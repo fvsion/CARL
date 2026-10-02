@@ -6,7 +6,7 @@
 
 <p align="center"><i>AI Slop Coded LLM Runner, So You Can Code AI Slop Locally</i></p>
 
-<p align="center">A local coding model on your Apple Silicon Mac, for <b>OpenCode</b> and <b>Pi</b>.<br>
+<p align="center">A local coding model runner on your Apple Silicon Mac, for <b>OpenCode</b> and <b>Pi</b>.<br>
 One command starts the server and a live dashboard.</p>
 
 ---
