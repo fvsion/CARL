@@ -282,6 +282,24 @@ if [[ $# -eq 0 ]]; then
   done
   last="$(cat "$LAST_FILE" 2>/dev/null || true)"
   case "$last" in llama|grant|pocket) ;; *) last=llama ;; esac
+  if [[ "$last" == llama ]]; then
+    source "$HERE/common.sh"
+    ensure_deps
+    # No model yet (a fresh clone): offer this Mac's default, else open the
+    # dashboard without a server (its Settings tab starts one later).
+    if [[ -z "$("$HERE/models.sh" downloaded)" ]]; then
+      d="$(python3 "$HERE/../tools/llama-fit.py" --pick-default 2>/dev/null || true)"; d="${d:-$("$HERE/models.sh" default)}"
+      echo "No model is downloaded yet. This Mac's default: $d ($("$HERE/models.sh" get "$d" bytes | awk '{printf "%.1f GB", $1/1e9}'))."
+      a=n
+      [[ -t 0 ]] && read -r -p "Download it now? [Y/n] " a
+      if [[ -t 0 && ! "$a" =~ ^[Nn] ]]; then
+        "$HERE/models.sh" download "$d" || exit 1
+      else
+        echo "Opening the dashboard without a server. Later: $CMD download default"
+        exec python3 "$HERE/../tools/llama-monitor.py" --port 8080
+      fi
+    fi
+  fi
   echo "starting $last ($([[ -s "$LAST_FILE" ]] && echo "last used" || echo "default")); $CMD -h for help"
   set -- "$last"
 fi
@@ -387,6 +405,7 @@ while [[ $# -gt 0 ]]; do
 done
 set -- ${pass[@]+"${pass[@]}"}
 source "$HERE/common.sh"
+ensure_deps mtplx
 resolve_host "$NET_FLAG"
 PORT="${PORT:-8000}"
 API_KEY_FILE="${API_KEY_FILE:-$HOME/.mtplx/api-key}"

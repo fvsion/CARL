@@ -92,6 +92,9 @@ if [[ "$SETTINGS_FILE" != none && -f "$SETTINGS_FILE" ]]; then
   done < "$SETTINGS_FILE"
 fi
 
+source "$(dirname "$0")/common.sh"
+ensure_deps                      # llama-server, aria2, ansifilter (asks to brew install them)
+
 # Model: --model flag > MODEL env (path) > saved MODEL_NAME > registry default (first line of models.conf).
 MODELS="$(dirname "$0")/models.sh"
 REG_NAME=""
@@ -106,6 +109,18 @@ elif [[ -z "${MODEL:-}" ]]; then
   # entry when the first can't fit one window in GPU memory (tools/llama-fit.py).
   REG_NAME="$(python3 "$(dirname "$0")/../tools/llama-fit.py" --pick-default --ctx "${CTX_FLAG:-${CTX:-98304}}" 2>/dev/null)"
   [[ -n "$REG_NAME" ]] || REG_NAME="$("$MODELS" default)"
+  # Not downloaded: use a registry model that is (the first one in models.conf order).
+  if ! "$MODELS" path "$REG_NAME" >/dev/null 2>&1; then
+    have="$("$MODELS" downloaded | head -n1)"
+    if [[ -n "$have" ]]; then
+      echo "default model $REG_NAME is not downloaded; using $have (downloaded)"
+      REG_NAME="$have"
+    else
+      echo "error: no model is downloaded. Download this Mac's default: ./carl.sh download default" >&2
+      echo "       (or one of: ./carl.sh models)" >&2
+      exit 1
+    fi
+  fi
 fi
 if [[ -n "$REG_NAME" ]]; then
   MODEL="$("$MODELS" path "$REG_NAME")" || exit 1
@@ -114,7 +129,6 @@ if [[ -n "$REG_NAME" ]]; then
 fi
 [[ -f "$MODEL" ]] || { echo "error: model file not found: $MODEL" >&2; exit 1; }
 ALIAS="${ALIAS:-${REG_ALIAS:-$(basename "$MODEL" .gguf)}}"
-source "$(dirname "$0")/common.sh"
 resolve_host "$NET_FLAG"
 PORT="${PORT:-8080}"
 API_KEY_FILE="${API_KEY_FILE:-$HOME/.mtplx/api-key}"

@@ -1270,10 +1270,15 @@ def resolve_default_model(p):
     if p["model"] != "default":
         return p["model"]
     try:
-        return subprocess.run([sys.executable, os.path.join(REPO, "tools", "llama-fit.py"), "--pick-default",
+        name = subprocess.run([sys.executable, os.path.join(REPO, "tools", "llama-fit.py"), "--pick-default",
                                "--ctx", str(p["ctx"])], capture_output=True, text=True, timeout=20).stdout.strip() or REG[0]["name"]
     except Exception:
-        return REG[0]["name"] if REG else ""
+        name = REG[0]["name"] if REG else ""
+    # Not downloaded: the launcher (host/serve-llama.sh) uses the first downloaded registry model instead.
+    r = next((x for x in REG if x["name"] == name), None)
+    if r and not os.path.exists(os.path.join(MODELS_DIR, r["file"])):
+        name = next((x["name"] for x in REG if os.path.exists(os.path.join(MODELS_DIR, x["file"]))), name)
+    return name
 
 def fit_line(p):
     """(ok, text): does the pending setup fit the GPU limit, and is the model downloaded?"""
@@ -1787,6 +1792,9 @@ def main():
     signal.signal(signal.SIGINT, on_int)
     for sig in (signal.SIGTERM, signal.SIGHUP):
         signal.signal(sig, lambda *_: (restore(), os._exit(0)))
+    import atexit
+    atexit.register(restore)                   # never leave mouse reporting on in the user's shell
+    pend = [""]
     tty.setcbreak(fd)
     sys.stdout.write("\x1b[?1049h\x1b[?25l\x1b[?1000h\x1b[?1006h")   # alt screen, hide cursor, mouse (SGR)
     try:
@@ -1814,8 +1822,20 @@ def main():
             r, _, _ = select.select([fd, wake_r], [], [], max(min(next_fetch - time.time(), 1.0), 0.05))
             if wake_r in r:
                 os.read(wake_r, 64)
-            if fd in r and handle_input(os.read(fd, 4096).decode(errors="replace")) == "refresh":
-                next_fetch = 0
+            if fd in r:
+                # a mouse report or key sequence can arrive split across reads: keep an
+                # unfinished escape sequence for the next read instead of reading its
+                # tail ("5M", "12;40m") as key presses
+                pend[0] += os.read(fd, 4096).decode(errors="replace")
+                m = re.search(r"\x1b(\[[<0-9;]*)?$", pend[0])
+                if m and len(pend[0]) - m.start() < 32:
+                    data, pend[0] = pend[0][:m.start()], pend[0][m.start():]
+                    if not select.select([fd], [], [], 0.05)[0]:
+                        data, pend[0] = data + pend[0], ""    # a lone Esc press
+                else:
+                    data, pend[0] = pend[0], ""
+                if data and handle_input(data) == "refresh":
+                    next_fetch = 0
     except SystemExit:
         pass
     finally:

@@ -61,6 +61,44 @@ ensure_api_key() {
   echo "created API key: $f (clients need it: ./carl.sh monitor shows it, or client/install.sh)" >&2
 }
 
+# ensure_deps [mtplx]: the Homebrew tools CARL needs (llama-server from llama.cpp,
+# aria2c, ansifilter). Missing ones are installed with Homebrew after asking (in
+# a terminal), or listed with the command to run. Homebrew itself is not
+# installed automatically (it needs the user's password). SKIP_DEPS=1 skips this.
+ensure_deps() {
+  [[ "${SKIP_DEPS:-0}" == 1 ]] && return 0
+  local missing=() need_llama=1 a
+  [[ "${1:-}" == mtplx ]] && need_llama=0
+  [[ -x /opt/homebrew/bin/brew ]] && eval "$(/opt/homebrew/bin/brew shellenv)" 2>/dev/null
+  (( need_llama )) && ! command -v llama-server >/dev/null && missing+=(llama.cpp)
+  command -v aria2c >/dev/null || missing+=(aria2)
+  command -v ansifilter >/dev/null || missing+=(ansifilter)
+  if [[ "${1:-}" == mtplx ]] && ! command -v mtplx >/dev/null; then
+    echo "error: mtplx is not installed (grant / pocket need it; see USERGUIDE.md). llama.cpp: ${CMD:-./carl.sh} llama" >&2
+    exit 1
+  fi
+  (( ${#missing[@]} )) || return 0
+  echo "CARL needs: ${missing[*]} (not installed)"
+  if ! command -v brew >/dev/null; then
+    echo "Install Homebrew first (https://brew.sh), then run this again:" >&2
+    echo '  /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"' >&2
+    exit 1
+  fi
+  if [[ -t 0 && -t 1 ]]; then
+    read -r -p "Install them now with Homebrew (brew install ${missing[*]})? [Y/n] " a
+    if [[ ! "$a" =~ ^[Nn] ]]; then
+      brew install "${missing[@]}" || { echo "error: brew install failed" >&2; exit 1; }
+      hash -r
+      (( need_llama )) && ! command -v llama-server >/dev/null && { echo "error: llama-server still not found" >&2; exit 1; }
+      return 0
+    fi
+  fi
+  if (( need_llama )) && [[ " ${missing[*]} " == *" llama.cpp "* ]]; then
+    echo "error: llama-server not found. Run: brew install ${missing[*]}" >&2; exit 1
+  fi
+  echo "note: optional tools missing (downloads and logs work without them): brew install ${missing[*]}" >&2
+}
+
 # guard_other_models: refuse to load a second model. Two models do not fit in
 # GPU memory on these Macs: the second one can crash the Mac (it rebooted on
 # 2026-10-02) or break the first server. Name checks miss servers started some

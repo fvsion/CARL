@@ -93,6 +93,7 @@ case "${1:-list}" in
   path) field "${2:?NAME}" name >/dev/null || exit 1; p="$(local_path "$2")"; [[ "$(status "$2")" == downloaded ]] || { echo "error: $2 not downloaded (run: ./carl.sh download $2)" >&2; exit 1; }; echo "$p" ;;
   get) field "${2:?NAME}" "${3:?FIELD}" ;;
   default) default_name ;;
+  downloaded) for n in $(names); do [[ "$(status "$n")" == downloaded ]] && echo "$n"; done; true ;;
   -h|--help|help) sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//' ;;
   *) echo "usage: $0 list | download NAME...|all | verify NAME... | path NAME | get NAME FIELD" >&2; exit 2 ;;
 esac
