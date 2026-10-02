@@ -1,0 +1,10 @@
+{
+  "name": "mtplx-session-headers",
+  "private": true,
+  "type": "module",
+  "main": "./index.js",
+  "exports": {
+    ".": "./index.js",
+    "./server": "./server.js"
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "name": "llm-deploy-session-switcher",
+  "version": "1.0.0",
+  "description": "OpenCode session switcher in the prompt box: the recent top-level sessions of this project with their state; arrows cycle, the title opens a picker, /switch opens it too.",
+  "type": "module",
+  "license": "MIT",
+  "exports": {
+    ".": { "import": "./index.js" },
+    "./tui": { "import": "./tui.js" }
+  },
+  "peerDependencies": {
+    "@opencode-ai/plugin": ">=1.14.0",
+    "@opentui/solid": ">=0.1.0",
+    "solid-js": ">=1.8.0"
+  }
+}

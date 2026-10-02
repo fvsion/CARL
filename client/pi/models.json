@@ -1,0 +1,149 @@
+{
+  "providers": {
+    "llamacpp": {
+      "baseUrl": "http://__MTPLX_HOST__:__LLAMA_PORT__/v1",
+      "api": "openai-completions",
+      "apiKey": "!cat ~/.config/mtplx/api-key",
+      "authHeader": true,
+      "compat": {
+        "supportsDeveloperRole": false,
+        "supportsReasoningEffort": false,
+        "thinkingFormat": "chat-template",
+        "chatTemplateKwargs": {
+          "enable_thinking": {
+            "$var": "thinking.enabled"
+          },
+          "preserve_thinking": true,
+          "reasoning_effort": {
+            "$var": "thinking.effort",
+            "omitWhenOff": true
+          }
+        },
+        "maxTokensField": "max_tokens"
+      },
+      "models": [
+        {
+          "id": "qwen3.6-35b-a3b",
+          "name": "Qwen3.6 35B-A3B stock MoE — unsloth UD-Q4_K_M (llama.cpp, 128K)",
+          "reasoning": true,
+          "thinkingLevelMap": {
+            "minimal": null,
+            "low": null,
+            "medium": null,
+            "xhigh": null
+          },
+          "input": [
+            "text"
+          ],
+          "contextWindow": 131072,
+          "maxTokens": 32768,
+          "cost": {
+            "input": 0,
+            "output": 0,
+            "cacheRead": 0,
+            "cacheWrite": 0
+          }
+        },
+        {
+          "id": "qwen3.8-27b",
+          "name": "Qwen3.8 27B stock — unsloth UD-Q4_K_M (llama.cpp, 128K)",
+          "reasoning": true,
+          "thinkingLevelMap": {
+            "minimal": null,
+            "high": null,
+            "xhigh": "xhigh"
+          },
+          "input": [
+            "text"
+          ],
+          "contextWindow": 131072,
+          "maxTokens": 32768,
+          "cost": {
+            "input": 0,
+            "output": 0,
+            "cacheRead": 0,
+            "cacheWrite": 0
+          }
+        },
+        {
+          "id": "qwen3.8-27b-abliterated-llama",
+          "name": "Qwen3.8 27B Abliterated — orcarouter Q4_K_M (llama.cpp, 128K)",
+          "reasoning": true,
+          "thinkingLevelMap": {
+            "minimal": null,
+            "high": null,
+            "xhigh": "xhigh"
+          },
+          "input": [
+            "text"
+          ],
+          "contextWindow": 131072,
+          "maxTokens": 32768,
+          "cost": {
+            "input": 0,
+            "output": 0,
+            "cacheRead": 0,
+            "cacheWrite": 0
+          }
+        }
+      ]
+    },
+    "mtplx": {
+      "baseUrl": "http://__MTPLX_HOST__:__MTPLX_PORT__/v1",
+      "api": "openai-completions",
+      "apiKey": "!cat ~/.config/mtplx/api-key",
+      "authHeader": true,
+      "headers": {
+        "x-mtplx-client": "pi"
+      },
+      "compat": {
+        "supportsDeveloperRole": false,
+        "supportsReasoningEffort": true,
+        "thinkingFormat": "qwen",
+        "maxTokensField": "max_tokens"
+      },
+      "models": [
+        {
+          "id": "qwen3.8-27b-abliterated-grant",
+          "name": "Qwen3.8 27B Abliterated — grant-ai Q4_K_M-class (fast)",
+          "reasoning": true,
+          "thinkingLevelMap": {
+            "minimal": null,
+            "xhigh": "xhigh"
+          },
+          "input": [
+            "text"
+          ],
+          "contextWindow": 49152,
+          "maxTokens": 49152,
+          "cost": {
+            "input": 0,
+            "output": 0,
+            "cacheRead": 0,
+            "cacheWrite": 0
+          }
+        },
+        {
+          "id": "qwen3.8-27b-abliterated",
+          "name": "Qwen3.8 27B Abliterated — PocketAiHub Q4_K_L-class",
+          "reasoning": true,
+          "thinkingLevelMap": {
+            "minimal": null,
+            "xhigh": "xhigh"
+          },
+          "input": [
+            "text"
+          ],
+          "contextWindow": 49152,
+          "maxTokens": 49152,
+          "cost": {
+            "input": 0,
+            "output": 0,
+            "cacheRead": 0,
+            "cacheWrite": 0
+          }
+        }
+      ]
+    }
+  }
+}

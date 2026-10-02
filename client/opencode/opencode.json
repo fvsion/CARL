@@ -1,0 +1,246 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "provider": {
+    "llamacpp": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "llama.cpp (Mac host)",
+      "options": {
+        "baseURL": "http://__MTPLX_HOST__:__LLAMA_PORT__/v1",
+        "apiKey": "{file:__HOME__/.config/mtplx/api-key}",
+        "timeout": false,
+        "chunkTimeout": 900000
+      },
+      "models": {
+        "qwen3.6-35b-a3b": {
+          "name": "Qwen3.6 35B-A3B (stock, MoE) — llama.cpp, 128K",
+          "reasoning": true,
+          "tool_call": true,
+          "temperature": true,
+          "limit": {
+            "context": 131072,
+            "output": 32000
+          },
+          "modalities": {
+            "input": [
+              "text"
+            ],
+            "output": [
+              "text"
+            ]
+          },
+          "options": {
+            "reasoningEffort": "high"
+          },
+          "variants": {
+            "none": {
+              "reasoningEffort": "none",
+              "temperature": 0.7,
+              "top_p": 0.8,
+              "presence_penalty": 1.5
+            },
+            "high": {
+              "reasoningEffort": "high"
+            },
+            "minimal": {
+              "disabled": true
+            },
+            "low": {
+              "disabled": true
+            },
+            "medium": {
+              "disabled": true
+            },
+            "xhigh": {
+              "disabled": true
+            }
+          }
+        },
+        "qwen3.8-27b": {
+          "name": "Qwen3.8 27B (stock) — llama.cpp, 128K",
+          "reasoning": true,
+          "tool_call": true,
+          "temperature": true,
+          "limit": {
+            "context": 131072,
+            "output": 32000
+          },
+          "modalities": {
+            "input": [
+              "text"
+            ],
+            "output": [
+              "text"
+            ]
+          },
+          "options": {
+            "reasoningEffort": "low"
+          },
+          "variants": {
+            "none": {
+              "reasoningEffort": "none",
+              "temperature": 0.7,
+              "top_p": 0.8,
+              "presence_penalty": 1.5
+            },
+            "minimal": {
+              "disabled": true
+            },
+            "high": {
+              "disabled": true
+            },
+            "low": {
+              "reasoningEffort": "low"
+            },
+            "medium": {
+              "reasoningEffort": "medium"
+            },
+            "xhigh": {
+              "reasoningEffort": "xhigh"
+            }
+          }
+        },
+        "qwen3.8-27b-abliterated-llama": {
+          "name": "Qwen3.8 27B Abliterated — llama.cpp, 128K",
+          "reasoning": true,
+          "tool_call": true,
+          "temperature": true,
+          "limit": {
+            "context": 131072,
+            "output": 32000
+          },
+          "modalities": {
+            "input": [
+              "text"
+            ],
+            "output": [
+              "text"
+            ]
+          },
+          "options": {
+            "reasoningEffort": "low"
+          },
+          "variants": {
+            "none": {
+              "reasoningEffort": "none",
+              "temperature": 0.7,
+              "top_p": 0.8,
+              "presence_penalty": 1.5
+            },
+            "minimal": {
+              "disabled": true
+            },
+            "high": {
+              "disabled": true
+            },
+            "low": {
+              "reasoningEffort": "low"
+            },
+            "medium": {
+              "reasoningEffort": "medium"
+            },
+            "xhigh": {
+              "reasoningEffort": "xhigh"
+            }
+          }
+        }
+      }
+    },
+    "mtplx": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "MTPLX (Mac host, ≤48K)",
+      "options": {
+        "baseURL": "http://__MTPLX_HOST__:__MTPLX_PORT__/v1",
+        "apiKey": "{file:__HOME__/.config/mtplx/api-key}",
+        "timeout": false,
+        "chunkTimeout": 900000,
+        "headers": {
+          "x-mtplx-client": "opencode"
+        }
+      },
+      "models": {
+        "qwen3.8-27b-abliterated-grant": {
+          "name": "Qwen3.8 27B Abliterated — grant-ai Q4_K_M-class (fast)",
+          "reasoning": true,
+          "tool_call": true,
+          "temperature": true,
+          "limit": {
+            "context": 49152,
+            "output": 32000
+          },
+          "modalities": {
+            "input": [
+              "text"
+            ],
+            "output": [
+              "text"
+            ]
+          },
+          "options": {
+            "reasoningEffort": "low"
+          },
+          "variants": {
+            "none": {
+              "disabled": true
+            },
+            "minimal": {
+              "disabled": true
+            },
+            "high": {
+              "disabled": true
+            },
+            "low": {
+              "reasoningEffort": "low"
+            },
+            "medium": {
+              "reasoningEffort": "medium"
+            },
+            "xhigh": {
+              "reasoningEffort": "xhigh"
+            }
+          }
+        },
+        "qwen3.8-27b-abliterated": {
+          "name": "Qwen3.8 27B Abliterated — PocketAiHub Q4_K_L-class",
+          "reasoning": true,
+          "tool_call": true,
+          "temperature": true,
+          "limit": {
+            "context": 49152,
+            "output": 32000
+          },
+          "modalities": {
+            "input": [
+              "text"
+            ],
+            "output": [
+              "text"
+            ]
+          },
+          "options": {
+            "reasoningEffort": "medium"
+          },
+          "variants": {
+            "none": {
+              "disabled": true
+            },
+            "minimal": {
+              "disabled": true
+            },
+            "high": {
+              "disabled": true
+            },
+            "low": {
+              "reasoningEffort": "low"
+            },
+            "medium": {
+              "reasoningEffort": "medium"
+            },
+            "xhigh": {
+              "reasoningEffort": "xhigh"
+            }
+          }
+        }
+      }
+    }
+  }
+}
