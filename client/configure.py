@@ -225,6 +225,10 @@ def opencode():
             "mode": "subagent",
             "prompt": "{file:" + prompt_path + "}",
             "options": {"reasoningEffort": "medium"},
+            # thinking on + temperature 0.6 (Qwen's coding value): the best of 9 coder
+            # runs on the 35B (2026-10-02: all functions typed, more tests, 26% faster
+            # than 1.0); the 27B uses the same value without its own test.
+            "temperature": 0.6,
             "permission": {"task": "deny"},
             "steps": 80,
             "color": "secondary",

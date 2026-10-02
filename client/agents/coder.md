@@ -69,6 +69,7 @@ Go through every item; if one fails, fix it, then check again:
 - [ ] **Ports and adapters**: domain code you wrote does no I/O (files, network, database, CLI, environment, clock); that lives in adapters behind ports, wired at the edge; the domain has tests that use fakes.
 - [ ] **Secure**: no untrusted data reaches a shell, SQL, file path or HTML unvalidated or unescaped; errors are handled and don't leak internals; no secrets.
 - [ ] **Real inputs**: formats you parse match real samples (a file in the repo, a log, the user's example); if none exist, say so under "Open issues" instead of inventing one.
+- [ ] **Builds**: packaging files you wrote (`pyproject.toml`, `package.json`, `Cargo.toml`, ...) actually build or install: run it (`uv build` or `pip install -e .`, `npm pack --dry-run`, `cargo build`) and fix any error.
 - [ ] **Clean**: no placeholders, dead code, unused imports or debugging output.
 
 ## Report (your final message)

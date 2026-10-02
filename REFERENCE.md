@@ -452,6 +452,7 @@ IQ3_M is a good choice only where no larger file fits, for example on a 24 GB Ma
 - **OpenCode:** `agent.coder` in `opencode.json`:
   - `mode: subagent`, `prompt: {file:…/.config/opencode/llm-deploy/coder.md}` (an absolute path; the rule is `~/.config/opencode/llm-deploy/delegation.md`; earlier versions used `~/.config/opencode/prompts/`, and the installer removes those files);
   - `options.reasoningEffort: medium` (the main session uses low; on the 35B, it only means thinking on);
+  - `temperature: 0.6` (see "Coder sampling" below);
   - `permission.task: deny` (no nested subagents), `steps: 80`, `color: secondary`.
   - The rule is added through `instructions`. The installer adds it to the instructions that you already have.
 - **Pi:**
@@ -462,6 +463,23 @@ IQ3_M is a good choice only where no larger file fits, for example on a 24 GB Ma
 - **When `install.sh` installs it:** if the llama.cpp server has 2+ slots, or if the server is MTPLX ([MTPLX and the coder subagent](#mtplx-and-the-coder-subagent-measured-2026-10-02)). `CODER=1` / `NO_CODER=1` override this.
 - **Same model, different context.** The server loads only one model, so the coder does not add capability. The coder gets a new context with only the task, more reasoning and a stricter method. With 2 slots, the main session keeps its cache while the coder runs.
 - **Reason for the rule:** With only the agent description, the 35B never delegated. It did 4/4 tasks itself. These tasks included a multi-file package and a bug that the user reported as stuck.
+
+
+**Coder sampling (measured 2026-10-02):** the 35B (2 × 96K, q4_0) did the same task 3 times for each setting. The task was a new package with a CLI that parses real llama-server log lines, plus tests. The main agent sent it to the coder each time.
+
+| Coder setting | Average time | Tests written | Typed functions | Packaging file builds |
+|---|---|---|---|---|
+| Thinking on, temperature 1.0 | 405 s | 16, 18, 12 | 10/13 | 1 of 2 |
+| **Thinking on, temperature 0.6** | **299 s** | **35, 18, 4** | **20/20** | 1 of 3 |
+| Thinking off (0.7 / 0.8 / presence 1.5) | 234 s | 9, 9, 7 | 10/10 | 0 of 3 |
+
+- All 9 runs passed their own tests, and all parsed the real log correctly.
+- **Selected: thinking on, temperature 0.6.** It typed every function, wrote the most tests on average, and was 26% faster than 1.0. It also agrees with the Qwen model cards, which give 0.6 for precise coding.
+- Thinking off was the fastest. But it wrote about half the tests, and none of its packaging files built.
+- 6 of 8 packaging files (`pyproject.toml`) did not build, with all settings. Thus, the coder prompt now has a "Builds" item in its definition of done.
+- NOTE: 3 runs for each setting give a direction, not proof. The test count for one setting went from 4 to 35.
+- NOTE: **The 27B coder uses the same setting, but it did not get its own test.** A full test of the 27B is a v2 item.
+- NOTE: **Pi has no temperature for subagents.** Its subagent extension passes only the thinking level. Thus, the Pi coder uses the server temperature (1.0).
 
 ---
 

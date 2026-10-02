@@ -27,6 +27,7 @@ The first release under the name CARL (Can't Afford Remote LLMs). Before this re
 - **OpenCode session switcher** (TUI plugin). `‹ 2/3 ● title ›` in the prompt box: the arrows go to the previous or next session, and the title or `/switch` opens a list with the state of each session. OpenCode 1.18.34 does not show sessions as tabs.
 - **The coder subagent on MTPLX.** `install.sh` now also installs the coder when the server is MTPLX. MTPLX keeps each session in its session bank, so the main session comes back after a subagent in 3.8 s (RAM) to 14.8 s (SSD), not a full re-read.
 - **Other computers and VM apps.** `--host ADDR` serves on one address of this Mac (its LAN address, or a Parallels network). The dashboard's network row lists the addresses of this Mac. `install.sh --key-file FILE` (or `--key KEY`) gives the API key to a client on another computer.
+- **Coder subagent tuning.** The OpenCode coder uses temperature 0.6 with thinking on: the best of 9 measured runs (all functions typed, more tests, 26% faster than 1.0). The 27B uses the same value without its own test. The coder now checks that the packaging files it writes actually build.
 - **Installer backups.** Before the installer changes an existing config file, it keeps your original as `FILE.before-carl` (never overwritten) and a copy of each version as `FILE.bak.<time>`. `APPEND_SYSTEM.md` of Pi is now included.
 - `tools/tuishot.py`: makes the README screenshots and GIFs from the real terminal programs.
 - README screenshots: the dashboard (GIF), the Settings tab, OpenCode with the plugins.
