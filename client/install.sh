@@ -235,9 +235,10 @@ if [[ "$web_search" != off ]]; then
 fi
 # OpenCode reads its tool switches only from the environment: say plainly which shell
 # profile files get the 3-line pointer to ~/.config/carl/opencode.env, before writing.
-profiles=()
+profiles=(); have_block=0
 for f in "$HOME/.zshrc" "$HOME/.bashrc"; do
   [[ -e "$f" ]] || continue
+  if grep -qF "# >>> CARL: OpenCode tool switches >>>" "$f" 2>/dev/null; then have_block=1; continue; fi
   if [[ -L "$f" ]]; then profiles+=("$(tilde "$f") (a link: the change goes to $(tilde "$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$f")"))")
   else profiles+=("$(tilde "$f")"); fi
 done
@@ -245,6 +246,8 @@ if [[ "${NO_PROFILE:-0}" == 1 ]]; then
   echo "shell profile: not changed (NO_PROFILE=1). For OpenCode's tool switches, add this line to it yourself:"
   # shellcheck disable=SC2016  # the line is printed for the user to paste, not expanded here
   echo '               [ -f "$HOME/.config/carl/opencode.env" ] && . "$HOME/.config/carl/opencode.env"'
+elif (( ${#profiles[@]} == 0 && have_block )); then
+  echo "shell profile: already loads ~/.config/carl/opencode.env (nothing to write)"
 elif (( ${#profiles[@]} )); then
   echo "shell profile: WRITING to ${profiles[*]}: appends 3 marked lines (# >>> CARL ... # <<< CARL <<<)"
   echo "               that load ~/.config/carl/opencode.env (OpenCode reads its tool switches only from the"
