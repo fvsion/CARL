@@ -168,6 +168,24 @@ def indent(rows: Sequence[Row], n: int = 1) -> list[Row]:
     return [(" " * n + t, [(n + a, n + b, act) for a, b, act in sp]) for t, sp in rows]
 
 
+def merge_columns(left: Sequence[CardLine], right: Sequence[CardLine], lw: int) -> list[CardLine]:
+    """Two columns inside one card: left lines cut / padded to lw, a dim divider, then the right
+    lines; the clickable parts of both are kept (the right ones shifted)."""
+    out: list[CardLine] = []
+    shift = lw + 3                                       # " │ "
+    for i in range(max(len(left), len(right))):
+        lt = left[i] if i < len(left) else ""
+        rt = right[i] if i < len(right) else ""
+        ll = lt if isinstance(lt, Ln) else Ln(lt)
+        rl = rt if isinstance(rt, Ln) else Ln(rt)
+        spans = list(ll.spans) + ([(0, lw, ll.act)] if ll.act else [])
+        spans += [(a + shift, b + shift, act) for a, b, act in rl.spans]
+        if rl.act:
+            spans.append((shift, shift + max(vlen(rl.text), 1), rl.act))
+        out.append(Ln(fit(ll.text, lw) + f" {DIM}│{R} " + rl.text, spans=spans))
+    return out
+
+
 def side_by_side(left: Sequence[Row], right: Sequence[Row], lw: int, pad_left: bool = True) -> list[Row]:
     """Two columns of rows, the left one lw columns wide, with a space before and between them.
     pad_left=False trusts the left rows to be exactly lw wide already (cards are)."""

@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from typing import List, Mapping, Optional, Tuple
 
 from .fmt import (B, CYN, DIM, GRN, R, RED, YEL, CardLine, Ln, Row, bar, buttons, ctx_label, draw_card, dur, fit,
-                  home_short, indent, lv, side_by_side, size, vlen, wwrap)
+                  home_short, indent, lv, merge_columns, size, vlen, wwrap)
 from .model import ModelInfo, ServerData, jdict
 from .settings import (ADV_WARN, LLAMA_ADV, MODEL_ROW_KEYS, NUMERIC, SET_HELP, UNMARKED, Pending,
                        SettingsService, fmt_val, shown_value)
@@ -123,11 +123,12 @@ class SettingsView:
         rws = svc.rows(p)
         ui.set_row = min(ui.set_row, len(rws) - 1)
         side = cols >= 130                                 # room for the model list beside the settings
-        w = cols - 1 - (LIST_W + 1 if side else 0)
-        vw = 28 if w >= 105 else 18                        # value column: room for "draft-mtp,ngram-mod"
+        w = cols - 1                                       # the card, full width
+        iw = w - 4 - (LIST_W + 3 if side else 0)          # its settings column (the model list takes the right side)
+        vw = 28 if iw >= 100 else 18                       # value column: room for "draft-mtp,ngram-mod"
         L: List[CardLine] = []
         if svc.models.error:                                # a broken catalogue / models.json: say so here
-            L += [f"{RED}{x}{R}" for x in wwrap(f"model list unavailable: {svc.models.error}", w - 6)[:3]]
+            L += [f"{RED}{x}{R}" for x in wwrap(f"model list unavailable: {svc.models.error}", iw - 2)[:3]]
             L += [f"{DIM}fix the file (./carl.sh models shows the same error); the list is read again every 10 s{R}", ""]
         L.append(f"{DIM}{'':2}{'setting':<14}{'new':<{vw + 8}}{'running now':<18}{R}")
         for i, (key, label, _, _, _) in enumerate(rws):
@@ -135,7 +136,7 @@ class SettingsView:
         key = rws[ui.set_row].key
         adv_on = p.get("adv") == "shown"
         hint = f"  {CYN}(type a value, Enter){R}" if key in NUMERIC else f"  {CYN}(Enter: choose){R}" if key == "model" else ""
-        help_lines = [f"{DIM}{x}{R}" for x in wwrap(SET_HELP[key], w - 6)[:2]]
+        help_lines = [f"{DIM}{x}{R}" for x in wwrap(SET_HELP[key], iw - 2)[:3]]
         help_lines[-1] += hint
         L += ["", *help_lines]
         if adv_on:
@@ -143,21 +144,21 @@ class SettingsView:
         ok, fl = svc.fit_cached(p)
         L.append(lv("fit", fl, 6))
         L.append(lv("file", home_short(self.config_file, self.home) + f"{DIM} (./carl.sh config show){R}", 6))
-        L.append(f"{DIM}colours: {GRN}tuned / fast{R}{DIM} · {YEL}changed / slower{R}{DIM} · {RED}very slow / no MTP head{R}"
-                 f"{DIM} · more models: ] Models panel → Add from Hugging Face (h){R}")
+        L.append(f"{DIM}colours: {GRN}tuned / fast{R}{DIM} · {YEL}changed / slower{R}{DIM} · {RED}very slow / no MTP head{R}")
+        L.append(f"{DIM}more models: ] Models panel → Add from Hugging Face (h){R}")
         if ui.restart:
             L.append(f"{YEL}{ui.restart}{R}")
         else:
             L.append(buttons("", [("Apply and restart (a)" if run else "Start server (a)", "setapply" if ok else "setnofit"),
                                   ("Revert (r)", "setrevert"), ("Tuned values (x)", "setdefaults")]))
-        L.append(f"{DIM}↑↓ select · ←→ change · * differs from the running server · wheel / PgUp PgDn scroll · "
-                 f"context or slots: run install.sh again{R}")
+        L.append(f"{DIM}↑↓ select · ←→ change · * differs from the running server · wheel / PgUp PgDn scroll{R}")
+        L.append(f"{DIM}context or slots changed: run install.sh again on the clients{R}")
         srv = "llama.cpp" if run else "no server"
-        card = draw_card("settings", "SERVER SETTINGS", f"{DIM}running: {srv} · port {port}{R}", L, w, 2)
-        if side:
-            rows = side_by_side(card, self.model_list(ui, p, LIST_W, len(card)), w, pad_left=False)
+        if side:                                           # the model list: the right column of the same card
+            L = merge_columns(L, self.model_list(ui, p, LIST_W, len(L)), iw)
         else:
-            rows = indent(card) + indent(self.model_list(ui, p, cols - 1, 14))
+            L += ["", f"{B}Choose a model{R}", *self.model_list(ui, p, w - 4, 14)]
+        rows = indent(draw_card("settings", "SERVER SETTINGS", f"{DIM}running: {srv} · port {port}{R}", L, w, 2))
         ui.levels.setdefault("modelinfo", 1)
         rows += indent(self.model_info(p, key, cols - 1, ui.levels["modelinfo"]))
         if ui.confirm:
@@ -165,9 +166,10 @@ class SettingsView:
         ui.set_scroll = max(0, min(ui.set_scroll, len(rows) - height))
         return rows[ui.set_scroll:ui.set_scroll + height]
 
-    def model_list(self, ui: UIState, p: Pending, w: int, height: int) -> List[Row]:
-        """A compact model selector beside the settings: click a model (or m, then ↑↓ Enter) to pick it;
-        s / f sort and filter. Only names and status: the card below has the rest."""
+    def model_list(self, ui: UIState, p: Pending, w: int, height: int) -> List[CardLine]:
+        """The model selector in the settings card (w columns, height lines): click a model (or m,
+        then ↑↓ Enter) to pick it; sort / filter drop-downs. Only names and status: the MODEL card
+        below has the rest."""
         items = ["auto"] + [m["name"] for m in self.visible(ui.msort, ui.mfilter)]
         cur = str(p.get("model", "auto"))
         if not ui.slist:                                    # the cursor follows the chosen model
@@ -175,9 +177,9 @@ class SettingsView:
         ui.srow = max(0, min(ui.srow, len(items) - 1))
         so, fi = arrange_label(ui.msort, ui.mfilter)
         st = {m["name"]: m["status"] for m in self.svc.models.get()}
-        tw = w - 4
-        L: List[CardLine] = arrange_lines(ui.msort, ui.mfilter, tw)
-        vis = max(height - 5, 3)
+        tw = w
+        L: List[CardLine] = [f"{B}Choose a model{R} {DIM}● here ○ not{R}", *arrange_lines(ui.msort, ui.mfilter, tw)]
+        vis = max(height - 4, 3)
         top = min(max(ui.srow - vis // 2, 0), max(len(items) - vis, 0))
         for i in range(top, min(top + vis, len(items))):
             name = items[i]
@@ -191,8 +193,7 @@ class SettingsView:
         more = len(items) - vis
         L.append(f"{DIM}{top + 1}-{min(top + vis, len(items))} of {len(items)} · " if more > 0 else DIM)
         L[-1] = str(L[-1]) + ("↑↓ Enter · m or Esc: back" if ui.slist else "click, or m for keys") + R
-        summary = f"{DIM}● here ○ not downloaded{R}"
-        return draw_card("modellist", "MODEL", summary, L, w, 2)
+        return L
 
     def _row(self, ui: UIState, p: Pending, run: Pending, i: int, key: str, label: str, vw: int) -> Ln:
         """One setting: [<] new value [>]  * running value. The value is coloured (value_color)."""
