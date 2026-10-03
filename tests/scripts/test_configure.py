@@ -207,6 +207,15 @@ class ConfigureTests(unittest.TestCase):
         self.assertEqual(stat.S_IMODE(os.stat(self.path("dotfiles/zshrc")).st_mode), 0o600)     # its mode stays
         self.assertIn("its link target", p.stdout)
 
+    def test_no_profile_prints_the_line(self) -> None:
+        with open(self.path(".zshrc"), "w", encoding="utf-8") as f:
+            f.write("export MINE=1\n")
+        p = self.run_configure("--profile", "0")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        with open(self.path(".zshrc"), encoding="utf-8") as f:
+            self.assertEqual(f.read(), "export MINE=1\n")
+        self.assertIn("NO_PROFILE=1", p.stdout)
+
     def test_a_bad_model_list_is_refused(self) -> None:
         for bad in ({"schema": 2, "models": []}, {"schema": 1, "models": [{"id": "a b", "ctx": 4096, "thinking": "on-off"}]},
                     {"schema": 1, "models": [{"id": "a", "ctx": 4096, "thinking": "maybe"}]},

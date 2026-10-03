@@ -147,6 +147,7 @@ class Options:
     background: bool = True
     browser: bool = True
     browser_headed: bool = False
+    profile: bool = True      # append the pointer to ~/.zshrc / ~/.bashrc (NO_PROFILE=1: print it instead)
 
     @property
     def oc_dir(self) -> str:
@@ -207,6 +208,7 @@ def parse_args(argv: list[str]) -> Options:
     ap.add_argument("--background", type=switch_arg, default=True)
     ap.add_argument("--browser", type=switch_arg, default=True)
     ap.add_argument("--browser-headed", type=switch_arg, default=False)
+    ap.add_argument("--profile", type=switch_arg, default=True)
     a = ap.parse_args(argv)
     try:
         models = carl_models.load_list(a.models)
@@ -215,7 +217,7 @@ def parse_args(argv: list[str]) -> Options:
     return Options(bundle=a.bundle, home=a.home, host=a.host, llama_port=a.llama_port, ctx=a.ctx, models=models,
                    running=a.running, coder=a.coder, sidebar=a.sidebar, switcher=a.switcher,
                    model_check=a.model_check, web_search=a.web_search, lsp=a.lsp, background=a.background,
-                   browser=a.browser, browser_headed=a.browser_headed)
+                   browser=a.browser, browser_headed=a.browser_headed, profile=a.profile)
 
 
 # ------------------------------------------------------------------ pure helpers
@@ -641,6 +643,12 @@ class Installer:
         block = (f"{PROFILE_BEGIN}\n[ -f \"$HOME/.config/carl/{ENV_FILE}\" ] && . \"$HOME/.config/carl/{ENV_FILE}\"\n"
                  f"{PROFILE_END}\n")
         found = False
+        line = f'[ -f "$HOME/.config/carl/{ENV_FILE}" ] && . "$HOME/.config/carl/{ENV_FILE}"'
+        if not self.o.profile:
+            if want:
+                self.report.add("kept", f"your shell profile (NO_PROFILE=1): add this line to it for OpenCode's tool "
+                                        f"switches: {line}")
+            return
         for name in (".zshrc", ".bashrc"):
             path = os.path.join(self.o.home, name)
             cur = read_or_none(path)
