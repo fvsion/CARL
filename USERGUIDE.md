@@ -229,7 +229,9 @@ Use this procedure when the clients are not in the VMware Fusion VM and not on t
 
 Qwen models "think" (hidden reasoning) before they answer. More thinking makes the model slower, but the answers to difficult problems are better.
 
-### OpenCode: `/effort` (or the variant picker)
+### OpenCode: `/variants` (or ctrl+t)
+
+In OpenCode 1.18 the thinking levels are model **variants**: type `/variants` and pick one, or press **ctrl+t** to step to the next. (There is no `/effort` command; `/models` switches the model.)
 
 | Model | Options | Default |
 |---|---|---|
@@ -411,7 +413,8 @@ CAUTION: Do not mix KV types (`KV_K=q8_0 KV_V=q4_0`). If you mix them, the serve
 
 **The catalogue** is [host/catalog.json](host/catalog.json). It holds the built-in models. For each model, it has:
 - `hf`: the download source: the Hugging Face repo, a pinned revision, the file, its SHA-256 and its size;
-- `summary` and `description`: what the model is and when to use it;
+- `summary` and `description`: what the model is (technical);
+- the **model card**: `role` (a short headline), `good_for` (tags: `agent coding`, `hard code`, `chat & writing`, `uncensored`), `why_use`, `trade_offs`, `pick_instead` (another catalogue model, and when it is the better pick), `hardware`, `uncensored` (what it means; abliterated models only) and `rank` (the quality order, 1 = best: parameters and density first, then quantization; speed is the reverse). The catalogue is checked when it loads: unknown tags, `uncensored` on a stock model, or a `pick_instead` model that is not in the catalogue are errors;
 - `tune`: the recommended server settings (KV cache, context, slots, speculation, draft tokens, sampling);
 - `why`: the reason for each tuned value;
 - `ctx_zones`: the context windows that read fast, slow and very slow;
@@ -428,7 +431,7 @@ The Settings tab shows the description and the reasons next to the settings. The
 - Before you use it from the clients, examine the chat template of the model. The thinking options are different between model families. The server answers with the loaded model for all model names, but the client sends the thinking options of the entry that you select.
 
 **To add a model to the catalogue** (for everyone who uses this folder):
-1. Copy an entry in `models` in `host/catalog.json`. Change `name`, `label`, `summary`, `description` and `alias` (the served name that the clients use).
+1. Copy an entry in `models` in `host/catalog.json`. Change `name`, `label`, `summary`, `description` and `alias` (the served name that the clients use), and write its model card (`role`, `good_for`, `why_use`, `trade_offs`, `pick_instead`, `hardware`, `rank`; `uncensored` for an abliterated model).
 2. Fill in `hf`: `repo`, `revision` (the commit SHA), `file`, `sha256` and `bytes`. The easy way: run `./carl.sh download hf:OWNER/REPO/FILE.gguf` first, and copy the `hf` block that it writes to `~/.config/llm-deploy/models.json`.
 3. Set `tune` and `why`. For `spec`, use `draft-mtp,ngram-mod` if the GGUF has an MTP head. Use `spec_n` 1, except for a MoE K-quant, where 2 can be better (the Q4 35B). Do not use 2 on an IQ quant. For a file without an MTP head, use `ngram-mod`. Run `./carl.sh tune NAME` to measure.
 4. Set `arch`, `mtp`, `min_ram_gb` and `ctx_zones`.
@@ -581,7 +584,10 @@ The Settings tab (tab 5) has three panels: **Server**, **Models** and **Auto-tun
    - **yellow:** changed from the tuned value, or slower;
    - A context of 96K or less is never yellow or red: 96K for each slot is the floor of the default window. Only larger windows get a warning (you can still select them).
    - **red:** very slow, or does not work on this model. For example, a context in the very slow zone, MTP speculation on a file without an MTP head, or MTP with more than 1 draft on an IQ quant.
-4. Read the right side (below the rows in a narrow terminal). It tells you what the model is, its recommended values (from Auto-tune or the catalogue), its context zones, and **why** the selected value is tuned that way.
+4. Read the **MODEL** card below the settings (both are full width). It tells you what the model is for and why to pick it. Click its title to change the detail: collapsed (name, role and tags in the title), normal, full. `e` / `c` expand or collapse all cards, and the mouse wheel or PgUp / PgDn scroll the panel.
+   - **Normal:** the role, the **good for** tags (`agent coding`, `hard code`, `chat & writing`, `uncensored`), **why use it**, the **trade-offs**, the hardware it is meant for, the speed (measured on this Mac after Auto-tune, else the catalogue figure and the Mac it came from), the recommended values next to yours, the context zones, and **why** the selected value is tuned that way.
+   - **Full:** also what *uncensored* means (abliterated models), the models to **pick instead** and when, the quality **rank**, the description, the reason for every tuned value, the Auto-tune table, and the source and file.
+   - The model list (Enter on the model row) shows the role and the tags of each model, and *why use it* and the trade-offs of the selected one.
 5. Read the **fit** line. It shows whether the model is downloaded and whether it fits in the GPU memory with these settings. If it does not fit, you cannot apply the settings.
 6. Press `a` (or click **[ Apply and restart ]**; with no server: **[ Start server ]**). Then press `y` to confirm.
 7. Wait while the model loads (about 30 s to 2 min). The footer shows the progress.
@@ -747,7 +753,7 @@ The options of the installer:
 | All requests fail with `Compute error`, but `/health` says ok | A GPU out-of-memory event. Usually, a second model started at the same time | Restart the server. CAUTION: Do not run two models at the same time. |
 | `HTTP 400 ... exceeds the available context size` | The session became larger than the server `--ctx`, and the client limit is higher | Restart the server with a larger `--ctx`, or run `install.sh` again so that the client compacts in time. Compact the session manually now. |
 | Thinking `none`/off still thinks | You did not restart OpenCode after `install.sh`, or the message generation started before the change | Fully restart OpenCode and send a new message. Make sure that the server has `--chat-template-file` (see the `ps` command above). |
-| `/effort` shows options that must not be there | Old config in the VM | Run the current `install.sh` again (it replaces the providers). Then restart OpenCode. |
+| `/variants` shows options that must not be there | Old config in the VM | Run the current `install.sh` again (it replaces the providers). Then restart OpenCode. |
 | The first message takes minutes | Cold prompt: the system prompt and the tools (~9K), or a resumed long session | This is the expected result. The 35B reads prompts ~6× faster. Later turns use the cache again. |
 | Slow replies late in a long session | The decode speed decreases as the context gets larger (27B: ~7 tok/s at 60–80K) | Compact the session or start a new session. Or, use the 35B. |
 | The client shows the wrong model name | The client selection does not control the server | Select the entry that matches `./carl.sh --model ...`. |
@@ -881,5 +887,5 @@ The script sends all other arguments after the flags directly to `llama-server`.
 | `./install-clients.sh [opencode\|pi]` | install the clients |
 | `./install.sh [--vm\|--local\|--host ADDR]` | install or update the configs, then do a smoke test (auto: VM on Linux, local on macOS) |
 | `LLAMA_CTX=96k ./install.sh` | force the client context limit |
-| OpenCode `/models`, `/effort` | change the model, the thinking level |
+| OpenCode `/models` (`/mo`), `/variants` (ctrl+t cycles) | change the model, the thinking level |
 | Pi `/model` | change the model |

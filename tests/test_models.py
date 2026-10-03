@@ -190,3 +190,28 @@ class TuneAdviceTest(unittest.TestCase):
     def test_no_advice_at_or_above_floor(self) -> None:
         m = cast(ModelInfo, {"name": "x", "tune": {"ctx": 98304}, "local": {}})
         self.assertIsNone(dm.tune_advice(m, *dm.effective_tune(m, Config())))
+
+
+class CatalogueCardTest(unittest.TestCase):
+    """The model card fields in host/catalog.json are checked when the catalogue loads."""
+
+    def doc(self, **card: object) -> Dict[str, object]:
+        base = {"name": "a", "abliterated": False,
+                "hf": {"repo": "o/r", "file": "a.gguf", "bytes": 1, "revision": "0" * 40, "sha256": "0" * 64}}
+        other = {"name": "b", "hf": {"repo": "o/r", "file": "b.gguf", "bytes": 1, "revision": "0" * 40, "sha256": "0" * 64}}
+        return {"schema": 1, "default": "a", "models": [{**base, **card}, other]}
+
+    def test_good_card_loads(self) -> None:
+        parse_catalog(self.doc(role="Everyday agent coding", good_for=["agent coding", "hard code"], why_use="x",
+                               trade_offs="y", hardware="32 GB", rank=3,
+                               pick_instead=[{"model": "b", "when": "on 24 GB"}]), "t")
+
+    def test_bad_cards_are_refused(self) -> None:
+        for card in ({"good_for": ["poetry"]}, {"good_for": ["uncensored"]}, {"rank": 0}, {"rank": True},
+                     {"role": "x" * 61}, {"why_use": 3}, {"pick_instead": [{"model": "nope", "when": "x"}]},
+                     {"pick_instead": [{"model": "b"}]}):
+            with self.subTest(card=card), self.assertRaises(ConfigError):
+                parse_catalog(self.doc(**card), "t")
+
+    def test_uncensored_tag_on_abliterated_model(self) -> None:
+        parse_catalog(self.doc(abliterated=True, good_for=["uncensored"], uncensored="what it means"), "t")

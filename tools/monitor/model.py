@@ -120,6 +120,16 @@ class ModelInfo(TypedDict, total=False):
     local: JSONDict         # this Mac's record: tune (date, machine, settings, results, ctx_zones), ...
     tune: JSONDict
     why: JSONDict
+    measured: List[JSONDict]
+    # the model card (host/catalog.json): what the model is for and why
+    role: str
+    good_for: List[str]
+    why_use: str
+    trade_offs: str
+    pick_instead: List[JSONDict]   # model, when
+    hardware: str
+    uncensored: str
+    rank: int
 
 
 @dataclass

@@ -80,8 +80,15 @@ class LocalDb(TypedDict):
     models: Dict[str, LocalEntry]
 
 
+class PickInstead(TypedDict):
+    """A nearby alternative on a model card: which model, and when it is the better pick."""
+    model: str
+    when: str
+
+
 class CatalogEntry(TypedDict, total=False):
-    """One host/catalog.json model."""
+    """One host/catalog.json model. The card fields (role, good_for, why_use, trade_offs,
+    pick_instead, hardware, uncensored, rank) tell the user what the model is for."""
     name: str
     label: str
     family: str
@@ -100,6 +107,14 @@ class CatalogEntry(TypedDict, total=False):
     why: Dict[str, str]
     ctx_zones: Optional[CtxZones]
     measured: List[Dict[str, str]]
+    role: str
+    good_for: List[str]
+    why_use: str
+    trade_offs: str
+    pick_instead: List[PickInstead]
+    hardware: str
+    uncensored: str
+    rank: int
 
 
 class Catalog(TypedDict, total=False):

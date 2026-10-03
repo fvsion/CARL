@@ -63,7 +63,7 @@ Each behaviour in this document was checked against the source code (MTPLX 2.11.
 | `host/serve.sh` | The entry point on the Mac. Server commands: `llama`, `grant`, `pocket`. Tools: `monitor`, `fit`, `models`, `download`, `verify`, `tune`, `config`, `install`. `help [command]` shows the help for one command, and `-h` prints the overview. `--help-adv` lists every backend flag. With no arguments, it opens the dashboard. It runs MTPLX itself, and it gives `llama` to `serve-llama.sh`. |
 | `host/common.sh` | Both launchers use this file. It contains the network mode (`--vm` / `--local` / auto, never 0.0.0.0), the API-key creation, `ensure_deps` (the Homebrew tools), `port_pid` / `port_host` (port lookups with `netstat`), `apply_settings` (reads the `KEY=value` lines of `tools/carl.py` with an allow-list; values are never evaluated), `require_int` and `is_port` (input checks), the launch guard and `run_server`. `run_server` runs the server in the background in its own process group, with the monitor in front. If there is no terminal, it runs a plain foreground server. |
 | `host/serve-llama.sh` | The llama.cpp launcher: `--model`, `--kv q4\|q8`, `--ctx N\|Nk`, logging, keep-awake, thinking-toggle template. It gets the model and its settings from `tools/carl.py launch-env`. |
-| `host/catalog.json` | The built-in model catalogue. For each model: `hf` (repo, pinned revision, file, SHA-256, size), `summary`, `description`, `tune` (kv, ctx, slots, spec, spec_n, sampling), `why` (the reason for each tuned value), `ctx_zones`, `measured`. `default` and `default_small` select the default models. |
+| `host/catalog.json` | The built-in model catalogue. For each model: `hf` (repo, pinned revision, file, SHA-256, size), `summary`, `description`, the model card (`role`, `good_for`, `why_use`, `trade_offs`, `pick_instead`, `hardware`, `uncensored`, `rank`), `tune` (kv, ctx, slots, spec, spec_n, sampling), `why` (the reason for each tuned value), `ctx_zones`, `measured`. `default` and `default_small` select the default models. |
 | `host/models.sh` | A thin wrapper around `tools/carl.py`: `list`, `download NAME\|default\|all\|hf:OWNER/REPO/FILE.gguf`, `verify`, `delete`, `path`, `get`, `default`, `downloaded`. |
 | `host/gguf-chat-template.py` | Extracts the chat template of a GGUF. Then it adds the rule "`reasoning_effort: none` → thinking off" at the start of the template. |
 | `client/install-clients.sh` | Run it in the VM or on a Mac. It installs OpenCode and/or Pi from npm into `~/.local`. If necessary, it also installs a Linux or macOS Node 22. It does not use sudo. |
@@ -661,7 +661,7 @@ From `mtplx/reasoning_effort.py` and `_reasoning_effort_for_state`:
 
 What you select → what occurs.
 
-### OpenCode (`/effort`)
+### OpenCode (`/variants`, ctrl+t)
 
 | Model entry | Selection | Sent | Result |
 |---|---|---|---|
@@ -788,7 +788,7 @@ python3 tools/req-capture-proxy.py 192.168.42.1:8080 127.0.0.1:8081 ~/models/log
 
 The installer writes these settings into `~/.config/opencode/opencode.json` (template: `client/opencode/opencode.json`):
 
-| Provider / model | Context | Thinking (`/effort` variants) | Default |
+| Provider / model | Context | Thinking (`/variants`) | Default |
 |---|---|---|---|
 | `llamacpp/qwen3.6-35b-a3b` (also its IQ3) | server `--ctx` | `none` (off), `high` (on) | `high`; **the default model** |
 | `llamacpp/qwen3.8-27b` (stock; also its Q3 and IQ3) | server `--ctx` | `none` (off), `low`, `medium`, `xhigh` | `low` |

@@ -57,6 +57,29 @@ The live state of the server: what it does now, the speed, the context, the memo
 
 ![The Settings tab](assets/settings.png)
 
+## In OpenCode: model, thinking effort, variants
+
+| Do this | In OpenCode 1.18 |
+|---|---|
+| **Switch the model** | type `/models` (or `/mo`, or press the leader key then **m**) and pick the entry that matches the server, e.g. `llamacpp/qwen3.6-35b-a3b` |
+| **Set the thinking effort** | type `/variants` and pick a level, or press **ctrl+t** to step to the next one. The current variant shows next to the model name |
+| **Switch the agent** | `/agents`, or **Tab** to cycle: `build` (does the work) and `plan` (read-only). The **coder** subagent that CARL adds is not picked here: the main agent hands it large coding tasks |
+| **Show or hide the thinking** | `/thinking` (display only: it doesn't change how much the model thinks) |
+
+There is no `/model` or `/effort` command in OpenCode 1.18: use `/models` and `/variants`. The variants are CARL's thinking levels:
+
+| Model entry | Variants (thinking effort) | Default |
+|---|---|---|
+| `llamacpp/qwen3.6-35b-a3b` (35B-A3B) | `none` = thinking off · `high` = on | `high` |
+| `llamacpp/qwen3.8-27b`, `llamacpp/qwen3.8-27b-abliterated-llama` (27B) | `none` = off · `low` · `medium` · `xhigh` | `low` |
+| `mtplx/…` (MTPLX) | `low` · `medium` · `xhigh` (MTPLX can't turn thinking off) | `low` (pocket: `medium`) |
+
+- **The model entry doesn't change the server's model.** The server answers with the model it has loaded; the entry only sets the label, the context limit and the thinking options. Change the server's model in the dashboard (Settings tab) or with `./carl.sh llama --model NAME`, then pick the matching entry in `/models`.
+- **`low` is right for agent work** on the 27B; `xhigh` thinks a long time even on simple tasks. A change applies from the next message.
+- **After `install.sh` runs again, fully restart OpenCode**: an open OpenCode keeps the old entries.
+
+More: USERGUIDE.md, "Thinking on, off and effort".
+
 ## OpenCode plugins
 
 ![OpenCode with the CARL plugins](assets/opencode-plugins.png)

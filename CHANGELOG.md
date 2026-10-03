@@ -6,6 +6,7 @@ Dates are local dates on the development Mac (M3 Pro, 36 GB).
 ## 1.1.0 - 2026-10-03
 
 ### Added
+- **Model cards:** each catalogue model says what it is for and why to pick it: a role headline, good-for tags (agent coding, hard code, chat & writing, uncensored), why use it, trade-offs, the models to pick instead and when, the hardware it is meant for, what *uncensored* means (abliterated models) and a quality rank (parameters and density first, then quantization; the 27B dense ranks above the 35B-A3B except the 27B IQ3). The Settings tab's MODEL card shows them (with this Mac's measured speed after Auto-tune), the model list shows the role and tags. Validated when the catalogue loads.
 - **Model catalogue: `host/catalog.json`** (replaces `host/models.conf`). For each model: the Hugging Face source (pinned revision, SHA-256, size), a summary and a description, the tuned settings (`tune`: KV, context, slots, speculation, draft tokens, sampling), the reason for each tuned value (`why`), context zones (`ctx_zones`) and measurements (`measured`). `default` and `default_small` select the default models.
 - **`tools/carl.py`**: one place for the catalogue, the models on this Mac and the settings. `host/models.sh` is now a thin wrapper around it.
 - **Custom models.**

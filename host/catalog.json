@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "_comment": "CARL built-in model catalogue. Downloaded and custom models are tracked separately in ~/.config/llm-deploy/models.json. Fields: hf (download source, pinned revision, sha256, bytes), tune (recommended server settings), why (the reason for each tuned value), ctx_zones (context per slot: <= good is fast (never below 96K, the floor), <= slow is usable, above very_slow is very slow; Auto-tune replaces these with measured values for this Mac), measured (reference measurements).",
+  "_comment": "CARL built-in model catalogue. Downloaded and custom models are tracked separately in ~/.config/llm-deploy/models.json. Fields: hf (download source, pinned revision, sha256, bytes), tune (recommended server settings), why (the reason for each tuned value), ctx_zones (context per slot: <= good is fast (never below 96K, the floor), <= slow is usable, above very_slow is very slow; Auto-tune replaces these with measured values for this Mac), measured (reference measurements). Card fields: role (headline), good_for (tags: agent coding, hard code, chat & writing, uncensored), why_use, trade_offs, pick_instead (model + when), hardware, uncensored (what it means; abliterated models only), rank (quality order, 1 = best: parameters and density first, then quantization).",
   "default": "qwen3.6-35b-a3b",
   "default_small": "qwen3.6-35b-a3b-iq3",
   "models": [
@@ -56,7 +56,26 @@
         "file": "Qwen3.6-35B-A3B-UD-Q4_K_M.gguf",
         "sha256": "0b21525e972670ed59e1812e170b27c26355381f0656ecc4e25617ece7dac58b",
         "bytes": 22663387424
-      }
+      },
+      "rank": 3,
+      "role": "Everyday agent coding (the default)",
+      "good_for": [
+        "agent coding",
+        "chat & writing"
+      ],
+      "why_use": "The fastest good model: only 3B parameters work per token, so it writes ~4x faster and reads prompts ~6x faster than the 27B, and its tiny KV cache fits two 96K slots (main session + subagent) in under 1 GiB.",
+      "trade_offs": "Weaker than the 27B on hard code (large refactors, subtle bugs, long reasoning); thinking is on/off only (no effort levels).",
+      "pick_instead": [
+        {
+          "model": "qwen3.8-27b",
+          "when": "a task is too hard for it and you can wait (quality agent coding)"
+        },
+        {
+          "model": "qwen3.6-35b-a3b-iq3",
+          "when": "on a 24 GB Mac"
+        }
+      ],
+      "hardware": "32 GB Macs and up"
     },
     {
       "name": "qwen3.8-27b",
@@ -111,7 +130,27 @@
         "file": "Qwen3.8-27B-UD-Q4_K_M.gguf",
         "sha256": "322e194ff79741c7baa497c240f677f54b201b0efab44ca8e50f122b39123482",
         "bytes": 16464440224
-      }
+      },
+      "rank": 1,
+      "role": "Quality agent coding, hard code",
+      "good_for": [
+        "hard code",
+        "agent coding",
+        "chat & writing"
+      ],
+      "why_use": "The strongest stock model in CARL: all 27B parameters work on every token, so it handles harder code and reasoning than the A3B, and thinking has effort levels (low / medium / xhigh). The choice for quality agent coding when you can accept the speed.",
+      "trade_offs": "Slow: ~4x slower writing than the A3B and ~6x slower prompt reading (a cold read of a full 96K session takes many minutes); its KV cache is 3x the A3B's.",
+      "pick_instead": [
+        {
+          "model": "qwen3.6-35b-a3b",
+          "when": "everyday work (about 4x faster)"
+        },
+        {
+          "model": "qwen3.8-27b-q3",
+          "when": "on a 24 GB Mac"
+        }
+      ],
+      "hardware": "32 GB Macs and up"
     },
     {
       "name": "orcarouter-27b",
@@ -165,7 +204,28 @@
         "file": "orcarouter_Qwen3.8-27B-Uncensored-Q4_K_M.gguf",
         "sha256": "6c8c7658fe13eef22666aa89862f7fb70aa72109838cf19989e59b15875e5e08",
         "bytes": 17772538112
-      }
+      },
+      "rank": 1,
+      "role": "Uncensored quality coding and hard tasks",
+      "good_for": [
+        "uncensored",
+        "hard code",
+        "agent coding"
+      ],
+      "why_use": "The same 27B as qwen3.8-27b with the refusal behaviour removed by a documented method (0-2.7% refusals, MMLU +0.4); its imatrix was calibrated with many tool calls. The only abliterated build CARL fully measured.",
+      "trade_offs": "As slow as the stock 27B; never chosen automatically; a little larger than the stock Q4 (17.8 vs 16.5 GB).",
+      "pick_instead": [
+        {
+          "model": "qwen3.8-27b",
+          "when": "refusals don't matter"
+        },
+        {
+          "model": "orcarouter-27b-q3",
+          "when": "on a 24 GB Mac"
+        }
+      ],
+      "hardware": "32 GB Macs and up",
+      "uncensored": "Uncensored: the refusal behaviour was removed from the weights (abliteration), so it answers requests the stock model declines, e.g. security research and exploit analysis, red-team prompts, frank medical, legal or drug questions, mature fiction. It adds no knowledge or skill and keeps the stock model's mistakes; you are responsible for how you use it."
     },
     {
       "name": "qwen3.8-27b-q3",
@@ -212,7 +272,30 @@
         "file": "Qwen3.8-27B-UD-Q3_K_XL.gguf",
         "sha256": "8c2a45ff85e7674ca185ec8eb6cdeab0e617ed9d8018caed0b64380eb2a67a5e",
         "bytes": 13146393504
-      }
+      },
+      "rank": 2,
+      "role": "Quality agent coding on a 24 GB Mac",
+      "good_for": [
+        "hard code",
+        "agent coding"
+      ],
+      "why_use": "The best-quality 27B that fits a 24 GB Mac: unsloth's dynamic 3-bit keeps sensitive layers at higher precision, and as a K-quant it unpacks fast on Metal.",
+      "trade_offs": "Slow like every 27B and a little less exact than Q4; usually 1 slot on 24 GB (no subagent).",
+      "pick_instead": [
+        {
+          "model": "qwen3.8-27b",
+          "when": "on 32 GB and up"
+        },
+        {
+          "model": "qwen3.6-35b-a3b-iq3",
+          "when": "everyday speed on 24 GB"
+        },
+        {
+          "model": "qwen3.8-27b-iq3",
+          "when": "this one doesn't fit"
+        }
+      ],
+      "hardware": "24 GB Macs"
     },
     {
       "name": "orcarouter-27b-q3",
@@ -259,7 +342,27 @@
         "file": "orcarouter_Qwen3.8-27B-Uncensored-Q3_K_M.gguf",
         "sha256": "c9d1882db0093b1abf7c6520c4ef525068c4f1f5e5f2b95f35f88ee1c0e01ba0",
         "bytes": 14605736192
-      }
+      },
+      "rank": 2,
+      "role": "Uncensored 27B on a 24 GB Mac",
+      "good_for": [
+        "uncensored",
+        "hard code"
+      ],
+      "why_use": "The uncensored 27B (as orcarouter-27b) in 3-bit so it fits a 24 GB Mac (about a 68K window there).",
+      "trade_offs": "Slow; starts at 64K (the one exception to the 96K floor); 1 slot; never chosen automatically.",
+      "pick_instead": [
+        {
+          "model": "orcarouter-27b",
+          "when": "on 32 GB and up"
+        },
+        {
+          "model": "qwen3.8-27b-q3",
+          "when": "refusals don't matter"
+        }
+      ],
+      "hardware": "24 GB Macs only (larger Macs use the Q4)",
+      "uncensored": "Uncensored: the refusal behaviour was removed from the weights (abliteration), so it answers requests the stock model declines, e.g. security research and exploit analysis, red-team prompts, frank medical, legal or drug questions, mature fiction. It adds no knowledge or skill and keeps the stock model's mistakes; you are responsible for how you use it."
     },
     {
       "name": "qwen3.6-35b-a3b-iq3",
@@ -313,7 +416,26 @@
         "file": "Qwen3.6-35B-A3B-UD-IQ3_XXS.gguf",
         "sha256": "36f9ec0e4c775f6efd3a61c1ea76f0875128469c3d012e3d9e2495a90e7a7150",
         "bytes": 14069266720
-      }
+      },
+      "rank": 5,
+      "role": "Everyday agent coding on a 24 GB Mac",
+      "good_for": [
+        "agent coding",
+        "chat & writing"
+      ],
+      "why_use": "Keeps the A3B's speed and two 96K slots in ~15 GiB, so subagents work on 24 GB Macs.",
+      "trade_offs": "~3-bit: less exact than the Q4, more mistakes in tool calls and edits.",
+      "pick_instead": [
+        {
+          "model": "qwen3.6-35b-a3b",
+          "when": "on 32 GB and up"
+        },
+        {
+          "model": "qwen3.8-27b-q3",
+          "when": "hard code on 24 GB"
+        }
+      ],
+      "hardware": "24 GB Macs (the default there)"
     },
     {
       "name": "qwen3.8-27b-iq3",
@@ -367,7 +489,25 @@
         "file": "Qwen3.8-27B-UD-IQ3_XXS.gguf",
         "sha256": "c0b7c3038681ed2e3040456c1dd45f9858b6c2290bed172c70388a94874f3eee",
         "bytes": 10934860704
-      }
+      },
+      "rank": 4,
+      "role": "The 27B where nothing larger fits",
+      "good_for": [
+        "hard code"
+      ],
+      "why_use": "The smallest 27B (10.9 GB): two 96K slots fit a 24 GB Mac, and with a raised GPU limit it can run on 16 GB.",
+      "trade_offs": "~3-bit IQ: the least exact 27B, more mistakes in tool calls and edits; slow (~10 tok/s on an M2 Max).",
+      "pick_instead": [
+        {
+          "model": "qwen3.8-27b-q3",
+          "when": "it fits (better quality)"
+        },
+        {
+          "model": "qwen3.6-35b-a3b-iq3",
+          "when": "you need speed"
+        }
+      ],
+      "hardware": "24 GB Macs; 16 GB with a raised GPU limit"
     }
   ]
 }

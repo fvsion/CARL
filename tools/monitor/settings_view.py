@@ -15,7 +15,7 @@ from .settings import (ADV_WARN, BACKEND_NAMES, LLAMA_ADV, MODEL_ROW_KEYS, NUMER
                        SettingsService, fmt_val, shown_value)
 from .state import SUBPANELS, Confirm, Download, PickItem, Picker, TuneRun, UIState
 
-MODEL_HEADER = f"{DIM}{'':2}{'model':<26} {'size':>8}  {'status':<10} {'fits':>5} {'':6} summary{R}"
+MODEL_HEADER = f"{DIM}{'':2}{'model':<26} {'size':>8}  {'status':<10} {'fits':>5} {'':6} role and good for{R}"
 PICKER_FOOT = ("↑↓ select · fits = largest window per slot that fits this Mac (q4_0, 1 slot) · "
                "download / add any GGUF from Hugging Face: ] Models panel (h)")
 WHY_KEY = {"specn": "spec", "presence": "temp", "top_k": "temp", "top_p": "temp", "min_p": "temp", "repeat": "temp"}
@@ -43,6 +43,37 @@ def subpanel_bar(sp: int) -> Row:
 def selectable(text: str, sel: bool, w: int, act: str) -> Ln:
     """A list line: › and reverse video when selected."""
     return Ln((f"{CYN}{B}›{R} " if sel else "  ") + (f"\x1b[7m{fit(text, w - 8)}{R}" if sel else text), act=act)
+
+
+GOOD_FOR_COLOUR = {"agent coding": GRN, "hard code": CYN, "chat & writing": B, "uncensored": RED}
+
+
+def good_for_chip(tag: str) -> str:
+    """A "good for" tag, coloured by kind."""
+    return f"{GOOD_FOR_COLOUR.get(tag, '')}[{tag}]{R}"
+
+
+def label_wrap(label: str, text: str, w: int, colour: str = "") -> List[CardLine]:
+    """A bold label on the first line, the text wrapped under it."""
+    pad = max(len(label) + 1, 11)                         # the same text column as lv(..., 11)
+    lines = wwrap(text, w - pad)
+    out: List[CardLine] = [f"{B}{label:<{pad}}{R}{colour}{lines[0]}{R}"]
+    return out + [f"{' ' * pad}{colour}{x}{R}" for x in lines[1:]]
+
+
+def speed_line(m: ModelInfo, tune: object) -> str:
+    """This Mac's measured speed after Auto-tune, else the catalogue's figure and the Mac it came from."""
+    t = jdict(tune)
+    st = jdict(t.get("settings"))
+    best = jdict(jdict(jdict(t.get("results")).get("speculation")).get(f"{st.get('spec')}:{st.get('spec_n')}"))
+    if best:
+        return (f"{GRN}{best.get('prose')} tok/s prose · {best.get('code')} code · {best.get('edit')} re-emitting{R} "
+                f"{DIM}(measured here, {t.get('date')}){R}")
+    measured = m.get("measured") or []
+    ref = jdict(measured[0]) if measured else {}
+    if ref.get("decode"):
+        return f"{ref['decode']} {DIM}(on an {ref.get('machine', '?')}; run Auto-tune for this Mac){R}"
+    return f"{DIM}not measured yet: run Auto-tune{R}"
 
 
 class SettingsView:
@@ -139,9 +170,11 @@ class SettingsView:
             buttons("  ", [("Yes, restart (y)" if run else "Yes, start (y)", "setyes"), ("Cancel (n)", "setno")])], w, 2)
 
     def model_info(self, p: Pending, key: str, w: int, lvl: int = 1) -> List[Row]:
-        """The selected model's card. Collapsed: tags and summary in the title. Normal: description,
-        recommended values next to yours, context zones, why for the selected row. Full: the whole
-        description, why for every tuned value, Auto-tune's measurements, source and file."""
+        """The selected model's card: what it is for and why, then how it is tuned.
+        Collapsed: name, role and tags in the title. Normal: good for, why use it, trade-offs,
+        hardware, speed, recommended values next to yours, context zones, why for the selected
+        row. Full: plus the description, what uncensored means, the alternatives, the quality
+        rank, why for every tuned value, Auto-tune's measurements, source and file."""
         svc = self.svc
         name = svc.resolved_model(p)
         m = svc.models.by_name(name)
@@ -152,16 +185,35 @@ class SettingsView:
         tags = [m["arch"].upper() if m.get("arch") else None, m.get("quant"),
                 f"{RED}abliterated{R}" if m.get("abliterated") else None, "custom" if m.get("custom") else None,
                 f"{GRN}tuned here {tune['date']}{R}" if tune else f"{DIM}catalogue tune{R}" if not m.get("custom") else f"{YEL}not tuned{R}"]
-        tagline = f"{DIM} · {R}".join(t for t in tags if t)
-        title_info = f"{B}{m.get('label', name)}{R}  {tagline}" + (f"  {DIM}{m.get('summary', '')}{R}" if lvl == 0 else "")
+        role = str(m.get("role") or m.get("summary") or "")
+        title_info = (f"{B}{m.get('label', name)}{R}  {CYN}{role}{R}  " + f"{DIM} · {R}".join(t for t in tags if t))
         tw = w - 4
         L: List[CardLine] = []
-        if m.get("summary"):
+        good = [str(t) for t in (m.get("good_for") or [])]
+        if good:
+            L.append(f"{B}{'Good for':<11}{R}" + "  ".join(good_for_chip(t) for t in good))
+        for field, label, colour in (("why_use", "Why use it", ""), ("trade_offs", "Trade-offs", YEL)):
+            text = str(m.get(field) or "")
+            if text:
+                L += label_wrap(label, text, tw, colour)
+        if m.get("hardware"):
+            L.append(f"{B}{'Hardware':<11}{R}{m['hardware']}")
+        L.append(f"{B}{'Speed':<11}{R}{speed_line(m, tune)}")
+        if lvl == 2:
+            if m.get("uncensored"):
+                L += [""] + label_wrap("Uncensored", str(m["uncensored"]), tw, RED)
+            alts = [jdict(a) for a in (m.get("pick_instead") or [])]
+            if alts:
+                L += ["", f"{B}Pick instead{R}"]
+                L += [f"  {CYN}{a.get('model')}{R} {DIM}when{R} {a.get('when')}" for a in alts]
+            if m.get("rank"):
+                L.append(f"{B}{'Quality':<11}{R}" + (f"rank {m['rank']} {DIM}(1 = best: parameters and density first, then quantization; "
+                                       f"speed is the reverse){R}"))
+            desc = wwrap(m.get("description", ""), tw)
+            if desc:
+                L += ["", *[f"{DIM}{x}{R}" for x in desc]]
+        elif not good and m.get("summary"):                 # custom models: no card text, the summary
             L += [f"{CYN}{x}{R}" for x in wwrap(m["summary"], tw)]
-        desc = wwrap(m.get("description", ""), tw)
-        L += [f"{DIM}{x}{R}" for x in (desc if lvl == 2 else desc[:4])]
-        if lvl == 1 and len(desc) > 4:
-            L.append(f"{DIM}… click the MODEL title for the full card{R}")
         L += ["", f"{B}Recommended for this model{R} {DIM}(Auto-tune > catalogue; yellow = yours differs){R}"]
         cells = []
         for pk, lab in (("kv", "KV cache"), ("ctx", "context"), ("slots", "slots"), ("spec", "speculation"),
@@ -176,8 +228,8 @@ class SettingsView:
                 L.append("  " + fit(cells[i], half) + (cells[i + 1] if i + 1 < len(cells) else ""))
         else:
             L += ["  " + c for c in cells]
-        good, slow, _ = svc.store.ctx_zones(m)
-        L.append(f"  {'zones':<13}{GRN}≤{ctx_label(good)} fast{R} · {YEL}≤{ctx_label(slow)} slow{R} · {RED}>{ctx_label(slow)} very slow{R} "
+        zg, zs, _ = svc.store.ctx_zones(m)
+        L.append(f"  {'zones':<13}{GRN}≤{ctx_label(zg)} fast{R} · {YEL}≤{ctx_label(zs)} slow{R} · {RED}>{ctx_label(zs)} very slow{R} "
                  f"{DIM}(cold re-read of a full window; {'measured here' if tune and tune.get('ctx_zones') else 'catalogue'}){R}")
         labels = {r.key: r.label for r in svc.schema.llama + LLAMA_ADV}
         why_all = jdict(m.get("why"))
@@ -188,6 +240,8 @@ class SettingsView:
             if why:
                 L += ["", f"{B}Why{R} {DIM}({labels.get(wk if wk != sel_wk else key, wk)}){R}"]
                 L += wwrap(why, tw)[: (12 if lvl == 2 else 6)]
+        if lvl == 1:
+            L += ["", f"{DIM}click the MODEL title for the full card: alternatives, what uncensored means, every reason, measurements{R}"]
         if lvl == 2:
             L += self._tune_table(tune)
             hf = jdict(m.get("hf"))
@@ -237,7 +291,8 @@ class SettingsView:
         fitc = (f"{(GRN if mx >= 65536 else YEL if mx >= 32768 else RED)}{ctx_label(mx) if mx else 'no fit':>5}{R}"
                 if mx is not None else f"{DIM}{'?':>5}{R}")
         head = f"{m['name']:<26} {size(m['bytes']):>8}  {st:<10}{' ' * max(0, 10 - vlen(st))} {fitc} {tuned} "
-        return head + f"{DIM}{m.get('summary', '')}{R}"
+        tags = " ".join(good_for_chip(str(t)) for t in (m.get("good_for") or []))
+        return head + f"{CYN}{m.get('role') or ''}{R} {tags} " + ("" if m.get("role") else f"{DIM}{m.get('summary', '')}{R}")
 
     def picker(self, pk: Picker, cols: int, height: int) -> List[Row]:
         """A drop-down list around its selection, with the selected model's description."""
@@ -251,7 +306,10 @@ class SettingsView:
             L.append(selectable(item if isinstance(item, str) else self.model_line(item), i == pk.sel, w, f"pick:{i}"))
         sel_item = pk.items[pk.sel][1]
         if not isinstance(sel_item, str):
-            L += ["", *[f"{DIM}{x}{R}" for x in wwrap(sel_item.get("description") or sel_item.get("summary", ""), w - 6)[:3]]]
+            L += ["", *[f"{DIM}{x}{R}" for x in wwrap(sel_item.get("why_use") or sel_item.get("description")
+                                                        or sel_item.get("summary", ""), w - 6)[:3]]]
+            if sel_item.get("trade_offs"):
+                L += [f"{YEL}{x}{R}" for x in wwrap(str(sel_item["trade_offs"]), w - 6)[:2]]
         L += ["", buttons("", [("Choose (Enter)", "pickok"), ("Cancel (Esc)", "pickno")]), f"{DIM}{pk.foot or PICKER_FOOT}{R}"]
         return indent(draw_card("picker", pk.title, f"{DIM}{n} {pk.noun}{R}", L, w, 2))
 

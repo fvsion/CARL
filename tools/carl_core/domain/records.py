@@ -15,6 +15,10 @@ from .settings import MODEL_KEYS, SCHEMA, coerce
 from .types import Catalog, JsonValue, LocalDb
 
 _NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
+# The "good for" tags a model card may carry; "uncensored" only on abliterated models.
+GOOD_FOR = ("agent coding", "hard code", "chat & writing", "uncensored")
+CARD_TEXT = ("role", "why_use", "trade_offs", "hardware", "uncensored")
+ROLE_MAX = 60
 
 
 def validate_name(name: object, where: str) -> str:
@@ -44,6 +48,30 @@ def _object(raw: object, where: str) -> Dict[str, JsonValue]:
     return raw
 
 
+def _card(entry: Dict[str, JsonValue], names: set[str], at: str) -> None:
+    """The model card fields: optional, but well-formed when present."""
+    for k in CARD_TEXT:
+        if k in entry and not isinstance(entry[k], str):
+            raise ConfigError(f"{at}: {k} must be text")
+    role = entry.get("role")
+    if isinstance(role, str) and len(role) > ROLE_MAX:
+        raise ConfigError(f"{at}: role must be at most {ROLE_MAX} characters (it is a headline)")
+    tags = entry.get("good_for", [])
+    if not isinstance(tags, list) or not all(isinstance(t, str) and t in GOOD_FOR for t in tags):
+        raise ConfigError(f"{at}: good_for must list tags from: {', '.join(GOOD_FOR)}")
+    if "uncensored" in tags and not entry.get("abliterated"):
+        raise ConfigError(f"{at}: only abliterated models may be tagged uncensored")
+    rank = entry.get("rank")
+    if rank is not None and (not isinstance(rank, int) or isinstance(rank, bool) or rank < 1):
+        raise ConfigError(f"{at}: rank must be a whole number >= 1 (1 = best quality)")
+    alts = entry.get("pick_instead", [])
+    if not isinstance(alts, list):
+        raise ConfigError(f"{at}: pick_instead must be a list")
+    for alt in alts:
+        if not (isinstance(alt, dict) and isinstance(alt.get("when"), str) and alt.get("model") in names):
+            raise ConfigError(f"{at}: pick_instead entries need a catalogue model and a when text")
+
+
 def parse_catalog(raw: object, where: str) -> Catalog:
     """The catalogue, checked. Raises ConfigError naming the bad entry."""
     if not isinstance(raw, dict) or raw.get("schema") != SCHEMA:
@@ -62,6 +90,10 @@ def parse_catalog(raw: object, where: str) -> Catalog:
         local_file_name(ref["file"])
         _settings(entry.get("tune", {}), f"{at}: tune")
         _zones(entry.get("ctx_zones"), f"{at}: ctx_zones")
+    names = {m.get("name") for m in models if isinstance(m, dict) and isinstance(m.get("name"), str)}
+    for m in models:
+        entry = _object(m, where)
+        _card(entry, cast("set[str]", names), f"{where}: {entry.get('name')}")
     return cast(Catalog, doc)
 
 
