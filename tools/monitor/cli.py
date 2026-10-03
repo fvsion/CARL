@@ -25,7 +25,7 @@ class Options:
     # from the environment
     home: str = ""
     demo: bool = False          # CARL_DEMO=1: README screenshots hide the key and the home path
-    key_file: str = ""          # API_KEY_FILE, else ~/.config/llm-deploy/api-key (carl_core.domain.apikey)
+    key_file: str = ""          # API_KEY_FILE, else ~/.config/carl/api-key (carl_core.domain.apikey)
     env_host: Optional[str] = None      # HOST
     vm_addr: str = "192.168.42.1"       # VM_HOST
 

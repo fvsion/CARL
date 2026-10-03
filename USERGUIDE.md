@@ -4,7 +4,7 @@ CARL: Can't Afford Remote LLMs.
 
 CARL runs a local Qwen coding model on an Apple Silicon Mac. You use the model from OpenCode or Pi. This guide tells you how to set up, run and use CARL. The clients can run in a VMware Fusion VM on the Mac, or directly on the Mac. For the technical details (architecture, repository layout, the llama.cpp server, how the thinking control works, model and quant choices, measurements, design reasons), see [REFERENCE.md](REFERENCE.md). For the short overview, see [README.md](README.md).
 
-Commands with the label **Mac** run in the CARL folder on the Mac (`~/LLM-Deploy`). Commands with the label **VM** run in the Kali VM. If you do not use a VM, all commands run on the Mac. See [Clients on the same Mac](#clients-on-the-same-mac-no-vm).
+Commands with the label **Mac** run in the CARL folder on the Mac (`~/CARL`). Commands with the label **VM** run in the Kali VM. If you do not use a VM, all commands run on the Mac. See [Clients on the same Mac](#clients-on-the-same-mac-no-vm).
 
 ## Contents
 
@@ -44,7 +44,7 @@ Commands with the label **Mac** run in the CARL folder on the Mac (`~/LLM-Deploy
    - `ansifilter` makes the logs easy to read.
    - If you forget this step, `./carl.sh` finds the missing tools and asks to install them with Homebrew. `SKIP_DEPS=1` skips this check. Homebrew itself is not installed automatically.
 
-2. **The API key:** the first server start makes the API key (`~/.config/llm-deploy/api-key`, mode 600, in a folder with mode 700) automatically, if it is missing. This is the same folder as `config.json`.
+2. **The API key:** the first server start makes the API key (`~/.config/carl/api-key`, mode 600, in a folder with mode 700) automatically, if it is missing. This is the same folder as `config.json`.
    - If you used CARL before 1.2.0, the first start of `./carl.sh llama` copies your old key (`~/.mtplx/api-key`) to the new path. It is the same key, so your clients continue to work.
    - The configs that `install.sh` writes refer to the key file. They do not contain the key.
 3. **Select and download a model.** The `fit` command shows which models fit in the GPU memory of this Mac. It also shows the largest context window for each model:
@@ -84,8 +84,8 @@ The VM needs Python 3 and curl. The staging folder for the client bundle is `~/D
    ```bash
    ./install.sh
    ```
-   - On the first run, the installer asks for the API key. Paste the contents of `~/.config/llm-deploy/api-key` from the Mac. Alternatively, put the key in a file with the name `api-key` next to `install.sh`, or set `CARL_API_KEY`.
-   - The installer keeps the key at `~/.config/llm-deploy/api-key`. It uses the key again on later runs.
+   - On the first run, the installer asks for the API key. Paste the contents of `~/.config/carl/api-key` from the Mac. Alternatively, put the key in a file with the name `api-key` next to `install.sh`, or set `CARL_API_KEY`.
+   - The installer keeps the key at `~/.config/carl/api-key`. It uses the key again on later runs.
    - At the end, the installer does a smoke test. If it shows `OK: llama.cpp reachable at http://192.168.42.1:8080/v1 -> "id":"qwen3.6-35b-a3b"` (the loaded model), you have a connection.
 4. **Start a client:** run `opencode` or `pi`. Both clients use the llama.cpp model by default. The OpenCode config is `~/.config/opencode/opencode.json`. The Pi configs are `~/.pi/agent/models.json` and `~/.pi/agent/settings.json`.
 
@@ -107,7 +107,7 @@ Use this procedure for a Mac without a VM, for example the Mac of a friend. The 
    ./client/install-clients.sh       # first time: OpenCode + Pi into ~/.local (fetches Node 22 for macOS if needed)
    ./client/install.sh --local       # configs pointing at this Mac's server, using its own key file
    ```
-   - On a Mac, `install.sh` uses `--local` by default. It sets the clients to the address that the server listens on now. This address is 127.0.0.1, or 192.168.42.1 if the server started for the VM. It reads the key directly from `~/.config/llm-deploy/api-key`.
+   - On a Mac, `install.sh` uses `--local` by default. It sets the clients to the address that the server listens on now. This address is 127.0.0.1, or 192.168.42.1 if the server started for the VM. It reads the key directly from `~/.config/carl/api-key`.
    - `install.sh` needs `python3`. If macOS asks you to install the command-line developer tools, accept. Alternatively, run `xcode-select --install`.
 3. **Start a client:** open a new terminal, so that `~/.local/bin` is on the `PATH`. Then run `opencode` or `pi`.
 
@@ -126,7 +126,7 @@ Use this procedure when the clients are not in the VMware Fusion VM and not on t
 - The address must exist on this Mac. The launcher always refuses `0.0.0.0`.
 - CAUTION: **With the LAN address, every computer on your network can connect to the server.** Only the API key protects it. Do not use the LAN address on a public or shared network.
 
-**2. Get the API key.** In the dashboard, open the Connect tab (tab 2), and push `k` to show the key. Or run `cat ~/.config/llm-deploy/api-key` on the server Mac.
+**2. Get the API key.** In the dashboard, open the Connect tab (tab 2), and push `k` to show the key. Or run `cat ~/.config/carl/api-key` on the server Mac.
 
 **3. On the client computer:** copy the `client/` folder to it. Then run:
 
@@ -135,7 +135,7 @@ Use this procedure when the clients are not in the VMware Fusion VM and not on t
 ./install.sh --host ADDR --key-file key.txt
 ```
 
-- `key.txt` is a file that contains only the key. Delete it after the installation; the installer keeps its own copy (`~/.config/llm-deploy/api-key`, mode 600).
+- `key.txt` is a file that contains only the key. Delete it after the installation; the installer keeps its own copy (`~/.config/carl/api-key`, mode 600).
 - If you do not give a key, the installer asks for it. The key does not show when you type it.
 - `--key KEY` also works. But then the key stays in your shell history. Thus, use the file or the prompt.
 
@@ -143,7 +143,7 @@ Use this procedure when the clients are not in the VMware Fusion VM and not on t
 
 1. **Make the zip:** `tools/make-share-zip.sh [OUT]` writes `../CARL-YYYYMMDD.zip`, or the file `OUT`. The zip holds one folder, `CARL/`.
    - The zip does not include caches, `.DS_Store` files or key files.
-   - Models, logs and the API key are outside the folder (`~/models`, `~/.config/llm-deploy`). Thus, the zip contains no personal data.
+   - Models, logs and the API key are outside the folder (`~/models`, `~/.config/carl`). Thus, the zip contains no personal data.
 2. **On the Mac of your friend:** unzip the file. Then do the steps in [Mac](#mac) and [Clients on the same Mac](#clients-on-the-same-mac-no-vm). In summary:
    - `brew install llama.cpp aria2 ansifilter`
    - `./carl.sh fit`
@@ -159,6 +159,8 @@ Use this procedure when the clients are not in the VMware Fusion VM and not on t
    | **`qwen3.6-35b-a3b-iq3`** (default on 24 GB: stock fast MoE, 14.1 GB) | 2 × 96K slots (the default) fit in ~15.3 GiB, thus subagents work. 1 slot can go to 256K. |
    | `qwen3.8-27b-iq3` (stock, the smallest 27B, 10.9 GB) | 2 × 96K slots (the default) fit, thus subagents work. 2 slots can go to ~128K each. 1 slot can go to 256K. |
    | `qwen3.8-27b-q3` (stock, 13.1 GB) | ~148K, 1 slot (the default 96K fits) |
+   | `heretic-35b-a3b-iq3` (abliterated fast MoE, 13.6 GB) | 2 × 96K slots fit, thus subagents work. No MTP head: n-gram speculation. |
+   | `orcarouter-27b-iq3` (abliterated, the smallest abliterated 27B, 12.6 GB) | 2 × 96K slots fit, thus subagents work. |
    | `orcarouter-27b-q3` (abliterated, 14.6 GB) | ~68K, 1 slot. Its default window is 64K (the one exception to the 96K floor: this build exists for 24 GB Macs). The start notes it and suggests `./carl.sh tune orcarouter-27b-q3`, which selects the largest window that fits. |
    | `qwen3.8-27b`, `orcarouter-27b` (Q4) | do not fit under the default limit |
    | `qwen3.6-35b-a3b` (Q4) | does not fit |
@@ -208,7 +210,9 @@ Use this procedure when the clients are not in the VMware Fusion VM and not on t
 | A 24 GB Mac (the default on that Mac) | `./carl.sh llama`, which selects `qwen3.6-35b-a3b-iq3` | `qwen3.6-35b-a3b` (the IQ3 uses the same name) |
 | A 24 GB Mac, stock | `./carl.sh llama --model qwen3.8-27b-q3` | `qwen3.8-27b` (the Q3 uses the same name) |
 | A 24 GB Mac, stock, the smallest 27B (10.9 GB) | `./carl.sh llama --model qwen3.8-27b-iq3` | `qwen3.8-27b` (the IQ3 uses the same name) |
-| A 24 GB Mac, uncensored | `./carl.sh llama --model orcarouter-27b-q3` | `qwen3.8-27b-abliterated-llama` |
+| A 24 GB Mac (or any Mac), uncensored and fast: the abliterated A3B | `./carl.sh llama --model heretic-35b-a3b-iq3` | `qwen3.6-35b-a3b` (same name as the stock 35B) |
+| A 24 GB Mac, uncensored 27B with subagents (2 × 96K) | `./carl.sh llama --model orcarouter-27b-iq3` | `qwen3.8-27b-abliterated-llama` |
+| A 24 GB Mac, uncensored 27B, better quality (1 slot) | `./carl.sh llama --model orcarouter-27b-q3` | `qwen3.8-27b-abliterated-llama` |
 
 **Key points:**
 - CAUTION: **Only one model can run at a time.** Stop the current server before you start a different server. Two models do not fit in 36 GB, and the collision breaks the model that runs.
@@ -364,9 +368,9 @@ The main agent keeps questions, explanations, code searches and small edits.
 - **To turn it off:** run `NO_CODER=1 ./install.sh`.
 - **Where it is:**
   - The only source files are `client/agents/coder.md` (frontmatter description = when to use; body = its instructions) and `client/agents/delegation.md` (the rule for the main agent). To change the coder, edit those files and run `install.sh` again.
-  - OpenCode: `agent.coder` in `opencode.json` (mode subagent, reasoning medium, no nested subagents, ≤80 steps), and `instructions`. Its prompt is in `~/.config/opencode/llm-deploy/coder.md`.
+  - OpenCode: `agent.coder` in `opencode.json` (mode subagent, reasoning medium, no nested subagents, ≤80 steps), and `instructions`. Its prompt is in `~/.config/opencode/carl/coder.md`.
   - Pi: `~/.pi/agent/agents/coder.md`, the `subagent` extension, and a marked block in `~/.pi/agent/APPEND_SYSTEM.md`.
-  - `install.sh` never replaces your own `coder` agent, Pi `agents/coder.md` or `extensions/subagent`. Our agent then gets the name `carl-coder` (before 1.2.0: `llm-deploy-coder`; a new run renames CARL's own one, with a backup), or the installer skips it and shows a note (if you also have your own `carl-coder`).
+  - `install.sh` never replaces your own `coder` agent, Pi `agents/coder.md` or `extensions/subagent`. Our agent then gets the name `carl-coder`, or the installer skips it and shows a note (if you also have your own `carl-coder`).
 
 ## 6. KV cache: q4 or q8
 
@@ -421,14 +425,14 @@ The Settings tab shows the description and the reasons next to the settings. The
 **Custom models (not in the catalogue):**
 - **Each `.gguf` in the models folder is a model.** `./carl.sh models` lists it with the source `file`. Its name is the file name in lower case, without `.gguf`. Vision projectors (`mmproj…`) and the second and later parts of a split GGUF are not listed.
 - **`./carl.sh download hf:OWNER/REPO/FILE.gguf` downloads any GGUF from Hugging Face.** It gets the revision, the size and the SHA-256 from the Hugging Face API. Then it downloads the file and verifies it. A `huggingface.co` URL to the file also works. `hf:OWNER/REPO` (no file) lists the GGUF files of the repo.
-- CARL records these models in `~/.config/llm-deploy/models.json`. This file also holds the Auto-tune results for each model on this Mac.
+- CARL records these models in `~/.config/carl/models.json`. This file also holds the Auto-tune results for each model on this Mac.
 - **A custom model gets its first settings from its GGUF header:** q4_0 KV, 96K for each slot (less only if the model was trained for less), and MTP + n-gram (1 draft) if the file has an MTP head. Without an MTP head: n-gram only (2 drafts). These settings are a guess. Run [Auto-tune](#auto-tune) to measure better values.
 - To start it: `./carl.sh llama --model NAME`. A path to a `.gguf` also works.
 - Before you use it from the clients, examine the chat template of the model. The thinking options are different between model families. The server answers with the loaded model for all model names, but the client sends the thinking options of the entry that you select.
 
 **To add a model to the catalogue** (for everyone who uses this folder):
 1. Copy an entry in `models` in `host/catalog.json`. Change `name`, `label`, `summary`, `description` and `alias` (the served name that the clients use), and write its model card (`role`, `good_for`, `why_use`, `trade_offs`, `pick_instead`, `hardware`, `rank`; `uncensored` for an abliterated model).
-2. Fill in `hf`: `repo`, `revision` (the commit SHA), `file`, `sha256` and `bytes`. The easy way: run `./carl.sh download hf:OWNER/REPO/FILE.gguf` first, and copy the `hf` block that it writes to `~/.config/llm-deploy/models.json`.
+2. Fill in `hf`: `repo`, `revision` (the commit SHA), `file`, `sha256` and `bytes`. The easy way: run `./carl.sh download hf:OWNER/REPO/FILE.gguf` first, and copy the `hf` block that it writes to `~/.config/carl/models.json`.
 3. Set `tune` and `why`. For `spec`, use `draft-mtp,ngram-mod` if the GGUF has an MTP head. Use `spec_n` 1, except for a MoE K-quant, where 2 can be better (the Q4 35B). Do not use 2 on an IQ quant. For a file without an MTP head, use `ngram-mod`. Run `./carl.sh tune NAME` to measure.
 4. Set `arch`, `mtp`, `min_ram_gb` and `ctx_zones`.
 5. Before you add the model to the clients, examine the chat template of the model. The thinking options are different between model families.
@@ -455,7 +459,7 @@ It does these steps. The model loads one time for each speculation mode.
    - If 96K does not fit (for example `orcarouter-27b-q3` on a 24 GB Mac), it selects the largest standard window that fits.
    - NOTE: The re-emit workload now copies `tools/carl_core/adapters/llama_server.py`. Thus, the re-emit scores are not directly comparable with older Auto-tune results.
 
-- CARL saves the result in `~/.config/llm-deploy/models.json`. Each later start of the model uses it. A value that you set in the settings file has priority ([section 8](#the-settings-file)).
+- CARL saves the result in `~/.config/carl/models.json`. Each later start of the model uses it. A value that you set in the settings file has priority ([section 8](#the-settings-file)).
 - CAUTION: **Auto-tune needs the GPU for itself.** It does not start if a server runs on port 8080, or if another large process (more than 8 GB, `BIG_GB`) or a known model server is in memory. `ALLOW_SECOND_MODEL=1` skips that check. Stop the server first. The **Auto-tune** panel of the dashboard stops the server for you, and starts it again after the tune.
 - Auto-tune uses its own server on port 8093 (`--port` changes it). `--dry-run` shows the result, but does not save it.
 
@@ -563,7 +567,7 @@ The Settings tab (tab 5) has three panels: **Server**, **Models** and **Auto-tun
 
 - CAUTION: **Apply stops the server.** Requests in progress stop. Make sure that no client waits for an answer.
 - **If the new server does not start,** the monitor starts the old server again with its old values. A message shows the last lines of the error.
-- **The monitor saves the settings in `~/.config/llm-deploy/config.json`** ([The settings file](#the-settings-file)). `./carl.sh llama` uses this file the next time. Flags and environment variables have priority over the file.
+- **The monitor saves the settings in `~/.config/carl/config.json`** ([The settings file](#the-settings-file)). `./carl.sh llama` uses this file the next time. Flags and environment variables have priority over the file.
   - Server-wide values go to the `llama` section. The monitor writes only values that are different from the defaults.
   - Model values (KV cache, context, slots, speculation, sampling) go to the profile of the model (`models.<name>`). The monitor writes only the values that are different from the tuned values of that model.
 - **`x` (Tuned values)** sets the defaults, and the tuned values of the selected model. Then apply.
@@ -600,7 +604,7 @@ The Settings tab (tab 5) has three panels: **Server**, **Models** and **Auto-tun
 
 ### The settings file
 
-The dashboard and the launchers keep your settings in `~/.config/llm-deploy/config.json`.
+The dashboard and the launchers keep your settings in `~/.config/carl/config.json`.
 
 | Section | What it holds |
 |---|---|
@@ -641,7 +645,7 @@ ls ~/models/logs/                         # one log per server start; llama-serv
 
 **Quick server checks (Mac):**
 ```bash
-K=$(cat ~/.config/llm-deploy/api-key)
+K=$(cat ~/.config/carl/api-key)
 curl -s -H "Authorization: Bearer $K" http://192.168.42.1:8080/v1/models          # which model is loaded
 curl -s -H "Authorization: Bearer $K" http://192.168.42.1:8080/props | python3 -c 'import json,sys; print(json.load(sys.stdin)["default_generation_settings"]["n_ctx"])'   # context window
 PID=$(netstat -anv -p tcp | awk '$6=="LISTEN" && $4 ~ /[.]8080$/ {n=split($(NF-8),a,":"); print a[n]; exit}')   # the server process
@@ -674,7 +678,7 @@ Then **fully restart OpenCode or Pi**.
   - `FILE.bak.<timestamp>`: the version from before each later change.
   - The summary shows the backups as `backed up`. If nothing changes, the installer writes nothing and makes no backup.
 - To go back to your own config, copy `FILE.before-carl` back to `FILE`. For example: `cp ~/.config/opencode/opencode.json.before-carl ~/.config/opencode/opencode.json`.
-- It stores the API key at `~/.config/llm-deploy/api-key` (mode 600). The configs refer to this key file. They do not contain the key.
+- It stores the API key at `~/.config/carl/api-key` (mode 600). The configs refer to this key file. They do not contain the key.
   - Before 1.2.0, the client copy was `~/.config/mtplx/api-key`. If the installer finds no other key, it uses that one. It changes old configs to the new path. It does not delete the old file (a provider of your own can use it): delete it yourself when nothing uses it.
   - The order of the key sources: `--key` / `--key-file`, `$CARL_API_KEY`, `./api-key` next to `install.sh`, the key file of the server (on a Mac with `--local`), the key from an earlier run, a prompt.
 - It replaces the `llamacpp` provider as a complete block. Thus, removed models do not stay in the config. (A deep merge never deletes keys, so old variants stayed in the configs.) It keeps your other providers and settings.
@@ -683,13 +687,14 @@ Then **fully restart OpenCode or Pi**.
 - It copies the plugins and the extensions. Then it does a smoke test of the server.
 
 **It does not overwrite settings that you own.** `client/configure.py` does the merge:
-- **It records our items** in `llm-deploy.json` next to each config (`~/.config/opencode/`, `~/.pi/agent/`). It identifies older installs by our provider names and the key path.
-- **Providers:** if you already have your own provider with the id `llamacpp`, it stays. The installer then adds ours next to it as `llm-deploy`.
+- **It records our items** in `carl.json` next to each config (`~/.config/opencode/`, `~/.pi/agent/`). It identifies older installs by our provider names and the key path.
+- **Providers:** if you already have your own provider with the id `llamacpp`, it stays. The installer then adds ours next to it as `carl`.
 - **Default model:** it sets the OpenCode `model` / `small_model` and the Pi defaults only if they are unset, or if they still have the value that it set before. If your default model is your own, it stays, and `small_model` follows it.
-- **Agents, prompts, extensions:** it never replaces your own `coder` agent, Pi `agents/coder.md` or `extensions/subagent`. Our coder becomes `carl-coder` (before 1.2.0: `llm-deploy-coder`), or the installer skips it and shows a note.
+- **Agents, prompts, extensions:** it never replaces your own `coder` agent, Pi `agents/coder.md` or `extensions/subagent`. Our coder becomes `carl-coder`, or the installer skips it and shows a note.
 - **Lists** (`plugin`, `instructions`): it adds our items to the end of the list, or removes them. It keeps your items.
 - **Report:** at the end, it shows a summary: added / updated / kept / removed.
 - **If you run it again with the same input, it changes nothing.**
+- **Formerly LLM-Deploy:** before 1.2.0, CARL's files had the name `llm-deploy`: the folder `~/.config/llm-deploy`, the records `llm-deploy.json`, the prompt folder `~/.config/opencode/llm-deploy/`, the provider `llm-deploy` and the coder `llm-deploy-coder`. The first `./carl.sh` command (or this installer) moves the folder to `~/.config/carl` and leaves a link with the old name, so the old configs keep working. The installer then changes CARL's own items to the new names (`carl.json`, `~/.config/opencode/carl/`, `carl`, `carl-coder`), with the usual backups. Your own items with these names stay.
 
 On the Mac (no VM), run `./client/install.sh --local` again from the CARL folder.
 
@@ -733,7 +738,7 @@ The options of the installer:
 | `CARL needs: llama.cpp aria2 ansifilter (not installed)` | Homebrew tools are missing | Answer `Y`, and CARL runs `brew install`. Or install them yourself. `SKIP_DEPS=1` skips the check. If Homebrew is missing, install it first (https://brew.sh). |
 | `No model is downloaded yet.` | A new installation | Answer `Y` to download the default for this Mac. Or answer `n`: the dashboard opens without a server, and you can download a model in its **Models** panel. |
 | `default model X is not downloaded; using Y (downloaded)` | The default model for this Mac is not downloaded, but another model is | This is the expected result. To use the default, run `./carl.sh download default`. To always use Y, select it in the Settings tab, or run `./carl.sh config set llama.model Y`. |
-| `error: models.NAME.ctx: ... is out of range` (or a different key) | A bad value in `~/.config/llm-deploy/config.json` | Correct the value, or remove it with `./carl.sh config unset KEY`. `./carl.sh config show` lists the valid keys. |
+| `error: models.NAME.ctx: ... is out of range` (or a different key) | A bad value in `~/.config/carl/config.json` | Correct the value, or remove it with `./carl.sh config unset KEY`. `./carl.sh config show` lists the valid keys. |
 | `error: a server is running on port 8080: stop it first` from `./carl.sh tune` | Auto-tune needs the GPU for itself | Stop the server first, or run Auto-tune from the dashboard (Settings, **Auto-tune** panel): it stops and starts the server for you. |
 | `error: another large process (probably a model) is in memory` from `./carl.sh tune` | A different model server, or another process larger than 8 GB (`BIG_GB`), runs | Stop it first. If the process is not a model, run with `ALLOW_SECOND_MODEL=1`. |
 
@@ -758,7 +763,7 @@ tools/llama-wait-idle.sh 1200 && tools/llama-ab.sh all
 
 | Tool | Purpose |
 |---|---|
-| `./carl.sh tune NAME [--quick]` (`tools/carl-tune.py`) | Auto-tune: memory, speculation modes, prompt reading at 8K/32K/64K. It saves the result for this Mac in `~/.config/llm-deploy/models.json`. |
+| `./carl.sh tune NAME [--quick]` (`tools/carl-tune.py`) | Auto-tune: memory, speculation modes, prompt reading at 8K/32K/64K. It saves the result for this Mac in `~/.config/carl/models.json`. |
 | `tools/llama-spec-sweep.sh CFG...` + `tools/llama-spec-bench.py` | A speculative-decoding sweep. The sweep restarts the server for each config. The bench measures prose, code and edit decode speed. NOTE: the edit workload re-emits the source of `llama-spec-bench.py`, which was rewritten in 1.1.0. Thus, new edit numbers are not directly comparable with older measurements. |
 | `tools/llama-ab.sh [kv\|ub\|all]` | An A/B test of the KV type and `-ub`. It uses `tools/llama-kv-longctx.py` and `tools/llama-ab-measure.py`. It restarts the server. |
 | `tools/llama-kv-longctx.py` | A ~64K haystack with 8 needles: cold prefill, decode, append, recall. |
@@ -817,7 +822,7 @@ python3 -m unittest discover -s tests/monitor -t tests/monitor   # the dashboard
 | `./carl.sh verify [NAME...]` | verify downloaded models (size and SHA-256); no names: every downloaded model |
 | `./carl.sh delete NAME` | delete a downloaded model file |
 | `./carl.sh tune NAME [--quick]` | Auto-tune a model for this Mac: speculation, context window, slots (~5–10 min; stop the server first) |
-| `./carl.sh config [show\|path\|get KEY\|set KEY VALUE\|unset KEY]` | the settings file `~/.config/llm-deploy/config.json`; KEY like `llama.net` or `models.NAME.ctx` |
+| `./carl.sh config [show\|path\|get KEY\|set KEY VALUE\|unset KEY]` | the settings file `~/.config/carl/config.json`; KEY like `llama.net` or `models.NAME.ctx` |
 | `./host/models.sh list\|download\|verify\|delete NAME\|path NAME\|get NAME FIELD\|default\|downloaded` | the models tool (a wrapper around `tools/carl.py`; `./carl.sh models\|download\|verify\|delete` use it): list, download, verify, delete, the local path, one field, the default model for this Mac, the downloaded models |
 | `./carl.sh -h` | print the help: overview of all commands; `<command> -h` for one command |
 | `./carl.sh --help-adv` | all `llama-server` flags |
@@ -842,7 +847,7 @@ python3 -m unittest discover -s tests/monitor -t tests/monitor   # the dashboard
 | `MONITOR=0` | no monitor: the server runs in the foreground |
 | `ALLOW_SECOND_MODEL=1` | start even when a process larger than 8 GB (`BIG_GB`) is in memory. CAUTION: a second model can stop the Mac. |
 | `NET=local\|vm\|auto`, `VM_HOST` | network mode / the VM address (default 192.168.42.1) |
-| `SETTINGS_FILE=none` | ignore the saved settings in `~/.config/llm-deploy/config.json` |
+| `SETTINGS_FILE=none` | ignore the saved settings in `~/.config/carl/config.json` |
 | `MODELS_DIR` | the models folder (default `~/models/gguf`; also `paths.models_dir` in config.json) |
 | `SKIP_DEPS=1` | do not check for the Homebrew tools (`llama-server`, `aria2c`, `ansifilter`) |
 

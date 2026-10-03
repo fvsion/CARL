@@ -187,7 +187,7 @@ const plugin = {
 
     // /switch and the command palette (legacy command API: present in 1.18.x)
     const unreg = api.command?.register?.(() => [{
-      title: "Switch session", value: "llm-deploy.session.switch", category: "Session",
+      title: "Switch session", value: "carl.session.switch", category: "Session",
       description: "Recent sessions of this project, with their state",
       slash: { name: "switch" },
       onSelect: () => picker(routeSessionID(api)),

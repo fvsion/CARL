@@ -2,7 +2,7 @@
 # Wires OpenCode and Pi to the model server (llama.cpp, port 8080).
 # Runs in the VMware VM (Linux) or directly on a Mac. Existing configs are
 # merged without overwriting what you own (client/configure.py): our providers,
-# defaults and agents are tracked in llm-deploy.json next to each config; a
+# defaults and agents are tracked in carl.json next to each config; a
 # backup is written before any change.
 #
 #   ./install.sh                     auto: on macOS = --local, on Linux = --vm
@@ -25,12 +25,11 @@
 # Re-run after restarting the server with a different --ctx.
 #
 # API key source (first hit wins): --key / --key-file, $CARL_API_KEY, ./api-key next to
-# this script, the server's own key file on a Mac (~/.config/llm-deploy/api-key), the
+# this script, the server's own key file on a Mac (~/.config/carl/api-key), the
 # key stored by a previous run, an interactive prompt. Stored at
-# ~/.config/llm-deploy/api-key (0600; on the server Mac that is the server's own file).
-# Before 1.2.0 the keys were ~/.mtplx/api-key (server) and ~/.config/mtplx/api-key
-# (client): both are still read when the new file doesn't exist yet. Re-running this
-# script also takes the MTPLX provider, plugin and Pi extension of an earlier install out.
+# ~/.config/carl/api-key (0600; on the server Mac that is the server's own file).
+# Earlier key files are still read while the new one doesn't exist yet. Re-running
+# this script also brings an earlier install up to date (old names, MTPLX pieces).
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -46,7 +45,7 @@ while [[ $# -gt 0 ]]; do
     --port) LLAMA_PORT="${2:?--port needs a port}"; shift ;;
     --key-file) f="${2:?--key-file needs a file}"; [[ -r "$f" ]] || { echo "error: cannot read $f" >&2; exit 1; }
                 ARG_KEY="$(tr -d '[:space:]' < "$f")"; shift ;;
-    -h|--help) sed -n '2,33p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,32p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) pos+=("$1") ;;
   esac
   shift
@@ -88,9 +87,22 @@ python3 -c 'import json' 2>/dev/null || {
 
 # The clients' copy of the key. On the server Mac it is the server's own key file
 # (host/common.sh uses the same path), so --local needs no copy.
-KEY_DIR="$HOME/.config/llm-deploy"
+KEY_DIR="$HOME/.config/carl"
 KEY_FILE="$KEY_DIR/api-key"
-# Before 1.2.0: the server's key lived in MTPLX's folder, the clients' copy here.
+# Before the rename in 1.2.0 the folder was ~/.config/llm-deploy (CARL was called
+# LLM-Deploy). Moved once, as host/common.sh's migrate_conf_dir does on the server
+# (on a Mac that is both, whichever runs first moves it); a symlink stays at the old
+# path, so configs that still read the key there work until configure.py rewrites them.
+OLD_KEY_DIR="$HOME/.config/llm-deploy"
+if [[ -d "$OLD_KEY_DIR" && ! -L "$OLD_KEY_DIR" && ! -e "$KEY_DIR" && ! -L "$KEY_DIR" ]]; then
+  if mv "$OLD_KEY_DIR" "$KEY_DIR"; then
+    chmod 700 "$KEY_DIR"
+    find "$KEY_DIR" -maxdepth 1 -type f -exec chmod go-rwx {} +
+    ln -s carl "$OLD_KEY_DIR" 2>/dev/null || true
+    echo "Moved $(tilde "$OLD_KEY_DIR") to $(tilde "$KEY_DIR") (CARL's new name; the old path links to it)"
+  fi
+fi
+# Before 1.2.0: the server's key lived in MTPLX's folder, the clients' copy in ~/.config/mtplx.
 OLD_SERVER_KEY="$HOME/.mtplx/api-key"
 OLD_KEY_FILE="$HOME/.config/mtplx/api-key"
 
@@ -104,6 +116,9 @@ elif [[ -f "$HERE/api-key" ]]; then
 elif [[ -s "$KEY_FILE" ]]; then
   key="$(tr -d '[:space:]' < "$KEY_FILE")"
   echo "Using the API key in $(tilde "$KEY_FILE")"
+elif [[ -s "$OLD_KEY_DIR/api-key" ]]; then
+  key="$(tr -d '[:space:]' < "$OLD_KEY_DIR/api-key")"
+  echo "Reusing the API key from $(tilde "$OLD_KEY_DIR/api-key"); it now lives in $(tilde "$KEY_FILE")"
 elif [[ "$MODE" == local && -s "$OLD_SERVER_KEY" ]]; then
   key="$(tr -d '[:space:]' < "$OLD_SERVER_KEY")"
   echo "Using the local server's API key from before 1.2.0 ($(tilde "$OLD_SERVER_KEY"))"
@@ -111,7 +126,7 @@ elif [[ -s "$OLD_KEY_FILE" ]]; then
   key="$(tr -d '[:space:]' < "$OLD_KEY_FILE")"
   echo "Reusing the API key from $(tilde "$OLD_KEY_FILE") (before 1.2.0); it now lives in $(tilde "$KEY_FILE")"
 else
-  read -rsp "API key (on the server Mac: cat ~/.config/llm-deploy/api-key, or the monitor's CONNECT section): " key; echo
+  read -rsp "API key (on the server Mac: cat ~/.config/carl/api-key, or the monitor's CONNECT section): " key; echo
 fi
 key="${key#"${key%%[![:space:]]*}"}"; key="${key%"${key##*[![:space:]]}"}"   # trim (a pasted newline)
 [[ -n "$key" ]] || { echo "error: empty API key" >&2; exit 1; }
@@ -169,16 +184,21 @@ if [[ "${NO_CODER:-0}" == 1 ]]; then CODER=0; coder_src="NO_CODER=1"
 elif [[ "${CODER:-}" == 1 ]]; then CODER=1; coder_src="CODER=1"
 elif [[ -n "$slots" ]]; then
   if (( slots >= 2 )); then CODER=1; coder_src="server has $slots slots"; else CODER=0; coder_src="server has 1 slot: delegating would evict the main session"; fi
-elif grep -qs '"coder_agent"' "$HOME/.config/opencode/llm-deploy.json" || [[ ! -f "$HOME/.config/opencode/llm-deploy.json" ]]; then CODER=1; coder_src="server not reachable; keeping it on"
-else CODER=0; coder_src="server not reachable; keeping it off"; fi
+else
+  # the state file configure.py keeps (llm-deploy.json before the rename; it moves it)
+  oc_state="$HOME/.config/opencode/carl.json"
+  [[ -f "$oc_state" ]] || oc_state="$HOME/.config/opencode/llm-deploy.json"
+  if grep -qs '"coder_agent"' "$oc_state" || [[ ! -f "$oc_state" ]]; then CODER=1; coder_src="server not reachable; keeping it on"
+  else CODER=0; coder_src="server not reachable; keeping it off"; fi
+fi
 echo "coder subagent: $([[ $CODER == 1 ]] && echo on || echo off) ($coder_src)"
 
 # --- OpenCode + Pi configs (client/configure.py) --------------------------------
 # Merges our providers, defaults, coder agent, sidebar and extensions into the
 # existing configs without overwriting anything the user owns: a provider of
-# your own named "llamacpp" stays, and ours is added as "llm-deploy"; your
+# your own named "llamacpp" stays, and ours is added as "carl"; your
 # default model, agents and extensions are kept. Our MTPLX pieces from before
-# 1.2.0 are removed. Backups: *.bak.<time>.
+# 1.2.0 are removed, and the pieces named llm-deploy get CARL's names. Backups: *.bak.<time>.
 python3 "$HERE/configure.py" --bundle "$HERE" --home "$HOME" --host "$HOST" \
   --llama-port "$LLAMA_PORT" --ctx "$ctx" --coder "$CODER" --sidebar "$([[ "${NO_SIDEBAR:-0}" == 1 ]] && echo 0 || echo 1)" \
   --switcher "$([[ "${NO_SWITCHER:-0}" == 1 ]] && echo 0 || echo 1)"

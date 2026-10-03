@@ -18,7 +18,7 @@ Tabs (click, or keys 1-5 / Tab):
                 slots, speculation, RAM cache, network, sampling; the right side
                 explains the model and why each value is tuned that way; values
                 are coloured (green tuned / fast, yellow changed / slower, red very
-                slow). Saved to ~/.config/llm-deploy/config.json, applied by a
+                slow). Saved to ~/.config/carl/config.json, applied by a
                 restart (the old server starts again if the new one fails)
               Models: catalogue + every .gguf in the models folder; download,
                 verify, delete, add any GGUF from Hugging Face

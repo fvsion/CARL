@@ -15,7 +15,7 @@ Steps (the model loads once per speculation mode, ~5-10 min in all):
   4. result: kv q4_0, the best speculation, the context (96K when it fits; above that the
      catalogue's window while a cold read of it is no worse than "slow" here and it fits,
      else the largest standard window in the fast zone), 2 slots when two windows fit.
-     Saved to ~/.config/llm-deploy/models.json (models.NAME.tune); every start of NAME
+     Saved to ~/.config/carl/models.json (models.NAME.tune); every start of NAME
      uses it unless config.json sets a value (the monitor's Settings tab).
 
 Needs the GPU to itself: refuses to run while another model is loaded

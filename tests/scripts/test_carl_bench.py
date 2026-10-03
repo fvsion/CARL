@@ -80,7 +80,7 @@ class KeyAndCorpusTests(unittest.TestCase):
             env = {"HOME": home}
             with mock.patch.dict(os.environ, env), mock.patch.dict(os.environ, {"API_KEY_FILE": ""}):
                 self.assertEqual(cb.read_api_key(), "oldkey")
-                new = os.path.join(home, ".config", "llm-deploy", "api-key")
+                new = os.path.join(home, ".config", "carl", "api-key")
                 os.makedirs(os.path.dirname(new))
                 with open(new, "w", encoding="utf-8") as f:
                     f.write("newkey")

@@ -1,10 +1,12 @@
 """client/configure.py against a throw-away home: fresh install, re-run, user-owned
-entries, the coder switch, argument validation, and taking the MTPLX pieces of a
-pre-1.2.0 install out (ours only)."""
+entries, the coder switch, argument validation, taking the MTPLX pieces of a
+pre-1.2.0 install out (ours only), and moving an install from before the rename
+(llm-deploy names) to CARL's names."""
 from __future__ import annotations
 
 import json
 import os
+import socket
 import stat
 import subprocess
 import sys
@@ -48,7 +50,7 @@ class ConfigureTests(unittest.TestCase):
         oc = self.read_json(".config/opencode/opencode.json")
         prov = oc["provider"]["llamacpp"]
         self.assertEqual(prov["options"]["baseURL"], "http://192.168.42.1:8080/v1")
-        self.assertEqual(prov["options"]["apiKey"], "{file:" + self.home + "/.config/llm-deploy/api-key}")
+        self.assertEqual(prov["options"]["apiKey"], "{file:" + self.home + "/.config/carl/api-key}")
         self.assertEqual(set(oc["provider"]), {"llamacpp"})
         self.assertNotIn("plugin", oc)
         self.assertTrue(all(m["limit"]["context"] == 65536 for m in prov["models"].values()))
@@ -56,12 +58,14 @@ class ConfigureTests(unittest.TestCase):
         self.assertIn("coder", oc["agent"])
         pi = self.read_json(".pi/agent/models.json")
         self.assertEqual(set(pi["providers"]), {"llamacpp"})
-        self.assertEqual(pi["providers"]["llamacpp"]["apiKey"], "!cat ~/.config/llm-deploy/api-key")
+        self.assertEqual(pi["providers"]["llamacpp"]["apiKey"], "!cat ~/.config/carl/api-key")
         self.assertFalse(os.path.exists(self.path(".pi/agent/extensions/mtplx-request-policy.ts")))
         self.assertFalse(os.path.exists(self.path(".config/opencode/plugins/mtplx-session-headers")))
         self.assertTrue(os.path.exists(self.path(".pi/agent/agents/coder.md")))
-        for rel in (".config/opencode/opencode.json", ".config/opencode/llm-deploy.json", ".pi/agent/models.json",
-                    ".pi/agent/settings.json"):
+        self.assertEqual(oc["instructions"], [self.path(".config/opencode/carl/delegation.md")])
+        self.assertEqual(oc["agent"]["coder"]["prompt"], "{file:" + self.path(".config/opencode/carl/coder.md") + "}")
+        for rel in (".config/opencode/opencode.json", ".config/opencode/carl.json", ".pi/agent/models.json",
+                    ".pi/agent/settings.json", ".pi/agent/carl.json"):
             self.assertEqual(stat.S_IMODE(os.stat(self.path(rel)).st_mode), 0o600, rel)
 
     def test_rerun_changes_nothing(self) -> None:
@@ -80,11 +84,12 @@ class ConfigureTests(unittest.TestCase):
         self.assertEqual(p.returncode, 0, p.stderr)
         oc = self.read_json(".config/opencode/opencode.json")
         self.assertEqual(oc["provider"]["llamacpp"], {"name": "mine"})
-        self.assertIn("llm-deploy", oc["provider"])
+        self.assertIn("carl", oc["provider"])
+        self.assertEqual(oc["provider"]["carl"]["name"], "llama.cpp (Mac host) [carl]")
         self.assertEqual(oc["model"], "other/model")
         self.assertEqual(oc["agent"]["coder"], {"prompt": "mine"})
         self.assertIn("carl-coder", oc["agent"])                           # ours, next to the user's own coder
-        with open(self.path(".config/opencode/llm-deploy/delegation.md"), encoding="utf-8") as f:
+        with open(self.path(".config/opencode/carl/delegation.md"), encoding="utf-8") as f:
             self.assertIn("`carl-coder`", f.read())
         self.assertTrue(os.path.exists(self.path(".config/opencode/opencode.json.before-carl")))
 
@@ -137,13 +142,14 @@ class ConfigureTests(unittest.TestCase):
         oc = self.read_json(".config/opencode/opencode.json")
         self.assertEqual(set(oc["provider"]), {"llamacpp"})
         self.assertEqual(oc["provider"]["llamacpp"]["options"]["apiKey"],
-                         "{file:" + self.home + "/.config/llm-deploy/api-key}")       # rewritten to the new key path
+                         "{file:" + self.home + "/.config/carl/api-key}")             # rewritten to the new key path
         self.assertEqual(oc["plugin"], ["/home/u/my-plugin"])                          # the user's plugin stays
         self.assertFalse(os.path.exists(self.path(".config/opencode/plugins/mtplx-session-headers")))
-        self.assertEqual(self.read_json(".config/opencode/llm-deploy.json")["providers"], {"llamacpp": "llamacpp"})
+        self.assertEqual(self.read_json(".config/opencode/carl.json")["providers"], {"llamacpp": "llamacpp"})
+        self.assertFalse(os.path.exists(self.path(".config/opencode/llm-deploy.json")))   # the old state file
         pi = self.read_json(".pi/agent/models.json")
         self.assertEqual(set(pi["providers"]), {"llamacpp"})
-        self.assertEqual(pi["providers"]["llamacpp"]["apiKey"], "!cat ~/.config/llm-deploy/api-key")
+        self.assertEqual(pi["providers"]["llamacpp"]["apiKey"], "!cat ~/.config/carl/api-key")
         self.assertFalse(os.path.exists(self.path(".pi/agent/extensions/mtplx-request-policy.ts")))
         for rel in (".config/opencode/opencode.json", ".pi/agent/models.json"):
             self.assertTrue(os.path.exists(self.path(rel + ".before-carl")), rel)     # the usual backups
@@ -190,7 +196,8 @@ class ConfigureTests(unittest.TestCase):
         self.assertIn("kept      Pi extensions/mtplx-request-policy.ts (yours)", p.stdout)
 
     # ---------------------------------------------------------------- the coder's name
-    CARL_PROMPT = "{file:/h/.config/opencode/llm-deploy/coder.md}"     # what makes an OpenCode agent ours
+    CARL_PROMPT = "{file:/h/.config/opencode/llm-deploy/coder.md}"     # what made an OpenCode agent ours (before the rename)
+    NEW_PROMPT = "{file:/h/.config/opencode/carl/coder.md}"            # ... and since
     PI_OURS = "---\nname: coder\n---\nYou are **coder**, a specialist software engineer.\n"
 
     def test_fresh_install_names_it_coder_everywhere(self) -> None:
@@ -256,7 +263,7 @@ class ConfigureTests(unittest.TestCase):
 
     def test_coder_off_removes_ours_under_every_name_only(self) -> None:
         mine = {"prompt": "mine"}
-        self.write_json(".config/opencode/opencode.json", {"agent": {"coder": mine, "carl-coder": {"prompt": self.CARL_PROMPT},
+        self.write_json(".config/opencode/opencode.json", {"agent": {"coder": mine, "carl-coder": {"prompt": self.NEW_PROMPT},
                                                                      "llm-deploy-coder": {"prompt": self.CARL_PROMPT}}})
         self.write_text(".pi/agent/agents/coder.md", "my own agent\n")
         self.write_text(".pi/agent/agents/carl-coder.md", self.PI_OURS)
@@ -265,6 +272,155 @@ class ConfigureTests(unittest.TestCase):
         self.assertEqual(self.read_json(".config/opencode/opencode.json")["agent"], {"coder": mine})
         self.assertTrue(os.path.exists(self.path(".pi/agent/agents/coder.md")))
         self.assertFalse(os.path.exists(self.path(".pi/agent/agents/carl-coder.md")))
+
+    # ---------------------------------------------------------------- the rename: llm-deploy -> carl
+    OLD_KEY = "{file:%s/.config/llm-deploy/api-key}"
+    PI_EXT_OLD = "// Changes for LLM-Deploy, all marked \"LLM-Deploy:\"\n// LLM-Deploy: the agents\n"
+    USER_SYSTEM = "Always answer in English."
+
+    def llm_deploy_install(self, alt: bool = False) -> None:
+        """What CARL 1.2.0 before the rename left in a home (a copy of a real one, trimmed): the
+        llm-deploy state files, prompt folder, key path, Pi extension marker and APPEND_SYSTEM
+        block. alt: the user owns "llamacpp", so ours is "llm-deploy" and the defaults point at it."""
+        oc = self.path(".config/opencode")
+        ours = "llm-deploy" if alt else "llamacpp"
+        prov = {"npm": "@ai-sdk/openai-compatible", "name": "llama.cpp (Mac host)" + (" [llm-deploy]" if alt else ""),
+                "options": {"baseURL": "http://127.0.0.1:8080/v1", "apiKey": self.OLD_KEY % self.home}, "models": {}}
+        providers: dict[str, Any] = {ours: prov}
+        if alt:
+            providers["llamacpp"] = {"name": "my llama", "options": {"apiKey": "{env:MY_KEY}"}}
+        default = f"{ours}/qwen3.6-35b-a3b"
+        self.write_json(".config/opencode/opencode.json", {
+            "$schema": "https://opencode.ai/config.json", "provider": providers, "model": default, "small_model": default,
+            "agent": {"coder": {"mode": "subagent", "prompt": "{file:" + oc + "/llm-deploy/coder.md}"}},
+            "instructions": [oc + "/llm-deploy/delegation.md", "/home/u/my-rules.md"]})
+        self.write_text(".config/opencode/llm-deploy/coder.md", "You are **coder**, a specialist software engineer.\n")
+        self.write_text(".config/opencode/llm-deploy/delegation.md", "## Delegating to the coder\n")
+        self.write_json(".config/opencode/llm-deploy.json", {"model": default, "small_model": default, "coder_agent": "coder",
+                                                             "providers": {"llamacpp": ours}})
+        pi_prov = {"baseUrl": "http://127.0.0.1:8080/v1", "apiKey": "!cat ~/.config/llm-deploy/api-key", "models": []}
+        pi_providers: dict[str, Any] = {ours: pi_prov}
+        if alt:
+            pi_providers["llamacpp"] = {"baseUrl": "http://10.0.0.5:8080/v1", "apiKey": "MY_KEY", "models": []}
+        self.write_json(".pi/agent/models.json", {"providers": pi_providers})
+        settings = {"defaultProvider": ours, "defaultModel": "qwen3.6-35b-a3b", "defaultThinkingLevel": "low"}
+        self.write_json(".pi/agent/settings.json", settings)
+        self.write_json(".pi/agent/llm-deploy.json", {"settings": settings, "subagent_ext": True, "coder_agent": "coder",
+                                                      "providers": {"llamacpp": ours}})
+        self.write_text(".pi/agent/agents/coder.md", self.PI_OURS)
+        self.write_text(".pi/agent/extensions/subagent/index.ts", self.PI_EXT_OLD)
+        self.write_text(".pi/agent/APPEND_SYSTEM.md", "<!-- llm-deploy:delegation begin -->\nold rule\n"
+                                                      "<!-- llm-deploy:delegation end -->\n\n" + self.USER_SYSTEM + "\n")
+
+    def read_text(self, rel: str) -> str:
+        with open(self.path(rel), encoding="utf-8") as f:
+            return f.read()
+
+    def test_llm_deploy_install_gets_carl_names(self) -> None:
+        self.llm_deploy_install()
+        p = self.run_configure("--coder", "1")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        oc_dir = self.path(".config/opencode")
+        oc = self.read_json(".config/opencode/opencode.json")
+        self.assertEqual(set(oc["provider"]), {"llamacpp"})
+        self.assertEqual(oc["provider"]["llamacpp"]["options"]["apiKey"], "{file:" + self.home + "/.config/carl/api-key}")
+        self.assertEqual((oc["model"], oc["small_model"]), ("llamacpp/qwen3.6-35b-a3b",) * 2)
+        self.assertEqual(oc["agent"]["coder"]["prompt"], "{file:" + oc_dir + "/carl/coder.md}")
+        self.assertEqual(oc["instructions"], ["/home/u/my-rules.md", oc_dir + "/carl/delegation.md"])
+        self.assertEqual(sorted(os.listdir(self.path(".config/opencode/carl"))), ["coder.md", "delegation.md"])
+        self.assertFalse(os.path.exists(self.path(".config/opencode/llm-deploy")))
+        # the state files: moved to carl.json (same content, plus this run), a copy of the old one kept
+        for folder, client in ((".config/opencode", "OpenCode"), (".pi/agent", "Pi")):
+            self.assertFalse(os.path.exists(self.path(folder + "/llm-deploy.json")), folder)
+            self.assertTrue(any(f.startswith("llm-deploy.json.bak.") for f in os.listdir(self.path(folder))), folder)
+            st = self.read_json(folder + "/carl.json")
+            self.assertEqual((st["providers"], st["coder_agent"]), ({"llamacpp": "llamacpp"}, "coder"), folder)
+            self.assertIn(f"{client} state file ~/{folder}/llm-deploy.json -> carl.json", p.stdout)
+        pi = self.read_json(".pi/agent/models.json")
+        self.assertEqual(pi["providers"]["llamacpp"]["apiKey"], "!cat ~/.config/carl/api-key")
+        self.assertEqual(self.read_json(".pi/agent/settings.json")["defaultProvider"], "llamacpp")
+        ext = self.read_text(".pi/agent/extensions/subagent/index.ts")       # ours: replaced by the bundled copy
+        self.assertIn('all marked "CARL:"', ext)
+        self.assertNotIn("LLM-Deploy", ext)
+        system = self.read_text(".pi/agent/APPEND_SYSTEM.md")
+        self.assertTrue(system.startswith(self.USER_SYSTEM + "\n\n<!-- carl:delegation begin -->\n"), system)
+        self.assertNotIn("llm-deploy", system)
+        self.assertEqual(system.count("delegation begin"), 1)
+        for rel in (".config/opencode/opencode.json", ".pi/agent/models.json", ".pi/agent/APPEND_SYSTEM.md"):
+            self.assertTrue(os.path.exists(self.path(rel + ".before-carl")), rel)          # the usual backups
+        self.assertIn("removed   ~/.config/opencode/llm-deploy (CARL's prompts are in carl/ now)", p.stdout)
+        again = self.run_configure("--coder", "1")                                         # moved once
+        self.assertEqual(again.returncode, 0, again.stderr)
+        for kind in ("added", "updated", "removed"):
+            self.assertNotIn(kind, again.stdout)
+
+    def test_users_own_llamacpp_moves_ours_from_llm_deploy_to_carl(self) -> None:
+        """Ours was "llm-deploy" next to the user's "llamacpp": it becomes "carl", and the
+        defaults CARL set follow it; the user's provider stays as it was."""
+        self.llm_deploy_install(alt=True)
+        theirs_oc = self.read_json(".config/opencode/opencode.json")["provider"]["llamacpp"]
+        theirs_pi = self.read_json(".pi/agent/models.json")["providers"]["llamacpp"]
+        p = self.run_configure("--coder", "1")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        oc = self.read_json(".config/opencode/opencode.json")
+        self.assertEqual(set(oc["provider"]), {"llamacpp", "carl"})
+        self.assertEqual(oc["provider"]["llamacpp"], theirs_oc)
+        self.assertEqual(oc["provider"]["carl"]["name"], "llama.cpp (Mac host) [carl]")
+        self.assertEqual((oc["model"], oc["small_model"]), ("carl/qwen3.6-35b-a3b",) * 2)
+        self.assertEqual(self.read_json(".config/opencode/carl.json")["providers"], {"llamacpp": "carl"})
+        pi = self.read_json(".pi/agent/models.json")
+        self.assertEqual(set(pi["providers"]), {"llamacpp", "carl"})
+        self.assertEqual(pi["providers"]["llamacpp"], theirs_pi)
+        self.assertEqual(self.read_json(".pi/agent/settings.json")["defaultProvider"], "carl")
+        self.assertIn("OpenCode provider 'llm-deploy' (CARL's provider is now 'carl')", p.stdout)
+        self.assertIn("Pi provider 'llm-deploy' (CARL's provider is now 'carl')", p.stdout)
+
+    def test_users_own_default_on_the_old_id_is_kept_with_a_hint(self) -> None:
+        self.llm_deploy_install(alt=True)
+        oc = self.read_json(".config/opencode/opencode.json")
+        oc["model"] = "llm-deploy/qwen3.8-27b"                    # picked by the user, not by CARL
+        self.write_json(".config/opencode/opencode.json", oc)
+        self.write_json(".pi/agent/settings.json", {"defaultProvider": "llm-deploy", "defaultModel": "qwen3.8-27b"})
+        p = self.run_configure()
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(self.read_json(".config/opencode/opencode.json")["model"], "llm-deploy/qwen3.8-27b")
+        self.assertEqual(self.read_json(".pi/agent/settings.json")["defaultProvider"], "llm-deploy")
+        self.assertIn("OpenCode model = llm-deploy/qwen3.8-27b (yours; that provider is now 'carl': pick carl/qwen3.8-27b)",
+                      p.stdout)
+        self.assertIn("Pi defaults (yours: llm-deploy/qwen3.8-27b; that provider is now 'carl'", p.stdout)
+
+    def test_users_own_llm_deploy_pieces_are_kept(self) -> None:
+        """A provider of the user's own called llm-deploy (not on our key file, not recorded),
+        their own Pi subagent extension, and their files in the old prompt folder stay."""
+        mine = {"name": "my server", "options": {"baseURL": "http://10.0.0.9:8080/v1", "apiKey": "{env:MY_KEY}"}}
+        self.write_json(".config/opencode/opencode.json", {"provider": {"llm-deploy": mine}})
+        self.write_text(".config/opencode/llm-deploy/coder.md", "old CARL prompt\n")
+        self.write_text(".config/opencode/llm-deploy/notes.md", "my notes\n")
+        self.write_json(".pi/agent/models.json", {"providers": {"llm-deploy": {"apiKey": "MY_KEY", "models": []}}})
+        self.write_text(".pi/agent/extensions/subagent/index.ts", "// my own subagent tool\n")
+        p = self.run_configure("--coder", "1")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(self.read_json(".config/opencode/opencode.json")["provider"]["llm-deploy"], mine)
+        self.assertIn("llamacpp", self.read_json(".config/opencode/opencode.json")["provider"])
+        self.assertIn("llm-deploy", self.read_json(".pi/agent/models.json")["providers"])
+        self.assertEqual(os.listdir(self.path(".config/opencode/llm-deploy")), ["notes.md"])
+        self.assertIn("kept      ~/.config/opencode/llm-deploy (not ours", p.stdout)
+        self.assertEqual(self.read_text(".pi/agent/extensions/subagent/index.ts"), "// my own subagent tool\n")
+
+    def test_both_state_files_carl_json_wins(self) -> None:
+        """A mixed home (carl.json written, the old state file still there): carl.json is
+        what counts; the old one goes (a copy stays)."""
+        self.write_json(".config/opencode/opencode.json", {"provider": {"llamacpp": {"name": "my llama"}}})
+        self.write_json(".config/opencode/carl.json", {"providers": {"llamacpp": "carl"}})
+        self.write_json(".config/opencode/llm-deploy.json", {"providers": {"llamacpp": "llamacpp"}, "model": "x/y"})
+        p = self.run_configure()
+        self.assertEqual(p.returncode, 0, p.stderr)
+        oc = self.read_json(".config/opencode/opencode.json")
+        self.assertEqual(oc["provider"]["llamacpp"], {"name": "my llama"})
+        self.assertIn("carl", oc["provider"])
+        self.assertEqual(oc["model"], "carl/qwen3.6-35b-a3b")         # the old file would have said "llamacpp"
+        self.assertFalse(os.path.exists(self.path(".config/opencode/llm-deploy.json")))
+        self.assertTrue(any(f.startswith("llm-deploy.json.bak.") for f in os.listdir(self.path(".config/opencode"))))
 
     def test_bad_json_changes_nothing(self) -> None:
         os.makedirs(self.path(".config/opencode"))
@@ -280,6 +436,56 @@ class ConfigureTests(unittest.TestCase):
         self.assertEqual(p.returncode, 2)
         self.assertIn("not a host name", p.stderr)
         self.assertFalse(os.path.exists(self.path(".config")))
+
+
+class InstallScriptTests(unittest.TestCase):
+    """client/install.sh in a throw-away home with no server (port closed): the key folder's
+    old name is moved, and the configs it writes read the key from the new place."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.home = self._tmp.name
+
+    def tearDown(self) -> None:
+        self._tmp.cleanup()
+
+    def install(self) -> subprocess.CompletedProcess[str]:
+        with socket.socket() as sock:                       # a port nothing listens on
+            sock.bind(("127.0.0.1", 0))
+            port = str(sock.getsockname()[1])
+        env = {k: v for k, v in os.environ.items() if k not in ("CARL_API_KEY", "LLAMA_CTX", "CODER", "NO_CODER")}
+        return subprocess.run(["bash", os.path.join(CLIENT, "install.sh"), "--host", "127.0.0.1", "--port", port],
+                              capture_output=True, text=True, stdin=subprocess.DEVNULL, env={**env, "HOME": self.home})
+
+    def write(self, rel: str, text: str) -> None:
+        os.makedirs(os.path.dirname(os.path.join(self.home, rel)), exist_ok=True)
+        with open(os.path.join(self.home, rel), "w", encoding="utf-8") as f:
+            f.write(text)
+
+    def test_old_key_folder_is_moved_and_used(self) -> None:
+        self.write(".config/llm-deploy/api-key", "vmsecret")
+        p = self.install()
+        self.assertEqual(p.returncode, 0, p.stderr)
+        carl, old = os.path.join(self.home, ".config/carl"), os.path.join(self.home, ".config/llm-deploy")
+        self.assertIn("Moved ~/.config/llm-deploy to ~/.config/carl", p.stdout)
+        self.assertIn("Using the API key in ~/.config/carl/api-key", p.stdout)
+        self.assertEqual(os.readlink(old), "carl")
+        self.assertEqual(stat.S_IMODE(os.stat(carl).st_mode), 0o700)
+        with open(os.path.join(carl, "api-key"), encoding="utf-8") as f:
+            self.assertEqual(f.read(), "vmsecret")
+        with open(os.path.join(self.home, ".config/opencode/opencode.json"), encoding="utf-8") as f:
+            self.assertEqual(json.load(f)["provider"]["llamacpp"]["options"]["apiKey"], "{file:" + carl + "/api-key}")
+        self.assertNotIn("vmsecret", p.stdout + p.stderr)
+
+    def test_both_folders_reuse_the_old_key(self) -> None:
+        self.write(".config/llm-deploy/api-key", "vmsecret")
+        os.makedirs(os.path.join(self.home, ".config/carl"))
+        p = self.install()
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("Reusing the API key from ~/.config/llm-deploy/api-key", p.stdout)
+        self.assertFalse(os.path.islink(os.path.join(self.home, ".config/llm-deploy")))
+        with open(os.path.join(self.home, ".config/carl/api-key"), encoding="utf-8") as f:
+            self.assertEqual(f.read(), "vmsecret")
 
 
 if __name__ == "__main__":

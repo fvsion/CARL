@@ -121,8 +121,8 @@ def chat_body(messages: list[Message], max_tokens: int, model: str = "x", **samp
 
 # ------------------------------------------------------------------ adapters
 def read_api_key(path: str | None = None) -> str:
-    """The server's Bearer key: PATH, else $API_KEY_FILE, else ~/.config/llm-deploy/api-key
-    (the pre-1.2.0 ~/.mtplx/api-key while only that exists)."""
+    """The server's Bearer key: PATH, else $API_KEY_FILE, else ~/.config/carl/api-key
+    (an earlier key file while only that exists: carl_core.domain.apikey)."""
     p = os.path.expanduser(path) if path else key_file()
     try:
         with open(p, encoding="utf-8") as f:

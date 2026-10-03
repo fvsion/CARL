@@ -17,7 +17,7 @@ CMD = "llama-server -m /m/a.gguf -c 196608 --parallel 2 -ctk q4_0 -ctv q8_0 --ca
 
 def view(**kw: Any) -> View:
     base = dict(levels={}, host="127.0.0.1", port=8080, base="http://127.0.0.1:8080", key="secretkey1234",
-                key_file="/home/u/.config/llm-deploy/api-key", key_shown=False, server_pid=None, log=LogBook(), log_path=None,
+                key_file="/home/u/.config/carl/api-key", key_shown=False, server_pid=None, log=LogBook(), log_path=None,
                 model_path="/m/a.gguf", model_size=13 * GIB, gpu_limit=(25 * GIB, "test"), slow=SlowStats(),
                 total_mem=32 * GIB, home="/home/u")
     base.update(kw)

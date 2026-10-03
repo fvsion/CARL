@@ -51,15 +51,31 @@ def write_private(path: str, text: str) -> None:
     os.replace(tmp, path)
 
 
+# The state file client/configure.py keeps next to each client's config, and its name
+# before the rename in 1.2.0 (read until the next client/install.sh moves it).
+STATE_FILES = ("carl.json", "llm-deploy.json")
+
+
+def client_state(folder: str) -> object:
+    """The parsed state file in a client's config folder (STATE_FILES, the first that
+    exists), None when there is none or it can't be read."""
+    for name in STATE_FILES:
+        path = os.path.join(folder, name)
+        if os.path.exists(path):
+            try:
+                with open(path) as f:
+                    state: object = json.load(f)
+                return state
+            except (OSError, ValueError):
+                return None
+    return None
+
+
 def installed_here(base: str, home: str) -> List[Tuple[str, str]]:
     """(client, provider id) pairs that install.sh on THIS Mac already pointed at base."""
     out = []
-    for client, rel in (("OpenCode", ".config/opencode/llm-deploy.json"), ("Pi", ".pi/agent/llm-deploy.json")):
-        try:
-            with open(os.path.join(home, rel)) as f:
-                st = json.load(f)
-        except (OSError, ValueError):
-            continue
+    for client, folder in (("OpenCode", ".config/opencode"), ("Pi", ".pi/agent")):
+        st = client_state(os.path.join(home, folder))
         if isinstance(st, dict) and st.get("base_url") == f"{base}/v1":
             prov = st.get("providers")
             out.append((client, str(prov.get("llamacpp", "llamacpp") if isinstance(prov, dict) else "llamacpp")))

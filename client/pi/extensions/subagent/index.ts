@@ -1,5 +1,5 @@
 // Vendored from @earendil-works/pi-coding-agent 1.0.0, examples/extensions/subagent
-// (MIT License). Changes for LLM-Deploy, all marked "LLM-Deploy:" (configure.py
+// (MIT License). Changes for CARL, all marked "CARL:" (configure.py
 // also looks for that marker to recognise this copy as ours):
 // - the tool description lists the installed user-level agents with their
 //   "when to use" descriptions, so the model can decide to delegate on its own
@@ -227,7 +227,7 @@ function getDisplayItems(messages: Message[]): DisplayItem[] {
 	return items;
 }
 
-/** LLM-Deploy: a line of `pi --mode json` output; only `type` and `message` are read. */
+/** CARL: a line of `pi --mode json` output; only `type` and `message` are read. */
 interface JsonEvent {
 	type?: unknown;
 	message?: unknown;
@@ -490,7 +490,7 @@ const SubagentParams = Type.Object({
 	cwd: Type.Optional(Type.String({ description: "Working directory for the agent process (single mode)" })),
 });
 
-// LLM-Deploy: the user-level agents, read once when the extension loads. A
+// CARL: the user-level agents, read once when the extension loads. A
 // broken agents directory must not stop the tool from registering.
 function installedUserAgents(): AgentConfig[] {
 	try {
@@ -500,12 +500,12 @@ function installedUserAgents(): AgentConfig[] {
 	}
 }
 
-// LLM-Deploy: the description lines that list the agents.
+// CARL: the description lines that list the agents.
 function agentListing(agents: AgentConfig[]): string[] {
 	return agents.length ? ["\n\nAvailable agents:", ...agents.map((a) => `\n- ${a.name}: ${a.description}`)] : [];
 }
 
-// LLM-Deploy: without promptSnippet Pi leaves custom tools out of the system
+// CARL: without promptSnippet Pi leaves custom tools out of the system
 // prompt's "Available tools" list, and the model rarely delegates. The
 // guidelines carry the coder rule into the Guidelines section.
 function delegationPrompt(agents: AgentConfig[]): { promptSnippet?: string; promptGuidelines?: string[] } {
@@ -535,7 +535,7 @@ export default function (pi: ExtensionAPI) {
 			"Modes: single (agent + task), parallel (tasks array), chain (sequential with {previous} placeholder).",
 			`Default agent scope is "user" (from ${path.join(getAgentDir(), "agents")}).`,
 			`To enable project-local agents in ${CONFIG_DIR_NAME}/agents, set agentScope: "both" (or "project").`,
-			// LLM-Deploy: tell the model which agents exist and when each one applies.
+			// CARL: tell the model which agents exist and when each one applies.
 			...agentListing(userAgents),
 		].join(" "),
 		...delegationPrompt(userAgents),

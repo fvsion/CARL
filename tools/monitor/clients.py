@@ -1,7 +1,7 @@
 """Client configs for the running server: OpenCode and Pi provider blocks and a curl test.
 Pure: the templates (client/opencode/opencode.json, client/pi/models.json) come in as text.
 
-Snippets for pasting by hand are additive: one provider block under the id "llm-deploy",
+Snippets for pasting by hand are additive: one provider block under the id "carl",
 which can't collide with a provider the user already has, and nothing else (no default
 model, $schema or agents)."""
 from __future__ import annotations
@@ -13,7 +13,7 @@ from typing import Callable, Dict, Optional
 from .model import JSONDict, ServerData, jdict, jlist
 
 PROVIDER = "llamacpp"        # the provider id in the templates
-SNIP_ID = "llm-deploy"       # the id of a pasted provider block
+SNIP_ID = "carl"             # the id of a pasted provider block
 LABELS = {"opencode": "OpenCode config", "pi": "Pi config", "curl": "curl test"}
 
 
@@ -55,7 +55,7 @@ def opencode_config(s: Served, template: JSONDict, base: str, key: str) -> JSOND
     m["limit"]["context"] = s.ctx
     m["limit"]["output"] = min(m["limit"].get("output", 32000), s.ctx // 2)
     p["models"] = {s.alias: m}
-    p["name"] = p.get("name", PROVIDER) + " [llm-deploy]"
+    p["name"] = p.get("name", PROVIDER) + f" [{SNIP_ID}]"
     return {"provider": {SNIP_ID: p}}
 
 

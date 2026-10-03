@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from typing import Mapping
+from typing import Callable, Mapping, Optional
 
 from .adapters.console import StdConsole
 from .adapters.downloader import Aria2OrCurl
@@ -13,10 +13,10 @@ from .adapters.huggingface import HfHttpClient
 from .adapters.json_files import JsonFile, LegacyEnvFiles
 from .adapters.system import MacGpuLimit, SystemClock
 from .app import Carl, Stores
+from .domain.confdir import conf_dir
 
 TOOLS_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 REPO = os.path.dirname(TOOLS_DIR)
-DEFAULT_CONF_DIR = "~/.config/llm-deploy"
 SHAPE_CACHE = os.path.expanduser("~/models/.gguf-shapes.json")     # headers of files not downloaded
 METAL_LIMIT_CACHE = os.path.expanduser("~/models/.metal-limit")
 METAL_PROBE = os.path.join(TOOLS_DIR, "metal-limit.swift")
@@ -44,10 +44,12 @@ class CarlPaths:
         return os.path.join(self.conf_dir, "llama.env")
 
     @classmethod
-    def from_env(cls, env: Mapping[str, str]) -> CarlPaths:
-        """CARL_CATALOG and CARL_CONF_DIR override the defaults (tests use a temporary folder)."""
+    def from_env(cls, env: Mapping[str, str], home: Optional[str] = None,
+                 is_dir: Callable[[str], bool] = os.path.isdir) -> CarlPaths:
+        """CARL_CATALOG and CARL_CONF_DIR override the defaults (tests use a temporary folder).
+        Without CARL_CONF_DIR: ~/.config/carl, or its old name until it is moved (domain/confdir.py)."""
         return cls(catalog=env.get("CARL_CATALOG", os.path.join(REPO, "host", "catalog.json")),
-                   conf_dir=os.path.expanduser(env.get("CARL_CONF_DIR", DEFAULT_CONF_DIR)))
+                   conf_dir=conf_dir(home or os.path.expanduser("~"), env, is_dir))
 
 
 def build_carl(paths: CarlPaths, env: Mapping[str, str]) -> Carl:

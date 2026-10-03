@@ -6,7 +6,7 @@
       "name": "llama.cpp (Mac host)",
       "options": {
         "baseURL": "http://__HOST__:__LLAMA_PORT__/v1",
-        "apiKey": "{file:__HOME__/.config/llm-deploy/api-key}",
+        "apiKey": "{file:__HOME__/.config/carl/api-key}",
         "timeout": false,
         "chunkTimeout": 900000
       },

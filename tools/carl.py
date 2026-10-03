@@ -4,15 +4,15 @@ models on this Mac, and the user's settings. Used by host/serve-llama.sh,
 host/serve.sh, host/models.sh, tools/llama-fit.py and the monitor.
 
 Files
-  host/catalog.json                  built-in catalogue (in the repo): download source, pinned
-                                     revision + sha256, tuned settings and why, context zones
-  ~/.config/llm-deploy/models.json   models on this Mac that are not in the catalogue (Hugging
-                                     Face downloads, files dropped into the models folder) and
-                                     Auto-tune results for every model (per Mac)
-  ~/.config/llm-deploy/config.json   the user's settings (monitor Settings tab, or by hand):
-                                     server options and per-model profiles
-  ~/models/gguf/*.gguf               the models folder (paths.models_dir); every .gguf here is
-                                     listed, catalogued or not
+  host/catalog.json              built-in catalogue (in the repo): download source, pinned
+                                 revision + sha256, tuned settings and why, context zones
+  ~/.config/carl/models.json     models on this Mac that are not in the catalogue (Hugging
+                                 Face downloads, files dropped into the models folder) and
+                                 Auto-tune results for every model (per Mac)
+  ~/.config/carl/config.json     the user's settings (monitor Settings tab, or by hand):
+                                 server options and per-model profiles
+  ~/models/gguf/*.gguf           the models folder (paths.models_dir); every .gguf here is
+                                 listed, catalogued or not
 
 Settings precedence for a llama.cpp start: command-line flags > environment >
 config.json (llama section, then models.<name>) > Auto-tune result for this Mac >

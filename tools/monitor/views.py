@@ -53,7 +53,7 @@ def body_connect(v: View, ui: UIState, d: ServerData, cols: int, height: int,
               f"{B}Clients on this Mac:{R} ./client/install-clients.sh && ./client/install.sh --local",
               f"{DIM}The installer merges without overwriting your providers, default model or agents, and adds the "
               f"coder, sidebar and session switcher.{R}",
-              f"{B}By hand:{R}             a provider block only (id llm-deploy), copied to the clipboard; it adds, never replaces",
+              f"{B}By hand:{R}             a provider block only (id carl), copied to the clipboard; it adds, never replaces",
               buttons("", [("OpenCode config", "opencode"), ("Pi config", "pi"), ("curl test", "curl")])]
     rows += draw_card("guide", "CLIENT SETUP", "", guide, w, v.level("guide"))
     kind = ui.preview

@@ -46,8 +46,8 @@ class FakeStore:
         self.saved: List[JSONDict] = []
         self.deleted: List[str] = []
         self.limit = limit
-        self.config_file = "/home/u/.config/llm-deploy/config.json"
-        self.conf_dir = "/home/u/.config/llm-deploy"
+        self.config_file = "/home/u/.config/carl/config.json"
+        self.conf_dir = "/home/u/.config/carl"
         self.broken: Optional[str] = None
 
     def _check(self) -> None:

@@ -3,7 +3,7 @@
     "llamacpp": {
       "baseUrl": "http://__HOST__:__LLAMA_PORT__/v1",
       "api": "openai-completions",
-      "apiKey": "!cat ~/.config/llm-deploy/api-key",
+      "apiKey": "!cat ~/.config/carl/api-key",
       "authHeader": true,
       "compat": {
         "supportsDeveloperRole": false,

@@ -32,7 +32,7 @@ Each behaviour in this document was checked against the source code (pi-ai 0.99.
  ┌──────────────────────────────────────────┐          ┌──────────────────────────────────┐
  │ host/serve.sh  ──►  llama-server :8080    │  vmnet8  │ OpenCode ─┐                       │
  │   (default)         (llama.cpp, Metal)    │◄─────────┤           ├─ Bearer key from      │
- │                                           │  NAT     │ Pi ───────┘  ~/.config/llm-deploy/│
+ │                                           │  NAT     │ Pi ───────┘  ~/.config/carl/      │
  │                                           │          │ configs from client/install.sh    │
  │ binds 192.168.42.1 (VM) or 127.0.0.1      │          │ VM address 192.168.42.130         │
  │ monitor in the same terminal              │          │                                   │
@@ -40,10 +40,10 @@ Each behaviour in this document was checked against the source code (pi-ai 0.99.
  └──────────────────────────────────────────┘          └──────────────────────────────────┘
       ~/models/gguf/      GGUF weights (catalogue: host/catalog.json; any other .gguf here is listed too)
       ~/models/logs/      server logs
-      ~/.config/llm-deploy/config.json   your settings (Settings tab, ./carl.sh config)
-      ~/.config/llm-deploy/models.json   custom models and Auto-tune results (this Mac)
-      ~/models/templates/ patched chat templates (thinking toggle)
-      ~/.config/llm-deploy/api-key       shared API key (server and clients; created on first start)
+      ~/.config/carl/config.json   your settings (Settings tab, ./carl.sh config)
+      ~/.config/carl/models.json   custom models and Auto-tune results (this Mac)
+      ~/models/templates/          patched chat templates (thinking toggle)
+      ~/.config/carl/api-key       shared API key (server and clients; created on first start)
 ```
 
 - **CAUTION:** Run only one server at a time. Each model needs about 14–23 GB, and two models do not fit in 36 GB. If you run two servers, GPU out-of-memory errors occur. The running server then stays broken until you restart it. The launchers refuse to start a second model ([section 2](#2-llamacpp-details), "Launch guard").
@@ -75,7 +75,7 @@ Each behaviour in this document was checked against the source code (pi-ai 0.99.
 | `client/pi/models.json` | The Pi config template. |
 | `tools/carl_core/` | The models and settings logic, in layers. `domain/` is pure (no I/O): `types`, `settings`, `gguf`, `fit`, `models`, `hf`, `launch`, `records`, `tuning`, `ports`. `adapters/` does the I/O: `json_files`, `filesystem`, `gguf_reader`, `system` (sysctl, the GPU limit, the `netstat` parser), `huggingface`, `downloader`, `llama_server`, `console`. `app.py` holds the use cases, and `wiring.py` connects the adapters. |
 | `tools/carl.py` | A thin facade over `tools/carl_core` (its CLI and the API of the monitor). One place for the models and the settings: the catalogue, the models on this Mac (catalogue, models folder, Hugging Face downloads), `config.json` (validated) and the settings order. Downloads (pinned, SHA-256 verified), `launch-env` for the launchers, `config show\|get\|set\|unset\|path`. The launchers, `llama-fit.py` and the monitor use it. |
-| `tools/carl-tune.py` | Auto-tune (`./carl.sh tune NAME [--quick]`): memory fit, speculation modes, prompt reading at 8K/32K/64K, context zones. It saves the result in `~/.config/llm-deploy/models.json`. |
+| `tools/carl-tune.py` | Auto-tune (`./carl.sh tune NAME [--quick]`): memory fit, speculation modes, prompt reading at 8K/32K/64K, context zones. It saves the result in `~/.config/carl/models.json`. |
 | `tools/llama-monitor.py` | The live monitor (the dashboard) for llama.cpp. Tabs: Overview, Connect, Requests, Log, Settings. The Settings tab has three panels: Server (the model and its settings, with the reason for each tuned value; restarts the server), Models (download, verify, delete, add from Hugging Face) and Auto-tune. On the Server panel the model card sits under the settings, full width; a click on its title cycles collapsed / normal / full. A thin launcher over the `tools/monitor/` package. |
 | `tools/monitor/` | The dashboard's code: pure formatting, state, settings and views (`fmt`, `model`, `keys`, `settings`, `cards`, `views`, `settings_view`, `state`), adapters (`system` for ps/netstat/sysctl/pmset, `api`, `collector`, `logtail`, `store` over `carl.py`, `jobs` for restart, Auto-tune and downloads, `terminal`), wiring (`app`, `controller`, `cli`). |
 | `tools/llama-fit.py`, `tools/gguf_shape.py`, `tools/metal-limit.swift` | `serve.sh fit` and the memory check at server start. `gguf_shape.py` (now a thin facade over `carl_core`) reads the GGUF metadata and does the KV/state maths (the monitor uses it too). `metal-limit.swift` reads the GPU memory limit of the Mac. |
@@ -98,7 +98,7 @@ For the use of each tool, see USERGUIDE.md, "Benchmarking and testing".
 |---|---|
 | Version | 0.4.1 (Homebrew), `llama-server` |
 | Port | 8080 |
-| API | OpenAI API (`/v1/chat/completions`, `/v1/models`), Bearer key `~/.config/llm-deploy/api-key` |
+| API | OpenAI API (`/v1/chat/completions`, `/v1/models`), Bearer key `~/.config/carl/api-key` |
 | Weights | GGUF (`~/models/gguf/`): the catalogue models, and any other GGUF |
 | Models available | Qwen3.6-35B-A3B (default, `qwen3.6-35b-a3b`), Qwen3.8-27B stock, Qwen3.8-27B abliterated (orcarouter), and their Q3/IQ3 builds |
 | KV cache | Real q4_0 (default) or q8_0, allocated one time with no bf16 copy. Set it with `--kv`. |
@@ -148,7 +148,7 @@ For the use of each tool, see USERGUIDE.md, "Benchmarking and testing".
   - **Evidence:** before this change, idle sleep (1 min on battery) froze a 74K prompt for 30+ min.
 - **The server ignores the model name in a request.** The GGUF that is loaded answers all requests. Thus, the model picker in the client must match the server.
 - **Template override.** The server uses `--chat-template-file ~/models/templates/<model>.thinking-toggle.jinja`. This file is generated at start ([section 4](#4-how-thinking-works)). To use the template of the GGUF, set `THINK_TOGGLE=0`.
-- **Speculation per model** (catalogue `tune.spec` and `tune.spec_n`, or the Auto-tune result): The 27B dense uses MTP + n-gram with 1 draft token. The 35B MoE (Q4) uses 2. More drafts help a MoE, because with 3B active parameters it costs little to verify more tokens. The IQ3 builds use MTP + n-gram with 1 draft token: 2 drafts lose on IQ quants ([IQ3 speculation](#iq3-speculation-measured-2026-10-03)).
+- **Speculation per model** (catalogue `tune.spec` and `tune.spec_n`, or the Auto-tune result): The 27B dense uses MTP + n-gram with 1 draft token. The 35B MoE (Q4) uses 2. More drafts help a MoE, because with 3B active parameters it costs little to verify more tokens. The stock IQ3 builds use MTP + n-gram with 1 draft token: 2 drafts lose on IQ quants. The abliterated IQ3 builds use n-gram only (Heretic 35B: no MTP head, n=1; orcarouter 27B IQ3: n=2, a tie with MTP + n-gram) ([IQ3 speculation](#iq3-speculation-measured-2026-10-03)).
 - **The monitor (since 2026-10-01):** `tools/llama-monitor.py`.
   - It has a header with the status and **[ Quit ]**.
   - Tabs: Overview (cards), Connect (URL, key, config copy), Requests, Log, Settings.
@@ -160,9 +160,10 @@ For the use of each tool, see USERGUIDE.md, "Benchmarking and testing".
   - It then uses `exec` to change into the monitor.
   - **Result:** The server is a child process of the monitor, so the monitor must reap it. If the monitor does not reap it, a stopped or crashed server stays as a zombie process. `ps` still lists this zombie. The `pid_alive()` function of the monitor calls `waitpid(WNOHANG)` and treats state `Z` as dead.
   - Without a terminal (scripts, `nohup`, `MONITOR=0`), the launcher starts the server with `exec` in the foreground, as before. The benchmark tools need this behaviour.
-- **API key** (`ensure_api_key` in `host/common.sh`): the server and the clients use `~/.config/llm-deploy/api-key` (mode 600, in a folder with mode 700; the folder of `config.json`). `API_KEY_FILE` overrides the path.
-  - If the file is missing, the first server start copies the key from the old path `~/.mtplx/api-key` (before 1.2.0). It is the same key, so existing clients continue to work. If there is no old key, it makes a random 40-character key.
-  - The dashboard, Auto-tune, the bench tools and `tools/llama-wait-idle.sh` read the new path. While the new file does not exist, they read the old path.
+- **API key** (`ensure_api_key` in `host/common.sh`): the server and the clients use `~/.config/carl/api-key` (mode 600, in a folder with mode 700; the folder of `config.json`). `API_KEY_FILE` overrides the path.
+  - If the file is missing, the first server start copies the key from an earlier path (`carl_core/domain/apikey.py`; `~/.mtplx/api-key` before 1.2.0). It is the same key, so existing clients continue to work. If there is no old key, it makes a random 40-character key.
+  - The dashboard, Auto-tune, the bench tools and `tools/llama-wait-idle.sh` read the new path. While the new file does not exist, they read the old paths.
+- **Settings folder, formerly `~/.config/llm-deploy`** (CARL was called LLM-Deploy; `migrate_conf_dir` in `host/common.sh`, `carl_core/domain/confdir.py`). Every `./carl.sh` command except help moves it once to `~/.config/carl` (folder 0700, files 0600) and leaves the symlink `~/.config/llm-deploy -> carl`: client configs from before the rename read the key there. If both folders exist, CARL uses `~/.config/carl` and does not change the old one. Until the move, the readers use the old folder, and the key chain is `API_KEY_FILE` > `~/.config/carl/api-key` > `~/.config/llm-deploy/api-key` > `~/.mtplx/api-key`. `CARL_CONF_DIR` turns the move off. On the client side, `client/install.sh` moves the same folder, and `configure.py` (`OLD_NAMES`) changes CARL's own `llm-deploy.json`, `~/.config/opencode/llm-deploy/`, provider `llm-deploy`, the `llm-deploy:delegation` block in `APPEND_SYSTEM.md` and the `LLM-Deploy:` marker of the Pi extension to `carl.json`, `~/.config/opencode/carl/`, `carl`, `carl:delegation` and `CARL:`. The dashboard's pasted provider id and the plugin packages are `carl` (`carl-subagents-sidebar`, `carl-session-switcher`, command `carl.session.switch`).
 - **Network modes** (`host/common.sh`):
   - `--vm` = 192.168.42.1. This is the VMware Fusion NAT network (vmnet8). The Mac is `192.168.42.1` on `bridge101`. The Kali VM is `192.168.42.130`. The VM and the Mac itself can both connect to this address. The mode fails if this address is missing.
   - `--local` = 127.0.0.1. Only the Mac can connect. Use it for OpenCode/Pi on the Mac, or on a Mac without VMware.
@@ -173,7 +174,7 @@ For the use of each tool, see USERGUIDE.md, "Benchmarking and testing".
   - After a restart from the Settings tab, the health check also tries the selected address. Thus, a server on the LAN address is not taken as a failed start.
   - CAUTION: The script refuses 0.0.0.0 / `::`, also through `HOST=0.0.0.0`. The macOS firewall is off on this Mac, so a wildcard bind would make the model available to the LAN.
   - `client/install.sh --local` sets the clients to the address on which the server actually listens. `--host ADDR` sets any address. `--port N` sets the llama.cpp port (default 8080). The old positional form `install.sh HOST [X] [PORT]` still works: the second value (an old port) is ignored with a note, and the third is the llama.cpp port.
-  - API key for `client/install.sh` (first hit wins): `--key KEY` / `--key-file FILE`, `$CARL_API_KEY`, a file `api-key` next to the script, on a Mac with `--local` the server key (`~/.config/llm-deploy/api-key`, else the old `~/.mtplx/api-key`), the key from a previous run (the same new path, else the old `~/.config/mtplx/api-key`), a hidden prompt. The installer stores it at `~/.config/llm-deploy/api-key` (mode 600), and the OpenCode and Pi configs point at that file. A new run changes old configs to the new path. It does not delete the old client file (a provider of your own can use it): delete it when nothing uses it. `--key` leaves the key in the shell history. The smoke test gives the key to `curl` through a header file (`curl -H @file`, curl 7.55 or later), so the key does not show in `ps`.
+  - API key for `client/install.sh` (first hit wins): `--key KEY` / `--key-file FILE`, `$CARL_API_KEY`, a file `api-key` next to the script, on a Mac with `--local` the server key (`~/.config/carl/api-key`, else the old `~/.mtplx/api-key`), the key from a previous run (the same new path, else the old `~/.config/mtplx/api-key`), a hidden prompt. The installer stores it at `~/.config/carl/api-key` (mode 600), and the OpenCode and Pi configs point at that file. A new run changes old configs to the new path. It does not delete the old client file (a provider of your own can use it): delete it when nothing uses it. `--key` leaves the key in the shell history. The smoke test gives the key to `curl` through a header file (`curl -H @file`, curl 7.55 or later), so the key does not show in `ps`.
 - **Memory check before load.** `serve-llama.sh` runs `tools/llama-fit.py --check`. It warns when weights + KV + buffers are more than the GPU limit ([below](#gpu-memory-limit-and-what-fits)). The warning does not block the start.
 - **Port guard.** `serve-llama.sh` does not start if a process already listens on the port (`port_pid`, see below). It does this check before it touches `llama-server-latest.log` or loads anything. Before this guard, a second `serve.sh` (10:08 on 2026-10-01) failed to bind. But it had already pointed the `latest` symlink to its own 4-line failure log.
 - **`/metrics` gauges reset at each read.** (`--metrics` enables this Prometheus endpoint.) `prompt_tokens_seconds` and `predicted_tokens_seconds` cover only the time since the last scrape. Thus, you must calculate averages from the `*_total` counters. The monitor does this.
@@ -201,8 +202,8 @@ netstat -anv -p tcp | awk '$6=="LISTEN" && $4 ~ /[.]8080$/ {n=split($(NF-8),a,":
 |---|---|---|
 | 1 | Command-line flags | `--model`, `--ctx`, `--kv`, `--slots`, … |
 | 2 | Environment variables | `CTX`, `KV`, `SPEC`, `SPEC_N`, `TEMP`, … |
-| 3 | `config.json` | `~/.config/llm-deploy/config.json`: the `llama` section, and the profile `models.<name>` |
-| 4 | Auto-tune result for this Mac | `~/.config/llm-deploy/models.json`: `models.<name>.tune.settings` |
+| 3 | `config.json` | `~/.config/carl/config.json`: the `llama` section, and the profile `models.<name>` |
+| 4 | Auto-tune result for this Mac | `~/.config/carl/models.json`: `models.<name>.tune.settings` |
 | 5 | Catalogue | `host/catalog.json`: `tune` of the model. For a custom model: values from its GGUF header |
 | 6 | Built-in defaults | q4_0, 96K, auto slots, MTP + n-gram n=1, temperature 1.0, … |
 
@@ -220,7 +221,7 @@ netstat -anv -p tcp | awk '$6=="LISTEN" && $4 ~ /[.]8080$/ {n=split($(NF-8),a,":
 1. **Memory:** the largest window for each slot that fits the GPU limit, with 1 and 2 slots (the same maths as `./carl.sh fit`).
 2. **Speculation:** none, `ngram-mod` (n=2), and, if the GGUF has an MTP head, `draft-mtp` and `draft-mtp,ngram-mod` at n=1 and n=2 (`--quick`: n=1 only). Each mode generates prose, new code and a code re-emit, two times. The score is a weighted geometric mean (prose 0.4, code 0.4, re-emit 0.2). A mode with drafting must beat a simpler mode by 3% to win.
 3. **Prompt reading:** a cold read at 8K and 32K tokens, and 64K without `--quick`. The time for each token grows about linearly with the depth. From this, Auto-tune calculates the time to read a full window. The context zones of this Mac: a full cold read in ≤3 min = fast, ≤10 min = slow, more = very slow. The fast zone is never smaller than 96K (`ctx_zones()` in `carl_core/domain/models.py`).
-4. **Result** (`choose_ctx()` in `carl_core/domain/tuning.py`): kv q4_0, the best speculation, the context, and 2 slots if two windows fit. It is saved in `~/.config/llm-deploy/models.json`, with the speed of each mode, the read speeds and the zones.
+4. **Result** (`choose_ctx()` in `carl_core/domain/tuning.py`): kv q4_0, the best speculation, the context, and 2 slots if two windows fit. It is saved in `~/.config/carl/models.json`, with the speed of each mode, the read speeds and the zones.
    - If 96K fits one slot, 96K is the floor. Above it, Auto-tune keeps the catalogue window while a cold read of it is not worse than slow on this Mac and it fits. Otherwise, it uses the largest standard window (96K, 128K, 160K) in the fast zone that fits.
    - If 96K does not fit, it uses the largest standard window (32K, 48K, 64K) that fits.
 
@@ -234,7 +235,7 @@ This table shows the flags that `host/serve-llama.sh` gives to `llama-server`, a
 
 | Setting | Value | Why |
 |---|---|---|
-| Bind | `--host 192.168.42.1 --port 8080 --api-key-file ~/.config/llm-deploy/api-key` | An address for the VM only; a shared key |
+| Bind | `--host 192.168.42.1 --port 8080 --api-key-file ~/.config/carl/api-key` | An address for the VM only; a shared key |
 | Offload | `-ngl 999` | The whole model is on the GPU (Metal). |
 | Flash attention | `-fa on` | Necessary for a quantized V cache. It was on for every measurement. |
 | KV cache | `-ctk q4_0 -ctv q4_0` (`--kv q8` → q8_0) | q4: +16% prefill and about 2 GB less memory than q8, the same decode speed, 8/8 needle recall at 66K. Do not mix K and V types (prefill is about 5× slower). |
@@ -448,6 +449,31 @@ IQ3_M is a good choice only where no larger file fits, for example on a 24 GB Ma
 - **Thus, the catalogue tune for both IQ3 builds is `draft-mtp,ngram-mod` with n=1.** The earlier setting of the 35B IQ3 (MTP + n-gram, n=2, copied from the Q4) was the second slowest mode on new text. The Q4 35B keeps n=2 (measured on the M3 Pro).
 - The Settings tab shows MTP with more than 1 draft on an IQ quant in red. To measure a model on your own Mac, run `./carl.sh tune NAME`.
 
+**The abliterated IQ3 builds** (same setup, 2026-10-03):
+
+**`heretic-35b-a3b-iq3`** (mradermacher i1-IQ3_XXS of llmfan46's Heretic 35B-A3B, 13.6 GB; **no MTP head**, so n-gram only):
+
+| Speculation | Prose | Code | Re-emit |
+|---|---|---|---|
+| none | 49.3 | 46.5 | 41.3 |
+| **n-gram, n=1** | **51.5** | **48.5** | **96.1** |
+| n-gram, n=2 | 50.4 | 45.4 | 85.0 |
+| n-gram, n=3 | 46.0 | 44.9 | 83.1 |
+
+**`orcarouter-27b-iq3`** (bartowski IQ3_XXS imatrix, 12.6 GB):
+
+| Speculation | Prose | Code | Re-emit |
+|---|---|---|---|
+| none | 8.6 | 8.6 | 8.5 |
+| MTP, n=1 | 8.6 | 9.3 | 9.6 |
+| MTP, n=2 | 8.1 | 9.3 | 9.9 |
+| **n-gram, n=2** | **8.8** | **8.6** | **19.8** |
+| MTP + n-gram, n=1 | 8.7 | 9.0 | 18.2 |
+| MTP + n-gram, n=2 | 7.6 | 8.3 | 20.1 |
+
+- **Heretic 35B:** n-gram with 1 draft is the best on all three workloads (score 57.0 vs 53.6 for n=2 and 46.5 without speculation). The catalogue uses `ngram-mod` n=1. An MTP-preserving IQ3 of this model would likely do better on new text; it does not exist yet (CARL may quantize one later).
+- **orcarouter 27B IQ3:** n-gram alone (n=2) and MTP + n-gram (n=1) tie (score 10.2). The Auto-tune rule picks the simpler mode for a tie, so the catalogue uses `ngram-mod` n=2. MTP alone adds only ~6% on this build (the stock 27B IQ3: 5-10%).
+
 ### The coder subagent
 
 - **One definition, two clients.** `client/agents/coder.md` contains the definition:
@@ -466,7 +492,7 @@ IQ3_M is a good choice only where no larger file fits, for example on a 24 GB Ma
   - The task is **large**: 3+ files, ~150+ lines, a new module/package/CLI, implementation plus tests, or a multi-step refactor.
   - All other work stays in the main session.
 - **OpenCode:** `agent.coder` in `opencode.json`:
-  - `mode: subagent`, `prompt: {file:…/.config/opencode/llm-deploy/coder.md}` (an absolute path; the rule is `~/.config/opencode/llm-deploy/delegation.md`; earlier versions used `~/.config/opencode/prompts/`, and the installer removes those files);
+  - `mode: subagent`, `prompt: {file:…/.config/opencode/carl/coder.md}` (an absolute path; the rule is `~/.config/opencode/carl/delegation.md`; earlier versions used `~/.config/opencode/prompts/`, and the installer removes those files);
   - `options.reasoningEffort: medium` (the main session uses low; on the 35B, it only means thinking on);
   - `temperature: 0.6` (see "Coder sampling" below);
   - `permission.task: deny` (no nested subagents), `steps: 80`, `color: secondary`.
@@ -646,7 +672,7 @@ NOTE: The presence 1.5 of the non-thinking variant is the Qwen recommendation fo
 ## 10. Verifying behaviour
 
 ```bash
-K=$(cat ~/.config/llm-deploy/api-key)
+K=$(cat ~/.config/carl/api-key)
 
 # Is thinking off? Look at reasoning_content length (llama.cpp)
 curl -s -H "Authorization: Bearer $K" -H 'Content-Type: application/json' http://192.168.42.1:8080/v1/chat/completions \

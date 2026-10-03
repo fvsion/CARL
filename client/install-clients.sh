@@ -85,4 +85,4 @@ echo
 [[ "$WHAT" == both || "$WHAT" == pi ]] && echo "pi       $(pi --version 2>/dev/null || echo '(not on PATH?)')  -> $(command -v pi || true)"
 echo
 echo "Open a new shell (or: source ~/.zshrc), then run 'opencode' or 'pi'."
-[[ -f "$HOME/.config/llm-deploy/api-key" || -f "$HOME/.config/mtplx/api-key" ]] || echo "Configs not found yet: run ./install.sh (on a Mac: ./install.sh --local) to point them at the server."
+[[ -f "$HOME/.config/carl/api-key" || -f "$HOME/.config/llm-deploy/api-key" || -f "$HOME/.config/mtplx/api-key" ]] || echo "Configs not found yet: run ./install.sh (on a Mac: ./install.sh --local) to point them at the server."

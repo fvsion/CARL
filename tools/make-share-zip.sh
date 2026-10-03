@@ -4,7 +4,7 @@
 # The zip holds one folder, CARL/, whatever this folder is called.
 # Leaves out the development notes (--with-docs keeps them), caches,
 # Finder files and any api-key file. Models, logs and keys live outside the
-# repo (~/models, ~/.config/llm-deploy), so nothing personal is included.
+# repo (~/models, ~/.config/carl), so nothing personal is included.
 set -euo pipefail
 cd "$(dirname "$0")/.." || exit 1
 name=CARL

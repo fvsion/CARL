@@ -58,7 +58,7 @@ class CommonTests(unittest.TestCase):
                 f.write("oldsecret123\n")
             p = bash('ensure_api_key "$CARL_KEY_FILE"; echo "$CARL_KEY_FILE"', env={"HOME": home})
             self.assertEqual(p.returncode, 0, p.stderr)
-            new = os.path.join(home, ".config", "llm-deploy", "api-key")
+            new = os.path.join(home, ".config", "carl", "api-key")
             self.assertEqual(p.stdout.strip(), new)
             with open(new, encoding="utf-8") as f:
                 self.assertEqual(f.read().strip(), "oldsecret123")
@@ -73,6 +73,74 @@ class CommonTests(unittest.TestCase):
             self.assertEqual((p.returncode, p.stderr), (0, ""))
             with open(new, encoding="utf-8") as f:
                 self.assertEqual(f.read(), "newsecret456")
+
+    def test_ensure_api_key_takes_the_newest_earlier_key(self) -> None:
+        """Both settings folders exist (the old one is not moved then) and only the old one
+        holds a key: that key is copied, not the older MTPLX one."""
+        with tempfile.TemporaryDirectory() as home:
+            for rel, text in ((".mtplx/api-key", "mtplxkey"), (".config/llm-deploy/api-key", "renamedkey")):
+                os.makedirs(os.path.join(home, os.path.dirname(rel)), exist_ok=True)
+                with open(os.path.join(home, rel), "w", encoding="utf-8") as f:
+                    f.write(text)
+            os.makedirs(os.path.join(home, ".config", "carl"))
+            p = bash('ensure_api_key "$CARL_KEY_FILE"', env={"HOME": home})
+            self.assertEqual(p.returncode, 0, p.stderr)
+            with open(os.path.join(home, ".config", "carl", "api-key"), encoding="utf-8") as f:
+                self.assertEqual(f.read(), "renamedkey")
+            self.assertIn("copied from ~/.config/llm-deploy/api-key", p.stderr)
+            self.assertTrue(os.path.isfile(os.path.join(home, ".config", "llm-deploy", "api-key")))
+
+    def old_conf(self, home: str) -> str:
+        """A settings folder under its name from before the rename, as a 1.2.0 install left it."""
+        old = os.path.join(home, ".config", "llm-deploy")
+        os.makedirs(old)
+        for name, text in (("config.json", '{"schema": 1}'), ("models.json", "{}"), ("api-key", "oldsecret123"),
+                           ("llama.env", "CTX=65536\n")):
+            with open(os.path.join(old, name), "w", encoding="utf-8") as f:
+                f.write(text)
+            os.chmod(os.path.join(old, name), 0o644)
+        os.chmod(old, 0o755)
+        return old
+
+    def test_migrate_conf_dir_moves_once_and_links_the_old_path(self) -> None:
+        with tempfile.TemporaryDirectory() as home:
+            old = self.old_conf(home)
+            new = os.path.join(home, ".config", "carl")
+            p = bash("migrate_conf_dir; migrate_conf_dir", env={"HOME": home, "CARL_CONF_DIR": ""})
+            self.assertEqual(p.returncode, 0, p.stderr)
+            self.assertEqual(p.stderr.count("moved ~/.config/llm-deploy to ~/.config/carl"), 1)   # once
+            self.assertEqual(sorted(os.listdir(new)), ["api-key", "config.json", "llama.env", "models.json"])
+            self.assertEqual(stat.S_IMODE(os.stat(new).st_mode), 0o700)
+            for name in os.listdir(new):
+                self.assertEqual(stat.S_IMODE(os.stat(os.path.join(new, name)).st_mode), 0o600, name)
+            self.assertTrue(os.path.islink(old))
+            self.assertEqual(os.readlink(old), "carl")
+            with open(os.path.join(old, "api-key"), encoding="utf-8") as f:          # old configs still read it
+                self.assertEqual(f.read(), "oldsecret123")
+            self.assertNotIn("oldsecret123", p.stdout + p.stderr)
+
+    def test_migrate_conf_dir_leaves_both_folders_alone(self) -> None:
+        with tempfile.TemporaryDirectory() as home:
+            old = self.old_conf(home)
+            new = os.path.join(home, ".config", "carl")
+            os.makedirs(new)
+            p = bash("migrate_conf_dir", env={"HOME": home, "CARL_CONF_DIR": ""})
+            self.assertEqual(p.returncode, 0, p.stderr)
+            self.assertIn("both ~/.config/carl and ~/.config/llm-deploy exist: using ~/.config/carl", p.stderr)
+            self.assertEqual(os.listdir(new), [])
+            self.assertFalse(os.path.islink(old))
+            self.assertEqual(len(os.listdir(old)), 4)
+
+    def test_migrate_conf_dir_does_nothing_without_an_old_folder_or_with_conf_dir(self) -> None:
+        with tempfile.TemporaryDirectory() as home:
+            p = bash("migrate_conf_dir", env={"HOME": home, "CARL_CONF_DIR": ""})
+            self.assertEqual((p.returncode, p.stderr), (0, ""))
+            self.assertEqual(os.listdir(home), [])
+            old = self.old_conf(home)
+            p = bash("migrate_conf_dir", env={"HOME": home, "CARL_CONF_DIR": os.path.join(home, "mine")})
+            self.assertEqual((p.returncode, p.stderr), (0, ""))
+            self.assertFalse(os.path.islink(old))
+            self.assertFalse(os.path.exists(os.path.join(home, ".config", "carl")))
 
     def test_ensure_api_key_other_file_is_not_migrated(self) -> None:
         with tempfile.TemporaryDirectory() as home:
@@ -130,9 +198,37 @@ class CommonTests(unittest.TestCase):
 class ServeDispatch(unittest.TestCase):
     """host/serve.sh commands that answer without starting anything."""
 
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()          # a throw-away home: commands may move its settings folder
+        self.home = self._tmp.name
+
+    def tearDown(self) -> None:
+        self._tmp.cleanup()
+
     def serve(self, *args: str) -> subprocess.CompletedProcess[str]:
+        env = {k: v for k, v in os.environ.items() if k not in ("CARL_CONF_DIR", "API_KEY_FILE")}
         return subprocess.run([os.path.join(REPO, "host", "serve.sh"), *args], capture_output=True, text=True,
-                              stdin=subprocess.DEVNULL, env={**os.environ, "CARL_CMD": "./carl.sh"})
+                              stdin=subprocess.DEVNULL, env={**env, "CARL_CMD": "./carl.sh", "HOME": self.home})
+
+    def test_config_moves_the_old_settings_folder_first(self) -> None:
+        old = os.path.join(self.home, ".config", "llm-deploy")
+        os.makedirs(old)
+        with open(os.path.join(old, "config.json"), "w", encoding="utf-8") as f:
+            json.dump({"schema": 1, "llama": {"net": "local"}}, f)
+        p = self.serve("config", "get", "llama.net")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(json.loads(p.stdout), "local")
+        self.assertIn("moved ~/.config/llm-deploy to ~/.config/carl", p.stderr)
+        self.assertEqual(self.serve("config", "path").stdout.strip(),
+                         os.path.join(self.home, ".config", "carl", "config.json"))
+
+    def test_help_and_unknown_commands_move_nothing(self) -> None:
+        old = os.path.join(self.home, ".config", "llm-deploy")
+        os.makedirs(old)
+        for args in (("-h",), ("help", "env"), ("nope",), ("grant",)):
+            self.serve(*args)
+        self.assertFalse(os.path.islink(old))
+        self.assertFalse(os.path.exists(os.path.join(self.home, ".config", "carl")))
 
     def test_removed_mtplx_presets_point_to_llama(self) -> None:
         for cmd in ("grant", "pocket"):
@@ -217,10 +313,32 @@ class ServeLlamaArgs(unittest.TestCase):
                 shutil.copy(cache, os.path.join(home, "models", ".metal-limit"))
             p, argv, _ = self.run_serve(env={"API_KEY_FILE": "", "HOME": home})
             self.assertEqual(p.returncode, 0, p.stderr)
-            new = os.path.join(home, ".config", "llm-deploy", "api-key")
+            new = os.path.join(home, ".config", "carl", "api-key")
             self.assertEqual(argv[argv.index("--api-key-file") + 1], new)
             with open(new, encoding="utf-8") as f:
                 self.assertEqual(f.read(), "oldsecret123")
+
+    def test_old_settings_folder_is_moved_before_the_start(self) -> None:
+        """A home from before the rename: its config.json and key are used from ~/.config/carl."""
+        with tempfile.TemporaryDirectory() as home:
+            old = os.path.join(home, ".config", "llm-deploy")
+            os.makedirs(old)
+            with open(os.path.join(old, "config.json"), "w", encoding="utf-8") as f:
+                json.dump({"schema": 1, "llama": {"extra_args": ["--from-old-config"]}}, f)
+            with open(os.path.join(old, "api-key"), "w", encoding="utf-8") as f:
+                f.write("renamedsecret")
+            cache = os.path.expanduser("~/models/.metal-limit")   # the GPU limit probe takes seconds
+            if os.path.exists(cache):
+                os.makedirs(os.path.join(home, "models"))
+                shutil.copy(cache, os.path.join(home, "models", ".metal-limit"))
+            p, argv, _ = self.run_serve(env={"API_KEY_FILE": "", "CARL_CONF_DIR": "", "HOME": home})
+            self.assertEqual(p.returncode, 0, p.stderr)
+            new = os.path.join(home, ".config", "carl")
+            self.assertIn("--from-old-config", argv)
+            self.assertEqual(argv[argv.index("--api-key-file") + 1], os.path.join(new, "api-key"))
+            with open(os.path.join(new, "api-key"), encoding="utf-8") as f:
+                self.assertEqual(f.read(), "renamedsecret")
+            self.assertTrue(os.path.islink(old))
 
     def test_rejects_bad_port(self) -> None:
         p, argv, _ = self.run_serve(env={"PORT": "80;x"})

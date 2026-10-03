@@ -18,8 +18,8 @@
 #
 # Network (host/common.sh): --vm = VMware's 192.168.42.1, --local = 127.0.0.1,
 # default auto (VM address if Fusion's network is up, else local). Never 0.0.0.0.
-# The API key file (~/.config/llm-deploy/api-key) is created on first use if missing
-# (ensure_api_key in host/common.sh; it copies a key from before 1.2.0 once).
+# The API key file (~/.config/carl/api-key) is created on first use if missing
+# (ensure_api_key in host/common.sh; it copies a key from an earlier place once).
 # Interactive starts show the live monitor in this terminal; quitting it asks
 # whether to stop the server or leave it running.
 # Override via env, e.g.  CTX=163840 SPEC=ngram-mod ./host/serve-llama.sh
@@ -82,6 +82,7 @@ set -- ${pass[@]+"${pass[@]}"}
 
 # shellcheck source=SCRIPTDIR/common.sh
 source "$HERE/common.sh"
+migrate_conf_dir                 # the settings folder's old name, once (host/common.sh)
 ensure_deps                      # llama-server, aria2, ansifilter (asks to brew install them)
 
 # Model and settings from tools/carl.py: config.json (monitor Settings tab, or

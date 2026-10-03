@@ -1,5 +1,5 @@
 {
-  "name": "llm-deploy-subagents-sidebar",
+  "name": "carl-subagents-sidebar",
   "version": "1.0.0",
   "description": "OpenCode sidebar panel for the current session's subagents: running ones live (agent, task, elapsed time, current tool), finished ones below as a short ✓/✗ list that folds away after a few minutes. Click one to expand it, click again to open it.",
   "type": "module",

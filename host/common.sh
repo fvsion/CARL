@@ -95,27 +95,55 @@ resolve_host() {
   esac
 }
 
-# The server's Bearer key. Clients copy it: client/install.sh, or the monitor's
-# CONNECT section. Before 1.2.0 it lived in MTPLX's folder (LEGACY_KEY_FILE);
-# the first start copies it here once, so clients configured with it keep working.
-CARL_KEY_FILE="$HOME/.config/llm-deploy/api-key"
-LEGACY_KEY_FILE="$HOME/.mtplx/api-key"
+# CARL's settings folder (config.json, models.json, api-key). tools/carl.py reads
+# CARL_CONF_DIR when set; the server's key stays in the default folder.
+CARL_CONF="$HOME/.config/carl"
+OLD_CONF="$HOME/.config/llm-deploy"        # its name before 1.2.0 (CARL was called LLM-Deploy)
 
 # tilde PATH: PATH as ~/... for messages (bash 3.2 would print a quoted \~ as is).
 tilde() { local t='~'; printf '%s' "${1/#"$HOME"/$t}"; }
 
+# migrate_conf_dir: move the settings folder from its old name to CARL_CONF, once.
+# A symlink is left at the old path: client configs written before the rename read
+# the key there (client/install.sh rewrites them). Nothing happens when CARL_CONF_DIR
+# picks another folder, or when CARL_CONF exists already (the old folder is then
+# left alone; tools/carl.py reads CARL_CONF). Files end up 0600, the folder 0700.
+migrate_conf_dir() {
+  [[ -z "${CARL_CONF_DIR:-}" ]] || return 0
+  [[ -d "$OLD_CONF" && ! -L "$OLD_CONF" ]] || return 0
+  if [[ -e "$CARL_CONF" || -L "$CARL_CONF" ]]; then
+    echo "note: both $(tilde "$CARL_CONF") and $(tilde "$OLD_CONF") exist: using $(tilde "$CARL_CONF"); the old folder is not used" >&2
+    return 0
+  fi
+  mv "$OLD_CONF" "$CARL_CONF" || { echo "warning: could not move $(tilde "$OLD_CONF") to $(tilde "$CARL_CONF"); still using the old folder" >&2; return 0; }
+  chmod 700 "$CARL_CONF"
+  find "$CARL_CONF" -maxdepth 1 -type f -exec chmod go-rwx {} +
+  ln -s carl "$OLD_CONF" 2>/dev/null || true
+  echo "moved $(tilde "$OLD_CONF") to $(tilde "$CARL_CONF") (CARL's new name; the old path links to it)" >&2
+}
+
+# The server's Bearer key. Clients copy it: client/install.sh, or the monitor's
+# CONNECT section. Its earlier places, newest first (LEGACY_KEY_FILES): the old
+# settings folder (when both folders exist), and MTPLX's folder (before 1.2.0).
+# The first start copies the newest one here once, so configured clients keep working.
+CARL_KEY_FILE="$CARL_CONF/api-key"
+LEGACY_KEY_FILES=("$OLD_CONF/api-key" "$HOME/.mtplx/api-key")
+
 # ensure_api_key FILE: make sure FILE holds the key, readable by its owner only.
-# For the default FILE, a key from before 1.2.0 is copied over once (same value);
-# otherwise a random key is created on first use.
+# For the default FILE, a key from an earlier place is copied over once (same
+# value; the old file stays); otherwise a random key is created on first use.
 ensure_api_key() {
-  local f="$1" dir
+  local f="$1" dir old
   if [[ -s "$f" ]]; then chmod go-rwx "$f" 2>/dev/null || true; return 0; fi
   dir="$(dirname "$f")"
   mkdir -p "$dir"; chmod 700 "$dir"
-  if [[ "$f" == "$CARL_KEY_FILE" && -s "$LEGACY_KEY_FILE" ]]; then
-    ( umask 077; cp "$LEGACY_KEY_FILE" "$f" ) && chmod 600 "$f"
-    echo "moved the API key to $f (copied from $(tilde "$LEGACY_KEY_FILE"); clients keep working)" >&2
-    return 0
+  if [[ "$f" == "$CARL_KEY_FILE" ]]; then
+    for old in "${LEGACY_KEY_FILES[@]}"; do
+      [[ -s "$old" ]] || continue
+      ( umask 077; cp "$old" "$f" ) && chmod 600 "$f"
+      echo "moved the API key to $f (copied from $(tilde "$old"); clients keep working)" >&2
+      return 0
+    done
   fi
   # pipefail off here: head closing the pipe ends tr with SIGPIPE, which would
   # fail the subshell (and, under set -e, silently end the server start).

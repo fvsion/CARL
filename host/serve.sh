@@ -59,7 +59,7 @@ $(row "" "Settings (5) → ] Models panel → Add from Hugging Face (h)")
 $(row "verify [NAME...]" "re-check downloaded models' size and SHA-256 (no names: all of them)")
 $(row "delete NAME" "delete a downloaded model file")
 $(row "tune NAME [--quick]" "auto-tune a model for this Mac: speculation, context window, slots (~5-10 min)")
-$(row "config [show|set K V]" "the settings file ~/.config/llm-deploy/config.json (show lists every key)")
+$(row "config [show|set K V]" "the settings file ~/.config/carl/config.json (show lists every key)")
 $(row "help [TOPIC]" "this page, or: llama monitor fit models download verify env tuning")
 
 NETWORK (llama, and $CMD without arguments)
@@ -89,7 +89,7 @@ QUICK START
 
 The monitor's CONNECT section shows the URL and API key and copies ready-made
 OpenCode / Pi configs. Its Settings tab (5) changes the model, KV cache, context,
-slots, RAM cache, network and sampling, saves them to ~/.config/llm-deploy/config.json
+slots, RAM cache, network and sampling, saves them to ~/.config/carl/config.json
 and restarts the server; $CMD llama then starts with them (flags still
 win; delete the file for the defaults). Quit (q, Ctrl-C or [ Quit ]) asks: stop
 the server, or leave it running. Client setup: client/install.sh (in the VM) or client/install.sh --local.
@@ -135,7 +135,7 @@ $(row "" "plus HOST, PORT, API_KEY_FILE: see 'help env'")
 BEHAVIOUR
   Refuses to start if the port is in use (another server is running).
   Warns before loading if the model + window won't fit the GPU memory (see: fit; FIT_CHECK=0 skips).
-  Creates the API key ~/.config/llm-deploy/api-key on first use if it doesn't exist.
+  Creates the API key ~/.config/carl/api-key on first use if it doesn't exist.
   In a terminal: the server runs in the background (output in its log file) and the
   monitor runs here; quitting asks stop-or-leave-running. Not a terminal (scripts,
   nohup) or MONITOR=0: the server runs in the foreground as before.
@@ -167,7 +167,7 @@ USAGE
   A file failing its checksum is renamed *.bad. Re-running a download resumes it.
   Any GGUF:  $CMD download hf:OWNER/REPO/FILE.gguf (verified against Hugging Face's SHA-256);
              $CMD download hf:OWNER/REPO lists the repo's files. Or drop a .gguf into ~/models/gguf.
-  Built-in models: host/catalog.json. Custom models and Auto-tune results: ~/.config/llm-deploy/models.json.
+  Built-in models: host/catalog.json. Custom models and Auto-tune results: ~/.config/carl/models.json.
   $CMD delete NAME               delete a downloaded model file
   Env: MODELS_DIR (default ~/models/gguf; config.json paths.models_dir).
 EOF
@@ -181,11 +181,11 @@ $(row "NET=auto" "auto | vm | local (same as --vm / --local). auto = VM address 
 $(row "VM_HOST=192.168.42.1" "the VMware Fusion vmnet8 address used by --vm / auto")
 $(row "HOST" "explicit bind address (wins over NET). 0.0.0.0 is refused: the LAN could reach it")
 $(row "PORT" "8080")
-$(row "API_KEY_FILE" "~/.config/llm-deploy/api-key, the server's Bearer key (created if missing)")
+$(row "API_KEY_FILE" "~/.config/carl/api-key, the server's Bearer key (created if missing)")
 $(row "KEEP_AWAKE=1" "caffeinate -i while the server runs (a sleeping Mac stalls requests)")
 $(row "MONITOR=1" "show the monitor in this terminal on start; 0 = foreground server, no monitor")
 $(row "ALLOW_SECOND_MODEL=1" "start although a process > 8 GB (BIG_GB) is in memory; a second model can crash the Mac")
-$(row "SETTINGS_FILE=none" "ignore ~/.config/llm-deploy/config.json (flags > env > config.json > Auto-tune > catalogue)")
+$(row "SETTINGS_FILE=none" "ignore ~/.config/carl/config.json (flags > env > config.json > Auto-tune > catalogue)")
 $(row "MODELS_DIR" "the models folder (default ~/models/gguf; config.json paths.models_dir)")
 EOF
 }
@@ -260,6 +260,12 @@ client_install() {
 # shellcheck source=SCRIPTDIR/common.sh
 source "$HERE/common.sh"
 LLAMA_PORT=8080
+# The settings folder's old name, moved once before anything reads it (not for
+# help, nor for a command that doesn't exist).
+case "${1:-}" in
+  help|-h|--help|--help-adv|grant|pocket) ;;
+  ""|dashboard|--no-start|install|monitor|fit|models|config|tune|download|verify|delete|llama|-*) migrate_conf_dir ;;
+esac
 if [[ $# -eq 0 ]]; then
   # No arguments: the dashboard. Attach to a server that runs already (one model
   # at a time), else start llama.cpp with its saved settings.

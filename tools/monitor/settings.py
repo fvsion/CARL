@@ -1,5 +1,5 @@
 """The Settings tab's model: its rows, how values are shown and coloured, whether a setup
-fits the GPU, and how the chosen values map to ~/.config/llm-deploy/config.json.
+fits the GPU, and how the chosen values map to ~/.config/carl/config.json.
 
 The Settings tab chooses the llama.cpp server's model and settings, saves them to
 config.json (tools/carl.py; the launchers read it: flags > environment > config.json >

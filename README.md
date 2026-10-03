@@ -24,9 +24,10 @@ brew install llama.cpp aria2 ansifilter
 If you skip the `brew install`, `./carl.sh` finds the missing tools and asks to install them. If you skip the download, `./carl.sh` asks to download the default model for this Mac.
 
 **Your own OpenCode and Pi settings stay.** The installer adds CARL next to them and does not replace them:
-- It keeps your providers, default model, agents and plugins. If a name is already in use, CARL uses its own name (`llm-deploy`).
+- It keeps your providers, default model, agents and plugins. If a name is already in use, CARL uses its own name (`carl`).
 - Before it changes a file, it keeps your original as `FILE.before-carl`, and a copy of each version as `FILE.bak.<time>`.
 - A second run with the same settings changes nothing.
+- CARL was formerly called LLM-Deploy: `./carl.sh` and the installer move files with the old name (`~/.config/llm-deploy`, `llm-deploy.json`) to the new one once.
 
 **Clients in a VM or on another computer:** copy the `client/` folder there, and run `./install-clients.sh && ./install.sh`. VMware Fusion works without options. For Parallels or a computer on your network, start the server with `--host ADDR` and use the same address for the clients (USERGUIDE.md, "Clients on another computer or another VM app").
 

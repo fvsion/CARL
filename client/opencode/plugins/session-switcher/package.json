@@ -1,5 +1,5 @@
 {
-  "name": "llm-deploy-session-switcher",
+  "name": "carl-session-switcher",
   "version": "1.0.0",
   "description": "OpenCode session switcher in the prompt box: the recent top-level sessions of this project with their state (busy, waiting for you, idle); click ‹ › to cycle, the title or /switch opens a picker.",
   "type": "module",

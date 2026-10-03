@@ -4,14 +4,17 @@ anything the user owns. Called by install.sh (it resolves the key, server
 address, context window and whether the coder is on).
 
 What "ours" means: recorded in a state file next to each config
-(~/.config/opencode/llm-deploy.json, ~/.pi/agent/llm-deploy.json). Installs
-from before the state file existed are recognised by a signature (our
-provider names / API-key file path, our prompt text).
+(~/.config/opencode/carl.json, ~/.pi/agent/carl.json). Installs from before
+the state file existed are recognised by a signature (our provider names /
+API-key file path, our prompt text).
 
 Rules
 - Providers: ours replace only our own earlier version. If the user has their
-  own provider called "llamacpp", ours is installed alongside as "llm-deploy"
-  and every reference uses that id.
+  own provider called "llamacpp", ours is installed alongside as "carl" and
+  every reference uses that id.
+- Renamed in 1.2.0 (CARL was called LLM-Deploy): an install with the old names
+  (OLD_NAMES: state files, prompt folder, provider id, markers) is moved to the
+  new ones; only CARL's own pieces, recognised as above.
 - Removed in 1.2.0 (CARL is llama.cpp only): our MTPLX provider ("mtplx" /
   "llm-deploy-mtplx"), the OpenCode plugin mtplx-session-headers and the Pi
   extension mtplx-request-policy.ts are taken out of an earlier install; a
@@ -44,11 +47,28 @@ JsonObj = dict[str, Any]
 
 ORIGINAL = ".before-carl"      # one copy of each config as it was before CARL first changed it
 PROVIDER = "llamacpp"
-ALT = "llm-deploy"             # our provider's id when the user owns one called PROVIDER
+
+
+@dataclass(frozen=True)
+class Names:
+    """What CARL's own pieces are called in the clients' folders."""
+    alt: str            # our provider's id when the user owns one called PROVIDER
+    state: str          # the state file next to each config
+    prompt_dir: str     # OpenCode: the folder of the coder prompt and the delegation rule
+    block: str          # Pi APPEND_SYSTEM.md: <!-- {block}:delegation begin --> ... end -->
+    ext_marker: str     # marks CARL's changes in the vendored Pi subagent extension
+    key_file: str       # the API-key file our providers read (under the home folder)
+
+
+NAMES = Names(alt="carl", state="carl.json", prompt_dir="carl", block="carl", ext_marker="CARL:",
+              key_file=".config/carl/api-key")
+# Before the rename in 1.2.0 (CARL was called LLM-Deploy): recognised as ours and moved to NAMES.
+OLD_NAMES = Names(alt="llm-deploy", state="llm-deploy.json", prompt_dir="llm-deploy", block="llm-deploy",
+                  ext_marker="LLM-Deploy:", key_file=".config/llm-deploy/api-key")
+ALT = NAMES.alt
 OUR_NAMES: frozenset[str] = frozenset({"llama.cpp (Mac host)", "MTPLX (Mac host, ≤48K)", "MTPLX (Mac host)"})
-# The API-key file our providers read: since 1.2.0, and before it (still recognised as ours).
-KEY_FILE = ".config/llm-deploy/api-key"
-OUR_KEYS = ("/" + KEY_FILE, "/.config/mtplx/api-key")
+# The API-key files our providers read: now, before the rename, and before 1.2.0 (all recognised as ours).
+OUR_KEYS = ("/" + NAMES.key_file, "/" + OLD_NAMES.key_file, "/.config/mtplx/api-key")
 # Pieces of the MTPLX support removed in 1.2.0 (taken out of an earlier install).
 OLD_MTPLX_IDS = ("mtplx", "llm-deploy-mtplx")
 OLD_OC_PLUGIN = "plugins/mtplx-session-headers"
@@ -58,11 +78,13 @@ OLD_PI_EXT_SIG = "Pi <-> MTPLX request bridge"
 CODER = "coder"                                         # the coder subagent's name in both clients
 CODER_ALT = "carl-coder"                                # ... when the user has their own "coder"
 CODER_NAMES = (CODER, CODER_ALT, "llm-deploy-coder")    # every name CARL used (the last before 1.2.0)
+CODER_FILES = ("coder.md", "delegation.md")             # OpenCode: in the prompt folder
 CODER_SIG = "specialist software engineer"              # in our coder prompt (the Pi agent file)
 # defaults earlier versions set (treated as ours when no state file exists yet)
-OLD_DEFAULTS: frozenset[str] = frozenset({
-    "llamacpp/qwen3.8-27b-abliterated-llama", "llamacpp/qwen3.8-27b", "llamacpp/qwen3.6-35b-a3b",
-    "mtplx/qwen3.8-27b-abliterated-grant", "mtplx/qwen3.8-27b-abliterated"})
+OLD_DEFAULTS: frozenset[str] = frozenset(
+    {f"{p}/{m}" for p in (PROVIDER, OLD_NAMES.alt)
+     for m in ("qwen3.8-27b-abliterated-llama", "qwen3.8-27b", "qwen3.6-35b-a3b")}
+    | {"mtplx/qwen3.8-27b-abliterated-grant", "mtplx/qwen3.8-27b-abliterated"})
 DEFAULT_MODEL = "qwen3.6-35b-a3b"
 REPORT_KINDS = ("backed up", "added", "updated", "kept", "removed")
 # The host is substituted into JSON text and URLs: a hostname, IPv4 or IPv6 literal only.
@@ -203,8 +225,11 @@ def set_ctx_pi(provider: JsonObj, ctx: int) -> None:
 
 
 def pick_ids(existing: JsonObj, state: JsonObj, is_ours: Callable[[JsonObj], bool]) -> dict[str, str]:
-    """Provider id to install under: ours by default, ALT when the user owns the name."""
+    """Provider id to install under: ours by default, ALT when the user owns the name
+    (also when the state file recorded ALT's name from before the rename)."""
     chosen = state.get("providers", {}).get(PROVIDER)
+    if chosen == OLD_NAMES.alt:
+        chosen = ALT
     if not chosen:
         cur = existing.get(PROVIDER)
         chosen = PROVIDER if cur is None or is_ours(cur) else ALT
@@ -232,9 +257,40 @@ def old_mtplx_ids(providers: JsonObj, state: JsonObj, is_ours: Callable[[JsonObj
     return [i for i in ids if isinstance(providers.get(i), dict) and is_ours(providers[i])]
 
 
+def old_alt_ids(providers: JsonObj, state: JsonObj, is_ours: Callable[[JsonObj], bool]) -> list[str]:
+    """Our provider under its id from before the rename (OLD_NAMES.alt), when it is ours:
+    the state file recorded it, or it reads our key file."""
+    old = providers.get(OLD_NAMES.alt)
+    recorded = state.get("providers", {}).get(PROVIDER) == OLD_NAMES.alt
+    return [OLD_NAMES.alt] if isinstance(old, dict) and (recorded or is_ours(old)) else []
+
+
+OUR_PROMPTS = tuple(f"/opencode/{n.prompt_dir}/" for n in (NAMES, OLD_NAMES)) + ("prompts/coder.md",)
+
+
 def ours_agent(a: object) -> bool:
-    """An OpenCode agent entry CARL wrote: its prompt is a file in CARL's folder."""
-    return isinstance(a, dict) and ("llm-deploy" in str(a.get("prompt", "")) or "prompts/coder.md" in str(a.get("prompt", "")))
+    """An OpenCode agent entry CARL wrote: its prompt is a file in CARL's folder (either name)."""
+    return isinstance(a, dict) and any(p in str(a.get("prompt", "")) for p in OUR_PROMPTS)
+
+
+def gone_note(ref: object, renamed: dict[str, str]) -> str:
+    """The note after a default model of the user's own whose provider CARL took out
+    (renamed: old id -> the id ours has now), "" when the provider is still there."""
+    prov, _, model = str(ref).partition("/")
+    if prov in renamed:
+        return f"; that provider is now '{renamed[prov]}': pick {renamed[prov]}/{model}"
+    return "; that provider no longer exists: pick another" if prov in OLD_MTPLX_IDS else ""
+
+
+def delegation_markers(names: Names) -> tuple[str, str]:
+    """The lines around CARL's delegation rule in Pi's APPEND_SYSTEM.md."""
+    return f"<!-- {names.block}:delegation begin -->", f"<!-- {names.block}:delegation end -->"
+
+
+def strip_block(text: str, markers: tuple[str, str]) -> str:
+    """text without the block between the markers (and the blank lines before it)."""
+    begin, end = markers
+    return re.sub(r"\n*" + re.escape(begin) + r".*?" + re.escape(end) + r"\n?", "\n", text, flags=re.S)
 
 
 # ------------------------------------------------------------------ files
@@ -314,6 +370,31 @@ class Installer:
         shutil.copy2(path, f"{path}.bak.{self.stamp}")
         os.remove(path)
 
+    # -- the state file (what is ours), and its name before the rename
+    def load_state(self, folder: str) -> JsonObj:
+        """NAMES.state; while it doesn't exist yet, the one from before the rename."""
+        new = os.path.join(folder, NAMES.state)
+        return load(new if os.path.exists(new) else os.path.join(folder, OLD_NAMES.state), {})
+
+    def save_state(self, folder: str, client: str, st: JsonObj) -> None:
+        """Write NAMES.state; the old-named one goes (a copy stays as FILE.bak.<time>)."""
+        self.save(os.path.join(folder, NAMES.state), st, backup=False)
+        old = os.path.join(folder, OLD_NAMES.state)
+        if os.path.isfile(old):
+            self.remove_file(old)
+            self.report.add("updated", f"{client} state file {self.short(old)} -> {NAMES.state} (CARL's new name)")
+
+    def renamed_provider(self, providers: JsonObj, st: JsonObj, is_ours: Callable[[JsonObj], bool],
+                         new_id: str, client: str) -> dict[str, str]:
+        """Take our provider under its old id out ({old id: the id ours has now}, or {})."""
+        out: dict[str, str] = {}
+        for old in old_alt_ids(providers, st, is_ours):
+            if old != new_id:
+                providers.pop(old)
+                self.report.add("removed", f"{client} provider '{old}' (CARL's provider is now '{new_id}')")
+                out[old] = new_id
+        return out
+
     def bundle_path(self, rel: str) -> str:
         return os.path.join(self.o.bundle, rel)
 
@@ -339,8 +420,7 @@ class Installer:
         oc, rep = self.o.oc_dir, self.report
         path = os.path.join(oc, "opencode.json")
         cfg = load(path, {})
-        st_path = os.path.join(oc, "llm-deploy.json")
-        st = load(st_path, {})
+        st = self.load_state(oc)
         first_install = not st
         bundle = self.bundle_json("opencode/opencode.json")
 
@@ -351,16 +431,17 @@ class Installer:
         prov = bundle["provider"][PROVIDER]
         set_ctx_oc(prov, self.o.ctx)
         if new_id != PROVIDER:
-            prov["name"] = prov["name"] + " [llm-deploy]"
+            prov["name"] = prov["name"] + f" [{ALT}]"
             rep.add("kept", f"OpenCode provider '{PROVIDER}' (yours); ours installed as '{new_id}'")
         if providers.get(new_id) != prov:
             rep.add("updated" if new_id in providers else "added", f"OpenCode provider '{new_id}'")
         providers[new_id] = prov
+        renamed = self.renamed_provider(providers, st, ours_oc, new_id, "OpenCode")
         for old in old_mtplx_ids(providers, st, ours_oc):
             providers.pop(old)
             rep.add("removed", f"OpenCode provider '{old}' (MTPLX support was removed in CARL 1.2.0)")
 
-        self._oc_default_model(cfg, st, ids, first_install, had_ours_before)
+        self._oc_default_model(cfg, st, ids, first_install, had_ours_before, renamed)
 
         # title agent: we no longer disable it; undo our earlier setting
         agent = cfg.setdefault("agent", {})
@@ -381,7 +462,7 @@ class Installer:
 
         st.update({"providers": ids, "base_url": self.o.base_url, "updated": self.stamp})
         self.save(path, cfg)
-        self.save(st_path, st, backup=False)
+        self.save_state(oc, "OpenCode", st)
         return ids
 
     def _oc_remove_old_plugin(self, cfg: JsonObj) -> None:
@@ -400,8 +481,9 @@ class Installer:
                 self.report.add("kept", f"{self.short(plug)} (not ours)")
 
     def _oc_default_model(self, cfg: JsonObj, st: JsonObj, ids: dict[str, str],
-                          first_install: bool, had_ours_before: bool) -> None:
-        """model / small_model: only if unset or still what we set before."""
+                          first_install: bool, had_ours_before: bool, renamed: dict[str, str]) -> None:
+        """model / small_model: only if unset or still what we set before. renamed: our
+        provider ids taken out this run -> the id ours has now (named in the note)."""
         rep = self.report
         ours_default = f"{ids['llamacpp']}/{DEFAULT_MODEL}"
         prev = {st.get("model"), st.get("small_model")} | (OLD_DEFAULTS if first_install and had_ours_before else set())
@@ -417,9 +499,7 @@ class Installer:
                     rep.add("updated" if cur else "added", f"OpenCode {key} = {ours_default}")
                 st[key] = ours_default
             else:
-                gone = isinstance(cur, str) and cur.split("/", 1)[0] in OLD_MTPLX_IDS
-                rep.add("kept", f"OpenCode {key} = {cur} (yours" + ("; that provider no longer exists: pick another)"
-                                                                     if gone else ")"))
+                rep.add("kept", f"OpenCode {key} = {cur} (yours{gone_note(cur, renamed)})")
                 st.pop(key, None)
 
         if "model" not in st and cfg.get("small_model") in prev and cfg.get("small_model"):
@@ -430,7 +510,8 @@ class Installer:
         """The coder agent and its delegation rule (on with --coder 1, removed with 0): "coder",
         or "carl-coder" next to a user's own "coder". Ours under another name goes."""
         oc, rep = self.o.oc_dir, self.report
-        ddir = os.path.join(oc, "llm-deploy")
+        ddir = os.path.join(oc, NAMES.prompt_dir)
+        self._oc_remove_old_prompt_dir(cfg)
         for p in (os.path.join(oc, "prompts", n) for n in ("coder.md", "delegation.md")):
             # earlier versions kept them in prompts/
             old = read_or_none(p)
@@ -481,6 +562,24 @@ class Installer:
             ins.append(rule_path)
         st["coder_agent"] = name
 
+    def _oc_remove_old_prompt_dir(self, cfg: JsonObj) -> None:
+        """The prompt folder from before the rename: its delegation rule out of the
+        instructions, our two files deleted (they are rewritten under NAMES.prompt_dir),
+        the folder too once empty. Anything else in it stays."""
+        old_dir = os.path.join(self.o.oc_dir, OLD_NAMES.prompt_dir)
+        if os.path.islink(old_dir) or not os.path.isdir(old_dir):
+            return
+        old_rule = os.path.join(old_dir, "delegation.md")
+        cfg["instructions"] = [x for x in cfg.get("instructions", []) if x != old_rule]
+        for f in CODER_FILES:
+            if os.path.isfile(os.path.join(old_dir, f)):
+                os.remove(os.path.join(old_dir, f))
+        if os.listdir(old_dir):
+            self.report.add("kept", f"{self.short(old_dir)} (not ours: CARL's prompts are in {NAMES.prompt_dir}/ now)")
+        else:
+            os.rmdir(old_dir)
+            self.report.add("removed", f"{self.short(old_dir)} (CARL's prompts are in {NAMES.prompt_dir}/ now)")
+
     def _oc_tui(self) -> None:
         """TUI plugins: subagents sidebar, session switcher (in the prompt box)."""
         oc, rep = self.o.oc_dir, self.report
@@ -511,8 +610,7 @@ class Installer:
         pi, rep = self.o.pi_dir, self.report
         path = os.path.join(pi, "models.json")
         cfg = load(path, {})
-        st_path = os.path.join(pi, "llm-deploy.json")
-        st = load(st_path, {})
+        st = self.load_state(pi)
         first_install = not st
         bundle = self.bundle_json("pi/models.json")
 
@@ -527,26 +625,28 @@ class Installer:
         if providers.get(new_id) != prov:
             rep.add("updated" if new_id in providers else "added", f"Pi provider '{new_id}'")
         providers[new_id] = prov
+        renamed = self.renamed_provider(providers, st, ours_pi, new_id, "Pi")
         for old in old_mtplx_ids(providers, st, ours_pi):
             providers.pop(old)
             rep.add("removed", f"Pi provider '{old}' (MTPLX support was removed in CARL 1.2.0)")
         self.save(path, cfg)
 
-        self._pi_settings(st, ids, first_install, had_ours_before)
+        self._pi_settings(st, ids, first_install, had_ours_before, renamed)
         self._pi_extensions_and_coder(st)
 
         st.update({"providers": ids, "base_url": self.o.base_url, "updated": self.stamp})
-        self.save(st_path, st, backup=False)
+        self.save_state(pi, "Pi", st)
         return ids
 
-    def _pi_settings(self, st: JsonObj, ids: dict[str, str], first_install: bool, had_ours_before: bool) -> None:
+    def _pi_settings(self, st: JsonObj, ids: dict[str, str], first_install: bool, had_ours_before: bool,
+                     renamed: dict[str, str]) -> None:
         """settings.json defaults: only when unset or still ours."""
         rep = self.report
         sp = os.path.join(self.o.pi_dir, "settings.json")
         sett = load(sp, {})
         want = {"defaultProvider": ids[PROVIDER], "defaultModel": DEFAULT_MODEL, "defaultThinkingLevel": "low"}
         prev = st.get("settings", {})
-        legacy = first_install and had_ours_before and sett.get("defaultProvider") == "llamacpp"
+        legacy = first_install and had_ours_before and sett.get("defaultProvider") in (PROVIDER, OLD_NAMES.alt)
         if all(sett.get(k) is None or sett.get(k) == prev.get(k) or legacy for k in want):
             changed = {k: v for k, v in want.items() if sett.get(k) != v}
             sett.update(want)
@@ -555,9 +655,8 @@ class Installer:
             st["settings"] = want
             self.save(sp, sett)
         else:
-            gone = sett.get("defaultProvider") in OLD_MTPLX_IDS
-            rep.add("kept", f"Pi defaults (yours: {sett.get('defaultProvider')}/{sett.get('defaultModel')}"
-                    + ("; that provider no longer exists: pick another)" if gone else ")"))
+            mine = f"{sett.get('defaultProvider')}/{sett.get('defaultModel')}"
+            rep.add("kept", f"Pi defaults (yours: {mine}{gone_note(mine, renamed)})")
             st.pop("settings", None)
 
     def _pi_extensions_and_coder(self, st: JsonObj) -> None:
@@ -577,7 +676,8 @@ class Installer:
 
         sub = os.path.join(ext, "subagent")
         sub_index = read_or_none(os.path.join(sub, "index.ts"))
-        sub_ours = (os.path.isdir(sub) and "LLM-Deploy" in sub_index) if sub_index is not None else not os.path.exists(sub)
+        sub_ours = ((os.path.isdir(sub) and any(n.ext_marker in sub_index for n in (NAMES, OLD_NAMES)))
+                    if sub_index is not None else not os.path.exists(sub))
         agents_dir = os.path.join(pi, "agents")
         texts = {n: read_or_none(os.path.join(agents_dir, f"{n}.md")) for n in CODER_NAMES}
         mine = {n for n, t in texts.items() if t is not None and CODER_SIG in t}
@@ -592,8 +692,10 @@ class Installer:
         existing = texts[name]
         asp = os.path.join(pi, "APPEND_SYSTEM.md")
         cur = read_or_none(asp) or ""
-        begin, end = "<!-- llm-deploy:delegation begin -->", "<!-- llm-deploy:delegation end -->"
-        cur = re.sub(r"\n*" + re.escape(begin) + r".*?" + re.escape(end) + r"\n?", "\n", cur, flags=re.S).strip()
+        for names in (OLD_NAMES, NAMES):
+            cur = strip_block(cur, delegation_markers(names))
+        cur = cur.strip()
+        begin, end = delegation_markers(NAMES)
         if plan.install:
             if sub_ours:
                 shutil.rmtree(sub, ignore_errors=True)
