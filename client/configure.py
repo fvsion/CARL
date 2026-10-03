@@ -44,6 +44,9 @@ Rules
   for the main agents and on for a "browser" subagent ("carl-browser" next to a user's own
   "browser"), so the main prompt stays under 10.5K tokens (measured: the 26 browser tools
   are ~4.8K); in Pi a deferred MCP server (tool_search loads its tools when needed).
+- OpenCode plugin carl-prefix-cache (the same kind of entry): records the system prompt and
+  tools OpenCode sends in ~/.config/carl/prefix/, for the dashboard's pre-read prompt cache
+  (tools/monitor/prefix.py). NO_PREFIX_CACHE=1 leaves it out.
 - OpenCode plugin carl-model-check (opencode.json "plugin", with our provider id as its
   option): warns when the model picked isn't the one the server runs, isn't installed, or
   is being loaded (router mode). NO_MODEL_CHECK=1 leaves it out.
@@ -111,7 +114,8 @@ BROWSER_PKG = "@playwright/mcp@0.0.83"                  # pinned: measured 2026-
 BROWSER_AGENT, BROWSER_AGENT_ALT = "browser", "carl-browser"
 BROWSER_OFF = ("bash", "edit", "write", "lsp", "task", "todowrite", "question", "skill")   # not for the browser agent
 CHROME_APP = "/Applications/Google Chrome.app"
-MODEL_CHECK = "carl-model-check"                        # the OpenCode plugin that warns about the model
+MODEL_CHECK = "carl-model-check"
+PREFIX_CACHE = "carl-prefix-cache"                      # records OpenCode's prompt prefix for the pre-read cache                        # the OpenCode plugin that warns about the model
 CODER = "coder"                                         # the coder subagent's name in both clients
 CODER_ALT = "carl-coder"                                # ... when the user has their own "coder"
 CODER_NAMES = (CODER, CODER_ALT, "llm-deploy-coder")    # every name CARL used (the last before 1.2.0)
@@ -147,6 +151,7 @@ class Options:
     background: bool = True
     browser: bool = True
     browser_headed: bool = False
+    prefix_cache: bool = True
     profile: bool = True      # append the pointer to ~/.zshrc / ~/.bashrc (NO_PROFILE=1: print it instead)
 
     @property
@@ -209,6 +214,7 @@ def parse_args(argv: list[str]) -> Options:
     ap.add_argument("--browser", type=switch_arg, default=True)
     ap.add_argument("--browser-headed", type=switch_arg, default=False)
     ap.add_argument("--profile", type=switch_arg, default=True)
+    ap.add_argument("--prefix-cache", type=switch_arg, default=True)
     a = ap.parse_args(argv)
     try:
         models = carl_models.load_list(a.models)
@@ -217,7 +223,8 @@ def parse_args(argv: list[str]) -> Options:
     return Options(bundle=a.bundle, home=a.home, host=a.host, llama_port=a.llama_port, ctx=a.ctx, models=models,
                    running=a.running, coder=a.coder, sidebar=a.sidebar, switcher=a.switcher,
                    model_check=a.model_check, web_search=a.web_search, lsp=a.lsp, background=a.background,
-                   browser=a.browser, browser_headed=a.browser_headed, profile=a.profile)
+                   browser=a.browser, browser_headed=a.browser_headed, profile=a.profile,
+                   prefix_cache=a.prefix_cache)
 
 
 # ------------------------------------------------------------------ pure helpers
@@ -506,7 +513,8 @@ class Installer:
         st.pop("title_disabled", None)
 
         self._oc_remove_old_plugin(cfg)
-        self._oc_model_check(cfg, new_id)
+        self._oc_server_plugin(cfg, MODEL_CHECK, self.o.model_check, new_id, "model warnings")
+        self._oc_server_plugin(cfg, PREFIX_CACHE, self.o.prefix_cache, new_id, "a pre-read prompt cache")
 
         self._oc_coder(cfg, st, agent)
         self._oc_tools(cfg, st)
@@ -668,10 +676,10 @@ class Installer:
                                     f'tool switches: [ -f "$HOME/.config/carl/{ENV_FILE}" ] && . '
                                     f'"$HOME/.config/carl/{ENV_FILE}"')
 
-    def _oc_model_check(self, cfg: JsonObj, provider_id: str) -> None:
-        """The model-check plugin: copied into plugins/, one entry in the plugin list with our
-        provider id (an entry of ours is replaced, other entries stay); out with --model-check 0."""
-        dest = os.path.join(self.o.oc_dir, "plugins", MODEL_CHECK)
+    def _oc_server_plugin(self, cfg: JsonObj, name: str, want_it: bool, provider_id: str, what: str) -> None:
+        """One of CARL's OpenCode server plugins: copied into plugins/, one entry in the plugin list
+        with our provider id (an entry of ours is replaced, other entries stay); out when not wanted."""
+        dest = os.path.join(self.o.oc_dir, "plugins", name)
         entry = "file:" + dest
 
         def is_ours(x: object) -> bool:
@@ -680,17 +688,17 @@ class Installer:
         plist = plist if isinstance(plist, list) else []
         had = [x for x in plist if is_ours(x)]
         rest = [x for x in plist if not is_ours(x)]
-        if not self.o.model_check:
+        if not want_it:
             if had or os.path.isdir(dest):
                 shutil.rmtree(dest, ignore_errors=True)
                 cfg["plugin"] = rest
-                self.report.add("removed", f"OpenCode plugin {MODEL_CHECK}")
+                self.report.add("removed", f"OpenCode plugin {name}")
             return
         shutil.rmtree(dest, ignore_errors=True)
-        shutil.copytree(self.bundle_path(os.path.join("opencode/plugins", MODEL_CHECK)), dest)
+        shutil.copytree(self.bundle_path(os.path.join("opencode/plugins", name)), dest)
         want = [entry, {"provider": provider_id}]
         if had != [want]:
-            self.report.add("updated" if had else "added", f"OpenCode plugin {MODEL_CHECK} (model warnings)")
+            self.report.add("updated" if had else "added", f"OpenCode plugin {name} ({what})")
         cfg["plugin"] = rest + [want]
 
     def _oc_default_model(self, cfg: JsonObj, st: JsonObj, ids: dict[str, str],

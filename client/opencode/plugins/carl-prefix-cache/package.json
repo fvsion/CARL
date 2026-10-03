@@ -1,0 +1,14 @@
+{
+  "name": "carl-prefix-cache",
+  "version": "1.0.0",
+  "description": "Records the system prompt and tools OpenCode sends to the CARL server, so CARL can keep them pre-read (a saved KV cache) and the first request after a server start is fast.",
+  "type": "module",
+  "license": "MIT",
+  "exports": {
+    ".": { "import": "./index.js" },
+    "./server": { "import": "./index.js" }
+  },
+  "peerDependencies": {
+    "@opencode-ai/plugin": ">=1.14.0"
+  }
+}

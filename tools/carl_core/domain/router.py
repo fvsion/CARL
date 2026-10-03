@@ -35,6 +35,7 @@ class Common:
     ckpt: int
     ckpt_step: int
     cache_ram: Optional[int]    # MiB; None = sized per model from free RAM
+    slot_dir: str = ""          # --slot-save-path: the saved prompt prefixes (tools/monitor/prefix.py)
 
 
 @dataclass(frozen=True)
@@ -98,7 +99,8 @@ def preset_ini(preset: Preset, common: Common) -> str:
         "jinja": "true", "reasoning-format": "deepseek", "chat-template-kwargs": '{"preserve_thinking":true}',
         "n-gpu-layers": "999", "flash-attn": "on", "no-mmproj": "true", "metrics": "true",
         "batch-size": str(common.batch), "ubatch-size": str(common.ubatch),
-        "ctx-checkpoints": str(common.ckpt), "checkpoint-min-step": str(common.ckpt_step)}
+        "ctx-checkpoints": str(common.ckpt), "checkpoint-min-step": str(common.ckpt_step),
+        **({"slot-save-path": common.slot_dir} if common.slot_dir and "\n" not in common.slot_dir else {})}
     out += [f"{k} = {v}" for k, v in shared.items()]
     for m in preset.models:
         out += ["", f"; {m.label()}, needs {m.need / 2**30:.1f} GiB", f"[{m.name}]", f"model = {m.path}",

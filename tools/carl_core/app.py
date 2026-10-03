@@ -318,7 +318,8 @@ class Carl:
         ll = {k: cfg.llama.get(k, s.default) for k, s in LLAMA_KEYS.items()}
         cache = ll["cache_ram"]
         common = Common(batch=int(str(ll["batch"])), ubatch=int(str(ll["ub"])), ckpt=int(str(ll["ckpt"])),
-                        ckpt_step=int(str(ll["ckpt_step"])), cache_ram=cache if isinstance(cache, int) else None)
+                        ckpt_step=int(str(ll["ckpt_step"])), cache_ram=cache if isinstance(cache, int) else None,
+                        slot_dir=os.path.join(self.home, ".config", "carl", "slots"))
         limit = self.gpu.limit()[0]
         ram, vm = self.host.ram_bytes(), self.host.vm_network_up()
         preset = Preset()

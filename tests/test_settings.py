@@ -47,6 +47,13 @@ class ValidateConfigTest(unittest.TestCase):
                                          "llama": {"model": "m", "net": "local", "ub": 1024},
                                          "models": {"m.v2": {"ctx": 131072, "spec": "ngram-mod"}}})
 
+    def test_cache_section(self) -> None:
+        cfg, warn = validate_config({"cache": {"disk_gb": "10", "prefix": "off"}})
+        self.assertEqual((warn, cfg.cache), ([], {"disk_gb": 10, "prefix": False}))
+        self.assertEqual(cfg.to_json()["cache"], {"disk_gb": 10, "prefix": False})
+        with self.assertRaisesRegex(ConfigError, "cache.disk_gb"):
+            validate_config({"cache": {"disk_gb": 0}})
+
     def test_net_auto_is_retired(self) -> None:
         self.assertEqual(LLAMA_KEYS["net"].default, "local")
         with self.assertRaisesRegex(ConfigError, "llama.net"):

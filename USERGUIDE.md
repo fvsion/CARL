@@ -351,6 +351,19 @@ OpenCode 1.18.34 does not show the open sessions as tabs. Thus, `install.sh` add
 
 NOTE: The list contains the top-level sessions of this project that changed in the last 72 hours (maximum 9). It does not contain subagent sessions. For older sessions, use `/sessions`. The switcher does not show when there is only one session. The plugin is `client/opencode/plugins/session-switcher/`. `install.sh` registers it in `~/.config/opencode/tui.json`. `NO_SWITCHER=1 ./install.sh` installs without it.
 
+### Fast starts: the disk cache
+
+After a server start, the server knows nothing. The first request of each session reads its whole prompt again: OpenCode's system prompt and tools (~9.9K tokens: ~17 s on the 35B, ~2 min on the 27B), and in a session that continues, the whole conversation (minutes for a long one). CARL keeps two things on disk so that this does not happen:
+
+- **Pre-read:** OpenCode's shared prompt (the tools and the instructions, ~9.1K tokens). The OpenCode plugin `carl-prefix-cache` records the prompt as OpenCode sends it, and the dashboard reads it once in an idle slot and saves it. After each start, the dashboard puts it back in a slot in under a second. Then the first request of a session reads only what is new: **768 tokens in 1.6 s instead of ~9.9K in 17 s** (35B IQ3).
+- **Conversations:** the dashboard saves each slot's conversation when it has been idle for 2 minutes, and before it stops or restarts the server (Stop, Apply, Auto-tune). After the next start, it puts them back in their slots. The next turn of that session reads only the new message: **16 tokens in 0.6 s instead of ~9.9K**.
+
+- The files are in `~/.config/carl/slots`. They stay within a disk limit: **5 GB** by default. When a save goes over it, the oldest conversations are removed first, then the oldest prompts. A pre-read prompt is ~120 MB on the 35B. A conversation is ~13 KB per token on the 35B (a 74K-token session: ~1 GB).
+- **Settings tab → Caching panel:** the disk limit, pre-read on / off, conversations on / off, what is on disk, and **Clear**.
+- **What a file is used for:** a file is used only by the same model file, KV cache type and llama.cpp build. If the request is different from the saved state (for example, you added a tool or a new MCP server), the server reads the whole prompt, as it would without the cache. The plugin then records the new prompt, and the dashboard saves it for the next start.
+- **Limits:** the dashboard saves one conversation per slot (the latest one in each slot). Conversations that you used earlier are in llama.cpp's RAM cache while the server runs. After a restart, only the conversations that were in a slot come back.
+- NOTE: The dashboard does this work. With `MONITOR=0` (no dashboard), there is no disk cache. `NO_PREFIX_CACHE=1 ./install.sh` installs OpenCode without the plugin (then there is no pre-read).
+
 ### Tools in OpenCode and Pi
 
 `./carl.sh install` gives OpenCode and Pi as many tools as fit a lean prompt. OpenCode's system prompt and tool definitions measure **9,870 tokens** as installed (Qwen3.6 35B-A3B, OpenCode 1.18.34; the target is under 10.5K, because every new session reads them first).
@@ -648,7 +661,7 @@ Auto fit picks the best **stock** model that fits this Mac, for a goal:
 
 ### The Settings tab
 
-The Settings tab (tab 5) has five panels: **Server**, **Models**, **Auto fit**, **Auto-tune** and **Router** ([router mode](#router-mode-switch-models-from-opencode-or-pi)). Push `[` or `]`, or click the name of a panel, to change the panel.
+The Settings tab (tab 5) has six panels: **Server**, **Models**, **Auto fit**, **Auto-tune**, **Router** ([router mode](#router-mode-switch-models-from-opencode-or-pi)) and **Caching** ([the disk cache](#fast-starts-the-disk-cache)). Push `[` or `]`, or click the name of a panel, to change the panel.
 
 **Server panel: change the server settings:**
 1. Press `5`, or click **5 Settings**.
@@ -720,6 +733,13 @@ The Settings tab (tab 5) has five panels: **Server**, **Models**, **Auto fit**, 
 - **Last result:** the date, the Mac, the selected settings, the speed of each speculation mode (prose, code, re-emit), the prompt read speeds and the context zones.
 - **[ Use these values ]** removes your own values for this model from config.json. Then the tuned values apply.
 
+**Caching panel:** the [disk cache](#fast-starts-the-disk-cache). Every change is saved at once (the `cache` section of config.json) and needs no restart.
+- **Disk limit:** 2, 5 (the default), 10, 20 or 50 GB (`d` for the next one). A lower limit removes the oldest files at once.
+- **Pre-read** (`p`) and **Sessions** (`s`): on or off. Off stops new saves and restores; the files stay until you clear them.
+- **On disk:** the space used of the limit, the folder, and each file (prompt or conversation, size, age). Below: what the last pre-read and the last conversation save did.
+- **[ Clear the disk cache ]** (`c`) asks, then removes every saved state. The server keeps what it holds now.
+- The RAM prompt cache (llama.cpp's own, lost when the server stops) is the **RAM cache** row of the Server panel.
+
 ### The settings file
 
 The dashboard and the launchers keep your settings in `~/.config/carl/config.json`.
@@ -729,6 +749,7 @@ The dashboard and the launchers keep your settings in `~/.config/carl/config.jso
 | `llama` | Server-wide llama.cpp settings: `model` (`auto` = auto fit's pick for this Mac), `auto_goal` (`everyday` \| `hard-code`), `auto_fit` (`catalogue` \| `downloaded`), `net` (`local` \| `vm`; default local), `host`, `cache_ram`, `ub`, `batch`, `ckpt`, `ckpt_step`, `think_toggle`, `extra_args` (more `llama-server` flags, as a list) |
 | `models.<name>` | The profile of one model: `kv`, `ctx`, `slots`, `spec`, `spec_n`, `temp`, `top_p`, `top_k`, `min_p`, `presence`, `repeat`, `alias` |
 | `paths` | `models_dir` (default `~/models/gguf`) |
+| `cache` | The [disk cache](#fast-starts-the-disk-cache): `disk_gb` (default 5), `prefix` (pre-read, default true), `sessions` (save conversations, default true) |
 
 - **Order of priority** for a llama.cpp start: command-line flags, then environment variables, then `config.json`, then the Auto-tune result of this Mac, then the catalogue (`host/catalog.json`), then the built-in defaults.
 - **CARL validates the file.** Each value must have the correct type, range or choice. A bad value stops the start with an error that names the key. CARL ignores an unknown key.

@@ -5,6 +5,7 @@ through SettingsService (the ModelStore port)."""
 from __future__ import annotations
 
 import re
+import time
 from dataclasses import dataclass
 from typing import List, Mapping, Optional, Sequence, Tuple
 
@@ -14,12 +15,14 @@ from carl_core.domain.autofit import GOAL_TEXT, GOALS, SCOPE_TEXT, SCOPES, AutoF
 from carl_core.domain.cards import CHOICE_TEXT
 from carl_core.domain.tuning import DEPTH_TEXT, DEPTHS, as_depth
 
+from .diskcache import PROMPT, CacheConfig, CacheFile, gb as gb_text, used
 from .model import ModelInfo, RouterModel, ServerData, flag, jdict
 from .settings import (ADV_WARN, LLAMA_ADV, MODEL_ROW_KEYS, NOT_RUNNING, SET_HELP, UNMARKED, Pending,
                        SettingsService, fmt_val, row_instruction, shown_value)
 from .arrange import FILTERS, MIN_FIT, SORTS, arrange, label as arrange_label, speed_of
 from .state import SP_FIT, SUBPANELS, Confirm, Download, PickItem, Picker, TuneRun, UIState
 
+DISK_CHOICES = (2, 5, 10, 20, 50)                      # the Caching panel's disk limits (GB)
 LIST_W = 40                                            # the Server panel's model list
 MODEL_HEADER = f"{DIM}{'':2}{'model':<26} {'size':>8}  {'status':<10} {'fits':>5} {'speed':>7} role and good for{R}"
 PICKER_FOOT = ("Press ↑ ↓ to select a model and Enter to choose it, Esc to cancel. ★ = auto fit's pick · fits = the "
@@ -842,6 +845,42 @@ class SettingsView:
                        f"Connect tab){R}", tw)
         L += button_rows("", [("Update the OpenCode / Pi configs", "insconfig")], tw)
         return indent(draw_card("router", "ROUTER", f"{DIM}model switching: {saved}{R}", L, w, 2))
+
+    # ------------------------------------------------------------ panel 6: the disk cache
+    def caching(self, ui: UIState, conf: CacheConfig, files: Sequence[CacheFile], folder: str, cols: int) -> List[Row]:
+        """The disk cache (diskcache.py): its limit, the pre-read and conversation switches, what
+        it holds, and Clear. Every change is saved at once; none needs a restart."""
+        w = cols - 2
+        tw = w - 4
+        L: List[CardLine] = [*cwrap(
+            f"{DIM}Saved prompt states on disk, so a server start doesn't read everything again: {B}pre-read{R}{DIM} = "
+            f"OpenCode's shared prompt (tools and instructions, ~9K tokens: the first request of a session reads only "
+            f"what is new) · {B}conversations{R}{DIM} = each slot's conversation, saved when it has been idle 2 min and "
+            f"before CARL stops or restarts the server, restored after the next start. Within the disk limit the oldest "
+            f"conversations go first, then the oldest prompts.{R}", tw), ""]
+        gbs = sorted({*DISK_CHOICES, conf.disk_gb})
+        L += self._choice_line("Disk limit", [(str(g), f"{g} GB", f"cache:disk:{g}") for g in gbs], str(conf.disk_gb), tw)
+        L += self._choice_line("Pre-read", [("on", "on", "cache:prefix:on"), ("off", "off", "cache:prefix:off")],
+                               "on" if conf.prefix else "off", tw)
+        L += self._choice_line("Sessions", [("on", "save conversations", "cache:sessions:on"),
+                                            ("off", "off", "cache:sessions:off")], "on" if conf.sessions else "off", tw)
+        use = used(files)
+        L += ["", heading("On disk", tw),
+              lv("used", f"{bar(use / conf.limit, 18)} {gb_text(use)} of {conf.disk_gb} GB · {len(files)} file{'' if len(files) == 1 else 's'}", 11),
+              lv("folder", f"{home_short(folder, self.home)}{DIM} (the server's --slot-save-path){R}", 11)]
+        for f in sorted(files, key=lambda f: -f.mtime)[:12]:
+            what = "prompt      " if f.kind == PROMPT else "conversation"
+            L.append(f"  {DIM}{what}{R}  {fit(f.name, max(tw - 36, 12)):<{max(tw - 36, 12)}} {size(f.bytes):>7}  "
+                     f"{DIM}{dur(time.time() - f.mtime)} ago{R}")
+        if len(files) > 12:
+            L.append(f"  {DIM}… and {len(files) - 12} more{R}")
+        L += ["", lv("pre-read", ui.prefix_status or f"{DIM}nothing yet{R}", 11),
+              lv("sessions", ui.session_status or f"{DIM}nothing yet{R}", 11), ""]
+        L += button_rows("", [("Clear the disk cache (c)", "cache:clear")], tw)
+        L += ["", *cwrap(f"{DIM}Keys: d = the next disk limit · p = pre-read on / off · s = conversations on / off · "
+                         f"c = clear. The RAM prompt cache (llama.cpp's own, while the server runs) is the Server "
+                         f"panel's RAM cache row.{R}", tw)]
+        return indent(draw_card("caching", "CACHING", f"{DIM}disk cache: {gb_text(use)} of {conf.disk_gb} GB{R}", L, w, 2))
 
     @staticmethod
     def _router_row(m: RouterModel, w: int) -> Ln:

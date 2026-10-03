@@ -18,7 +18,7 @@ from monitor.jobs import Paths, ServerJobs
 from monitor.keys import InputBuffer
 from monitor.settings import Schema, SettingsService, net_choices
 from monitor.settings_view import SettingsView
-from monitor.state import SP_FIT, SP_MODELS, SP_ROUTER, SP_SERVER, SP_TUNE, UIState
+from monitor.state import SP_CACHE, SP_FIT, SP_MODELS, SP_ROUTER, SP_SERVER, SP_TUNE, UIState
 from monitor.store import ModelList
 
 DOWN, UP, ESC = "\x1b[B", "\x1b[A", "\x1b"
@@ -214,7 +214,7 @@ class AppTest(unittest.TestCase):
         self.assertEqual(self.ui.text and self.ui.text.value, "ab")
 
     def test_auto_tune_panel_choice_and_clear(self) -> None:
-        self.keys("5", "[", "[")                        # back from the first panel: Router, then Auto-tune
+        self.keys("5", "[", "[", "[")                   # back from the first panel: Caching, Router, Auto-tune
         self.assertEqual(self.ui.sp, SP_TUNE)
         first = self.ui.tune_model
         self.keys("\x1b[C")
@@ -340,8 +340,32 @@ class AppTest(unittest.TestCase):
         self.assertGreater(self.ui.fit_scroll, 0)
         self.assertEqual(len(rows), 12)
 
+    def test_caching_panel_saves_at_once_and_clears_after_a_question(self) -> None:
+        conf = os.path.join(self.tmp.name, "carl", "config.json")
+        self.app.jobs.paths = Paths(repo=self.tmp.name, logs=self.tmp.name, config_file=conf)
+        slots = os.path.join(self.tmp.name, "carl", "slots")
+        os.makedirs(slots)
+        for n in ("carl-prefix-m-1.bin", "carl-session-m-s0.bin"):
+            with open(os.path.join(slots, n), "wb") as f:
+                f.write(b"x" * 1000)
+        self.keys("5", "[")                                     # back from the first panel: the last, Caching
+        self.assertEqual(self.ui.sp, SP_CACHE)
+        text = " ".join(ANSI.sub("", self.screen()).split())
+        for part in ("CACHING", "Disk limit", "5 GB", "Pre-read", "save conversations", "carl-session-m-s0.bin"):
+            self.assertIn(part, text)
+        self.keys("d", "p")                                     # the next limit; pre-read off
+        self.assertEqual(self.store.config["cache"], {"disk_gb": 10, "prefix": False})
+        self.assertEqual(self.app.jobs.cache_conf().disk_gb, 10)
+        self.ctl.do("cache:disk:50")
+        self.assertEqual(self.store.config["cache"]["disk_gb"], 50)
+        self.keys("c")
+        self.assertIsNotNone(self.ui.confirm2)
+        self.assertEqual(len(os.listdir(slots)), 2)             # nothing removed before the answer
+        self.keys("y")
+        self.assertEqual(os.listdir(slots), ["carl-sessions.json"])
+
     def test_router_panel_switches_the_mode_after_a_question(self) -> None:
-        self.keys("5", "[")                                     # back from the first panel: the last, Router
+        self.keys("5", "[", "[")                                # back from the first panel: Caching, then Router
         self.assertEqual(self.ui.sp, SP_ROUTER)
         text = " ".join(" ".join(x.strip(" │") for x in ANSI.sub("", self.screen()).splitlines()).split())
         for part in ("ROUTER", "Dashboard only (single model)", "OpenCode / Pi switch models (router)",

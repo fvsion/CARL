@@ -8,7 +8,7 @@ import signal
 import time
 from typing import Callable, Dict, List, NamedTuple, Optional, cast
 
-from . import fsio, system
+from . import diskcache, fsio, sessions, system
 from .api import FETCH_ERRORS, Endpoint
 from carl_core.domain.cards import editable_card
 from carl_core.domain.tuning import DEPTHS, as_depth
@@ -25,8 +25,8 @@ from .logtail import LogTail
 from .model import JSONDict, ModelInfo, ServerData, clean
 from .settings import NUMERIC, Pending, SettingsService, parse_typed, step_choice
 from .arrange import FILTERS, SORTS
-from .settings_view import SettingsView
-from .state import (SP_FIT, SP_MODELS, SP_ROUTER, SP_SERVER, SP_TUNE, SUBPANELS, TABS, Confirm, PickItem, Picker, TextPrompt,
+from .settings_view import DISK_CHOICES, SettingsView
+from .state import (SP_CACHE, SP_FIT, SP_MODELS, SP_ROUTER, SP_SERVER, SP_TUNE, SUBPANELS, TABS, Confirm, PickItem, Picker, TextPrompt,
                     UIState)
 from .store import ModelList
 
@@ -40,6 +40,7 @@ MODEL_KEYS = {"\r": "museit", "\n": "museit", "d": "mdl", "v": "mverify", "x": "
               "S": "msort-", "F": "mfilter-"}
 ARRANGE_KEYS = {"s": "msort", "S": "msort-", "f": "mfilter", "F": "mfilter-"}   # every model list
 FIT_KEYS = {"\r": "fuse", "\n": "fuse", "d": "fdl", "g": "fgoal", "f": "fscope"}
+CACHE_KEYS = {"d": "cache:disk", "p": "cache:prefix", "s": "cache:sessions", "c": "cache:clear"}
 TUNE_KEYS = {"\r": "trun", "\n": "trun", RIGHT: "tnext", LEFTKEY: "tprev", "c": "tcancel", " ": "tquick"}
 SCROLL_KEYS = {UP: 1, DOWN: -1, PGUP: 10, PGDN: -10}
 PANEL_PASSTHROUGH = ("q", "Q", "\x03", "\t")       # keys the Models / Auto-tune panels leave to the app
@@ -146,7 +147,7 @@ class Controller:
         """Run an action: a clicked region's or button's, or one a key stands for."""
         ui, d = self.ui, self.data
         if action.startswith(("set", "sp:", "pick", "mrow:", "smodel:", "msortset:", "mfilterset:", "c2no", "card",
-                              "fgoal:", "fscope:", "rmode", "rload:", "runload:", "tdepth:")) \
+                              "fgoal:", "fscope:", "rmode", "rload:", "runload:", "tdepth:", "cache:")) \
                 or action in SETTINGS_ACTIONS:
             self.settings_action(action)
         elif action.startswith("level:"):
@@ -181,6 +182,7 @@ class Controller:
         elif action == "stop":
             pid = d.target_pid
             if pid:
+                self.jobs.save_before_stop(d)           # the open conversations: the next start restores them
                 system.kill(pid, signal.SIGTERM)
                 ui.stopping = (pid, time.time() + 30)
             ui.quit = False
@@ -297,6 +299,10 @@ class Controller:
                 self.jobs.start_download(fit.pick.name)
             else:
                 ui.toast("auto fit's pick is already downloaded", 5)
+            return
+        # ---- caching panel
+        if act.startswith("cache:"):
+            self.cache_action(act[6:])
             return
         # ---- router panel
         if act.startswith(("rmode", "rload:", "runload:")):
@@ -436,6 +442,58 @@ class Controller:
             return
         name = act.split(":", 1)[1]
         self.jobs.router_load(name, unload=act.startswith("runload:"))
+
+    def cache_action(self, act: str) -> None:
+        """The Caching panel: disk[:GB] (the next limit, or that one), prefix[:on|off] and
+        sessions[:on|off] (switch, or set), saved to config.json "cache" at once; clear asks,
+        clearyes removes every saved state (diskcache.py)."""
+        ui, jobs = self.ui, self.jobs
+        folder = jobs.paths.slots
+        if act == "clear":
+            files = diskcache.listing(folder)
+            if not files:
+                ui.toast("the disk cache is empty", 5)
+                return
+            ui.confirm2 = Confirm("CLEAR THE DISK CACHE?", [
+                f"Removes {len(files)} saved prompt states ({diskcache.gb(diskcache.used(files))}) from "
+                f"{home_short(folder, self.home)}: OpenCode's pre-read prompts and the saved conversations.",
+                "The server keeps what it holds now; after the next start, each one is read again on first use."],
+                "cache:clearyes")
+            return
+        if act == "clearyes":
+            ui.confirm2 = None
+            diskcache.remove(folder, [f.name for f in diskcache.listing(folder)])
+            sessions.write_manifest(folder, {})
+            ui.toast("disk cache cleared", 6)
+            return
+        conf = jobs.cache_conf(fresh=True)
+        key, _, value = act.partition(":")
+        new: object
+        if key == "disk":
+            gbs = sorted({*DISK_CHOICES, conf.disk_gb})
+            new = int(value) if value.isdigit() else gbs[(gbs.index(conf.disk_gb) + 1) % len(gbs)]
+            text = f"disk limit: {new} GB"
+        elif key in ("prefix", "sessions"):
+            cur = conf.prefix if key == "prefix" else conf.sessions
+            new = value == "on" if value else not cur
+            text = f"{'pre-read' if key == 'prefix' else 'saved conversations'}: {'on' if new else 'off'}"
+        else:
+            return
+        try:
+            cfg = self.store.load_config()
+            sec = cfg.setdefault("cache", {})
+            sec[{"disk": "disk_gb"}.get(key, key)] = new
+            self.store.save_config(cfg)
+        except Exception as e:      # config.json unreadable or not writable: say so
+            ui.toast(f"{RED}config.json: {e}{R}", 10)
+            return
+        conf = jobs.cache_conf(fresh=True)
+        if key == "disk":
+            before = len(diskcache.listing(folder))
+            jobs.trim_cache()
+            gone = before - len(diskcache.listing(folder))
+            text += f" ({gone} oldest saved states removed to fit)" if gone else ""
+        ui.toast(f"{text} (saved)", 8)
 
     def auto_choice(self, act: str) -> None:
         """The Auto fit panel's goal / scope: fgoal / fscope switch to the other one, fgoal:X /
@@ -630,6 +688,11 @@ class Controller:
                 return True
             return rest not in PANEL_PASSTHROUGH and not rest.isdigit() and rest != "A"
         if ui.sp == SP_ROUTER:
+            return rest not in PANEL_PASSTHROUGH and not rest.isdigit()
+        if ui.sp == SP_CACHE:
+            if rest in CACHE_KEYS:
+                self.settings_action(CACHE_KEYS[rest])
+                return True
             return rest not in PANEL_PASSTHROUGH and not rest.isdigit()
         if ui.sp == SP_TUNE:
             if rest in TUNE_KEYS:

@@ -1,6 +1,6 @@
 """The settings schema, value validation and config.json (validation, migration, key paths).
 
-config.json sections: llama (server-wide), models.<name> (per-model profile), paths.
+config.json sections: llama (server-wide), models.<name> (per-model profile), paths, cache.
 Every value is validated against its SettingSpec; unknown keys are ignored with a warning
 so a newer config.json still loads in an older CARL. Keys of removed features (see
 REMOVED) are ignored too and disappear the next time the file is saved.
@@ -16,7 +16,7 @@ from .types import JsonObject, JsonValue, SettingValue, Settings
 SCHEMA = 1
 DEFAULT_MODELS_DIR = "~/models/gguf"
 CONFIG_COMMENT = ("CARL settings. Edit here or in the monitor's Settings tab. "
-                  "Sections: llama, models.<name> (per-model profile), paths. "
+                  "Sections: llama, models.<name> (per-model profile), paths, cache (the disk cache). "
                   "Precedence: flags > environment > this file > Auto-tune > catalogue. "
                   "./carl.sh config show lists every key.")
 # Top-level keys of removed features: ignored on load (None = silently, else this warning)
@@ -110,7 +110,14 @@ LLAMA_KEYS: Dict[str, SettingSpec] = {
     "extra_args": SettingSpec("list", []),                  # passed to llama-server as-is
 }
 PATH_KEYS: Dict[str, SettingSpec] = {"models_dir": _str(DEFAULT_MODELS_DIR)}
-SECTIONS: Dict[str, Dict[str, SettingSpec]] = {"llama": LLAMA_KEYS, "paths": PATH_KEYS}
+# The disk cache in ~/.config/carl/slots (the dashboard's Settings > Caching panel): OpenCode's
+# pre-read prompt and the saved conversations, within disk_gb (the oldest files go first).
+CACHE_KEYS: Dict[str, SettingSpec] = {
+    "disk_gb": _int(5, 1, 1000),
+    "prefix": SettingSpec("bool", True),
+    "sessions": SettingSpec("bool", True),
+}
+SECTIONS: Dict[str, Dict[str, SettingSpec]] = {"llama": LLAMA_KEYS, "paths": PATH_KEYS, "cache": CACHE_KEYS}
 
 
 def to_json(v: SettingValue) -> JsonValue:
@@ -175,10 +182,11 @@ class Config:
     """A validated config.json. Absent values mean "not set" (a lower layer decides)."""
     llama: Settings = field(default_factory=dict)
     paths: Settings = field(default_factory=dict)
+    cache: Settings = field(default_factory=dict)
     models: Dict[str, Settings] = field(default_factory=dict)
 
     def section(self, name: str) -> Settings:
-        return {"llama": self.llama, "paths": self.paths}[name]
+        return {"llama": self.llama, "paths": self.paths, "cache": self.cache}[name]
 
     def profile(self, model: str) -> Settings:
         """The per-model settings for one model ({} when there are none)."""

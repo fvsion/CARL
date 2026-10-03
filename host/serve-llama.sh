@@ -187,6 +187,10 @@ guard_other_models               # a second model can crash the Mac (host/common
 
 ensure_api_key "$API_KEY_FILE"
 
+# Saved KV caches of OpenCode's shared prompt prefix (the dashboard restores them after a start:
+# tools/monitor/prefix.py); one file per model, KV type and prefix.
+SLOT_DIR="$CARL_CONF/slots"; mkdir -p "$SLOT_DIR"
+
 # The thinking toggle's chat template for a model file: TMPL (regenerated when the model
 # or the generator is newer).
 TMPL_DIR="$HOME/models/templates"
@@ -304,7 +308,7 @@ run_server "$PORT" "$LOG_FILE" llama-server \
   -ngl 999 -fa on -ctk "$KV_K" -ctv "$KV_V" -c "$(( SLOTS * CTX ))" \
   -b "$BATCH" -ub "$UB" --parallel "$SLOTS" ${slot_args[@]+"${slot_args[@]}"} --no-mmproj \
   --ctx-checkpoints "$CKPT" --checkpoint-min-step "$CKPT_STEP" --cache-ram "$CACHE_RAM" \
-  --metrics \
+  --metrics --slot-save-path "$SLOT_DIR" \
   ${log_args[@]+"${log_args[@]}"} \
   ${tmpl_args[@]+"${tmpl_args[@]}"} \
   ${spec_args[@]+"${spec_args[@]}"} \

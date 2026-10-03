@@ -62,7 +62,11 @@ class ConfigureTests(unittest.TestCase):
         self.assertEqual(prov["options"]["apiKey"], "{file:" + self.home + "/.config/carl/api-key}")
         self.assertEqual(set(oc["provider"]), {"llamacpp"})
         check = self.path(".config/opencode/plugins/carl-model-check")
-        self.assertEqual(oc["plugin"], [["file:" + check, {"provider": "llamacpp"}]])      # the model warnings
+        cache = self.path(".config/opencode/plugins/carl-prefix-cache")
+        self.assertEqual(oc["plugin"], [["file:" + check, {"provider": "llamacpp"}],     # the model warnings
+                                        ["file:" + cache, {"provider": "llamacpp"}]])    # the pre-read prompt
+        with open(os.path.join(cache, "package.json"), encoding="utf-8") as f:
+            self.assertIn("./server", json.load(f)["exports"])
         self.assertTrue(os.path.isfile(os.path.join(check, "check.js")))
         with open(os.path.join(check, "package.json"), encoding="utf-8") as f:     # OpenCode 1.18 loads exports["./server"]
             self.assertIn("./server", json.load(f)["exports"])
@@ -124,8 +128,8 @@ class ConfigureTests(unittest.TestCase):
         self.assertEqual(self.run_configure().returncode, 0)
         entry = "file:" + self.path(".config/opencode/plugins/carl-model-check")
         oc = self.read_json(".config/opencode/opencode.json")
-        self.assertEqual(oc["plugin"], ["/home/u/mine.js", [entry, {"provider": "carl"}]])  # ours is "carl" here
-        p = self.run_configure("--model-check", "0")
+        self.assertEqual(oc["plugin"][:2], ["/home/u/mine.js", [entry, {"provider": "carl"}]])  # ours is "carl" here
+        p = self.run_configure("--model-check", "0", "--prefix-cache", "0")
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertEqual(self.read_json(".config/opencode/opencode.json")["plugin"], ["/home/u/mine.js"])
         self.assertFalse(os.path.exists(self.path(".config/opencode/plugins/carl-model-check")))
@@ -302,7 +306,7 @@ class ConfigureTests(unittest.TestCase):
         self.assertEqual(oc["provider"]["llamacpp"]["options"]["apiKey"],
                          "{file:" + self.home + "/.config/carl/api-key}")             # rewritten to the new key path
         self.assertEqual(oc["plugin"][0], "/home/u/my-plugin")                         # the user's plugin stays
-        self.assertEqual(len(oc["plugin"]), 2)                                          # + carl-model-check
+        self.assertEqual(len(oc["plugin"]), 3)                                          # + CARL's two plugins
         self.assertFalse(os.path.exists(self.path(".config/opencode/plugins/mtplx-session-headers")))
         self.assertEqual(self.read_json(".config/opencode/carl.json")["providers"], {"llamacpp": "llamacpp"})
         self.assertFalse(os.path.exists(self.path(".config/opencode/llm-deploy.json")))   # the old state file

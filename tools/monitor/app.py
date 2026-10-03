@@ -11,7 +11,7 @@ import time
 from dataclasses import dataclass
 from typing import List, Optional, Sequence, Tuple
 
-from . import cli, fsio, system
+from . import cli, diskcache, fsio, system
 from .api import Endpoint
 from .card_view import draw_form
 from .cards import View, status_of
@@ -24,7 +24,7 @@ from .keys import InputBuffer
 from .model import ServerData, jdict
 from .settings import Pending, Schema, SettingsService, net_choices
 from .settings_view import ModelsDir, SettingsView, subpanel_bar
-from .state import SP_FIT, SP_MODELS, SP_ROUTER, SP_SERVER, TABS, UIState
+from .state import SP_CACHE, SP_FIT, SP_MODELS, SP_ROUTER, SP_SERVER, TABS, UIState
 from .store import CarlStore, ModelList
 from .terminal import LOGO_COLS, Terminal, logo_escape, logo_mode, place_lines
 from .views import body_connect, body_log, body_overview, body_requests, quit_dialog
@@ -97,7 +97,7 @@ class App:
                     key_shown=ui.key_shown, server_pid=c.server_pid, log=c.tail.book, log_path=c.tail.path,
                     model_path=c.model_path, model_size=c.model_size, gpu_limit=c.gpu_limit, slow=c.slow,
                     total_mem=self.machine.total_mem, home=self.opts.home, wrap=ui.wrap, errors_only=ui.errors_only,
-                    log_scroll=ui.log_scroll)
+                    log_scroll=ui.log_scroll, prefix=ui.prefix_status, sessions=ui.session_status)
 
     def frame(self, d: ServerData) -> List[str]:
         """The screen's lines; the clickable regions go to the controller."""
@@ -215,6 +215,9 @@ class App:
                 stale, n = self.client_drift(fsio.installed_here(self.endpoint.base, self.opts.home))
                 body = self.view.router(ui, d, self.saved_mode(), [(book.wall(t), name) for t, name in book.switches],
                                         [s.line(n) for s in stale], cols)[:height - 2]
+            elif ui.sp == SP_CACHE:
+                folder = self.jobs.paths.slots
+                body = self.view.caching(ui, self.jobs.cache_conf(), diskcache.listing(folder), folder, cols)[:height - 2]
             elif ui.sp == SP_MODELS:
                 mdir = self.store.models_dir()
                 body = self.view.models(ui, cols, height - 2, ModelsDir(mdir, disk_free(mdir)))
@@ -261,7 +264,7 @@ class App:
                 if time.time() >= next_fetch:
                     self.ctl.data = c.collect()
                     next_fetch = time.time() + (0.5 if ui.stopping else self.opts.interval)
-                self.jobs.poll()
+                self.jobs.poll(self.ctl.data)
                 if ui.stopping:
                     pid, deadline = ui.stopping
                     if not system.pid_alive(pid):
