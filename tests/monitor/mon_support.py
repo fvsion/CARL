@@ -10,6 +10,7 @@ from typing import Dict, List, Optional, Tuple
 sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "tools"))
 
+from carl_core.domain.autofit import AutoFit, Budget, Candidate, Plan  # noqa: E402
 from monitor.model import JSONDict, ModelInfo, Shape  # noqa: E402
 from monitor.store import HFFile, ModelList  # noqa: E402
 
@@ -49,6 +50,9 @@ class FakeStore:
         self.config_file = "/home/u/.config/carl/config.json"
         self.conf_dir = "/home/u/.config/carl"
         self.broken: Optional[str] = None
+        self.fit_calls: List[Tuple[str, str]] = []
+        # auto fit's answer: (pick, downloaded); None = nothing fits
+        self.pick: Optional[Tuple[str, bool]] = ("big", True)
 
     def _check(self) -> None:
         if self.broken:
@@ -84,6 +88,24 @@ class FakeStore:
 
     def shape_of(self, path: str) -> Shape:
         return shape()
+
+    def model_shape(self, m: ModelInfo) -> Optional[Shape]:
+        return shape() if m["status"] == "downloaded" or m.get("source") == "catalog" else None
+
+    def auto_fit(self, goal: str, scope: str) -> AutoFit:
+        """A pick with 2 x 96K q4_0 (or nothing), one better model passed over."""
+        self._check()
+        self.fit_calls.append((goal, scope))
+        budget = Budget(self.limit, 32 * GIB, 6 * GIB)
+        g = "hard-code" if goal == "hard-code" else "everyday"
+        sc = "downloaded" if scope == "downloaded" else "catalogue"
+        if self.pick is None:
+            return AutoFit(g, sc, budget, None, None, 2, False, ())
+        name, here = self.pick
+        pick = Candidate(name, "moe", 2, False, here, 13 * GIB, shape())
+        from carl_core.domain.autofit import Rejection
+        return AutoFit(g, sc, budget, pick, Plan(98304, 2, "q4_0", 20 * GIB), 0, False,
+                       (Rejection("better", 1, "needs 30.0 GiB for 2 × 96K, this Mac allows 25.0 GiB"),))
 
     def file_size(self, path: str) -> int:
         return next(x["bytes"] for x in self.models if x["path"] == path)

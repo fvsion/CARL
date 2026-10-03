@@ -38,6 +38,8 @@ class Picker:
     foot: Optional[str] = None
     noun: str = "models"
     reopen: Optional[str] = None    # sort / filter picker: reopen the model drop-down on this model
+    mark: Optional[str] = None      # the model drop-down: auto fit's pick (★)
+    note: str = ""                  # shown below the list while the first item ("auto") is selected
 
 
 @dataclass

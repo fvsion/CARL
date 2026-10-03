@@ -249,8 +249,8 @@ class ServeDispatch(unittest.TestCase):
 class ServeLlamaArgs(unittest.TestCase):
     """serve-llama.sh with MONITOR=0 execs llama-server: a fake one records argv."""
 
-    def run_serve(self, *args: str, env: dict[str, str] | None = None,
-                  extra_args: list[str] | None = None) -> tuple[subprocess.CompletedProcess[str], list[str], str]:
+    def run_serve(self, *args: str, env: dict[str, str] | None = None, extra_args: list[str] | None = None,
+                  model_bytes: int = 0) -> tuple[subprocess.CompletedProcess[str], list[str], str]:
         with tempfile.TemporaryDirectory() as d:
             bindir, conf = os.path.join(d, "bin"), os.path.join(d, "conf")
             os.makedirs(bindir)
@@ -263,6 +263,8 @@ class ServeLlamaArgs(unittest.TestCase):
             model = os.path.join(d, "fake.gguf")
             with open(model, "wb") as f:
                 f.write(b"GGUF")
+                if model_bytes:
+                    f.truncate(model_bytes)                       # sparse: no disk used
             with open(os.path.join(conf, "config.json"), "w", encoding="utf-8") as f:
                 json.dump({"schema": 1, "llama": {"extra_args": extra_args or []}}, f)
             key = os.path.join(d, "key", "api-key")
@@ -289,6 +291,19 @@ class ServeLlamaArgs(unittest.TestCase):
         self.assertIn("127.0.0.1", argv[argv.index("--host") + 1])
         slots = int(argv[argv.index("--parallel") + 1])
         self.assertEqual(argv[argv.index("-c") + 1], str(slots * 16384))   # slots x the 16k window
+
+    def test_a_start_over_the_gpu_limit_is_refused(self) -> None:
+        """Weights bigger than any Mac's GPU limit: refused before llama-server runs, with the
+        reasons; FIT_CHECK=0 (the expert override) starts it anyway."""
+        huge = 4096 * 2 ** 30
+        p, argv, _ = self.run_serve(env={"FIT_CHECK": "1"}, model_bytes=huge)
+        self.assertEqual(p.returncode, 1, p.stderr)
+        self.assertEqual(argv, [])                               # llama-server never ran
+        self.assertIn("so it is refused", p.stderr)
+        self.assertIn("FIT_CHECK=0", p.stderr)
+        p, argv, _ = self.run_serve(env={"FIT_CHECK": "0"}, model_bytes=huge)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("--parallel", argv)
 
     def test_extra_args_from_environment_are_not_globbed(self) -> None:
         p, argv, _ = self.run_serve(env={"EXTRA_ARGS": "--x * ?"})

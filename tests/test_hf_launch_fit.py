@@ -122,12 +122,26 @@ class FitTest(unittest.TestCase):
         self.assertEqual(fit.prompt_cache_mib(24 * GIB, 30 * GIB, 6 * GIB), 1024)
         self.assertEqual(fit.estimated_limit(24 * GIB), (16 * GIB, 2 / 3))
         self.assertEqual(fit.estimated_limit(64 * GIB), (48 * GIB, 3 / 4))
+        self.assertEqual(fit.estimated_limit(32 * GIB), (24 * GIB, 3 / 4))      # 32 GB: like a real M2 Max (25.0 GiB)
 
-    def test_default_or_small(self) -> None:
-        self.assertEqual(fit.choose_default("big", "small", 30 * GIB, 24 * GIB), "small")
-        self.assertEqual(fit.choose_default("big", "small", 20 * GIB, 24 * GIB), "big")
-        self.assertEqual(fit.choose_default("big", "small", None, 1), "big")
-        self.assertEqual(fit.choose_default("big", None, 30 * GIB, 24 * GIB), "big")
+    def test_offline_default_or_small(self) -> None:
+        self.assertEqual(fit.offline_default("big", "small", 30 * GIB, 24 * GIB), "small")
+        self.assertEqual(fit.offline_default("big", "small", 20 * GIB, 24 * GIB), "big")
+        self.assertEqual(fit.offline_default("big", "small", 23.5 * GIB, 24 * GIB), "small")   # + 1 GiB buffers
+        self.assertEqual(fit.offline_default("big", "small", None, 1), "big")
+        self.assertEqual(fit.offline_default("big", None, 30 * GIB, 24 * GIB), "big")
+
+    def test_start_check(self) -> None:
+        """Over the limit = refused: the check says what it needs and the largest window that fits."""
+        ok = fit.check_start(self.S, 10 * GIB, 65536, 2, "q4_0", 16 * GIB)
+        self.assertTrue(ok.fits)
+        self.assertEqual(ok.need, fit.need_bytes(self.S, 10 * GIB, 65536, 2))
+        big = fit.check_start(self.S, 10 * GIB, 262144, 4, "q8_0", 16 * GIB)
+        self.assertFalse(big.fits)
+        self.assertEqual(big.largest, fit.max_ctx(self.S, 10 * GIB, 16 * GIB, 4, "q8_0"))
+        self.assertEqual(big.setup(), "--ctx 256K x 4 slots (q8_0 KV)")
+        self.assertEqual(fit.check_start(self.S, 20 * GIB, 4096, 0, "q4_0", 16 * GIB).largest, 0)
+        self.assertEqual(fit.check_start(self.S, GIB, 4096, 0, "q4_0", 16 * GIB).slots, 1)
         self.assertEqual(fit.window_label(98304), "96K")
         self.assertEqual(fit.window_label(0), "–")
 

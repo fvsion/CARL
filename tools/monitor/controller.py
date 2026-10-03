@@ -26,7 +26,7 @@ from .store import ModelList
 
 TEMPLATES = {"opencode": "opencode/opencode.json", "pi": "pi/models.json"}     # client config templates in client/
 SETTINGS_ACTIONS = ("msort", "mfilter", "msort-", "mfilter-", "msortpick", "mfilterpick",
-                    "museit", "mdl", "mverify", "mdelete", "mdelyes", "mhf", "mcancel", "mtune",
+                    "museit", "mdl", "mverify", "mdelete", "mdelyes", "mhf", "mcancel", "mtune", "mautodl",
                     "tprev", "tnext", "tpick", "tquick", "trun", "tyes", "tcancel", "tclear")
 MODEL_KEYS = {"\r": "museit", "\n": "museit", "d": "mdl", "v": "mverify", "x": "mdelete", "h": "mhf", "c": "mcancel",
               "u": "mtune", "s": "msort", "f": "mfilter",
@@ -191,10 +191,17 @@ class Controller:
             chosen["model"] = m["name"]
             svc.load_profile(chosen, m["name"])
             ui.sp, ui.set_row = 0, 0                    # the model row
-            ui.toast(f"{m['name']} selected: Apply (a) to start it" + ("" if m["status"] == "downloaded" else " after the download"), 6)
+            ui.toast(f"{m['name']} selected: press a to start it" + ("" if m["status"] == "downloaded" else " once it is downloaded"), 6)
             return
         if act == "mdl" and m:
             self.jobs.start_download(m["name"])
+            return
+        if act == "mautodl":                            # Auto fit's pick: download it, show it in the Models panel
+            c, ui.confirm2 = ui.confirm2, None
+            if c and c.model:
+                self.jobs.start_download(c.model)
+                ui.sp = 1
+                ui.mrow = next((i for i, x in enumerate(self.visible()) if x["name"] == c.model), ui.mrow)
             return
         if act == "mverify" and m:
             self.jobs.verify(m["name"])
@@ -282,11 +289,13 @@ class Controller:
             ui.pending = None
         elif act == "setdefaults":
             ui.pending = svc.defaults_for(p)
+        elif act == "setautofit":
+            self.auto_fit(p)
         elif act == "setnofit":
-            ui.toast("this setup does not fit or is not downloaded: see the fit line", 6)
+            ui.toast("this setup does not fit or is not downloaded: see Status (fit)", 6)
         elif act == "setapply" and not ui.restart:
             if not svc.fit_cached(p)[0]:
-                ui.toast("this setup does not fit or is not downloaded: see the fit line", 6)
+                ui.toast("this setup does not fit or is not downloaded: see Status (fit)", 6)
                 return
             if d.cmd and "llama-server" not in d.cmd:
                 ui.toast("another server (not llama.cpp) uses this port: stop it first", 8)
@@ -297,6 +306,25 @@ class Controller:
         elif act == "setyes":
             ui.confirm = False
             self.jobs.restart(p, d)
+
+    def auto_fit(self, p: Pending) -> None:
+        """Auto fit (A): the pick for this Mac with the goal and scope rows, its context, slots and
+        KV, in one step; a pick that isn't downloaded is offered for download."""
+        ui = self.ui
+        fit = self.svc.apply_auto_fit(p)
+        if fit is None:
+            ui.toast(f"{RED}auto fit unavailable: {self.models.fit_error or 'no model list'}{R}", 10)
+        elif fit.pick is None or fit.plan is None:
+            ui.toast(f"{RED}auto fit: {fit.because()}{R}", 12)
+        elif not fit.pick.downloaded:
+            m = self.models.by_name(fit.pick.name)
+            ui.confirm2 = Confirm("DOWNLOAD?", [
+                f"Auto fit picked {fit.pick.name} ({size(m['bytes']) if m else '?'}) for this Mac: {fit.plan.label()}.",
+                f"Why: {fit.because()}.", "",
+                "Download it now? The Models panel shows the progress; press a to start it once it is here.",
+                "No: the settings stay chosen (a start needs the download first)."], "mautodl", fit.pick.name)
+        else:
+            ui.toast(f"auto fit: {fit.pick.name}, {fit.plan.label()} chosen: press a to start it", 8)
 
     def server_list_keys(self, rest: str) -> bool:
         """Keys for the Server panel's model list: m focuses it (↑↓ Enter, m / Esc leave); s / f sort
@@ -334,7 +362,8 @@ class Controller:
 
     def open_model_picker(self) -> None:
         """Open the model drop-down on the pending model."""
-        self.ui.picker = self.view.model_picker(str((self.ui.pending or {}).get("model", "auto")), self.ui.msort, self.ui.mfilter)
+        self.ui.picker = self.view.model_picker(str((self.ui.pending or {}).get("model", "auto")), self.ui.msort,
+                                                self.ui.mfilter, self.ui.pending)
 
     def choose_model(self, name: str) -> None:
         """Make name the pending model and load its profile (the picker and the Server panel's list)."""
@@ -345,7 +374,7 @@ class Controller:
         self.svc.load_profile(ui.pending, name)
         m = self.models.by_name(self.svc.resolved_model(ui.pending))
         if m and m["status"] != "downloaded":
-            ui.toast(f"{m['name']} is not downloaded: Models panel (]) → Download", 8)
+            ui.toast(f"{m['name']} is not downloaded: press ] for the Models panel, then d to download it", 8)
 
     def picker_choose(self) -> None:
         """Use the picker's selection: a model for the Server panel, a file to download, a model to tune."""
@@ -363,7 +392,7 @@ class Controller:
         elif pk.on_pick in ("picksort", "pickfilter"):
             self.set_arrangement("sort" if pk.on_pick == "picksort" else "filter", int(str(val)))
             if pk.reopen:                               # back to the model drop-down it came from
-                ui.picker = self.view.model_picker(pk.reopen, ui.msort, ui.mfilter)
+                ui.picker = self.view.model_picker(pk.reopen, ui.msort, ui.mfilter, ui.pending)
 
     def commit_edit(self, key: str) -> None:
         """Settings: store a typed value (Enter) if it is a valid number for that row."""
@@ -409,7 +438,7 @@ class Controller:
             elif rest in ARRANGE_KEYS and pk.on_pick == "pickmodel":
                 cur = str(pk.items[pk.sel][0])
                 self.settings_action(ARRANGE_KEYS[rest])
-                ui.picker = self.view.model_picker(cur, ui.msort, ui.mfilter)
+                ui.picker = self.view.model_picker(cur, ui.msort, ui.mfilter, ui.pending)
             elif rest in ENTER:
                 self.picker_choose()
             elif rest == ESC:
@@ -561,8 +590,8 @@ class Controller:
                 self.do("quit")
             elif ch in "12345":
                 ui.tab = int(ch) - 1
-            elif ui.tab == 4 and ui.sp == 0 and ch in "arx":
-                self.do({"a": "setapply", "r": "setrevert", "x": "setdefaults"}[ch])
+            elif ui.tab == 4 and ui.sp == 0 and ch in "arxA":
+                self.do({"a": "setapply", "r": "setrevert", "x": "setdefaults", "A": "setautofit"}[ch])
             elif ch == "\t":
                 ui.tab = (ui.tab + 1) % len(TABS)
             elif ch in simple:

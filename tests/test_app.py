@@ -4,13 +4,16 @@ from __future__ import annotations
 
 import unittest
 
-from support import GIB, MDIR, SHA_A, FakeHub, FakeLegacy, FakeShapes, World, catalog, entry, shape
+from typing import Optional
+
+from support import GIB, MDIR, SHA_A, FakeHost, FakeHub, FakeLegacy, FakeShapes, World, catalog, entry, shape
+from carl_core.domain.autofit import Budget
 from carl_core.domain.errors import ConfigError
 from carl_core.domain.settings import Config
 from carl_core.domain.types import JsonValue, ModelInfo
 
-BIG = entry("big", "Big-Q4.gguf", 20 * GIB)
-SMALL = entry("small", "Small-IQ3.gguf", 10 * GIB)
+BIG = entry("big", "Big-Q4.gguf", 20 * GIB, rank=1)
+SMALL = entry("small", "Small-IQ3.gguf", 10 * GIB, rank=2)
 SMALL_PATH = f"{MDIR}/Small-IQ3.gguf"
 
 
@@ -56,25 +59,84 @@ class ConfigTest(unittest.TestCase):
 
 
 class LaunchTest(unittest.TestCase):
-    def world(self, config: object = None, gpu: int = 24 * GIB) -> World:
-        return World(catalog(BIG, SMALL), files={SMALL_PATH: 10 * GIB}, config=config, gpu=gpu,
+    def world(self, config: object = None, gpu: int = 24 * GIB, host: Optional[FakeHost] = None) -> World:
+        return World(catalog(BIG, SMALL), files={SMALL_PATH: 10 * GIB}, config=config, gpu=gpu, host=host,
                      shapes=FakeShapes(local={SMALL_PATH: shape()}, remote={"Big-Q4.gguf": shape(kv_elems=8192)}))
 
-    def test_default_not_downloaded_falls_back_with_a_note(self) -> None:
+    def test_auto_pick_not_downloaded_falls_back_with_a_note(self) -> None:
         w = self.world(gpu=48 * GIB)
         m, _, note = w.carl.resolve_launch(None, w.carl.load_config())
         self.assertEqual(m["name"], "small")
-        self.assertEqual(note, "default model big is not downloaded; using small (downloaded)")
+        self.assertEqual(note, "auto fit picks big for this Mac, but it is not downloaded (./carl.sh download big); "
+                               "starting small, the best downloaded model that fits")
 
-    def test_default_small_when_the_big_one_does_not_fit(self) -> None:
+    def test_auto_pick_downloaded_has_no_note(self) -> None:
+        w = self.world(gpu=48 * GIB, config={"llama": {"auto_fit": "downloaded"}})
+        m, _, note = w.carl.resolve_launch(None, w.carl.load_config())
+        self.assertEqual((m["name"], note), ("small", None))
+
+    def test_pick_default_is_auto_fit_over_the_catalogue(self) -> None:
         w = self.world(gpu=16 * GIB)
         models = w.carl.all_models(Config())
-        self.assertEqual(w.carl.pick_default(models), "small")
-        self.assertEqual(w.carl.pick_default(models, limit=48 * GIB), "big")
+        self.assertEqual(w.carl.pick_default(models), "small")             # big's weights don't fit 16 GiB
+        self.assertEqual(w.carl.pick_default(models, budget=Budget(48 * GIB, 0, 0)), "big")
 
-    def test_offline_keeps_the_default(self) -> None:
-        w = World(catalog(BIG, SMALL), gpu=1)
+    def test_reserve_for_macos_and_the_vm(self) -> None:
+        """32 GB RAM, a 48 GiB GPU limit: 26 GiB with the usual reserve, 22 with the VM up."""
+        self.assertEqual(self.world(gpu=48 * GIB).carl.budget().allowed, 26 * GIB)
+        w = self.world(gpu=48 * GIB, host=FakeHost(32 * GIB, vm=True))
+        self.assertEqual(w.carl.budget().allowed, 22 * GIB)
+        self.assertEqual(w.carl.budget(reserve_gb=2).allowed, 30 * GIB)
+        self.assertEqual(w.carl.budget(ram_gb=24).allowed, 16 * GIB)          # another Mac: the estimate
+
+    def test_offline_falls_back_to_the_catalogue_default(self) -> None:
+        w = World(catalog(BIG, SMALL), gpu=48 * GIB)                        # no header can be read
         self.assertEqual(w.carl.pick_default(w.carl.all_models(Config())), "big")
+        w = World(catalog(BIG, SMALL), gpu=16 * GIB)
+        self.assertEqual(w.carl.pick_default(w.carl.all_models(Config())), "small")
+
+    def test_nothing_fits(self) -> None:
+        w = self.world(gpu=8 * GIB)
+        with self.assertRaisesRegex(ConfigError, "no ranked stock model fits"):
+            w.carl.pick_default(w.carl.all_models(Config()))
+        with self.assertRaisesRegex(ConfigError, "no downloaded stock model fits"):
+            w.carl.resolve_launch(None, Config())
+
+    def test_never_an_abliterated_model(self) -> None:
+        ablit = entry("ablit", "Ablit.gguf", 5 * GIB, rank=1, abliterated=True)
+        path = f"{MDIR}/Ablit.gguf"
+        w = World(catalog(BIG, ablit), files={path: 5 * GIB}, gpu=48 * GIB,
+                  shapes=FakeShapes(local={path: shape()}, remote={"Big-Q4.gguf": shape()}))
+        with self.assertRaisesRegex(ConfigError, r"download big \(./carl.sh download big\)"):
+            w.carl.resolve_launch(None, Config())
+        m, _, _ = w.carl.resolve_launch("ablit", Config())                  # by hand: fine
+        self.assertEqual(m["name"], "ablit")
+
+    def test_nothing_downloaded(self) -> None:
+        w = World(catalog(BIG, SMALL), shapes=FakeShapes(remote={"Big-Q4.gguf": shape()}))
+        with self.assertRaisesRegex(ConfigError, "no model is downloaded"):
+            w.carl.resolve_launch(None, Config())
+
+    def test_goal_from_config(self) -> None:
+        dense_path = f"{MDIR}/Dense.gguf"
+        dense = entry("dense", "Dense.gguf", 8 * GIB, arch="dense", rank=1)
+        w = World(catalog(BIG, SMALL, dense), files={SMALL_PATH: 10 * GIB, dense_path: 8 * GIB}, gpu=48 * GIB,
+                  config={"llama": {"auto_goal": "hard-code"}},
+                  shapes=FakeShapes(local={SMALL_PATH: shape(), dense_path: shape()}, remote={"Big-Q4.gguf": shape()}))
+        cfg = w.carl.load_config()
+        self.assertEqual(w.carl.auto_settings(cfg), ("hard-code", "catalogue"))
+        self.assertEqual(w.carl.resolve_launch(None, cfg)[0]["name"], "dense")
+        self.assertEqual(w.carl.auto_fit(w.carl.all_models(cfg)).name, "big")    # everyday: the MoE
+
+    def test_no_96k_window_starts_with_auto_fits_largest(self) -> None:
+        """Auto fit's last pass (one window below 96K) lowers a catalogue window, never yours."""
+        w = self.world(gpu=11 * GIB + GIB // 5)
+        env, _ = w.carl.launch_env(None, use_config=True)
+        self.assertEqual(env["MODEL_NAME"], "small")
+        self.assertLess(int(env["CTX"]), 98304)
+        self.assertIn("ctx:auto-fit", str(env["CARL_SOURCES"]))
+        w = self.world(gpu=11 * GIB + GIB // 5, config={"models": {"small": {"ctx": 98304}}})
+        self.assertEqual(w.carl.launch_env(None, use_config=True)[0]["CTX"], 98304)
 
     def test_launch_env_uses_config(self) -> None:
         w = self.world(config={"llama": {"model": "small", "net": "local"}, "models": {"small": {"ctx": "128k"}}})

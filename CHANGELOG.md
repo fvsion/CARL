@@ -3,6 +3,23 @@
 All notable changes to CARL. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Dates are local dates on the development Mac (M3 Pro, 36 GB).
 
+## Unreleased (1.3.0)
+
+Auto fit: the best stock model for this Mac, and a start that doesn't fit is refused.
+
+### Added
+- **Auto fit** picks the best **stock** model that fits this Mac for a goal: `everyday` (default) = the MoE builds first (35B-A3B: fast, usually sufficient; CARL prioritises speed), `hard-code` = the dense builds first (27B: better at code and hard tasks, slower). Quality is the catalogue rank (parameters and density, then quantization). It wants two 96K windows (main session + a coder subagent), else one, else the largest window of at least 32K, within the smaller of the GPU limit and RAM minus the reserve for macOS and apps (6 GiB, 10 with the VM network up). If no build of the goal's family fits, it takes the best of the other family and says so. Abliterated models are never picked automatically, and models without a rank (custom downloads) are not candidates. The answer names every better-ranked model it passed over, and why.
+  - Picks (2 × 96K each): 16 GB nothing fits; 24 GB `qwen3.6-35b-a3b-iq3` (everyday) / `qwen3.8-27b-iq3` (hard code); 32 GB (estimate 24.0 GiB; a real M2 Max reports 25.0) and up `qwen3.6-35b-a3b` / `qwen3.8-27b`. With VMware's network up the reserve grows to 10 GiB, so a 32 GB Mac's everyday pick becomes the IQ3. `--ram` previews estimate the GPU limit at 2/3 of RAM below 32 GB and 3/4 from 32 GB up.
+- **`config.json` keys** `llama.auto_goal` (`everyday` | `hard-code`) and `llama.auto_fit` (`catalogue` | `downloaded`; default `catalogue`, so a new Mac with nothing downloaded is offered the best model). `./carl.sh config set llama.auto_goal hard-code` works through the schema.
+- **`./carl.sh fit`** shows auto fit's pick for each goal, why, and the passed-over models with their reasons; the model table has a `rank` column and marks the picks with ★. New options: `--goal`, `--scope`, `--reserve-gb`; `--ram 24|36|64` previews other Macs.
+- **Settings tab:** the rows **auto goal** and **auto from**; an **Auto fit** button / key (`A`) that sets the model, context, slots and KV cache for this Mac in one step, and offers to download a pick that isn't here; the `auto` row and lists show what `auto` starts (`★ auto → NAME`), ★ marks auto fit's pick, red names are too big for this Mac; the MODEL card explains the pick ("Auto fit picked X: …", the goal, the scope, what starts until it is downloaded, the passed-over models).
+
+### Changed
+- **A start over the GPU limit is refused** (it used to only warn): `serve-llama.sh` stops with what the setup needs against the limit, the largest window that fits (with these slots and with 1), and auto fit's alternative. Expert override: `FIT_CHECK=0`. The dashboard's Apply uses the same check (`check_start`).
+- **`llama.model = auto`** starts auto fit's pick; when the pick is not downloaded, the best downloaded stock model that fits (with a note naming the pick to download), no longer the first downloaded model in catalogue order. If only abliterated models are downloaded, `auto` says so instead of starting one.
+- **`./carl.sh download default`, `host/models.sh default` and the download offer of `./carl.sh` on a new Mac** use auto fit's pick (whole catalogue, everyday goal). The catalogue's `default` / `default_small` remain only as the offline fallback (no GGUF header readable).
+- **The Server panel of the Settings tab is easier to read:** below the rows, separate sections **About this setting** (how to change the selected row, then what it does), **Status** (the fit line, auto fit's pick, the settings file), the buttons, and **Keys**. Key hints in every Settings panel, picker and confirmation read "Press Enter to …", "Press a to …". Text wraps to the terminal width (a colour-keeping word wrap) instead of being cut with "…"; the value column is wide enough for model names at 80 columns.
+
 ## 1.2.0 - 2026-10-03
 
 CARL now runs only llama.cpp.

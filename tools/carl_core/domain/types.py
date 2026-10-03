@@ -17,7 +17,7 @@ Settings = Dict[str, SettingValue]
 
 Status = Literal["downloaded", "partial", "missing"]
 # Where an effective setting came from (shown by the monitor and in CARL_SOURCES).
-SettingSource = Literal["default", "catalogue", "header", "auto-tune", "config"]
+SettingSource = Literal["default", "catalogue", "header", "auto-tune", "config", "auto-fit"]
 Zone = Literal["good", "slow", "very_slow"]
 
 

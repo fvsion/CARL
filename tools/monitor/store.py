@@ -6,6 +6,8 @@ import os
 import time
 from typing import Any, Callable, Dict, List, Optional, Protocol, Tuple
 
+from carl_core.domain.autofit import AutoFit
+
 from . import gguf
 from .model import JSONDict, ModelInfo, Shape
 
@@ -26,12 +28,14 @@ class ModelStore(Protocol):
     def ctx_zone(self, m: ModelInfo, ctx: int) -> str: ...
     def header_info(self, path: str) -> JSONDict: ...
     def shape_of(self, path: str) -> Shape: ...
+    def model_shape(self, m: ModelInfo) -> Optional[Shape]: ...
     def file_size(self, path: str) -> int: ...
     def gpu_limit(self) -> Tuple[int, str]: ...
     def empty_config(self) -> JSONDict: ...
     def load_config(self) -> JSONDict: ...
     def save_config(self, cfg: JSONDict) -> None: ...
     def launch_model(self, cfg: JSONDict) -> str: ...
+    def auto_fit(self, goal: str, scope: str) -> AutoFit: ...
     def catalog_default(self) -> str: ...
     def models_dir(self) -> str: ...
     def parse_hf(self, spec: str) -> Tuple[str, Optional[str], Optional[str]]: ...
@@ -82,6 +86,12 @@ class CarlStore:
         shape: Shape = self._carl.shape_of(path)
         return shape
 
+    def model_shape(self, m: ModelInfo) -> Optional[Shape]:
+        """A model's header shape: the file's, or (a catalogue model not downloaded) the cached
+        one from Hugging Face; None when it can't be read."""
+        shape: Optional[Shape] = self._carl.app().shape_of(m)
+        return shape
+
     def file_size(self, path: str) -> int:
         return os.path.getsize(path)
 
@@ -102,6 +112,11 @@ class CarlStore:
         """The model a llama.cpp start with cfg loads (carl.resolve_launch)."""
         name: str = self._carl.resolve_launch(None, cfg)[0]["name"]
         return name
+
+    def auto_fit(self, goal: str, scope: str) -> AutoFit:
+        """Auto fit for this Mac with a goal (everyday / hard-code) and scope (catalogue / downloaded)."""
+        fit: AutoFit = self._carl.auto_fit(goal, scope)
+        return fit
 
     def catalog_default(self) -> str:
         name: str = self._carl.load_catalog()["default"]
@@ -124,8 +139,9 @@ class CarlStore:
 
 class ModelList:
     """The model list, re-read from the store at most every 10 s (it lists the models
-    folder and reads config.json), plus what "auto" means on this Mac. error: why the
-    last read failed (a broken catalogue, models.json or config.json), None when it worked."""
+    folder and reads config.json), plus what "auto" means on this Mac (auto fit, cached
+    with the list). error: why the last read failed (a broken catalogue, models.json or
+    config.json), None when it worked."""
 
     def __init__(self, store: ModelStore, on_error: Callable[[str], None],
                  clock: Callable[[], float] = time.time) -> None:
@@ -135,7 +151,9 @@ class ModelList:
         self.items: List[ModelInfo] = []
         self.error: Optional[str] = None
         self.t = 0.0
-        self._auto: Optional[Tuple[float, str]] = None     # (list time, model name)
+        self._auto: Dict[Tuple[str, str], Tuple[float, str]] = {}            # (goal, scope) -> (list time, model)
+        self._fit: Dict[Tuple[str, str], Tuple[float, Optional[AutoFit]]] = {}
+        self.fit_error: Optional[str] = None
 
     def get(self, refresh: bool = False) -> List[ModelInfo]:
         if refresh or self.clock() - self.t > 10:
@@ -162,18 +180,43 @@ class ModelList:
     def downloaded(self) -> List[ModelInfo]:
         return [m for m in self.get() if m["status"] == "downloaded"]
 
-    def auto_model(self) -> str:
-        """The model "auto" starts on this Mac (config.json's llama.model ignored),
-        recomputed when the list is re-read."""
-        if self._auto is None or self._auto[0] != self.t:
+    def auto_fit(self, goal: str = "everyday", scope: str = "catalogue") -> Optional[AutoFit]:
+        """Auto fit's answer for this Mac (None when it can't be worked out: fit_error says
+        why), recomputed when the list is re-read."""
+        self.get()
+        key = (goal, scope)
+        hit = self._fit.get(key)
+        if hit is None or hit[0] != self.t:
+            try:
+                fit: Optional[AutoFit] = self.store.auto_fit(goal, scope)
+                self.fit_error = None
+            except Exception as e:      # a broken catalogue / config, an unreadable header: say why, no pick
+                fit, self.fit_error = None, str(e)
+            hit = self._fit[key] = (self.t, fit)
+        return hit[1]
+
+    def auto_model(self, goal: str = "everyday", scope: str = "catalogue") -> str:
+        """The model "auto" starts on this Mac with this goal and scope (config.json's
+        llama.model ignored): auto fit's pick, or the best downloaded model that fits while
+        the pick isn't downloaded. Recomputed when the list is re-read."""
+        self.get()
+        key = (goal, scope)
+        hit = self._auto.get(key)
+        if hit is None or hit[0] != self.t:
             try:
                 cfg = self.store.load_config()
-                cfg.get("llama", {}).pop("model", None)
+                llama = cfg.setdefault("llama", {})
+                llama.pop("model", None)
+                llama.update(auto_goal=goal, auto_fit=scope)
                 name = self.store.launch_model(cfg)
-            except Exception:           # nothing downloaded, bad config, ...: the catalogue's default
-                try:
-                    name = self.store.catalog_default()
-                except Exception:       # the catalogue itself can't be read (self.error says why)
-                    name = "auto"
-            self._auto = (self.t, name)
-        return self._auto[1]
+            except Exception:           # nothing downloaded / no stock model fits, bad config, ...
+                fit = self.auto_fit(goal, scope)
+                name = fit.name if fit and fit.name else self._catalog_default()
+            hit = self._auto[key] = (self.t, name)
+        return hit[1]
+
+    def _catalog_default(self) -> str:
+        try:
+            return self.store.catalog_default()
+        except Exception:               # the catalogue itself can't be read (self.error says why)
+            return "auto"

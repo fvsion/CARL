@@ -17,14 +17,18 @@ Files
 Settings precedence for a llama.cpp start: command-line flags > environment >
 config.json (llama section, then models.<name>) > Auto-tune result for this Mac >
 catalogue tune > built-in defaults. 96K per slot is the smallest "fast" window: only
-larger windows are flagged as slow.
+larger windows are flagged as slow. llama.model = auto starts auto fit's pick: the best
+ranked stock model for the goal (llama.auto_goal: everyday = MoE first, hard-code = dense
+first) that fits this Mac, from llama.auto_fit (catalogue or downloaded); when the pick is
+not downloaded, the best downloaded one that fits (./carl.sh fit shows the reasons).
 
 CLI (./carl.sh models | download | verify use it through host/models.sh)
   carl.py list                         models: catalogue + models folder + custom
-  carl.py download NAME|default|all    a catalogue model (pinned, verified)
+  carl.py download NAME|default|all    a catalogue model (pinned, verified); default = auto fit's pick
   carl.py download hf:REPO/FILE.gguf   any GGUF from Hugging Face (also a huggingface.co URL)
   carl.py hf-files REPO                the GGUF files of a Hugging Face repo
   carl.py verify NAME... | delete NAME | path NAME | get NAME FIELD | default | downloaded
+                                       (default: auto fit's pick for this Mac, everyday goal)
   carl.py launch-env [--model NAME|PATH] [--no-config]   KEY=value lines for serve-llama.sh
   carl.py config [show|path|get KEY|set KEY VALUE|unset KEY]   KEY like llama.net or models.NAME.ctx
 
@@ -42,8 +46,9 @@ from typing import Dict, List, Mapping, Optional, Sequence, Tuple  # noqa: E402
 
 from carl_core.app import Carl  # noqa: E402
 from carl_core.domain import models as _dm  # noqa: E402
+from carl_core.domain.autofit import AutoFit as AutoFit, as_goal, as_scope  # noqa: E402
 from carl_core.domain.errors import ConfigError as ConfigError  # noqa: E402  (re-exported)
-from carl_core.domain.fit import DEFAULT_CTX, human_gb  # noqa: E402
+from carl_core.domain.fit import human_gb  # noqa: E402
 from carl_core.domain.gguf import GIB as GIB, ModelShape  # noqa: E402
 from carl_core.domain.hf import parse_hf as parse_hf  # noqa: E402
 from carl_core.domain.launch import shell_lines as shell_lines  # noqa: E402
@@ -162,15 +167,24 @@ def ctx_zone(m: ModelInfo, ctx: int) -> Zone:
     return _dm.ctx_zone(m, ctx)
 
 
-def pick_default(models: Optional[List[ModelInfo]] = None, ctx: int = DEFAULT_CTX) -> str:
-    """This Mac's default: the catalogue default, or default_small when it can't hold one window."""
-    return app().pick_default(_models(models), ctx)
+def pick_default(models: Optional[List[ModelInfo]] = None) -> str:
+    """This Mac's default: auto fit's pick from the whole catalogue (everyday goal)."""
+    return app().pick_default(_models(models))
+
+
+def auto_fit(goal: Optional[str] = None, scope: Optional[str] = None, models: Optional[List[ModelInfo]] = None,
+             cfg: Optional[Mapping[str, object]] = None) -> AutoFit:
+    """Auto fit for this Mac: the best ranked stock model for the goal (everyday / hard-code)
+    from the scope (catalogue / downloaded); None takes config.json's llama.auto_goal / auto_fit."""
+    c = _config(cfg)
+    g, s = app().auto_settings(c)
+    return app().auto_fit(models or app().all_models(c), as_goal(goal) if goal else g, as_scope(scope) if scope else s)
 
 
 def resolve_launch(name: Optional[str] = None, cfg: Optional[Mapping[str, object]] = None
                    ) -> Tuple[ModelInfo, List[ModelInfo], Optional[str]]:
     """(model, all models, note) for a llama.cpp start: name, else config llama.model, else
-    this Mac's default (the first downloaded model when the default isn't downloaded)."""
+    auto fit's pick (the best downloaded stock model that fits when the pick isn't downloaded)."""
     return app().resolve_launch(name, _config(cfg))
 
 
@@ -278,7 +292,7 @@ def cmd_download(names: List[str]) -> int:
     for n in names:
         if n == "default":
             n = pick_default(models)
-            print(f"== default model for this Mac: {n}")
+            print(f"== this Mac's auto-fit pick: {n}")
         if n.startswith(("hf:", "http")) or (n.count("/") >= 1 and not find(n, models)):
             ok = download_hf(n) and ok
             continue

@@ -7,9 +7,9 @@ import unittest
 from mon_support import GIB, FakeStore, model, model_list, shape
 from monitor.fmt import GRN, RED, YEL
 from monitor.model import ServerData
-from monitor.settings import (LLAMA_ADV, MODEL_ROW_KEYS, Schema, SettingsService, env_from_cmd, fmt_val, llama_fit,
-                              max_ctx_per_slot, net_choices, parse_typed, rows, running_settings, settings_to_config,
-                              shown_value, step_choice)
+from monitor.settings import (LLAMA_ADV, MODEL_ROW_KEYS, SET_HELP, Schema, SettingsService, env_from_cmd, fmt_val,
+                              llama_fit, max_ctx_per_slot, net_choices, parse_typed, row_instruction, rows,
+                              running_settings, settings_to_config, shown_value, step_choice)
 
 SCHEMA = Schema(net_choices(["192.168.1.5"]))
 LLAMA_CMD = ("/opt/llama-server -m /m/big.gguf --host 127.0.0.1 -c 196608 --parallel 2 -ctk q4_0 -ctv q4_0 "
@@ -202,8 +202,68 @@ class ServiceTest(unittest.TestCase):
 
     def test_auto_model_and_max_ctx(self) -> None:
         self.assertEqual(self.svc.resolved_model({"model": "auto"}), "big")
-        self.assertIsNone(self.svc.max_ctx(model("remote", status="missing")))
+        self.assertGreater(self.svc.max_ctx(model("remote", status="missing")) or 0, 0)   # catalogue: its HF header
+        custom = dict(model("hfonly", status="missing"), source="hf")
+        self.assertIsNone(self.svc.max_ctx(custom))                                         # custom, not here: unknown
         self.assertGreater(self.svc.max_ctx(self.store.models[0]) or 0, 0)
+
+
+
+class AutoFitTest(unittest.TestCase):
+    """Auto fit in the Settings tab: goal / scope rows, the one-step Auto fit, the start model."""
+
+    def setUp(self) -> None:
+        self.store = FakeStore()
+        self.svc = service(self.store)
+
+    def test_goal_and_scope_rows_are_saved_to_llama(self) -> None:
+        keys = [r.key for r in SCHEMA.llama]
+        self.assertEqual(keys[:3], ["model", "goal", "scope"])
+        p = dict(SCHEMA.defaults(), adv="hidden", goal="hard-code", scope="downloaded")
+        cfg = settings_to_config(p, {"schema": 1}, SCHEMA, None, None)
+        self.assertEqual((cfg["llama"]["auto_goal"], cfg["llama"]["auto_fit"]), ("hard-code", "downloaded"))
+        cfg = settings_to_config(dict(SCHEMA.defaults(), adv="hidden"), cfg, SCHEMA, None, None)
+        self.assertNotIn("auto_goal", cfg["llama"])                     # defaults are not saved
+
+    def test_auto_resolves_with_the_rows_goal_and_scope(self) -> None:
+        seen = []
+        orig = self.store.launch_model
+
+        def launch(cfg: dict) -> str:
+            seen.append((cfg["llama"].get("auto_goal"), cfg["llama"].get("auto_fit"), "model" in cfg["llama"]))
+            return orig(cfg)
+        self.store.launch_model = launch                                # type: ignore[method-assign]
+        self.store.config = {"schema": 1, "llama": {"model": "iq"}}
+        self.assertEqual(self.svc.resolved_model({"model": "auto", "goal": "hard-code", "scope": "downloaded"}), "big")
+        self.assertEqual(seen, [("hard-code", "downloaded", False)])   # config's llama.model ignored for auto
+        fit = self.svc.auto_fit({"goal": "hard-code"})
+        self.assertEqual((fit.goal if fit else None, self.store.fit_calls[-1]), ("hard-code", ("hard-code", "catalogue")))
+
+    def test_apply_auto_fit_sets_model_ctx_slots_kv(self) -> None:
+        p = dict(SCHEMA.defaults(), adv="hidden", model="iq", ctx=32768, kv="q8_0", slots="1")
+        fit = self.svc.apply_auto_fit(p)
+        self.assertIsNotNone(fit)
+        self.assertEqual((p["model"], p["ctx"], p["kv"], p["slots"]), ("big", 98304, "q4_0", "auto"))
+        self.store.pick = None                                          # nothing fits: p unchanged
+        q = dict(SCHEMA.defaults(), adv="hidden", model="iq")
+        none = service(self.store).apply_auto_fit(q)
+        self.assertIsNone(none.pick if none else "no answer")
+        self.assertEqual(q["model"], "iq")
+
+    def test_fit_line_names_the_largest_window_when_too_big(self) -> None:
+        ok, text = llama_fit("m", 20 * GIB, shape(), "q4_0", 262144, "2", 22 * GIB)
+        self.assertFalse(ok)
+        self.assertIn("largest window", text)
+        ok, text = llama_fit("m", 30 * GIB, shape(), "q4_0", 4096, "1", 22 * GIB)
+        self.assertIn("the weights alone don't fit", text)
+
+    def test_row_instructions_are_for_new_users(self) -> None:
+        self.assertTrue(row_instruction("model").startswith("Press Enter"))
+        self.assertTrue(row_instruction("ctx").startswith("Type a number and press Enter"))
+        self.assertTrue(row_instruction("kv").startswith("Press ← →"))
+        for key, text in SET_HELP.items():
+            with self.subTest(key=key):
+                self.assertNotIn("Enter:", text)
 
 
 if __name__ == "__main__":

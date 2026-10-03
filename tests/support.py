@@ -30,12 +30,16 @@ def shape(experts: int = 0, nextn: int = 1, kv_elems: int = 8192, rs_bytes: int 
 
 
 def entry(name: str, file: str, size: int = 10 * GIB, arch: str = "moe", ctx: int = 98304,
-          zones: Optional[CtxZones] = None) -> CatalogEntry:
-    return {"name": name, "label": name, "alias": name.split("-iq3")[0], "summary": f"{name} summary", "arch": arch,
-            "hf": {"repo": "owner/repo", "revision": "0" * 40, "file": file, "sha256": SHA_A, "bytes": size},
-            "tune": {"kv": "q4_0", "ctx": ctx, "slots": "auto", "spec": "draft-mtp,ngram-mod", "spec_n": 2,
-                     "temp": 1.0},
-            "ctx_zones": zones or {"good": 98304, "slow": 131072, "very_slow": 163840}}
+          zones: Optional[CtxZones] = None, rank: Optional[int] = None, abliterated: bool = False) -> CatalogEntry:
+    e: CatalogEntry = {
+        "name": name, "label": name, "alias": name.split("-iq3")[0], "summary": f"{name} summary", "arch": arch,
+        "abliterated": abliterated,
+        "hf": {"repo": "owner/repo", "revision": "0" * 40, "file": file, "sha256": SHA_A, "bytes": size},
+        "tune": {"kv": "q4_0", "ctx": ctx, "slots": "auto", "spec": "draft-mtp,ngram-mod", "spec_n": 2, "temp": 1.0},
+        "ctx_zones": zones or {"good": 98304, "slow": 131072, "very_slow": 163840}}
+    if rank is not None:
+        e["rank"] = rank
+    return e
 
 
 def catalog(*entries: CatalogEntry, default: str = "big", default_small: str = "small") -> Dict[str, object]:
@@ -102,6 +106,17 @@ class FakeGpu:
 
     def limit(self) -> Tuple[int, str]:
         return self.value, "test"
+
+
+class FakeHost:
+    def __init__(self, ram: int = 32 * GIB, vm: bool = False) -> None:
+        self.ram, self.vm = ram, vm
+
+    def ram_bytes(self) -> int:
+        return self.ram
+
+    def vm_network_up(self) -> bool:
+        return self.vm
 
 
 class FakeDoc:
@@ -172,7 +187,7 @@ class World:
     def __init__(self, cat: object, files: Optional[Dict[str, int]] = None, config: object = None,
                  local: object = None, shapes: Optional[FakeShapes] = None, gpu: int = 24 * GIB,
                  legacy: Optional[FakeLegacy] = None, hub: Optional[FakeHub] = None, download_size: int = 0,
-                 env_models_dir: Optional[str] = None) -> None:
+                 env_models_dir: Optional[str] = None, host: Optional[FakeHost] = None) -> None:
         self.folder = FakeFolder(files)
         self.config = FakeDoc(config)
         self.local = FakeDoc(local)
@@ -181,5 +196,6 @@ class World:
         self.downloader = FakeDownloader(self.folder, download_size)
         stores = Stores(catalog=FakeDoc(cat), catalog_path="catalog.json", config=self.config, local=self.local,
                         local_path="models.json", legacy=legacy or FakeLegacy())
-        self.carl = Carl(stores, self.folder, shapes or FakeShapes(), FakeGpu(gpu), self.hub, self.downloader,
-                         FakeClock(), self.console, home=HOME, env_models_dir=env_models_dir)
+        self.host = host or FakeHost()
+        self.carl = Carl(stores, self.folder, shapes or FakeShapes(), FakeGpu(gpu), self.host, self.hub,
+                         self.downloader, FakeClock(), self.console, home=HOME, env_models_dir=env_models_dir)

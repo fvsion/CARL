@@ -8,8 +8,8 @@ import unittest
 sys.dont_write_bytecode = True                                  # keep tools/ free of __pycache__
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "tools"))
 
-from monitor.fmt import (DIM, GRN, R, RED, YEL, Ln, bar, buttons, ctx_label, draw_card, dur, fit, indent, knum,
-                         side_by_side, size, vlen, wrap, wwrap)
+from monitor.fmt import (ANSI, B, DIM, GRN, R, RED, YEL, Ln, bar, button_rows, buttons, ctx_label, cwrap, draw_card,
+                         dur, fit, heading, indent, knum, lv, side_by_side, size, vlen, wrap, wwrap)
 
 
 class FitTest(unittest.TestCase):
@@ -48,6 +48,42 @@ class WrapTest(unittest.TestCase):
     def test_wwrap_wraps_words_at_least_ten_columns(self) -> None:
         self.assertEqual(wwrap("one two three four", 4), ["one two", "three four"])
         self.assertEqual(wwrap(None, 20), [""])
+
+
+class ColourWrapTest(unittest.TestCase):
+    TEXT = f"Press {B}Enter{R} to pick a model: {RED}auto is auto fit's pick for this Mac{R} and more words follow here"
+
+    def test_every_line_fits_and_no_word_is_lost(self) -> None:
+        for w in (10, 17, 25, 40, 200):
+            lines = cwrap(self.TEXT, w, "  ")
+            with self.subTest(w=w):
+                self.assertTrue(all(vlen(x) <= w for x in lines))
+                self.assertEqual(" ".join(ANSI.sub("", x).strip() for x in lines), ANSI.sub("", self.TEXT))
+                self.assertFalse(any("…" in x for x in lines))
+
+    def test_colour_continues_on_the_next_line(self) -> None:
+        lines = cwrap(f"{RED}one two three four{R} five", 10)
+        self.assertEqual(lines[0], f"{RED}one two{R}")
+        self.assertTrue(lines[1].startswith(RED))              # still red after the break
+        self.assertTrue(all(x.endswith(R) for x in lines[:2]))
+        self.assertEqual(ANSI.sub("", lines[-1]), "five")
+
+    def test_indent_space_runs_newlines_and_long_words(self) -> None:
+        lines = cwrap(lv("fit", "fits: a model needs 15.3G for 2 x 96K"), 24, " " * 10)
+        self.assertTrue(ANSI.sub("", lines[0]).startswith("fit       fits:"))     # the padded label survives
+        self.assertTrue(all(ANSI.sub("", x).startswith(" " * 10) for x in lines[1:]))
+        self.assertEqual(cwrap("a\n  b", 10), ["a", "  b"])
+        self.assertEqual(cwrap("x" * 25, 10), ["x" * 10, "x" * 10, "x" * 5])
+        self.assertEqual(cwrap(None, 10), [""])
+
+    def test_heading_and_button_rows(self) -> None:
+        self.assertEqual(vlen(heading("Status", 30)), 30)
+        rows = button_rows("", [("Start server (a)", "s"), ("Auto fit (A)", "f"), ("Revert (r)", "r")], 40)
+        self.assertEqual(len(rows), 2)
+        self.assertTrue(all(vlen(x.text.rstrip()) <= 40 for x in rows))
+        self.assertEqual([a for x in rows for _, _, a in x.spans], ["s", "f", "r"])
+        self.assertEqual(rows[1].spans[0][:2], (0, len("[ Revert (r) ]")))
+        self.assertEqual(len(button_rows("", [("a", "a"), ("b", "b")], 80)), 1)
 
 
 class NumbersTest(unittest.TestCase):

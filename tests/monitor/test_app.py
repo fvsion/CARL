@@ -8,6 +8,7 @@ import unittest
 
 from mon_support import GIB, FakeStore
 from monitor.arrange import FILTERS
+from monitor.fmt import ANSI
 from monitor.api import Endpoint
 from monitor.app import App, Machine
 from monitor.cli import Options
@@ -109,7 +110,7 @@ class AppTest(unittest.TestCase):
         self.keys(DOWN, DOWN, "\r")                     # auto -> big -> iq
         self.assertIsNone(self.ui.picker)
         self.assertEqual(p["model"], "iq")
-        self.keys(DOWN, DOWN, "\r")                     # the context row: type a value
+        self.keys(DOWN, DOWN, DOWN, DOWN, "\r")         # model, auto goal, auto from, KV cache, context: type a value
         self.assertEqual(self.ui.edit, "")
         self.keys("6", "4", "k", "\r")
         self.assertEqual(p["ctx"], 65536)
@@ -219,6 +220,51 @@ class AppTest(unittest.TestCase):
         self.store.config["models"] = {self.ui.tune_model: {"ctx": 1}}
         self.ctl.do("tclear")
         self.assertEqual(self.store.saved[-1]["models"], {})
+
+    def server_text(self, cols: int) -> list:
+        p = self.ui.pending
+        assert p is not None
+        rows = self.app.view.server(self.ui, p, self.ctl.data, cols, 400, 8095)
+        return [ANSI.sub("", t) for t, _ in rows]
+
+    def test_auto_fit_key_sets_the_pick_or_offers_the_download(self) -> None:
+        self.keys("5")
+        p = self.ui.pending
+        assert p is not None
+        p["model"], p["ctx"] = "iq", 32768
+        self.keys("A")                                          # the pick (big) is here: chosen, then Apply
+        self.assertEqual((p["model"], p["ctx"], p["slots"]), ("big", 98304, "auto"))
+        self.assertIn("press a to start it", self.ui.toast_msg[0])
+        self.store.pick = ("remote", False)                    # not downloaded: asked first
+        self.app.svc.models._fit.clear()
+        self.keys("A")
+        c = self.ui.confirm2
+        assert c is not None
+        self.assertEqual((c.title, c.yes, c.model), ("DOWNLOAD?", "mautodl", "remote"))
+        self.keys("n")                                          # no download (it would start a process)
+        self.assertIsNone(self.ui.confirm2)
+        self.assertEqual(p["model"], "remote")
+        self.assertTrue(any("Auto fit" in x and "picked remote" in x for x in self.server_text(160)))
+
+    def test_server_card_sections_at_80_and_160_columns(self) -> None:
+        """About this setting, Status, the buttons and Keys are separate, and nothing is cut."""
+        self.keys("5")
+        for cols in (80, 160):
+            with self.subTest(cols=cols):
+                text = self.server_text(cols)
+                heads = {h: next(i for i, x in enumerate(text) if f" {h} ─" in x)
+                         for h in ("About this setting", "Status", "Keys")}
+                self.assertLess(heads["About this setting"], heads["Status"])
+                self.assertLess(heads["Status"], heads["Keys"])
+                buttons = [i for i, x in enumerate(text) if "[ Start server (a) ]" in x]
+                self.assertEqual(len(buttons), 1)
+                self.assertTrue(heads["Status"] < buttons[0] < heads["Keys"])
+                self.assertNotIn("Status", text[buttons[0]])
+                card = text[:next(i for i, x in enumerate(text) if "╰" in x)]
+                self.assertFalse(any("…" in x for x in card), [x for x in card if "…" in x])
+                joined = " ".join(" ".join(x.strip(" │").split()) for x in card)
+                self.assertIn("then h to add one from Hugging Face.", joined)      # the model row's help, in full
+                self.assertIn("Press a to start the server", joined)
 
 
 if __name__ == "__main__":

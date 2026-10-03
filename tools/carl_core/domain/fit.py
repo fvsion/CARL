@@ -1,5 +1,6 @@
 """What fits in this Mac's GPU memory: the memory a model needs at a context window, the
-largest window that fits, slots, the RAM prompt cache, and this Mac's default model.
+largest window that fits, whether a start fits (the launcher refuses one that doesn't), slots
+and the RAM prompt cache. The best model for this Mac: autofit.py.
 
 need = weights + KV cache (window x slots x bytes/token) + recurrent state per slot
        + ~1 GiB of compute buffers
@@ -8,6 +9,7 @@ its own recurrent state.
 """
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Optional, Tuple
 
 from .errors import ConfigError
@@ -38,9 +40,10 @@ def max_ctx(shape: ModelShape, weights: int, limit: float, slots: int = 1, kv: s
 
 
 def estimated_limit(ram_bytes: float) -> Tuple[int, float]:
-    """(GPU limit, fraction of RAM) macOS gives the GPU when nothing better is known:
-    ~2/3 of RAM up to 32 GB, ~3/4 above."""
-    frac = 2 / 3 if ram_bytes <= 32 * GIB else 3 / 4
+    """(GPU limit, fraction of RAM) macOS gives the GPU when nothing better is known (only for
+    --ram previews; a real Mac reports its own limit): ~2/3 of RAM below 32 GB, ~3/4 from 32 GB
+    up (a 32 GB M2 Max reports 25.0 GiB, 78%)."""
+    frac = 2 / 3 if ram_bytes < 32 * GIB else 3 / 4
     return int(ram_bytes * frac), frac
 
 
@@ -70,12 +73,41 @@ def prompt_cache_mib(ram_bytes: int, need: float, reserve: float) -> int:
     return int(max(CACHE_MIN_MIB, min(CACHE_MAX_MIB, cache)) // CACHE_STEP_MIB * CACHE_STEP_MIB)
 
 
-def choose_default(default: str, default_small: Optional[str], need: Optional[float], limit: float) -> str:
-    """This Mac's default model: the catalogue default, or default_small when one window of
-    the default doesn't fit (need unknown: keep the default)."""
-    if need is not None and need > limit and default_small:
+def offline_default(default: str, default_small: Optional[str], weights: Optional[float], limit: float) -> str:
+    """This Mac's default when auto fit can't size the candidates (their headers can't be
+    read, e.g. offline): the catalogue default, or default_small when the default's weights
+    alone don't fit (weights unknown: keep the default)."""
+    if weights is not None and weights + OVERHEAD > limit and default_small:
         return default_small
     return default
+
+
+@dataclass(frozen=True)
+class StartCheck:
+    """Does a start fit the GPU limit? need and limit in bytes; largest = the largest window
+    per slot that fits with these slots (0: the weights alone don't fit)."""
+    need: float
+    limit: float
+    ctx: int
+    slots: int
+    kv: str
+    largest: int
+
+    @property
+    def fits(self) -> bool:
+        return self.need <= self.limit
+
+    def setup(self) -> str:
+        per = f" x {self.slots} slots" if self.slots > 1 else ""
+        return f"--ctx {window_label(self.ctx)}{per} ({self.kv} KV)"
+
+
+def check_start(shape: ModelShape, weights: int, ctx: int, slots: int, kv: str, limit: float) -> StartCheck:
+    """The memory a start needs against the GPU limit: a start over the limit won't work
+    (it fails to load, or swaps the Mac to a crawl), so the launcher refuses it."""
+    slots = max(slots, 1)
+    return StartCheck(need_bytes(shape, weights, ctx, slots, kv), limit, ctx, slots, kv,
+                      max_ctx(shape, weights, limit, slots, kv))
 
 
 def human_gb(n: float) -> str:

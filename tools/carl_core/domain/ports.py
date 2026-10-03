@@ -50,6 +50,17 @@ class GpuLimit(Protocol):
         ...
 
 
+class HostMemory(Protocol):
+    """This Mac's RAM and whether the VM's network is up (auto fit keeps a reserve for
+    macOS and apps, more with the VM running)."""
+
+    def ram_bytes(self) -> int:
+        """Installed RAM (0 when unknown)."""
+        ...
+
+    def vm_network_up(self) -> bool: ...
+
+
 class JsonDocument(Protocol):
     """One JSON file (config.json, models.json, the catalogue)."""
 

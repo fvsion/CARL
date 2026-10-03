@@ -9,14 +9,16 @@ from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
 from .domain import models as dm
+from .domain.autofit import (AutoFit, Budget, Candidate, Goal, Plan, Scope, as_goal, as_scope, auto_fit,
+                             best_downloaded, candidate)
 from .domain.errors import ConfigError
-from .domain.fit import DEFAULT_CTX, choose_default, human_gb, need_bytes
-from .domain.gguf import ModelShape
+from .domain.fit import estimated_limit, human_gb, offline_default, reserve_bytes
+from .domain.gguf import GIB, ModelShape
 from .domain.hf import (commit_sha, download_url, gguf_files, local_file_name, model_name, parse_hf,
                         revision_api_path, tree_api_path, validate_repo)
 from .domain.launch import launch_env as build_launch_env
-from .domain.ports import (Clock, Console, Downloader, GpuLimit, HubClient, JsonDocument, LegacyEnv, ModelFolder,
-                           ShapeReader)
+from .domain.ports import (Clock, Console, Downloader, GpuLimit, HostMemory, HubClient, JsonDocument, LegacyEnv,
+                           ModelFolder, ShapeReader)
 from .domain.records import parse_catalog, parse_local_db
 from .domain.settings import SCHEMA, Config, migrate_env, models_dir_setting, validate_config
 from .domain.types import (Catalog, CustomInfo, HfFileList, HfRef, LocalDb, ModelInfo, SettingSource, SettingValue,
@@ -39,13 +41,14 @@ class Stores:
 class Carl:
     """Models, settings and downloads for one user (one CONF_DIR and models folder)."""
 
-    def __init__(self, stores: Stores, files: ModelFolder, shapes: ShapeReader, gpu: GpuLimit, hub: HubClient,
-                 downloader: Downloader, clock: Clock, console: Console, home: str,
+    def __init__(self, stores: Stores, files: ModelFolder, shapes: ShapeReader, gpu: GpuLimit, host: HostMemory,
+                 hub: HubClient, downloader: Downloader, clock: Clock, console: Console, home: str,
                  env_models_dir: Optional[str]) -> None:
         self.stores = stores
         self.files = files
         self.shapes = shapes
         self.gpu = gpu
+        self.host = host
         self.hub = hub
         self.downloader = downloader
         self.clock = clock
@@ -117,32 +120,91 @@ class Carl:
             header = self.custom_defaults(m.get("path", ""))[0]
         return dm.effective_tune(m, cfg, header)
 
-    def pick_default(self, models: List[ModelInfo], ctx: int = DEFAULT_CTX, limit: Optional[float] = None) -> str:
-        """This Mac's default: the catalogue default, or default_small when the GPU can't
-        hold one window of it (the header of a model not downloaded is read over HTTP)."""
-        cat = self.load_catalog()
-        default = cat.get("default", "")
-        m = self.find(default, models)
-        need: Optional[float] = None
-        if m:
-            try:
-                hf: HfRef = m.get("hf") or {}
-                shape = self.shapes.local(m.get("path", "")) if m.get("status") == "downloaded" else self.shapes.remote(hf)
-                need = need_bytes(shape, m.get("bytes", 0), ctx)
-            except (OSError, ValueError):
-                need = None                   # header unavailable (offline): keep the default
-        if need is None:
-            return default
-        return choose_default(default, cat.get("default_small"), need, self.gpu.limit()[0] if limit is None else limit)
+    # ------------------------------------------------------------ auto fit
+    def budget(self, ram_gb: Optional[float] = None, reserve_gb: Optional[float] = None) -> Budget:
+        """What a model may use: on this Mac (GPU limit, RAM, the reserve for macOS + apps,
+        more with the VM up), or estimated for a Mac with ram_gb of RAM (VM not counted)."""
+        if ram_gb:
+            return Budget(estimated_limit(ram_gb * GIB)[0], ram_gb * GIB, reserve_bytes(reserve_gb, False))
+        return Budget(self.gpu.limit()[0], self.host.ram_bytes(), reserve_bytes(reserve_gb, self.host.vm_network_up()))
+
+    def shape_of(self, m: ModelInfo) -> Optional[ModelShape]:
+        """A model's header shape: the local file's, or (a catalogue model not downloaded)
+        the one on Hugging Face (read once, then cached); None when it can't be read."""
+        try:
+            if m.get("status") == "downloaded":
+                return self.shapes.local(m.get("path", ""))
+            if m.get("source") == "catalog" and m.get("hf"):
+                return self.shapes.remote(m.get("hf") or {})
+        except (OSError, ValueError):
+            pass
+        return None
+
+    def candidates(self, models: List[ModelInfo]) -> List[Candidate]:
+        """Every model as auto fit sees it; headers are read only for the eligible ones
+        (ranked stock models)."""
+        out = []
+        for m in models:
+            c = candidate(m, None)
+            out.append(candidate(m, self.shape_of(m)) if c.eligible else c)
+        return out
+
+    @staticmethod
+    def auto_settings(cfg: Config) -> Tuple[Goal, Scope]:
+        """The goal and the candidates auto fit uses (config.json llama.auto_goal / auto_fit)."""
+        return as_goal(cfg.llama.get("auto_goal")), as_scope(cfg.llama.get("auto_fit"))
+
+    def auto_fit(self, models: List[ModelInfo], goal: Goal = "everyday", scope: Scope = "catalogue",
+                 budget: Optional[Budget] = None) -> AutoFit:
+        """The best ranked stock model for the goal that fits (domain/autofit.py)."""
+        return auto_fit(self.candidates(models), budget or self.budget(), goal, scope)
+
+    def pick_default(self, models: List[ModelInfo], budget: Optional[Budget] = None, goal: Goal = "everyday") -> str:
+        """This Mac's default (the download offer, `download default`): auto fit's pick from
+        the whole catalogue. When the headers can't be read (offline) and so nothing could
+        be sized, the catalogue default (default_small when its weights alone don't fit)."""
+        b = budget or self.budget()
+        cands = self.candidates(models)
+        fit = auto_fit(cands, b, goal, "catalogue")
+        if fit.pick:
+            return fit.pick.name
+        if any(c.eligible and c.shape is None for c in cands):
+            cat = self.load_catalog()
+            default = cat.get("default", "")
+            m = self.find(default, models)
+            return offline_default(default, cat.get("default_small"), m.get("bytes") if m else None, b.allowed)
+        raise ConfigError(f"auto fit: {fit.because()} (./carl.sh fit shows every model)")
+
+    def auto_launch(self, models: List[ModelInfo], cfg: Config) -> Tuple[ModelInfo, Optional[str], Plan]:
+        """The model llama.model = auto starts: auto fit's pick when it is downloaded, else
+        the best downloaded stock model that fits (with a note naming the pick to download)."""
+        goal, scope = self.auto_settings(cfg)
+        cands = self.candidates(models)
+        fit = auto_fit(cands, self.budget(), goal, scope)
+        start = best_downloaded(fit, cands)
+        if not any(m.get("status") == "downloaded" for m in models):
+            raise ConfigError("no model is downloaded. Download this Mac's auto-fit pick: ./carl.sh download default")
+        if start.pick is None or start.plan is None:
+            want = f"download {fit.name} (./carl.sh download {fit.name}), or " if fit.name else ""
+            raise ConfigError(f"auto fit: no downloaded stock model fits this Mac ({start.because()}); "
+                              f"{want}choose a model by name: ./carl.sh config set llama.model NAME")
+        m = self.find(start.pick.name, models)
+        if m is None:                          # the candidates came from these models
+            raise ConfigError(f"auto fit: {start.pick.name} is not in the model list")
+        note = None
+        if start is not fit and fit.name:
+            note = (f"auto fit picks {fit.name} for this Mac, but it is not downloaded (./carl.sh download {fit.name}); "
+                    f"starting {start.pick.name}, the best downloaded model that fits")
+        return m, note, start.plan
 
     def resolve_launch(self, name: Optional[str], cfg: Config) -> Tuple[ModelInfo, List[ModelInfo], Optional[str]]:
-        """The model a llama.cpp start uses: name, else config llama.model, else this Mac's
-        default; a default that isn't downloaded falls back to the first downloaded model."""
+        """The model a llama.cpp start uses: name, else config llama.model, else auto fit's
+        pick (the best downloaded stock model that fits when the pick isn't downloaded)."""
         models = self.all_models(cfg)
         explicit = name or dm.configured_model(cfg)
         if explicit:
             return dm.select_named(models, explicit, self.expand(explicit)), models, None
-        m, note = dm.select_default(models, self.pick_default(models))
+        m, note, _ = self.auto_launch(models, cfg)
         return m, models, note
 
     def model_file(self, name: Optional[str]) -> Optional[str]:
@@ -157,12 +219,18 @@ class Carl:
         cfg = self.load_config() if use_config else Config()
         path = self.model_file(name)
         note: Optional[str] = None
+        plan: Optional[Plan] = None
         if path:
             m = self.find(path, self.all_models(self.load_config())) or dm.custom_entry(
                 model_name(path), path, {"source": "file"}, self.files)
-        else:
+        elif name or dm.configured_model(cfg):
             m, _, note = self.resolve_launch(name, cfg)
+        else:
+            m, note, plan = self.auto_launch(self.all_models(cfg), cfg)
         vals, src = self.effective_tune(m, cfg)
+        ctx = vals.get("ctx")
+        if plan and plan.ctx < dm.CTX_FLOOR and src.get("ctx") != "config" and isinstance(ctx, int) and plan.ctx < ctx:
+            vals["ctx"], src["ctx"] = plan.ctx, "auto-fit"      # no 96K window fits: auto fit's largest
         advice = dm.tune_advice(m, vals, src)
         note = "\n".join(n for n in (note, advice) if n) or None
         return build_launch_env(m, vals, src, cfg), note

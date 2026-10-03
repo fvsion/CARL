@@ -47,14 +47,14 @@ Commands with the label **Mac** run in the CARL folder on the Mac (`~/CARL`). Co
 2. **The API key:** the first server start makes the API key (`~/.config/carl/api-key`, mode 600, in a folder with mode 700) automatically, if it is missing. This is the same folder as `config.json`.
    - If you used CARL before 1.2.0, the first start of `./carl.sh llama` copies your old key (`~/.mtplx/api-key`) to the new path. It is the same key, so your clients continue to work.
    - The configs that `install.sh` writes refer to the key file. They do not contain the key.
-3. **Select and download a model.** The `fit` command shows which models fit in the GPU memory of this Mac. It also shows the largest context window for each model:
+3. **Select and download a model.** The `fit` command shows **auto fit's pick** for this Mac, why it picked it, and, for each model, the largest context window that fits in the GPU memory:
    ```bash
    ./carl.sh fit
-   ./carl.sh download default          # this Mac's default (qwen3.6-35b-a3b on 36 GB, the IQ3 35B on 24 GB)
+   ./carl.sh download default          # auto fit's pick (qwen3.6-35b-a3b on 32-36 GB+, the IQ3 35B on 24 GB)
    ```
-   `default` selects a model for each Mac. It selects the catalogue default (`qwen3.6-35b-a3b`, the `default` field in `host/catalog.json`) if that model fits. If not, it selects `qwen3.6-35b-a3b-iq3` (`default_small`), which is the 24 GB default (see [section 3](#3-choosing-a-model)).
-   - If you forget this step, `./carl.sh` tells you that no model is downloaded. It shows the default for this Mac and its size, and asks to download it. If you answer no, the dashboard opens without a server.
-   - If the default model is not downloaded, but a different model is, the server starts with the first downloaded model. The start-up output tells you this.
+   `default` is auto fit's pick from the whole catalogue for the everyday goal (see [Auto fit](#auto-fit-the-best-model-for-this-mac) below).
+   - If you forget this step, `./carl.sh` tells you that no model is downloaded. It shows auto fit's pick for this Mac and its size, and asks to download it. If you answer no, the dashboard opens without a server.
+   - If auto fit's pick is not downloaded, but a different model is, the server starts with the best downloaded stock model that fits. The start-up output tells you this, and how to download the pick.
 4. **For VM clients, start VMware Fusion first.** Then the server listens on the Fusion NAT address `192.168.42.1`. This address exists only while the Fusion network is up. If you do not start Fusion, the server serves only this Mac (127.0.0.1).
 5. **Start the server:**
    ```bash
@@ -167,7 +167,7 @@ Use this procedure when the clients are not in the VMware Fusion VM and not on t
 
    - **To increase the GPU limit:** run `sudo sysctl iogpu.wired_limit_mb=18432`. Then the stock Q4 `qwen3.8-27b` can run with ~84K. This setting resets at reboot, and it keeps ~6 GB for macOS. The abliterated Q4 gets only ~16K, thus use its Q3.
    - **Monitor the SYSTEM card in the monitor.** If the memory pressure changes to WARNING/CRITICAL, use a smaller `--ctx`.
-   - **The launcher gives a warning before it loads** a model and a context window that do not fit.
+   - **The launcher refuses to start** a model and a context window that do not fit: it shows what they need against the limit, the largest window that fits, and auto fit's alternative. `FIT_CHECK=0` is the expert override.
    - With 1 slot, `install.sh` does not install the coder subagent ([section 5](#the-coder-subagent-opencode-and-pi)).
    - NOTE: These estimates did not get a test on a 24 GB machine.
 
@@ -532,7 +532,7 @@ Each card keeps the same height while the server works. If a value is not availa
 | `?` | show all keys in the footer |
 | `q`, Ctrl-C | quit (asks stop / leave running / cancel) |
 | `[` / `]` | Settings tab: the previous / next panel (Server, Models, Auto-tune) |
-| ↑ ↓, ← →, Enter, `a`, `r`, `x` | Settings tab, Server panel: select a row, change the value, open the model list (on the model row) or type a value, apply, revert, tuned values |
+| ↑ ↓, ← →, Enter, `a`, `A`, `r`, `x` | Settings tab, Server panel: select a row, change the value, open the model list (on the model row) or type a value, apply, Auto fit, revert, tuned values |
 | ↑ ↓, Enter, `d`, `v`, `u`, `x`, `h`, `c` | Settings tab, Models panel: select a model, use it, download, verify, Auto-tune, delete, add from Hugging Face, cancel the download |
 | ← →, Enter, `c` | Settings tab, Auto-tune panel: select a model, run, cancel |
 
@@ -542,14 +542,35 @@ Mouse: left-click only (titles, tabs, buttons). The wheel scrolls.
 - **The monitor only reads from the server.** On llama.cpp, it reads only `/health`, `/slots`, `/metrics`, `/props`, `/v1/models` and the log file. Thus, it is safe to use during a session. It changes the server only when you select that: stop the server, or apply new settings.
 - **The monitor calculates the context memory. It does not measure it.** The server does not log it. Thus, the monitor calculates it from the GGUF metadata of the model and the server flags (REFERENCE.md, "Context memory").
 
+### Auto fit: the best model for this Mac
+
+Auto fit picks the best **stock** model that fits this Mac, for a goal:
+
+| Goal (`llama.auto_goal`) | Family first | Why |
+|---|---|---|
+| `everyday` (default) | the MoE builds (35B-A3B) | fast, and usually sufficient: CARL prioritises speed |
+| `hard-code` | the dense builds (27B) | better at code and hard tasks, but slower |
+
+- **Quality** is the catalogue `rank` (1 = best): parameters and density first, then the quantization.
+- **The rule:** among the goal's family, the best rank that holds **two 96K windows** (the main session and a coder subagent); if none does, one 96K window; if none does, the largest window of at least 32K. If no build of the family fits, the best of the other family (it says so).
+- **Memory:** the smaller of the GPU limit and the RAM minus a reserve for macOS and apps (6 GiB; 10 GiB while VMware's network is up; `RESERVE_GB` / `--reserve-gb`).
+- **Stock only:** auto fit and every automatic default never pick an abliterated model. You pick those by hand. Models that you added (Hugging Face, the models folder) have no rank yet, so they are not candidates.
+- **Candidates (`llama.auto_fit`):** `catalogue` (default) = every catalogue model: it offers the download of the pick, and until then a start with `model auto` uses the best downloaded model that fits; `downloaded` = only the models on this Mac.
+- **Where it is used:** `llama.model = auto`, `./carl.sh download default`, the download offer of `./carl.sh` on a new Mac, the `auto` row and the **Auto fit** key (`A`) in the Settings tab.
+- `./carl.sh fit` shows the pick for each goal and why each better-ranked model was passed over; `./carl.sh fit --ram 24` (or 16, 36, 64, ...) shows another Mac. The picks: 16 GB nothing fits; 24 GB `qwen3.6-35b-a3b-iq3` / `qwen3.8-27b-iq3` (everyday / hard code); 32 GB and up: `qwen3.6-35b-a3b` / `qwen3.8-27b` (on 32 GB only while VMware's network is down: with it up, CARL keeps 10 GiB for macOS and the VM and the everyday pick becomes the IQ3). All with 2 × 96K. Previews (`--ram`) estimate the GPU limit at 2/3 of RAM below 32 GB and 3/4 from 32 GB up; a real Mac reports its own limit.
+
+**A start over the GPU limit is refused.** `serve-llama.sh` (and so `./carl.sh llama` and the dashboard) checks the setup before the model loads. If it needs more than the GPU limit, it stops with what it needs against the limit, the largest window that fits, and auto fit's alternative. Expert override: `FIT_CHECK=0 ./carl.sh llama ...` (it may fail to load, or swap the Mac to a crawl).
+
 ### The Settings tab
 
 The Settings tab (tab 5) has three panels: **Server**, **Models** and **Auto-tune**. Push `[` or `]`, or click the name of a panel, to change the panel.
 
 **Server panel: change the server settings:**
 1. Press `5`, or click **5 Settings**.
-2. Use ↑ ↓ to select a row. The rows are the llama.cpp settings: model, KV cache, context/slot, slots, speculation, draft tokens, RAM cache, network, temperature, presence.
-   - On the **model** row, push Enter (or click the model name) to open a list of all models: the catalogue, the models folder and your Hugging Face downloads. `auto` is the default of this Mac. When you select a model, the rows change to the settings of that model (your profile, else its Auto-tune result, else its catalogue values).
+2. Use ↑ ↓ to select a row. The rows are the llama.cpp settings: model, auto goal, auto from, KV cache, context/slot, slots, speculation, draft tokens, RAM cache, network, temperature, presence.
+   - On the **model** row, push Enter (or click the model name) to open a list of all models: the catalogue, the models folder and your Hugging Face downloads. `auto` is auto fit's pick for this Mac (`★`). When you select a model, the rows change to the settings of that model (your profile, else its Auto-tune result, else its catalogue values).
+   - **auto goal** (`everyday` / `hard-code`) and **auto from** (`catalogue` / `downloaded`) set what auto fit optimises for and which models it picks from (`llama.auto_goal` / `llama.auto_fit`).
+   - **Auto fit:** push `A` (or click **[ Auto fit (A) ]**) to set the model, the context, the slots and the KV cache for this Mac in one step. If the pick is not downloaded, the dashboard asks whether to download it (the Models panel shows the progress).
    - The **network** row offers auto, local, vm and each address of this Mac (for example the LAN address). An address is saved as `llama.host`.
 
    Use ← → (or click `[<]` `[>]`) to change the value. A `*` shows a value that is different from the server that runs now.
@@ -558,12 +579,13 @@ The Settings tab (tab 5) has three panels: **Server**, **Models** and **Auto-tun
    - **yellow:** changed from the tuned value, or slower;
    - A context of 96K or less is never yellow or red: 96K for each slot is the floor of the default window. Only larger windows get a warning (you can still select them).
    - **red:** very slow, or does not work on this model. For example, a context in the very slow zone, MTP speculation on a file without an MTP head, or MTP with more than 1 draft on an IQ quant.
-4. **Pick a model from the list beside the settings** (on a wide terminal; below them on a narrow one): click a model, or push `m`, then ↑ ↓ and Enter (`m` or Esc goes back to the settings). `●` = downloaded, `○` = not downloaded, `★ auto` = this Mac's default. Above the list, `sort: … ▾ 1/5` and `show: … ▾ 1/10` open a drop-down of every option when you click them; `s` / `S` and `f` / `F` step through them. The list only selects: everything about the model is on the card below.
+4. **Pick a model from the list beside the settings** (on a wide terminal; below them on a narrow one): click a model, or push `m`, then ↑ ↓ and Enter (`m` or Esc goes back to the settings). `●` = downloaded, `○` = not downloaded, `★ auto → NAME` = the model `auto` starts, `★` after a name = auto fit's pick, a red name = too big for this Mac (less than a 32K window). Above the list, `sort: … ▾ 1/5` and `show: … ▾ 1/10` open a drop-down of every option when you click them; `s` / `S` and `f` / `F` step through them. The list only selects: everything about the model is on the card below.
 5. Read the **MODEL** card below the settings. It tells you what the model is for and why to pick it. Click its title to change the detail: collapsed (name, role and tags in the title), normal, full. `e` / `c` expand or collapse all cards, and the mouse wheel or PgUp / PgDn scroll the panel.
+   - With `auto` (or auto fit's pick) selected, the card starts with **Auto fit**: why it picked the model (goal, scope, the plan, the memory it needs of what this Mac allows), what a start uses while the pick is not downloaded, and the better-ranked models it passed over, with the reason for each.
    - **Normal:** the role, the **good for** tags (`agent coding`, `hard code`, `chat & writing`, `uncensored`), **why use it**, the **trade-offs**, the hardware it is meant for, the speed (measured on this Mac after Auto-tune, else the catalogue figure and the Mac it came from), the recommended values next to yours, the context zones, and **why** the selected value is tuned that way.
    - **Full:** also what *uncensored* means (abliterated models), the models to **pick instead** and when, the quality **rank**, the description, the reason for every tuned value, the Auto-tune table, and the source and file.
    - The model list (Enter on the model row) shows the role and the tags of each model, and *why use it* and the trade-offs of the selected one.
-6. Read the **fit** line. It shows whether the model is downloaded and whether it fits in the GPU memory with these settings. If it does not fit, you cannot apply the settings.
+6. Below the rows, the card has four parts: **About this setting** (how to change the selected row and what it does), **Status** (the **fit** line, auto fit's pick, the settings file), the buttons, and **Keys**. The fit line shows whether the model is downloaded and whether it fits in the GPU memory with these settings. If it does not fit, you cannot apply the settings (the launcher would refuse the start too). Every text wraps to the width of the terminal.
 7. Press `a` (or click **[ Apply and restart ]**; with no server: **[ Start server ]**). Then press `y` to confirm.
 8. Wait while the model loads (about 30 s to 2 min). The footer shows the progress.
 
@@ -611,7 +633,7 @@ The dashboard and the launchers keep your settings in `~/.config/carl/config.jso
 
 | Section | What it holds |
 |---|---|
-| `llama` | Server-wide llama.cpp settings: `model` (`auto` = the default of this Mac), `net`, `host`, `cache_ram`, `ub`, `batch`, `ckpt`, `ckpt_step`, `think_toggle`, `extra_args` (more `llama-server` flags, as a list) |
+| `llama` | Server-wide llama.cpp settings: `model` (`auto` = auto fit's pick for this Mac), `auto_goal` (`everyday` \| `hard-code`), `auto_fit` (`catalogue` \| `downloaded`), `net`, `host`, `cache_ram`, `ub`, `batch`, `ckpt`, `ckpt_step`, `think_toggle`, `extra_args` (more `llama-server` flags, as a list) |
 | `models.<name>` | The profile of one model: `kv`, `ctx`, `slots`, `spec`, `spec_n`, `temp`, `top_p`, `top_k`, `min_p`, `presence`, `repeat`, `alias` |
 | `paths` | `models_dir` (default `~/models/gguf`) |
 
@@ -717,7 +739,7 @@ The options of the installer:
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| `warning: this model needs about N GiB of GPU memory ...` on start | The model and the context window are larger than the memory that macOS lets the GPU use | Use the suggested `--ctx`, a Q3 model, or q4 KV. See `./carl.sh fit`. The model can possibly still load, but it can fail or swap. |
+| `error: MODEL needs N GiB of GPU memory at --ctx ..., but this Mac allows M GiB` on start (the start is refused) | The model and the context window are larger than the memory that macOS lets the GPU use: it would fail to load or swap | Use the suggested `--ctx`, auto fit's alternative (shown), a smaller build, or q4 KV. See `./carl.sh fit`. Expert override: `FIT_CHECK=0` (it may not load, or swap). |
 | No monitor shows; plain server output shows instead | You did not start the server from a terminal (script, `nohup`), or `MONITOR=0` is set | This is the expected result. To attach, run `./carl.sh monitor`. |
 | The monitor shows **EXITED** immediately after start | The server did not start (bad flag, file not found, out of memory) | Read the log lines on the screen. The full output is in `~/models/logs/.console-8080.out`. |
 | You closed the terminal, and you do not know if the server still runs | The server continues to run, because it runs under `nohup` | To attach again, run `./carl.sh monitor`. Then press `q` → `s` to stop it. |
@@ -740,7 +762,8 @@ The options of the installer:
 | The monitor or `./carl.sh` freezes, and Ctrl-C does not stop it (versions before 2026-10-03) | Old versions used `lsof` to find the server. `lsof` checks each mounted volume. On a stale network share (for example a disconnected Time Machine SMB volume), it hangs, and you cannot stop it. | Update CARL: it now uses `netstat`. To release the hang now, eject the stale volume in Finder (or `diskutil unmount force /Volumes/NAME`), then close the terminal. |
 | `CARL needs: llama.cpp aria2 ansifilter (not installed)` | Homebrew tools are missing | Answer `Y`, and CARL runs `brew install`. Or install them yourself. `SKIP_DEPS=1` skips the check. If Homebrew is missing, install it first (https://brew.sh). |
 | `No model is downloaded yet.` | A new installation | Answer `Y` to download the default for this Mac. Or answer `n`: the dashboard opens without a server, and you can download a model in its **Models** panel. |
-| `default model X is not downloaded; using Y (downloaded)` | The default model for this Mac is not downloaded, but another model is | This is the expected result. To use the default, run `./carl.sh download default`. To always use Y, select it in the Settings tab, or run `./carl.sh config set llama.model Y`. |
+| `auto fit picks X for this Mac, but it is not downloaded (...); starting Y, the best downloaded model that fits` | `llama.model` is `auto` and auto fit picks from the whole catalogue (`llama.auto_fit catalogue`) | This is the expected result. To use X, run `./carl.sh download X` (or press `A` in the Settings tab). To pick only from downloaded models, run `./carl.sh config set llama.auto_fit downloaded`. To always use Y, run `./carl.sh config set llama.model Y`. |
+| `auto fit: no downloaded stock model fits this Mac` | `llama.model` is `auto`, and only abliterated (or no fitting) models are downloaded: auto fit never picks an abliterated model | Download auto fit's pick (`./carl.sh download default`), or choose the model by name: `./carl.sh config set llama.model NAME`. |
 | `error: models.NAME.ctx: ... is out of range` (or a different key) | A bad value in `~/.config/carl/config.json` | Correct the value, or remove it with `./carl.sh config unset KEY`. `./carl.sh config show` lists the valid keys. |
 | `error: a server is running on port 8080: stop it first` from `./carl.sh tune` | Auto-tune needs the GPU for itself | Stop the server first, or run Auto-tune from the dashboard (Settings, **Auto-tune** panel): it stops and starts the server for you. |
 | `error: another large process (probably a model) is in memory` from `./carl.sh tune` | A different model server, or another process larger than 8 GB (`BIG_GB`), runs | Stop it first. If the process is not a model, run with `ALLOW_SECOND_MODEL=1`. |
@@ -818,7 +841,7 @@ python3 -m unittest discover -s tests/monitor -t tests/monitor   # the dashboard
 | `./carl.sh --kv q8` / `--q8` / `--q4` | KV cache type |
 | `./carl.sh --ctx 192k` | context window |
 | `./carl.sh models` | the catalogue, the models folder and your downloads, with the download status |
-| `./carl.sh fit [--ram GB] [--ctx N]` | which models fit this Mac, and the largest context window for each model |
+| `./carl.sh fit [--ram GB] [--ctx N] [--goal everyday\|hard-code] [--scope catalogue\|downloaded]` | auto fit's pick for each goal and the reasons; which models fit this Mac, and the largest context window for each model |
 | `tools/make-share-zip.sh [OUT]` | make a clean zip of the folder to share |
 | `./carl.sh download NAME\|default\|all` | download catalogue models |
 | `./carl.sh download hf:OWNER/REPO/FILE.gguf` | download any GGUF from Hugging Face (verified); `hf:OWNER/REPO` lists its GGUF files |
@@ -842,8 +865,8 @@ python3 -m unittest discover -s tests/monitor -t tests/monitor   # the dashboard
 | `LOG_FILE` | the path of the log file; `none` turns off the log file |
 | `THINK_TOGGLE=0` | use the unpatched chat template |
 | `KEEP_AWAKE=0` | do not keep the Mac awake |
-| `FIT_CHECK=0` | do not do the memory check before the model loads |
-| `SLOTS`, `CACHE_RAM`, `RESERVE_GB` | slots (auto) / RAM prompt cache in MiB (auto-sized) / RAM that stays free when the server sizes the cache |
+| `FIT_CHECK=0` | expert override: start even when the setup needs more than the GPU limit (the memory check refuses it otherwise) |
+| `SLOTS`, `CACHE_RAM`, `RESERVE_GB` | slots (auto) / RAM prompt cache in MiB (auto-sized) / RAM that stays free for macOS and apps when the server sizes the cache and auto fit picks a model |
 | `NO_SIDEBAR=1 ./install.sh` | install without the OpenCode subagents sidebar |
 | `NO_SWITCHER=1 ./install.sh` | install without the OpenCode session switcher |
 | `NO_CODER=1 ./install.sh` | install without the coder subagent and its delegation rule |

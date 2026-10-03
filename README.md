@@ -39,7 +39,7 @@ If you skip the `brew install`, `./carl.sh` finds the missing tools and asks to 
 
 Then run `opencode` or `pi` in a second terminal. `./carl.sh -h` shows all commands.
 
-- **The first time,** CARL starts llama.cpp with the model that fits your Mac (Qwen3.6-35B-A3B).
+- **The first time,** CARL offers the model that **auto fit** picks for your Mac: the best stock model that holds two 96K windows (the fast Qwen3.6-35B-A3B by default; the 27B dense for the "hard-code" goal). `./carl.sh fit` shows the pick and why.
 - **The next time,** it starts llama.cpp with the settings that you saved.
 - **If a server runs already,** the dashboard attaches to it.
 
@@ -52,7 +52,7 @@ The live state of the server: what it does now, the speed, the context, the memo
 ![The CARL dashboard](assets/dashboard.gif)
 
 **Settings (tab 5):** three panels. Push `[` or `]` to change the panel.
-- **Server:** change the model, the KV cache, the context and more. Then push `a` to restart with them. Colours show tuned values (green), changed values (yellow) and very slow values (red).
+- **Server:** change the model, the KV cache, the context and more. Then push `a` to restart with them. Push `A` for **Auto fit**: the best model and settings for this Mac in one step. Colours show tuned values (green), changed values (yellow) and very slow values (red). A start that needs more GPU memory than the Mac has is refused (`FIT_CHECK=0` overrides).
 - **Models:** download, verify and delete models, or add one from Hugging Face.
 - **Auto-tune:** measure the best settings for a model on this Mac.
 

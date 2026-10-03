@@ -138,16 +138,6 @@ class SelectionTest(unittest.TestCase):
         with self.assertRaisesRegex(ConfigError, r"big is not downloaded \(run: ./carl.sh download big\)"):
             dm.select_named(self.ms, "big", "big")
 
-    def test_default_falls_back_to_first_downloaded(self) -> None:
-        m, note = dm.select_default(self.ms, "big")
-        self.assertEqual(m["name"], "small")
-        self.assertEqual(note, "default model big is not downloaded; using small (downloaded)")
-        self.assertEqual(dm.select_default(self.ms, "small"), (self.ms[1], None))
-
-    def test_nothing_downloaded(self) -> None:
-        with self.assertRaisesRegex(ConfigError, "no model is downloaded"):
-            dm.select_default(models(FakeFolder()), "big")
-
     def test_configured_model(self) -> None:
         self.assertIsNone(dm.configured_model(Config(llama={"model": "auto"})))
         self.assertEqual(dm.configured_model(Config(llama={"model": "small"})), "small")

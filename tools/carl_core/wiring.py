@@ -11,7 +11,7 @@ from .adapters.filesystem import LocalModelFolder
 from .adapters.gguf_reader import GgufShapes
 from .adapters.huggingface import HfHttpClient
 from .adapters.json_files import JsonFile, LegacyEnvFiles
-from .adapters.system import MacGpuLimit, SystemClock
+from .adapters.system import MacGpuLimit, MacHost, SystemClock
 from .app import Carl, Stores
 from .domain.confdir import conf_dir
 
@@ -56,5 +56,5 @@ def build_carl(paths: CarlPaths, env: Mapping[str, str]) -> Carl:
     stores = Stores(catalog=JsonFile(paths.catalog), catalog_path=paths.catalog, config=JsonFile(paths.config),
                     local=JsonFile(paths.local), local_path=paths.local,
                     legacy=LegacyEnvFiles(paths.legacy_llama))
-    return Carl(stores, LocalModelFolder(), SHAPES, GPU, HfHttpClient(), Aria2OrCurl(), SystemClock(), StdConsole(),
-                home=os.path.expanduser("~"), env_models_dir=env.get("MODELS_DIR") or None)
+    return Carl(stores, LocalModelFolder(), SHAPES, GPU, MacHost(), HfHttpClient(), Aria2OrCurl(), SystemClock(),
+                StdConsole(), home=os.path.expanduser("~"), env_models_dir=env.get("MODELS_DIR") or None)

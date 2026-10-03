@@ -124,6 +124,16 @@ def llama_server_version() -> str:
     return lines[0] if lines else "?"
 
 
+class MacHost:
+    """This Mac's RAM and VM network (implements HostMemory)."""
+
+    def ram_bytes(self) -> int:
+        return sysctl_int("hw.memsize")
+
+    def vm_network_up(self) -> bool:
+        return vm_network_up()
+
+
 class SystemClock:
     def today(self) -> str:
         return time.strftime("%Y-%m-%d")

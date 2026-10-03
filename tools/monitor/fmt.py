@@ -61,6 +61,61 @@ def wwrap(text: str | None, w: int) -> list[str]:
     return textwrap.wrap(ANSI.sub("", text or ""), max(w, 10)) or [""]
 
 
+def cwrap(text: str | None, w: int, indent: str = "") -> list[str]:
+    """Word-wrap text that may hold colour codes to w visible columns (at least 10), keeping
+    the colours: a line ends with a reset and the next starts with the codes still active.
+    Runs of spaces are kept inside a line (padded labels stay aligned) and dropped where a
+    line breaks. Lines after the first begin with indent (plain spaces, counted in w); a
+    word longer than a line is split; newlines start a new line."""
+    w = max(w, 10)
+    out: list[str] = []
+    active = ""                                   # SGR codes in effect (since the last reset)
+    for para in (text or "").split("\n"):
+        line, used, fresh = "", 0, True           # fresh: nothing but the indent on this line yet
+        gap, broke = "", False                    # broke: this line comes from a wrap (no leading gap)
+
+        def flush() -> None:
+            nonlocal line, used, fresh, broke
+            out.append(line + (R if ANSI.search(line) else ""))
+            line, used, fresh, broke = indent + active, vlen(indent), True, True
+
+        for tok in re.split(r"( +)", para):
+            if not tok:
+                continue
+            if tok.startswith(" ") and not ANSI.sub("", tok).strip():
+                if fresh and broke:
+                    continue
+                gap = tok
+                continue
+            wv = vlen(tok)
+            if not fresh and used + len(gap) + wv > w and wv <= w - vlen(indent):
+                flush()                           # (a word too long for any line is split where it is)
+                gap = ""
+            line, used = line + gap, used + len(gap)
+            gap = ""
+            i = 0
+            while i < len(tok):                   # copy the word, splitting it if it is wider than a line
+                m = ANSI.match(tok, i)
+                if m:
+                    code = m.group()
+                    active = "" if code == R else active + code
+                    line += code
+                    i = m.end()
+                    continue
+                c = cw(tok[i])
+                if used + c > w and not fresh:
+                    flush()
+                line, used, fresh = line + tok[i], used + c, False
+                i += 1
+        out.append(line + (R if ANSI.search(line) else ""))
+    return out or [""]
+
+
+def heading(title: str, w: int) -> str:
+    """A section heading inside a card: the title in bold, then a dim rule to w columns."""
+    return f"{B}{title}{R} {DIM}{'─' * max(w - vlen(title) - 1, 0)}{R}"
+
+
 def bar(frac: float | None, w: int = 18) -> str:
     """A w-column fill bar: green below 70 %, yellow below 90 %, red above."""
     f = max(0.0, min(1.0, frac or 0))
@@ -140,6 +195,22 @@ def buttons(prefix: str, items: Sequence[tuple[str, str]]) -> Ln:
         text += f"{B}{CYN}{b}{R}  "
         col += len(b) + 2
     return Ln(text, spans=spans)
+
+
+def button_rows(prefix: str, items: Sequence[tuple[str, str]], w: int) -> list[Ln]:
+    """Inline buttons like buttons(), on as many lines as w columns need (a button is never cut)."""
+    rows: list[Ln] = []
+    line: list[tuple[str, str]] = []
+    used = vlen(prefix)
+    for label, act in items:
+        bw = len(f"[ {label} ]") + 2
+        if line and used + bw - 2 > w:
+            rows.append(buttons(prefix if not rows else " " * vlen(prefix), line))
+            line, used = [], vlen(prefix)
+        line.append((label, act))
+        used += bw
+    rows.append(buttons(prefix if not rows else " " * vlen(prefix), line))
+    return rows
 
 
 def draw_card(name: str, title: str, summary: str, lines: Sequence[CardLine], w: int, lvl: int) -> list[Row]:

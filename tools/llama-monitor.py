@@ -14,9 +14,13 @@ Tabs (click, or keys 1-5 / Tab):
   3 Requests  every finished request with its speeds
   4 Log       full server log: scroll, wrap, errors only
   5 Settings  three panels ([ and ] switch):
-              Server: model (Enter: a drop-down of every model), KV cache, context,
-                slots, speculation, RAM cache, network, sampling; the right side
-                explains the model and why each value is tuned that way; values
+              Server: model (press Enter for a drop-down of every model; auto =
+                auto fit's pick, ★), auto goal (everyday / hard-code), auto from
+                (catalogue / downloaded), KV cache, context, slots, speculation, RAM
+                cache, network, sampling. Press A for Auto fit: model, context, slots
+                and KV for this Mac in one step (it offers the download of a pick that
+                isn't here). The MODEL card explains the model, why auto fit picked
+                it, and why each value is tuned that way; values
                 are coloured (green tuned / fast, yellow changed / slower, red very
                 slow). Saved to ~/.config/carl/config.json, applied by a
                 restart (the old server starts again if the new one fails)

@@ -209,7 +209,7 @@ class ServerJobs:
         """Download a catalogue model by name, or hf:REPO/FILE.gguf (resumable)."""
         ui = self.ui
         if ui.dl and ui.dl.proc.poll() is None:
-            ui.toast("a download is already running (c cancels it)", 6)
+            ui.toast("a download is already running (press c in the Models panel to cancel it)", 6)
             return
         if spec.startswith("hf:"):
             _, file, _ = self.svc.store.parse_hf(spec)
@@ -234,7 +234,7 @@ class ServerJobs:
         """Stop the download; the partial file stays for a resume."""
         if self.ui.dl:
             system.kill_group(self.ui.dl.proc.pid, signal.SIGTERM)
-            self.ui.toast("download cancelled (the part stays: Download resumes it)", 6)
+            self.ui.toast("download cancelled (the part stays: press d to resume it)", 6)
 
     def verify(self, name: str) -> None:
         """Check a model's SHA-256 in the background (~1 min)."""

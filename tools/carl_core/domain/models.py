@@ -165,17 +165,3 @@ def select_named(models: List[ModelInfo], name: str, as_path: str) -> ModelInfo:
     if m.get("status") != "downloaded":
         raise ConfigError(f"{m.get('name')} is not downloaded (run: ./carl.sh download {m.get('name')})")
     return m
-
-
-def select_default(models: List[ModelInfo], want: str) -> Tuple[ModelInfo, Optional[str]]:
-    """(model, note): this Mac's default when it is downloaded, else the first downloaded
-    model with a note saying so."""
-    m = find_model(models, want, want)
-    if m and m.get("status") == "downloaded":
-        return m, None
-    have = [x for x in models if x.get("status") == "downloaded"]
-    if not have:
-        raise ConfigError("no model is downloaded. Download this Mac's default: ./carl.sh download default")
-    first = have[0]
-    return first, f"default model {want} is not downloaded; using {first.get('name')} (downloaded)"
-

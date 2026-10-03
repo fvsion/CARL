@@ -39,7 +39,7 @@ $(use "$CMD -h | help <command>" "this page / detailed help for one command")
 $(use "$CMD <command> --help" "same")
 
 SERVER COMMAND
-$(row "llama" "llama.cpp server on :8080. Defaults: model qwen3.6-35b-a3b (fast MoE; IQ3 on 24 GB), q4_0 KV,")
+$(row "llama" "llama.cpp server on :8080. Defaults: auto fit's model for this Mac (fit), q4_0 KV,")
 $(row "" "96K per slot, 2 slots when they fit (main session + a subagent), RAM cache sized to free memory.")
 $(row "" "Shows the live monitor in this terminal.")
 
@@ -50,8 +50,9 @@ $(row "install [opencode|pi]" "install OpenCode and/or Pi, then point them at th
 $(row "" "another address; --clients-only / --config-only for one step)")
 $(row "monitor" "attach the live dashboard to a running server (connect info, configs, stats)")
 $(row "models" "list the models (catalogue + models folder + custom) and what's downloaded")
-$(row "fit [--ram GB] [--slots N]" "which models fit this Mac's GPU memory, and the largest window for each")
-$(row "download NAME|default|all" "download catalogue models (resumable, SHA-256 verified); default = this Mac's default")
+$(row "fit [--ram GB] [--goal G]" "auto fit's pick for this Mac per goal (everyday = MoE, hard-code = dense) and why;")
+$(row "" "every model's largest window. --ram 24: a 24 GB Mac; --scope downloaded; --slots N")
+$(row "download NAME|default|all" "download catalogue models (resumable, SHA-256 verified); default = auto fit's pick")
 $(row "download hf:OWNER/REPO" "ANY model from Hugging Face: lists the repo's GGUF files; then")
 $(row "" "download hf:OWNER/REPO/FILE.gguf (a huggingface.co URL works too; SHA-256 verified).")
 $(row "" "Any .gguf you put in ~/models/gguf also shows up as a model. In the dashboard:")
@@ -108,7 +109,7 @@ USAGE
   $CMD [options]                    (same: a leading flag means llama)
 
 OPTIONS
-$(row "--model NAME|PATH" "a model name (see: models, fit) or a .gguf path. Default: qwen3.6-35b-a3b (qwen3.6-35b-a3b-iq3 where it doesn't fit)")
+$(row "--model NAME|PATH" "a model name (see: models, fit) or a .gguf path. Default: config llama.model, else auto fit's pick (fit)")
 $(row "--kv q4|q8" "KV cache quantization for K and V (default q4 = q4_0). --q4 / --q8 shorthands")
 $(row "--ctx N|Nk" "window per slot, 4k..256k (default 96k; 128k-160k for long sessions, slower: see REFERENCE.md). Re-run client/install.sh after changing it")
 $(row "--local | --vm" "listen on 127.0.0.1 / on 192.168.42.1 (default: auto, see 'help env')")
@@ -124,7 +125,8 @@ $(row "UB=$(llama_default UB)" "-ub physical batch (512 measured best)")
 $(row "SPEC / SPEC_N" "speculation type and draft count (default per model: catalogue, Auto-tune, config.json)")
 $(row "TEMP TOP_P TOP_K MIN_P" "sampling: 1.0 0.95 20 0 (Qwen thinking mode). PRESENCE=0 (presence penalty)")
 $(row "SLOTS, CACHE_RAM" "slots as --slots; RAM prompt cache in MiB (default: sized from free RAM, 1-8 GiB)")
-$(row "RESERVE_GB" "RAM kept free for macOS + apps when sizing the cache (10 with the VM network up, else 6)")
+$(row "RESERVE_GB" "RAM kept free for macOS + apps when sizing the cache and the auto-fit pick (10 with the VM network up, else 6)")
+$(row "FIT_CHECK=0" "expert override: start even when the setup needs more than the GPU limit (it may not load, or swap)")
 $(row "MODEL=PATH, ALIAS" "model file / served model id")
 $(row "LOG_FILE" "~/models/logs/llama-server-<ts>.log; none = off")
 $(row "THINK_TOGGLE=1" "patched chat template (reasoning_effort none = thinking off); 0 = stock")
@@ -134,7 +136,8 @@ $(row "" "plus HOST, PORT, API_KEY_FILE: see 'help env'")
 
 BEHAVIOUR
   Refuses to start if the port is in use (another server is running).
-  Warns before loading if the model + window won't fit the GPU memory (see: fit; FIT_CHECK=0 skips).
+  Refuses to start if the model + window need more than the GPU memory: it names the largest window
+  that fits and auto fit's alternative (see: fit; FIT_CHECK=0 skips the check).
   Creates the API key ~/.config/carl/api-key on first use if it doesn't exist.
   In a terminal: the server runs in the background (output in its log file) and the
   monitor runs here; quitting asks stop-or-leave-running. Not a terminal (scripts,
@@ -273,11 +276,15 @@ if [[ $# -eq 0 ]]; then
     exec python3 "$HERE/../tools/llama-monitor.py" --port "$LLAMA_PORT"
   fi
   ensure_deps
-  # No model yet (a fresh clone): offer this Mac's default, else open the
+  # No model yet (a fresh clone): offer auto fit's pick, else open the
   # dashboard without a server (its Settings tab starts one later).
   if [[ -z "$("$HERE/models.sh" downloaded)" ]]; then
-    d="$(python3 "$HERE/../tools/llama-fit.py" --pick-default 2>/dev/null || true)"; d="${d:-$("$HERE/models.sh" default)}"
-    echo "No model is downloaded yet. This Mac's default: $d ($("$HERE/models.sh" get "$d" bytes | awk '{printf "%.1f GB", $1/1e9}'))."
+    # Auto fit's pick from the whole catalogue (./carl.sh fit says why); nothing fits: say so.
+    if ! d="$(python3 "$HERE/../tools/llama-fit.py" --pick-default)" || [[ -z "$d" ]]; then
+      echo "Opening the dashboard without a server ($CMD fit shows what fits this Mac)."
+      exec python3 "$HERE/../tools/llama-monitor.py" --port "$LLAMA_PORT"
+    fi
+    echo "No model is downloaded yet. Auto fit's pick for this Mac: $d ($("$HERE/models.sh" get "$d" bytes | awk '{printf "%.1f GB", $1/1e9}'); $CMD fit says why)."
     a=n
     [[ -t 0 ]] && read -r -p "Download it now? [Y/n] " a
     if [[ -t 0 && ! "$a" =~ ^[Nn] ]]; then

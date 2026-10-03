@@ -586,7 +586,7 @@
       ],
       "hardware": "24 GB Macs",
       "uncensored": "Uncensored: the refusal behaviour was removed from the weights (abliteration), so it answers requests the stock model declines, e.g. security research and exploit analysis, red-team prompts, frank medical, legal or drug questions, mature fiction. It adds no knowledge or skill and keeps the stock model's mistakes; you are responsible for how you use it.",
-      "rank": 6
+      "rank": 4
     },
     {
       "name": "heretic-35b-a3b",
@@ -660,7 +660,7 @@
       ],
       "hardware": "32 GB Macs and up",
       "uncensored": "Uncensored: the refusal behaviour was removed from the weights (abliteration), so it answers requests the stock model declines, e.g. security research and exploit analysis, red-team prompts, frank medical, legal or drug questions, mature fiction. It adds no knowledge or skill and keeps the stock model's mistakes; you are responsible for how you use it.",
-      "rank": 5
+      "rank": 3
     },
     {
       "name": "heretic-35b-a3b-iq3",
@@ -741,7 +741,7 @@
       ],
       "hardware": "24 GB Macs and up",
       "uncensored": "Uncensored: the refusal behaviour was removed from the weights (abliteration), so it answers requests the stock model declines, e.g. security research and exploit analysis, red-team prompts, frank medical, legal or drug questions, mature fiction. It adds no knowledge or skill and keeps the stock model's mistakes; you are responsible for how you use it.",
-      "rank": 7
+      "rank": 5
     }
   ]
 }

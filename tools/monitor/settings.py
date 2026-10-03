@@ -12,8 +12,10 @@ import os
 from dataclasses import dataclass
 from typing import Callable, Dict, List, NamedTuple, Optional, Sequence, Tuple, Union
 
+from carl_core.domain.autofit import AutoFit
+from carl_core.domain.fit import check_start, max_ctx, need_bytes, plan_slots
+
 from .fmt import GRN, R, RED, YEL, ctx_label, size
-from .gguf import OVERHEAD, kv_bytes_per_token
 from .model import JSONDict, ModelInfo, ServerData, Shape, flag, flag_int, jdict
 from .store import ModelList
 
@@ -55,6 +57,8 @@ class Schema:
         """The llama.cpp rows (without the advanced ones)."""
         return [
             SettingRow("model", "model", None, "llama:model", "auto"),      # choices: the model list
+            SettingRow("goal", "auto goal", ["everyday", "hard-code"], "llama:auto_goal", "everyday"),
+            SettingRow("scope", "auto from", ["catalogue", "downloaded"], "llama:auto_fit", "catalogue"),
             SettingRow("kv", "KV cache", ["q4_0", "q8_0"], "m:kv", "q4_0"),
             SettingRow("ctx", "context/slot", [32768, 49152, 65536, 98304, 131072, 163840, 196608, 262144], "m:ctx", 98304),
             SettingRow("slots", "slots", ["auto", "1", "2"], "m:slots", "auto"),
@@ -88,16 +92,22 @@ NUMERIC = {"ctx", "temp", "presence", "top_k", "top_p", "min_p", "repeat", "spec
 INT_KEYS = {"ctx", "cache", "top_k", "specn", "ub", "ckpt", "ckstep"}
 FROM_RUNNING = {"kv", "ctx", "temp", "presence", "spec", "specn", "top_k", "top_p", "min_p", "repeat", "ckpt", "ckstep",
                 "ub", "slots"}
-UNMARKED = {"slots", "cache", "net", "adv", "model"}   # no * when they differ
+UNMARKED = {"slots", "cache", "net", "adv", "model", "goal", "scope"}   # no * when they differ
+NOT_RUNNING = {"adv", "goal", "scope"}                  # rows without a "running now" value
 REINSTALL = {"ctx", "slots"}         # clients need install.sh again when these change
 
-ADV_WARN = ("CAUTION: these values are tuned and measured (REFERENCE.md).",
-            "         A change can make the model slower, or its answers worse. Defaults (x) sets them back.")
+ADV_WARN = "Caution: these values are tuned and measured (REFERENCE.md). A change can make the model slower, " \
+           "or its answers worse. Press x to set them back to the tuned values."
 _NET_HELP = ("auto = the VM address if VMware's network is up, else this Mac only · an address = that interface "
              "(LAN: other computers can reach it)")
 SET_HELP = {
-    "model": "Enter: pick from every model (catalogue, models folder, Hugging Face downloads) · auto = this Mac's default · "
-             "any other model: ] Models panel → Add from Hugging Face (h)",
+    "model": "Every model: the catalogue, the models folder and Hugging Face downloads. auto = auto fit's pick for this "
+             "Mac (★). Press A for Auto fit: it sets the model, context, slots and KV cache in one step. Another "
+             "model: press ] for the Models panel, then h to add one from Hugging Face.",
+    "goal": "What auto fit optimises for: everyday = the MoE builds first (fast, usually sufficient) · hard-code = "
+            "the dense builds first (better at code and hard tasks, slower). Stock models only.",
+    "scope": "Which models auto fit picks from: catalogue = every catalogue model (it offers the download; a start "
+             "uses the best downloaded one until then) · downloaded = only the models on this Mac.",
     "kv": "q4_0: less memory, the tested default · q8_0: more exact long-range recall, about 2x the KV memory",
     "ctx": "tokens per slot; green = fast cold reads on this Mac, yellow = slow, red = very slow (see the context zones)",
     "slots": "auto = 2 when two full windows fit (main session + coder subagent), else 1",
@@ -116,6 +126,17 @@ SET_HELP = {
     "ckpt": "context checkpoints per slot (each ~63 MiB on the 35B, ~150 MiB on the 27B); more did not help (Phase 6)",
     "ckstep": "minimum tokens between checkpoints; 1024 vs 4096 made no difference in the Phase 6 test",
 }
+
+
+def row_instruction(key: str) -> str:
+    """How to change a Settings row, for someone new to the dashboard."""
+    if key == "model":
+        return "Press Enter to pick a model from the list (or click one)."
+    if key == "adv":
+        return "Press ← → to show or hide the advanced settings."
+    if key in NUMERIC:
+        return "Type a number and press Enter, or press ← → to step through common values."
+    return "Press ← → to change the value."
 
 
 def rows(p: Pending, schema: Schema, model_choices: Callable[[], List[str]]) -> List[SettingRow]:
@@ -242,25 +263,24 @@ def _fits(ok: bool) -> str:
 
 
 def llama_need(weights: int, shape: Shape, kv: str, ctx: int, n: int) -> float:
-    """GPU bytes for a llama.cpp model with n slots of ctx tokens each."""
-    return weights + kv_bytes_per_token(shape, kv, kv) * ctx * n + shape["rs_bytes"] * n + OVERHEAD
+    """GPU bytes for a llama.cpp model with n slots of ctx tokens each (carl_core.domain.fit)."""
+    return need_bytes(shape, weights, ctx, n, kv)
 
 
 def llama_fit(name: str, weights: int, shape: Shape, kv: str, ctx: int, slots: str, limit: int) -> FitResult:
-    """Does the model fit with these settings? slots "auto" = 2 when two fit, else 1."""
-    if slots == "auto":
-        n = 2 if llama_need(weights, shape, kv, ctx, 2) <= limit else 1
-    else:
-        n = int(slots)
-    need = llama_need(weights, shape, kv, ctx, n)
-    ok = need <= limit
-    return ok, f"{_fits(ok)}: {name} needs {size(need)} for {n} × {ctx_label(ctx)} ({kv}) of {size(limit)} GPU memory"
+    """Does the model fit with these settings? slots "auto" = 2 when two fit, else 1. The same
+    check the launcher refuses a start with (carl_core.domain.fit.check_start)."""
+    n = plan_slots(slots, llama_need(weights, shape, kv, ctx, 2) <= limit)
+    chk = check_start(shape, weights, ctx, n, kv, limit)
+    text = f"{_fits(chk.fits)}: {name} needs {size(chk.need)} for {n} × {ctx_label(ctx)} ({kv}) of {size(limit)} GPU memory"
+    if not chk.fits:
+        text += (f" · largest window: {ctx_label(chk.largest)}" if chk.largest else " · the weights alone don't fit")
+    return chk.fits, text
 
 
 def max_ctx_per_slot(weights: int, shape: Shape, limit: int) -> int:
     """Largest window (q4_0, 1 slot, in steps of 4K) that fits limit, at most the trained context."""
-    room = limit - weights - shape["rs_bytes"] - OVERHEAD
-    return 0 if room <= 0 else min(int(room // kv_bytes_per_token(shape, "q4_0")) // 4096 * 4096, shape.get("ctx_train") or 262144)
+    return max_ctx(shape, weights, limit, 1, "q4_0")
 
 
 class SettingsService:
@@ -274,15 +294,36 @@ class SettingsService:
         self.gpu_limit = gpu_limit          # bytes; the collector's cached value when it has one
         self._fit_key: Optional[Tuple[Tuple[str, str], ...]] = None
         self._fit: FitResult = (False, "")
+        self._max: Dict[str, Tuple[float, Optional[int]]] = {}     # model -> (list time, largest window)
 
     def rows(self, p: Pending) -> List[SettingRow]:
         """The rows shown for p (the model row offers every model)."""
         return rows(p, self.schema, self.models.choices)
 
+    @staticmethod
+    def goal_scope(p: Pending) -> Tuple[str, str]:
+        """Auto fit's goal and scope in these settings."""
+        return str(p.get("goal", "everyday")), str(p.get("scope", "catalogue"))
+
     def resolved_model(self, p: Pending) -> str:
-        """The model a start with these settings loads ("auto" resolved for this Mac)."""
+        """The model a start with these settings loads ("auto" resolved for this Mac: auto fit's
+        pick, or the best downloaded model that fits while the pick isn't downloaded)."""
         name = str(p.get("model", "auto"))
-        return name if name != "auto" else self.models.auto_model()
+        return name if name != "auto" else self.models.auto_model(*self.goal_scope(p))
+
+    def auto_fit(self, p: Pending) -> Optional[AutoFit]:
+        """Auto fit for this Mac with the goal and scope in p (None: unavailable, models.fit_error says why)."""
+        return self.models.auto_fit(*self.goal_scope(p))
+
+    def apply_auto_fit(self, p: Pending) -> Optional[AutoFit]:
+        """Auto fit in one step: p gets the pick, its profile, and auto fit's context, slots and KV."""
+        fit = self.auto_fit(p)
+        if fit and fit.pick and fit.plan:
+            p["model"] = fit.pick.name
+            self.load_profile(p, fit.pick.name)
+            p["ctx"], p["kv"] = fit.plan.ctx, fit.plan.kv
+            p["slots"] = "auto" if fit.plan.slots == 2 else str(fit.plan.slots)    # auto = 2 when two fit
+        return fit
 
     def recommended(self, name: str, with_config: bool = False) -> Tuple[JSONDict, Dict[str, str]]:
         """(values, source per key) for a model: Auto-tune > catalogue (> config.json when with_config).
@@ -336,7 +377,8 @@ class SettingsService:
     def defaults_for(self, p: Pending) -> Pending:
         """Every row at its default, advanced / model kept, the model rows at its tune."""
         q = self.schema.defaults()
-        q.update(adv=p.get("adv", "hidden"), model=p.get("model", "auto"))
+        q.update(adv=p.get("adv", "hidden"), model=p.get("model", "auto"), goal=p.get("goal", "everyday"),
+                 scope=p.get("scope", "catalogue"))
         vals = self.recommended(self.resolved_model(q))[0]           # the model's tune, without my overrides
         for key, pk in MODEL_ROW_KEYS.items():
             q[key] = fmt_val(key, vals[pk])
@@ -371,7 +413,8 @@ class SettingsService:
         if not m:
             return False, f"{RED}unknown model {name}{R}"
         if m["status"] != "downloaded":
-            return False, f"{RED}{name} is not downloaded{R}: Models panel (]) or ./carl.sh download {name}"
+            return False, (f"{RED}{name} is not downloaded{R}: press ] for the Models panel, then d to download it "
+                           f"(or ./carl.sh download {name})")
         try:
             return llama_fit(name, self.store.file_size(m["path"]), self.store.shape_of(m["path"]), str(p["kv"]),
                              int(p["ctx"]), str(p["slots"]), self.gpu_limit())
@@ -386,11 +429,20 @@ class SettingsService:
         return self._fit
 
     def max_ctx(self, m: ModelInfo) -> Optional[int]:
-        """Largest window per slot (q4_0, 1 slot) that fits this Mac, or None if unknown."""
-        if m["status"] != "downloaded":
-            return None
+        """Largest window per slot (q4_0, 1 slot) that fits this Mac, None if unknown. A catalogue
+        model not downloaded uses its header from Hugging Face (cached). Recomputed when the
+        model list is re-read."""
+        hit = self._max.get(m["name"])
+        if hit is None or hit[0] != self.models.t:
+            hit = self._max[m["name"]] = (self.models.t, self._max_ctx(m))
+        return hit[1]
+
+    def _max_ctx(self, m: ModelInfo) -> Optional[int]:
         try:
-            return max_ctx_per_slot(self.store.file_size(m["path"]), self.store.shape_of(m["path"]), self.gpu_limit())
+            if m["status"] == "downloaded":
+                return max_ctx_per_slot(self.store.file_size(m["path"]), self.store.shape_of(m["path"]), self.gpu_limit())
+            shape = self.store.model_shape(m)
+            return None if shape is None else max_ctx_per_slot(int(m.get("bytes", 0)), shape, self.gpu_limit())
         except Exception:           # unreadable GGUF header or file: unknown
             return None
 

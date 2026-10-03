@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
-# Serve a GGUF model (default qwen3.6-35b-a3b; the IQ3 build on 24 GB) with
+# Serve a GGUF model (default: auto fit's pick for this Mac, ./carl.sh fit) with
 # llama.cpp (llama-server) to this Mac and the VMware Fusion guest, with a
 # quantized KV cache (q4_0 by default) and 2 slots when they fit.
 #
 #   ./host/serve-llama.sh [--model NAME|PATH] [--kv q4|q8 | --q4 | --q8] [--ctx N|Nk] [--local|--vm] [extra llama-server flags...]
 #
 #   --model NAME       a model from the catalogue or the models folder (./carl.sh models;
-#                      fetch with ./host/serve.sh download NAME). Default: first entry.
+#                      fetch with ./host/serve.sh download NAME). Default: config.json
+#                      llama.model, else auto fit's pick (the best downloaded one that fits).
 #   --model PATH.gguf  any local GGUF
 #
 #   --kv q4 (default)  q4_0 K+V: +16% cold prefill, ~2 GB less RAM, same decode,
@@ -88,8 +89,9 @@ ensure_deps                      # llama-server, aria2, ansifilter (asks to brew
 # Model and settings from tools/carl.py: config.json (monitor Settings tab, or
 # ./carl.sh config), this Mac's Auto-tune result, the catalogue (host/catalog.json).
 # Precedence: flags > environment > config.json > Auto-tune > catalogue > defaults.
-# Model: --model flag > MODEL env (a path) > config llama.model > this Mac's default
-# (the first downloaded model when the default isn't downloaded).
+# Model: --model flag > MODEL env (a path) > config llama.model > auto fit's pick for
+# this Mac (llama.auto_goal / llama.auto_fit; the best downloaded stock model that fits
+# when the pick isn't downloaded).
 # SETTINGS_FILE=none ignores config.json (catalogue and Auto-tune only).
 model_arg="${MODEL_FLAG:-${MODEL:-}}"
 carl_args=(launch-env); [[ -n "$model_arg" ]] && carl_args+=(--model "$model_arg")
@@ -190,10 +192,20 @@ else
   SLOTS_NOTE="fallback"; CACHE_RAM="${CACHE_RAM:-4096}"
 fi
 
-# Memory check (tools/llama-fit.py): warn, don't block, if weights + KV +
-# buffers exceed what macOS lets the GPU use. FIT_CHECK=0 skips it.
+# Memory check (tools/llama-fit.py --check): a start whose weights + KV + buffers
+# exceed what macOS lets the GPU use fails to load or swaps the Mac to a crawl, so it
+# is refused (exit 3: what it needs vs the limit, the largest window that fits, auto
+# fit's alternative). Expert override: FIT_CHECK=0 skips the check. A check that
+# can't run (an unreadable header) only warns: llama-server reports a bad file itself.
 if [[ "${FIT_CHECK:-1}" != 0 ]]; then
-  python3 "$HERE/../tools/llama-fit.py" --check "$MODEL" --ctx "$CTX" --slots "$SLOTS" --kv "$KV_K" || true
+  fit_rc=0
+  python3 "$HERE/../tools/llama-fit.py" --check "$MODEL" --ctx "$CTX" --slots "$SLOTS" --kv "$KV_K" \
+    ${reserve_args[@]+"${reserve_args[@]}"} || fit_rc=$?
+  if (( fit_rc == 3 )); then
+    exit 1
+  elif (( fit_rc != 0 )); then
+    echo "warning: the memory check could not run (exit $fit_rc); starting anyway" >&2
+  fi
 fi
 
 # Thinking toggle for OpenCode: llama-server gets the model's own chat template
