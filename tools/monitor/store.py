@@ -42,6 +42,7 @@ class ModelStore(Protocol):
     def hf_files(self, repo: str) -> List[HFFile]: ...
     def delete(self, m: ModelInfo) -> None: ...
     def save_card(self, name: str, card: JSONDict) -> None: ...
+    def client_models(self) -> JSONDict: ...
 
 
 class CarlStore:
@@ -141,6 +142,11 @@ class CarlStore:
         """Check and store a custom model's card (carl.ConfigError says what is wrong)."""
         self._carl.save_card(name, card)
 
+    def client_models(self) -> JSONDict:
+        """The installed models as the client configs list them (carl.client_models)."""
+        doc: JSONDict = self._carl.client_models()
+        return doc
+
 
 class ModelList:
     """The model list, re-read from the store at most every 10 s (it lists the models
@@ -159,6 +165,7 @@ class ModelList:
         self._auto: Dict[Tuple[str, str], Tuple[float, str]] = {}            # (goal, scope) -> (list time, model)
         self._fit: Dict[Tuple[str, str], Tuple[float, Optional[AutoFit]]] = {}
         self.fit_error: Optional[str] = None
+        self._clients: Optional[Tuple[float, Optional[JSONDict]]] = None
 
     def get(self, refresh: bool = False) -> List[ModelInfo]:
         if refresh or self.clock() - self.t > 10:
@@ -219,6 +226,18 @@ class ModelList:
                 name = fit.name if fit and fit.name else self._catalog_default()
             hit = self._auto[key] = (self.t, name)
         return hit[1]
+
+    def client_list(self) -> Optional[JSONDict]:
+        """The installed models for the client configs (re-read with the list; None when it
+        can't be worked out)."""
+        self.get()
+        if self._clients is None or self._clients[0] != self.t:
+            try:
+                doc: Optional[JSONDict] = self.store.client_models()
+            except Exception:           # a broken config / catalogue: the pasted config lists the served model
+                doc = None
+            self._clients = (self.t, doc)
+        return self._clients[1]
 
     def _catalog_default(self) -> str:
         try:

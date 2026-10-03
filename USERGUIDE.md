@@ -181,7 +181,7 @@ Use this procedure when the clients are not in the VMware Fusion VM and not on t
    - To open only the dashboard, run `./carl.sh --no-start` (or `./carl.sh dashboard`). It attaches to a server that runs. If no server runs, it starts nothing: select a model in the Settings tab (tab 5), and push `a` to start it.
    - To start a specific server, give a command: for example `./carl.sh llama --model qwen3.8-27b` (see [section 3](#3-choosing-a-model)). Type `./carl.sh -h` for help.
    - CAUTION: **The server does not start if another model is in memory.** Two models do not fit. The launcher looks for any process larger than 8 GB, and it shows that process.
-2. **VM or Mac:** run `opencode` or `pi`. Select the model that matches the server (`/models` in OpenCode, `/model` in Pi). This is necessary only if the server model is not the default.
+2. **VM or Mac:** run `opencode` or `pi`. Select the model that the server runs (`/models` in OpenCode, `/model` in Pi): the lists show the models installed on the server under their own names. This is necessary only if the server model is not the clients' default. If you pick another one, OpenCode shows a CARL warning (in [router mode](#router-mode-switch-models-from-opencode-or-pi), picking it loads it).
 3. **Stop the server, or let it continue to run:** in the monitor, press `q` (or Ctrl-C, or click **[ Quit ]**). Then select one option:
    - `s`: stop the server and quit.
    - `d`: quit the monitor and let the server continue to run. The server continues to run after you close the terminal. To attach the monitor again, run `./carl.sh monitor`.
@@ -202,26 +202,42 @@ Use this procedure when the clients are not in the VMware Fusion VM and not on t
 
 ## 3. Choosing a model
 
+Each model is served under its own name, and the clients list it under the same name (before 1.3.0, builds of one family shared a name, so the label could be wrong).
+
 | You want | Run on the Mac | Select in the client |
 |---|---|---|
 | **The default:** Qwen3.6-35B-A3B (MoE, ~4× faster decode and ~6× faster prompt read than the 27B) | `./carl.sh llama` | `qwen3.6-35b-a3b` |
 | The dense 27B (stock), if you specifically want it | `./carl.sh llama --model qwen3.8-27b` | `qwen3.8-27b` |
-| Uncensored (abliterated) 27B, with the best measured quality in long sessions | `./carl.sh llama --model orcarouter-27b` | `qwen3.8-27b-abliterated-llama` |
-| Uncensored and fast: the abliterated A3B (Heretic, Q4 with the MTP head; 32 GB+) | `./carl.sh llama --model heretic-35b-a3b` | `qwen3.6-35b-a3b` (same name as the stock 35B) |
-| A 24 GB Mac (the default on that Mac) | `./carl.sh llama`, which selects `qwen3.6-35b-a3b-iq3` | `qwen3.6-35b-a3b` (the IQ3 uses the same name) |
-| A 24 GB Mac, stock | `./carl.sh llama --model qwen3.8-27b-q3` | `qwen3.8-27b` (the Q3 uses the same name) |
-| A 24 GB Mac, stock, the smallest 27B (10.9 GB) | `./carl.sh llama --model qwen3.8-27b-iq3` | `qwen3.8-27b` (the IQ3 uses the same name) |
-| A 24 GB Mac (or any Mac), uncensored and fast: the abliterated A3B | `./carl.sh llama --model heretic-35b-a3b-iq3` | `qwen3.6-35b-a3b` (same name as the stock 35B) |
-| A 24 GB Mac, uncensored 27B with subagents (2 × 96K) | `./carl.sh llama --model orcarouter-27b-iq3` | `qwen3.8-27b-abliterated-llama` |
-| A 24 GB Mac, uncensored 27B, better quality (1 slot) | `./carl.sh llama --model orcarouter-27b-q3` | `qwen3.8-27b-abliterated-llama` |
+| Uncensored (abliterated) 27B, with the best measured quality in long sessions | `./carl.sh llama --model orcarouter-27b` | `orcarouter-27b` |
+| Uncensored and fast: the abliterated A3B (Heretic, Q4 with the MTP head; 32 GB+) | `./carl.sh llama --model heretic-35b-a3b` | `heretic-35b-a3b` |
+| A 24 GB Mac (the default on that Mac) | `./carl.sh llama`, which selects `qwen3.6-35b-a3b-iq3` | `qwen3.6-35b-a3b-iq3` |
+| A 24 GB Mac, stock | `./carl.sh llama --model qwen3.8-27b-q3` | `qwen3.8-27b-q3` |
+| A 24 GB Mac, stock, the smallest 27B (10.9 GB) | `./carl.sh llama --model qwen3.8-27b-iq3` | `qwen3.8-27b-iq3` |
+| A 24 GB Mac (or any Mac), uncensored and fast: the abliterated A3B | `./carl.sh llama --model heretic-35b-a3b-iq3` | `heretic-35b-a3b-iq3` |
+| A 24 GB Mac, uncensored 27B with subagents (2 × 96K) | `./carl.sh llama --model orcarouter-27b-iq3` | `orcarouter-27b-iq3` |
+| A 24 GB Mac, uncensored 27B, better quality (1 slot) | `./carl.sh llama --model orcarouter-27b-q3` | `orcarouter-27b-q3` |
 
 **Key points:**
 - CAUTION: **Only one model can run at a time.** Stop the current server before you start a different server. Two models do not fit in 36 GB, and the collision breaks the model that runs.
-- **The client does not change the server model.** llama-server answers with the model that is loaded, for all model names that the client sends. If the client selection and the server do not match, you get the loaded model with the wrong label and the wrong thinking options.
+- **By default the client does not change the server model.** llama-server answers with the model that is loaded, for all model names that the client sends. If the client selection and the server do not match, you get the loaded model with the wrong label and the wrong thinking options: OpenCode shows a CARL warning then. Router mode (below) is the other way round.
+- **The clients list only the installed models** (downloaded, or in the models folder), one entry each. After a download or a delete, update them: `./carl.sh install --config-only`, or `u` in the dashboard's Connect tab, which warns when they are out of date.
 - **Stock vs abliterated:** the stock models (`qwen3.8-27b`, the 35B) keep their refusals. The orcarouter builds do not have refusals. Only `orcarouter-27b` has full measurements in CARL. The stock 27B has the same architecture and speed profile.
 - **Q3 vs Q4:** Q3 is 2.5–3.5 GB smaller, but its quality is lower (more slips in long agent sessions). Use Q3 if Q4 does not fit.
 - **IQ3:** the IQ3 builds are smaller again, and their quality is lower again. The IQ formats unpack more slowly on Metal. MTP helps them less, and 2 drafts make them slower. Thus, their tuned speculation is MTP + n-gram with 1 draft (REFERENCE.md, "IQ3 speculation"). Use IQ3 only if nothing larger fits.
 - **Other models:** each `.gguf` in `~/models/gguf` is a model too. See [section 7](#7-downloading-and-adding-models).
+
+### Router mode: switch models from OpenCode or Pi
+
+For users who prefer to choose models on the fly. In router mode, llama.cpp's router offers every downloaded model that fits this Mac, and loads the model that OpenCode (`/models`) or Pi (`/model`) asks for: one model at a time, the loaded one stops first. A switch takes 30 s to 2 min. The default is the dashboard's own mode (single model): auto fit and the Settings tab pick the model.
+
+WARNING: every switch empties the prompt cache. The model that loads starts cold, so the next request re-reads the whole conversation (a long OpenCode session: minutes, see [section 5](#5-context-window)), and so does switching back. Switch with this in consideration.
+
+- **Turn it on:** Settings (tab 5) → **Router** panel → **OpenCode / Pi switch models (router)**, then `y`. It saves `llama.mode = router` in `config.json` and restarts a running server. Or: `./carl.sh --router` (this start only), `./carl.sh config set llama.mode router`. Back: the panel's **Dashboard only**, or `./carl.sh --single`.
+- **Each model gets the settings a single start of it would use** (your `config.json` profile, else its Auto-tune result, else the catalogue): window, slots, KV cache, speculation, sampling, RAM cache. A model whose setup doesn't fit the GPU limit is left out, and the start says why. `--model`, `--ctx`, `--kv` and `--slots` don't apply to a router start. The presets are written to `~/.config/carl/router-presets.ini` at each start (don't edit it).
+- **The model loaded first** is the one a single start would load (`llama.model`, or auto fit's pick).
+- **The Router panel** shows each model's state (loaded, loading, unloaded) with **Load** / **Unload** buttons, the recent switches, and whether the OpenCode / Pi lists match the installed models (**Update the OpenCode / Pi configs**).
+- **A model that isn't installed** gets an error (HTTP 400 "not found"; nothing loads), and OpenCode shows a CARL warning. **Custom models:** set their card's *thinking* (Models panel, `e`) so OpenCode offers the right levels.
+- The dashboard follows the loaded model (memory, context, requests); the header shows `llama.cpp router (N models)`.
 
 ---
 
@@ -237,6 +253,7 @@ In OpenCode 1.18 the thinking levels are model **variants**: type `/variants` an
 |---|---|---|
 | Qwen3.8-27B (llama.cpp) | `none` = off, `low`, `medium`, `xhigh` | `low` |
 | Qwen3.6-35B-A3B | `none` = off, `high` = on | `high` |
+| A model you added | from its card's *thinking* ([Cards for custom models](#cards-for-custom-models)): on / off (`none`, `high`), or effort levels (as the 27B); on / off without one | |
 
 ### Pi: thinking level
 
@@ -539,7 +556,7 @@ The dashboard (the monitor) is `tools/llama-monitor.py`.
 | **2 Connect** | Endpoint, model, API key, who can reach the server, connected clients, key file; setup steps for Mac and VM clients; **[ Install on this Mac ]** (`i`: runs `./carl.sh install` and shows its output) and **[ Update configs only ]** (`u`), both asked first; buttons **[ OpenCode config ]**, **[ Pi config ]**, **[ curl test ]**. A button copies its snippet to the clipboard and shows it below. The screen masks the key unless you reveal it. The copy has the real key. CAUTION: Protect a copied config as you protect the key. |
 | **3 Requests** | All finished requests in the log, newest first: start time, context size, new tokens, read speed, output tokens, generation speed, duration, draft acceptance, prompt tokens from the cache. The title shows the averages. |
 | **4 Log** | The full server log, which you can scroll. Buttons and keys: wrap (`w`), errors and warnings only (`f`), follow (End). |
-| **5 Settings** | Four panels; `[` and `]` change the panel. **Server:** the model and the server setup, with an explanation of the model and of each tuned value. **Models:** the catalogue and the models folder: download, verify, delete, add from Hugging Face. **Auto fit:** the best stock model for this Mac, why, and the ranking. **Auto-tune:** measure a model on this Mac. See "The Settings tab" below. |
+| **5 Settings** | Five panels; `[` and `]` change the panel. **Server:** the model and the server setup, with an explanation of the model and of each tuned value. **Models:** the catalogue and the models folder: download, verify, delete, add from Hugging Face. **Auto fit:** the best stock model for this Mac, why, and the ranking. **Auto-tune:** measure a model on this Mac. **Router:** who switches the model (the dashboard, or OpenCode / Pi in router mode). See "The Settings tab" below. |
 
 **The Overview cards:** click the title of a card to see more detail. Click again to see full detail. Click once more to collapse the card. The dots after the title show the level: `○○` collapsed, `●○` normal, `●●` full detail.
 
@@ -570,7 +587,7 @@ Each card keeps the same height while the server works. If a value is not availa
 | space | refresh now |
 | `?` | show all keys in the footer |
 | `q`, Ctrl-C | quit (asks stop / leave running / cancel) |
-| `[` / `]` | Settings tab: the previous / next panel (Server, Models, Auto fit, Auto-tune) |
+| `[` / `]` | Settings tab: the previous / next panel (Server, Models, Auto fit, Auto-tune, Router) |
 | ↑ ↓, ← →, Enter, `a`, `A`, `r`, `x` | Settings tab, Server panel: select a row, change the value, open the model list (on the model row) or type a value, apply, open the Auto fit panel, revert, tuned values |
 | ↑ ↓, Enter, `d`, `v`, `u`, `x`, `h`, `c` | Settings tab, Models panel: select a model, use it, download, verify, Auto-tune, delete, add from Hugging Face, cancel the download |
 | `g`, `f`, Enter, `d`, ↑ ↓ | Settings tab, Auto fit panel: the other goal, the other model set, use the pick, download it, scroll |
@@ -603,7 +620,7 @@ Auto fit picks the best **stock** model that fits this Mac, for a goal:
 
 ### The Settings tab
 
-The Settings tab (tab 5) has four panels: **Server**, **Models**, **Auto fit** and **Auto-tune**. Push `[` or `]`, or click the name of a panel, to change the panel.
+The Settings tab (tab 5) has five panels: **Server**, **Models**, **Auto fit**, **Auto-tune** and **Router** ([router mode](#router-mode-switch-models-from-opencode-or-pi)). Push `[` or `]`, or click the name of a panel, to change the panel.
 
 **Server panel: change the server settings:**
 1. Press `5`, or click **5 Settings**.
@@ -731,8 +748,11 @@ NOTE: CARL does not use `lsof`. On a Mac with a stale network share (for example
 ## 9. Updating the client configs
 
 Run the installer again in these conditions:
-- the bundle in `client/` changed (new model, new options), or
+- you downloaded or deleted a model (the lists show the installed models only; the dashboard's Connect tab warns when they are out of date, and `u` there updates this Mac's configs),
+- the bundle in `client/` changed (new options), or
 - you restarted the server with a different `--ctx`.
+
+On the server Mac, `./carl.sh install --config-only` is enough. **For a VM,** run it on the Mac first: it writes the list of installed models to `client/installed-models.json`, and the copy of the client folder carries the list into the VM. Without that file (a bundle copied before 1.3.0), `install.sh` lists only what the server reports (in the dashboard's mode: the model it runs).
 
 ```bash
 # Mac (only if client/ changed): stage the bundle in the shared folder
@@ -753,6 +773,8 @@ Then **fully restart OpenCode or Pi**.
 - It stores the API key at `~/.config/carl/api-key` (mode 600). The configs refer to this key file. They do not contain the key.
   - Before 1.2.0, the client copy was `~/.config/mtplx/api-key`. If the installer finds no other key, it uses that one. It changes old configs to the new path. It does not delete the old file (a provider of your own can use it): delete it yourself when nothing uses it.
   - The order of the key sources: `--key` / `--key-file`, `$CARL_API_KEY`, `./api-key` next to `install.sh`, the key file of the server (on a Mac with `--local`), the key from an earlier run, a prompt.
+- It writes one entry per installed model, under the model's own name, with its family's thinking options (custom models: their card's *thinking*) and its context window (the running model: the server's window; the others: their settings). The default model (`model` / `small_model`, Pi's `defaultModel`) becomes the model a server start loads, if the default is still CARL's.
+- It installs the OpenCode plugin **carl-model-check** (in `opencode.json`'s `plugin` list, with CARL's provider id): a warning when the model you pick isn't the one the server runs, isn't installed, or is being loaded (router mode). `NO_MODEL_CHECK=1 ./install.sh` leaves it out (and removes it).
 - It replaces the `llamacpp` provider as a complete block. Thus, removed models do not stay in the config. (A deep merge never deletes keys, so old variants stayed in the configs.) It keeps your other providers and settings.
 - It removes the client parts of the server support that 1.2.0 removed (a provider, an OpenCode plugin and a Pi extension; CHANGELOG.md), if an earlier CARL installed them. It removes only CARL's own items, with the usual backups.
 - It sets the llama.cpp context limit from the server.
@@ -880,6 +902,7 @@ python3 -m unittest discover -s tests/monitor -t tests/monitor   # the dashboard
 | `./carl.sh llama` | llama.cpp, default model (`qwen3.6-35b-a3b`; the IQ3 build on 24 GB), q4 KV, 2 slots |
 | `./carl.sh monitor` | attach the live dashboard (a server start shows it automatically in the same terminal) |
 | `./carl.sh llama --local` / `--vm` | serve only this Mac (the default) / the VM address too |
+| `./carl.sh --router` / `--single` | router mode (OpenCode / Pi switch models) / one model (the default); `llama.mode` saves the choice |
 | `./carl.sh llama --host ADDR` | serve on one address of this Mac (LAN, Parallels, …); never 0.0.0.0 |
 | `./carl.sh --no-start` (or `dashboard`) | the dashboard only: attach to a server, or open it offline (no model loads) |
 | `./install.sh --host ADDR --key-file FILE` | connect the clients to that address, with the key from a file (`--key KEY` also works) |

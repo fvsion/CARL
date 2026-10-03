@@ -1,19 +1,25 @@
 """Takes a snapshot of the server and the Mac: its process (ps, netstat), its HTTP API
 (/health, /slots, /metrics, /props), memory and power, and
-its log. Read-only towards the server."""
+its log. Read-only towards the server.
+
+A llama.cpp router (router mode) answers /props with role "router" and needs ?model= on
+/slots, /metrics and /props: the collector lists its models (/models), asks only about the
+loaded one, always with autoload=false (a query must never load a model), and takes the
+model server's own process (its port from the router's /models) for memory and flags."""
 from __future__ import annotations
 
 import json
 import os
 import re
 import time
+import urllib.parse
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from . import fsio, gguf, system
 from .api import FETCH_ERRORS, Endpoint
 from .logtail import LogTail
-from .model import JSONDict, ServerData, Shape, SlotInfo, SlowStats, clean_json, flag, jdict
+from .model import JSONDict, RouterInfo, ServerData, Shape, SlotInfo, SlowStats, clean_json, flag, jdict
 from .system import TcpRow
 
 _POSITION = re.compile(r'position="(\d+)"')
@@ -65,10 +71,10 @@ def live_rates(d: ServerData, last: Optional[Sample]) -> Tuple[Optional[float], 
     return None, None
 
 
-def choose_log(d: ServerData, log_arg: Optional[str], console: str, home: str) -> Optional[str]:
-    """The log to show: the server's --log-file (or --log), else its console output, else
-    the latest llama.cpp log."""
-    path = flag(d.cmd, "--log-file") or log_arg
+def choose_log(cmd: str, log_arg: Optional[str], console: str, home: str) -> Optional[str]:
+    """The log to show: the server's --log-file (cmd: its command line; or --log), else its
+    console output, else the latest llama.cpp log."""
+    path = flag(cmd, "--log-file") or log_arg
     if not path or not os.path.exists(path) or os.path.getsize(path) == 0:
         return console if os.path.exists(console) else (path or os.path.join(home, "models/logs/llama-server-latest.log"))
     return path
@@ -91,8 +97,9 @@ class Collector:
         self.tail = LogTail()
         self.pid: Optional[int] = None
         self.pid_t = 0.0
-        self.props: JSONDict = {}
+        self.props: JSONDict = {}           # /props of the server (a router's own when it is one)
         self.props_t = 0.0
+        self.model_props: Tuple[str, float, JSONDict] = ("", 0.0, {})   # a router's loaded model: (id, time, /props)
         self.last: Optional[Sample] = None
         self.model_path: Optional[str] = None
         self.shape: Optional[Shape] = None
@@ -141,14 +148,16 @@ class Collector:
                 ep.host = h
         ep.key = fsio.read_key(self.key_file) or ep.key
         self._process(d, tcp)
-        self._model(d)
         self._http(d)
+        server_cmd = d.cmd
+        self._router_child(d, tcp)
+        self._model(d)
         d.pp_rate, d.tg_rate = live_rates(d, self.last)
         if d.slots:
             self.last = Sample(d.task, d.t, d.processed, d.decoded)
         d.system = system.read_system(self.page)
         console = self.console or os.path.join(self.home, f"models/logs/.console-{ep.port}.out")
-        d.log_path = choose_log(d, self.log_arg, console, self.home)
+        d.log_path = choose_log(server_cmd, self.log_arg, console, self.home)
         self.tail.update(d.log_path)
         return d
 
@@ -172,8 +181,17 @@ class Collector:
             self.model_path, self.shape, self.model_size = mpath, gguf.read_shape(mpath), os.path.getsize(mpath)
         d.shape = self.shape if mpath else None
 
+    def _router_child(self, d: ServerData, tcp: Callable[[], List[TcpRow]]) -> None:
+        """Router mode: memory, CPU and the command line of the loaded model's own server."""
+        cur = d.router.current if d.router else None
+        port = flag(" ".join(cur.args), "--port") if cur else None
+        pid = system.listen_pid(tcp(), int(port)) if port and port.isdigit() else None
+        info = system.process_info(pid) if pid else None
+        if d.router is not None:
+            d.cmd, d.rss, d.cpu = (info.cmd, info.rss, info.cpu) if info else ("", None, 0.0)
+
     def _http(self, d: ServerData) -> None:
-        """Fill d from the server's API."""
+        """Fill d from the server's API (a router: from its loaded model, see the module doc)."""
         ep = self.endpoint
         try:
             t0 = time.time()
@@ -181,8 +199,35 @@ class Collector:
             d.health_ms, d.up = (time.time() - t0) * 1000, True
         except FETCH_ERRORS:
             return
+        if time.time() - self.props_t > 30:
+            try:
+                self.props = jdict(get_json(ep, "/props"))
+            except FETCH_ERRORS:
+                pass
+            self.props_t = time.time()
+        q = ""
+        if self.props.get("role") == "router":
+            try:
+                d.router = RouterInfo.from_json(get_json(ep, "/models"))
+            except FETCH_ERRORS + SHAPE_ERRORS:
+                d.router = RouterInfo()
+            cur = d.router.current
+            if cur is None or cur.status != "loaded":
+                d.props = {}
+                return
+            q = f"?model={urllib.parse.quote(cur.id, safe='')}&autoload=false"
+            mid, t, props = self.model_props
+            if mid != cur.id or time.time() - t > 30:
+                try:
+                    props = jdict(get_json(ep, "/props" + q))
+                except FETCH_ERRORS:
+                    props = {}
+                self.model_props = (cur.id, time.time(), props)
+            d.props = props
+        else:
+            d.props = self.props
         try:
-            all_slots = get_json(ep, "/slots")
+            all_slots = get_json(ep, "/slots" + q)
             if not isinstance(all_slots, list) or not all(isinstance(x, dict) for x in all_slots):
                 raise TypeError("/slots is not a list of slots")
             d.slot_list = [SlotInfo.from_json(x) for x in all_slots]
@@ -194,13 +239,6 @@ class Collector:
         except FETCH_ERRORS + SHAPE_ERRORS:
             d.slots = False
         try:
-            d.metrics, d.accepted_by_pos = parse_metrics(ep.get("/metrics"))
+            d.metrics, d.accepted_by_pos = parse_metrics(ep.get("/metrics" + q))
         except FETCH_ERRORS:
             pass
-        if time.time() - self.props_t > 30:
-            try:
-                self.props = jdict(get_json(ep, "/props"))
-            except FETCH_ERRORS:
-                pass
-            self.props_t = time.time()
-        d.props = self.props

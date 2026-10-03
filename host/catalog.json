@@ -9,6 +9,7 @@
       "label": "Qwen3.6 35B-A3B · Q4",
       "family": "qwen3.6-35b-a3b",
       "arch": "moe",
+      "thinking": "on-off",
       "params": "35B total, 3B active per token",
       "quant": "UD-Q4_K_M",
       "abliterated": false,
@@ -49,7 +50,6 @@
           "prefill": "490-580 tok/s at 2-9K"
         }
       ],
-      "alias": "qwen3.6-35b-a3b",
       "hf": {
         "repo": "unsloth/Qwen3.6-35B-A3B-MTP-GGUF",
         "revision": "5bc3e238d916f48a861bac2f8a1990a0e9b7e98d",
@@ -82,6 +82,7 @@
       "label": "Qwen3.8 27B · Q4",
       "family": "qwen3.8-27b",
       "arch": "dense",
+      "thinking": "effort",
       "params": "27B dense",
       "quant": "UD-Q4_K_M",
       "abliterated": false,
@@ -123,7 +124,6 @@
           "model": "orcarouter-27b (same architecture)"
         }
       ],
-      "alias": "qwen3.8-27b",
       "hf": {
         "repo": "unsloth/Qwen3.8-27B-GGUF",
         "revision": "4ca720788d1e01f1bff70c033e0d0028fd02e502",
@@ -156,6 +156,7 @@
       "label": "orcarouter 27B · Q4 (abliterated)",
       "family": "qwen3.8-27b",
       "arch": "dense",
+      "thinking": "effort",
       "params": "27B dense",
       "quant": "Q4_K_M imatrix",
       "abliterated": true,
@@ -196,7 +197,6 @@
           "prefill": "85-90 tok/s at 2-9K, 56-65 at 66K"
         }
       ],
-      "alias": "qwen3.8-27b-abliterated-llama",
       "hf": {
         "repo": "bartowski/orcarouter_Qwen3.8-27B-Uncensored-GGUF",
         "revision": "87d37daf5e5eb72a926d8b413e08809a57f1a120",
@@ -231,6 +231,7 @@
       "label": "Qwen3.8 27B · Q3_K_XL",
       "family": "qwen3.8-27b",
       "arch": "dense",
+      "thinking": "effort",
       "params": "27B dense",
       "quant": "UD-Q3_K_XL",
       "abliterated": false,
@@ -264,7 +265,6 @@
         "very_slow": 163840
       },
       "measured": [],
-      "alias": "qwen3.8-27b",
       "hf": {
         "repo": "unsloth/Qwen3.8-27B-GGUF",
         "revision": "4ca720788d1e01f1bff70c033e0d0028fd02e502",
@@ -301,6 +301,7 @@
       "label": "orcarouter 27B · Q3_K_M (abliterated)",
       "family": "qwen3.8-27b",
       "arch": "dense",
+      "thinking": "effort",
       "params": "27B dense",
       "quant": "Q3_K_M imatrix",
       "abliterated": true,
@@ -334,7 +335,6 @@
         "very_slow": 163840
       },
       "measured": [],
-      "alias": "qwen3.8-27b-abliterated-llama",
       "hf": {
         "repo": "bartowski/orcarouter_Qwen3.8-27B-Uncensored-GGUF",
         "revision": "87d37daf5e5eb72a926d8b413e08809a57f1a120",
@@ -368,6 +368,7 @@
       "label": "Qwen3.6 35B-A3B · IQ3_XXS",
       "family": "qwen3.6-35b-a3b",
       "arch": "moe",
+      "thinking": "on-off",
       "params": "35B total, 3B active per token",
       "quant": "UD-IQ3_XXS",
       "abliterated": false,
@@ -408,7 +409,6 @@
           "prefill": "~500 tok/s at 2K"
         }
       ],
-      "alias": "qwen3.6-35b-a3b",
       "hf": {
         "repo": "unsloth/Qwen3.6-35B-A3B-MTP-GGUF",
         "revision": "5bc3e238d916f48a861bac2f8a1990a0e9b7e98d",
@@ -441,6 +441,7 @@
       "label": "Qwen3.8 27B · IQ3_XXS",
       "family": "qwen3.8-27b",
       "arch": "dense",
+      "thinking": "effort",
       "params": "27B dense",
       "quant": "UD-IQ3_XXS",
       "abliterated": false,
@@ -481,7 +482,6 @@
           "prefill": "~37 tok/s at <100 tokens, ~88 at 1.9K"
         }
       ],
-      "alias": "qwen3.8-27b",
       "hf": {
         "repo": "unsloth/Qwen3.8-27B-GGUF",
         "revision": "4ca720788d1e01f1bff70c033e0d0028fd02e502",
@@ -515,13 +515,13 @@
       "format": "gguf",
       "family": "qwen3.8-27b",
       "arch": "dense",
+      "thinking": "effort",
       "params": "27B dense",
       "quant": "IQ3_XXS imatrix",
       "abliterated": true,
       "mtp": true,
       "min_ram_gb": 24,
       "tested": true,
-      "alias": "qwen3.8-27b-abliterated-llama",
       "hf": {
         "repo": "bartowski/orcarouter_Qwen3.8-27B-Uncensored-GGUF",
         "revision": "87d37daf5e5eb72a926d8b413e08809a57f1a120",
@@ -595,13 +595,13 @@
       "format": "gguf",
       "family": "qwen3.6-35b-a3b",
       "arch": "moe",
+      "thinking": "on-off",
       "params": "35B total, 3B active per token",
       "quant": "Q4_K_M",
       "abliterated": true,
       "mtp": true,
       "min_ram_gb": 32,
       "tested": false,
-      "alias": "qwen3.6-35b-a3b",
       "hf": {
         "repo": "llmfan46/Qwen3.6-35B-A3B-uncensored-heretic-Native-MTP-Preserved-GGUF",
         "revision": "fa96dc904fe4dafb415ca707afab30aee2d2e703",
@@ -669,13 +669,13 @@
       "format": "gguf",
       "family": "qwen3.6-35b-a3b",
       "arch": "moe",
+      "thinking": "on-off",
       "params": "35B total, 3B active per token",
       "quant": "i1-IQ3_XXS imatrix",
       "abliterated": true,
       "mtp": false,
       "min_ram_gb": 24,
       "tested": true,
-      "alias": "qwen3.6-35b-a3b",
       "hf": {
         "repo": "mradermacher/Qwen3.6-35B-A3B-uncensored-heretic-i1-GGUF",
         "revision": "97c91a931dbfd582487e8866bd129a2e8765051d",

@@ -114,7 +114,7 @@ class CatalogEntry(TypedDict, total=False):
     name: str
     label: str
     family: str
-    alias: str
+    thinking: str
     summary: str
     description: str
     arch: str

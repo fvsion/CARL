@@ -3,12 +3,13 @@ they draw from a View, the UI state and the snapshot (they clamp scroll position
 from __future__ import annotations
 
 import dataclasses
-from typing import List, Optional, Tuple
+from typing import List, Optional, Sequence, Tuple
 
 from .cards import REQ_HEAD, View, card_connect, card_requests, column, log_view, req_row
 from .fmt import (B, CYN, DIM, GRN, R, RED, YEL, Card, CardLine, Row, buttons, cwrap, draw_card, fit, home_short, indent,
                   knum, side_by_side)
 from .model import ServerData, clean
+from .clients import Drift
 from .state import InstallRun, UIState
 
 PREVIEW_TITLES = {"opencode": "OPENCODE CONFIG", "pi": "PI CONFIG", "curl": "CURL TEST"}
@@ -41,14 +42,16 @@ def body_overview(v: View, ui: UIState, d: ServerData, cols: int, height: int, l
 
 
 def body_connect(v: View, ui: UIState, d: ServerData, cols: int, height: int,
-                 here: List[Tuple[str, str]], preview: str) -> List[Row]:
-    """The connection in full, how to set up clients (Install runs ./carl.sh install), and the
-    installer's output or the selected config (preview text)."""
+                 here: List[Tuple[str, str]], preview: str, stale: Sequence[Drift] = (), installed: int = 0) -> List[Row]:
+    """The connection in full, how to set up clients (Install runs ./carl.sh install), a warning
+    when a client config lists other models than are installed (stale), and the installer's
+    output or the selected config (preview text)."""
     w = cols - 1
     tw = w - 4
     full = dataclasses.replace(v, level_override={"connect": 2})
     rows = _card(full, "connect", card_connect(full, d)._replace(title="CONNECTION"), w, 2)
-    rows += draw_card("guide", "SET UP OPENCODE AND PI", "", setup_lines(v, ui, here, tw), w, v.level("guide"))
+    rows += draw_card("guide", "SET UP OPENCODE AND PI", "", setup_lines(v, ui, here, tw, stale, installed), w,
+                      v.level("guide"))
     room = max(height - len(rows) - 3, 3)
     if ui.install and ui.install_shown:
         rows += draw_card("install", "INSTALLER", install_summary(ui.install), install_lines(ui, room, tw), w, 2)
@@ -62,11 +65,18 @@ def body_connect(v: View, ui: UIState, d: ServerData, cols: int, height: int,
     return indent(rows)[:height]
 
 
-def setup_lines(v: View, ui: UIState, here: List[Tuple[str, str]], tw: int) -> List[CardLine]:
-    """This Mac: one command (or the Install button); a VM: start the server with --vm, then the
-    installer there; by hand: the copy buttons."""
+def setup_lines(v: View, ui: UIState, here: List[Tuple[str, str]], tw: int, stale: Sequence[Drift] = (),
+                installed: int = 0) -> List[CardLine]:
+    """This Mac: one command (or the Install button), and a warning with Update configs when the
+    installed models changed; a VM: start the server with --vm, then the installer there; by
+    hand: the copy buttons."""
     L: List[CardLine] = []
-    if here:
+    for dr in stale:
+        L += cwrap(f"{YEL}⚠ Out of date: {dr.line(installed)}.{R} {DIM}Press u (Update configs only) to list the "
+                   f"installed models; a VM client: copy the client folder again and run ./install.sh there.{R}", tw)
+    if stale:
+        L.append("")
+    elif here:
         L += cwrap(f"{GRN}✓ This Mac is set up{R} for this server (" + ", ".join(f"{c}: provider {p}" for c, p in here)
                    + f"). {DIM}Run the installer again after a new model or a context / slots change.{R}", tw)
     L += cwrap(f"{B}On this Mac:{R} one command, {CYN}./carl.sh install{R} {DIM}— it installs OpenCode and Pi when "

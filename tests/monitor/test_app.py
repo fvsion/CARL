@@ -2,6 +2,7 @@
 (no subprocess is started: nothing here applies settings, downloads or tunes)."""
 from __future__ import annotations
 
+import json
 import os
 import tempfile
 import unittest
@@ -17,7 +18,7 @@ from monitor.jobs import Paths, ServerJobs
 from monitor.keys import InputBuffer
 from monitor.settings import Schema, SettingsService, net_choices
 from monitor.settings_view import SettingsView
-from monitor.state import SP_FIT, SP_MODELS, SP_SERVER, SP_TUNE, UIState
+from monitor.state import SP_FIT, SP_MODELS, SP_ROUTER, SP_SERVER, SP_TUNE, UIState
 from monitor.store import ModelList
 
 DOWN, UP, ESC = "\x1b[B", "\x1b[A", "\x1b"
@@ -213,7 +214,7 @@ class AppTest(unittest.TestCase):
         self.assertEqual(self.ui.text and self.ui.text.value, "ab")
 
     def test_auto_tune_panel_choice_and_clear(self) -> None:
-        self.keys("5", "[")                             # from the first panel back to the last
+        self.keys("5", "[", "[")                        # back from the first panel: Router, then Auto-tune
         self.assertEqual(self.ui.sp, SP_TUNE)
         first = self.ui.tune_model
         self.keys("\x1b[C")
@@ -300,6 +301,20 @@ class AppTest(unittest.TestCase):
         self.assertFalse(self.ui.install_shown)
         self.assertIn("OPENCODE CONFIG", self.screen())
 
+    def test_connect_warns_when_the_client_lists_are_out_of_date(self) -> None:
+        home = self.tmp.name
+        os.makedirs(os.path.join(home, ".config/opencode"))
+        with open(os.path.join(home, ".config/opencode/carl.json"), "w", encoding="utf-8") as f:
+            json.dump({"providers": {"llamacpp": "llamacpp"}, "base_url": "http://127.0.0.1:8095/v1"}, f)
+        with open(os.path.join(home, ".config/opencode/opencode.json"), "w", encoding="utf-8") as f:
+            json.dump({"provider": {"llamacpp": {"models": {"gone": {}}}}}, f)
+        self.keys("2")
+        text = " ".join(" ".join(x.strip(" │") for x in ANSI.sub("", self.screen()).splitlines()).split())
+        installed = [m["name"] for m in self.store.models if m["status"] == "downloaded"]
+        self.assertIn(f"Out of date: OpenCode lists 1 models; installed now: {len(installed)}", text)
+        self.assertIn("removed gone", text)
+        self.assertIn("Press u (Update configs only)", text)
+
     def test_connect_install_failure_is_shown(self) -> None:
         self.fake_serve('echo "npm: network down"; exit 3\n')
         self.ctl.do("insall")
@@ -329,6 +344,26 @@ class AppTest(unittest.TestCase):
         self.assertEqual(len(self.app.view.autofit(self.ui, p, 100, 12)), 12)
         self.assertGreater(self.ui.fit_scroll, 0)
         self.assertEqual(len(rows), 12)
+
+    def test_router_panel_switches_the_mode_after_a_question(self) -> None:
+        self.keys("5", "[")                                     # back from the first panel: the last, Router
+        self.assertEqual(self.ui.sp, SP_ROUTER)
+        text = " ".join(" ".join(x.strip(" │") for x in ANSI.sub("", self.screen()).splitlines()).split())
+        for part in ("ROUTER", "Dashboard only (single model)", "OpenCode / Pi switch models (router)",
+                     "prefer to choose models on the fly", "every switch empties the prompt cache",
+                     "Update the OpenCode / Pi configs"):
+            self.assertIn(part, text)
+        self.ctl.do("rmode:router")
+        c = self.ui.confirm2
+        assert c is not None
+        self.assertEqual((c.title, c.yes, c.model), ("MODEL SWITCHING?", "rmodeyes", "router"))
+        self.assertTrue(any("empties the prompt cache" in x for x in c.lines))
+        self.keys("y")                                          # no server runs: saved for the next start
+        self.assertEqual(self.store.saved[-1]["llama"]["mode"], "router")
+        self.assertIn("the next start uses it", self.ui.toast_msg[0])
+        self.ctl.do("rmode:single")
+        self.keys("y")
+        self.assertNotIn("mode", self.store.saved[-1].get("llama", {}))      # the default is left out
 
     def test_server_card_sections_at_80_and_160_columns(self) -> None:
         """About this setting, Status, the buttons and Keys are separate, and nothing is cut."""

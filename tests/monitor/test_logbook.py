@@ -23,6 +23,35 @@ REQUEST = """2.09.112.847 I slot launch_slot_: id  1 | task 118 | processing tas
 """
 
 
+ROUTER = """0.00.106.007 I srv  load_startup: (startup) loading model qwen3.6-35b-a3b-iq3
+0.45.530.992 I srv          tick: evicting idle LRU name=qwen3.6-35b-a3b-iq3 for a queued request
+0.45.531.014 I srv  ensure_model: waiting until model name=qwen3.8-9b-q4_k_m is fully loaded...
+0.45.740.187 I srv  ensure_model: slot available, loading queued model name=qwen3.8-9b-q4_k_m
+0.45.740.300 I srv          load: spawning server instance with name=qwen3.8-9b-q4_k_m on port 51808
+[51808] 0.10.000.000 I slot launch_slot_: id  0 | task 2 | processing task, is_child = 0
+0.55.900.000 I srv  proxy_reques: proxying request to model qwen3.8-9b-q4_k_m on port 51808
+[51808] 0.12.500.000 I slot print_timing: id  0 | task 2 |        eval time =    1669.89 ms /    80 tokens (   21.14 ms per token,    47.31 tokens per second)
+[51808] 0.12.600.000 I slot      release: id  0 | task 2 | stop processing: n_tokens = 97, truncated = 0
+"""
+
+
+class RouterLogTest(unittest.TestCase):
+    """A router's log: its model servers' lines lose the [PORT] prefix and move onto the router's
+    clock; its forwarding lines (the dashboard's own polls) are not shown; loads are recorded."""
+
+    def test_router_lines(self) -> None:
+        book = LogBook()
+        for line in ROUTER.splitlines():
+            book.add(line)
+        r = book.requests[0]
+        self.assertEqual((r.task, r.gen), (2, 80))
+        self.assertAlmostEqual(r.t0 or 0, 45.740 + 10.0, places=2)        # the spawn time + the server's own
+        self.assertAlmostEqual((r.t1 or 0) - (r.t0 or 0), 2.6, places=2)
+        self.assertFalse(any(x.startswith("[") or "proxying" in x for x in book.lines))
+        self.assertTrue(any(x.startswith("0.55.740.000 I slot launch_slot_") for x in book.lines))
+        self.assertEqual([n for _, n in book.switches], ["qwen3.6-35b-a3b-iq3", "qwen3.8-9b-q4_k_m"])
+
+
 class LogBookTest(unittest.TestCase):
     def setUp(self) -> None:
         self.book = LogBook()

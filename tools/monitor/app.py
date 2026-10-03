@@ -9,21 +9,22 @@ import signal
 import threading
 import time
 from dataclasses import dataclass
-from typing import List, Optional, Sequence
+from typing import List, Optional, Sequence, Tuple
 
 from . import cli, fsio, system
 from .api import Endpoint
 from .card_view import draw_form
 from .cards import View, status_of
+from .clients import Drift, drift
 from .collector import Collector
 from .controller import Controller, Region
 from .fmt import B, DIM, GRN, R, RED, YEL, Row, draw_card, fit, indent, pill, vlen, wwrap
 from .jobs import Paths, ServerJobs
 from .keys import InputBuffer
-from .model import ServerData
+from .model import ServerData, jdict
 from .settings import Pending, Schema, SettingsService, net_choices
 from .settings_view import ModelsDir, SettingsView, subpanel_bar
-from .state import SP_FIT, SP_MODELS, SP_SERVER, TABS, UIState
+from .state import SP_FIT, SP_MODELS, SP_ROUTER, SP_SERVER, TABS, UIState
 from .store import CarlStore, ModelList
 from .terminal import LOGO_COLS, Terminal, logo_escape, logo_mode, place_lines
 from .views import body_connect, body_log, body_overview, body_requests, quit_dialog
@@ -106,8 +107,10 @@ class App:
         regions.clear()
         label, bg, _ = status_of(d, self.collector.server_pid)
         up = f" · up {d.etime}" if d.etime else ""
-        left = (f"{'' if self.logo else '😎 '}{B}CARL{R}  {pill(label, bg)}  {B}{d.alias}{R}"
-                f"{DIM}{' · llama.cpp' if d.up else ''}{up}{R}")
+        kind = ("" if not d.up else f" · llama.cpp router ({len(d.router.models)} models)" if d.router is not None
+                else " · llama.cpp")
+        name = d.alias or ("no model loaded" if d.router is not None else "")
+        left = f"{'' if self.logo else '😎 '}{B}CARL{R}  {pill(label, bg)}  {B}{name}{R}{DIM}{kind}{up}{R}"
         right = f"{DIM}{time.strftime('%H:%M:%S')}{R}  " + ("" if once else f"{B}{RED}{QUIT_LABEL}{R}")
         head = fit(left, cols - self.logo_cols - vlen(right) - 1) + " " + right
         regions.append(Region(1, cols - len(QUIT_LABEL) + 1, cols + 1, "quit"))
@@ -156,13 +159,28 @@ class App:
             return body_overview(v, ui, d, cols, height, log_name)
         if ui.tab == 1:
             here = fsio.installed_here(self.endpoint.base, self.opts.home)
-            return body_connect(v, ui, d, cols, height, here, self.ctl.preview_text(ui.preview, d, mask=not ui.key_shown))
+            stale, installed = self.client_drift(here)
+            return body_connect(v, ui, d, cols, height, here, self.ctl.preview_text(ui.preview, d, mask=not ui.key_shown),
+                                stale, installed)
         if ui.tab == 2:
             return body_requests(v, ui, cols, height)
         if ui.tab == 3:
             n = max(height - 3, 3) if not self.opts.once else max(shutil.get_terminal_size((120, 36))[1] - 8, 10)
             return body_log(v, ui, cols, n)
         return self.body_settings(d, cols, height)
+
+    def client_drift(self, here: List[Tuple[str, str]]) -> Tuple[List[Drift], int]:
+        """The client configs on this Mac (for this server) that list other models than are
+        installed, and how many are installed."""
+        installed = [m["name"] for m in self.svc.models.downloaded()]
+        return drift({c: fsio.listed_models(self.opts.home, c, pid) for c, pid in here}, installed), len(installed)
+
+    def saved_mode(self) -> str:
+        """llama.mode in config.json (single when unset or unreadable)."""
+        try:
+            return str(jdict(self.store.load_config().get("llama")).get("mode") or "single")
+        except Exception:           # a broken config.json: the Server panel says why
+            return "single"
 
     def body_settings(self, d: ServerData, cols: int, height: int) -> List[Row]:
         """The Settings tab: the panel bar, then the picker, a question, or the selected panel."""
@@ -179,6 +197,11 @@ class App:
                 body = draw_form(ui.card, cols, height - 2)
             elif ui.sp == SP_FIT:
                 body = self.view.autofit(ui, self.ensure_pending(d), cols, height - 2)
+            elif ui.sp == SP_ROUTER:
+                book = self.collector.tail.book
+                stale, n = self.client_drift(fsio.installed_here(self.endpoint.base, self.opts.home))
+                body = self.view.router(ui, d, self.saved_mode(), [(book.wall(t), name) for t, name in book.switches],
+                                        [s.line(n) for s in stale], cols)[:height - 2]
             elif ui.sp == SP_MODELS:
                 mdir = self.store.models_dir()
                 body = self.view.models(ui, cols, height - 2, ModelsDir(mdir, disk_free(mdir)))

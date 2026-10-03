@@ -165,7 +165,7 @@ if [[ -n "${LLAMA_CTX:-}" ]]; then
   else echo "error: LLAMA_CTX takes tokens or Nk (e.g. 96k), got '$LLAMA_CTX'" >&2; exit 1; fi
   ctx_src="LLAMA_CTX"
 elif ctx=$(api_get "http://$HOST:$LLAMA_PORT/props" 2>/dev/null \
-           | python3 -c 'import json,sys; print(int(json.load(sys.stdin)["default_generation_settings"]["n_ctx"]))' 2>/dev/null); then
+           | python3 -c 'import json,sys; n=int(json.load(sys.stdin)["default_generation_settings"]["n_ctx"]); assert n >= 1024; print(n)' 2>/dev/null); then
   ctx_src="running llama.cpp server"
 else
   ctx=98304; ctx_src="default (llama.cpp server not reachable)"
@@ -193,6 +193,39 @@ else
 fi
 echo "coder subagent: $([[ $CODER == 1 ]] && echo on || echo off) ($coder_src)"
 
+# --- The installed models: one OpenCode / Pi entry each (client/carl_models.py) ---
+# On the server Mac CARL lists them (tools/carl.py client-models) into
+# installed-models.json next to this script, so a copy of this folder carries the
+# list into a VM. Without the list (a bundle copied before 1.3.0): the ids the server
+# reports on /v1/models, as generic entries. Re-run after a download or a delete
+# (the dashboard's Connect tab says when the list is out of date).
+MODELS_FILE="$HERE/installed-models.json"
+if [[ -f "$HERE/../tools/carl.py" ]]; then
+  if python3 "$HERE/../tools/carl.py" client-models > "$MODELS_FILE.tmp"; then
+    mv "$MODELS_FILE.tmp" "$MODELS_FILE"
+  else
+    rm -f "$MODELS_FILE.tmp"; echo "warning: could not list this Mac's models (tools/carl.py client-models)" >&2
+  fi
+fi
+running=$(api_get "http://$HOST:$LLAMA_PORT/props" 2>/dev/null \
+          | python3 -c 'import json,sys; p=json.load(sys.stdin); print("" if p.get("role") == "router" else p.get("model_alias") or "")' 2>/dev/null || true)
+models_arg="$MODELS_FILE"
+if [[ ! -s "$MODELS_FILE" ]]; then
+  models_arg="$(mktemp)"; trap 'rm -f "$models_arg"' EXIT
+  if ! api_get "http://$HOST:$LLAMA_PORT/v1/models" 2>/dev/null | python3 -c '
+import json, sys
+sys.path.insert(0, sys.argv[1])
+import carl_models
+ids = [m.get("id") for m in json.load(sys.stdin).get("data", [])]
+ml = carl_models.from_server_ids(ids, int(sys.argv[2]))
+json.dump({"schema": 1, "default": ml.default, "models": [m.__dict__ for m in ml.models]}, sys.stdout)' "$HERE" "$ctx" > "$models_arg"; then
+    echo '{"schema": 1, "default": null, "models": []}' > "$models_arg"
+  fi
+  echo "note: no installed-models.json here: the model entries come from the server (/v1/models). Copy the"
+  echo "      client folder from the server Mac again (after ./carl.sh install there) for every installed model."
+fi
+echo "models for the clients: $(python3 -c 'import json,sys; print(", ".join(m["id"] for m in json.load(open(sys.argv[1]))["models"]) or "none yet")' "$models_arg")"
+
 # --- OpenCode + Pi configs (client/configure.py) --------------------------------
 # Merges our providers, defaults, coder agent, sidebar and extensions into the
 # existing configs without overwriting anything the user owns: a provider of
@@ -200,8 +233,9 @@ echo "coder subagent: $([[ $CODER == 1 ]] && echo on || echo off) ($coder_src)"
 # default model, agents and extensions are kept. Our MTPLX pieces from before
 # 1.2.0 are removed, and the pieces named llm-deploy get CARL's names. Backups: *.bak.<time>.
 python3 "$HERE/configure.py" --bundle "$HERE" --home "$HOME" --host "$HOST" \
-  --llama-port "$LLAMA_PORT" --ctx "$ctx" --coder "$CODER" --sidebar "$([[ "${NO_SIDEBAR:-0}" == 1 ]] && echo 0 || echo 1)" \
-  --switcher "$([[ "${NO_SWITCHER:-0}" == 1 ]] && echo 0 || echo 1)"
+  --llama-port "$LLAMA_PORT" --ctx "$ctx" --models "$models_arg" ${running:+--running "$running"} --coder "$CODER" --sidebar "$([[ "${NO_SIDEBAR:-0}" == 1 ]] && echo 0 || echo 1)" \
+  --switcher "$([[ "${NO_SWITCHER:-0}" == 1 ]] && echo 0 || echo 1)" \
+  --model-check "$([[ "${NO_MODEL_CHECK:-0}" == 1 ]] && echo 0 || echo 1)"
 
 # --- Smoke test ----------------------------------------------------------------
 echo

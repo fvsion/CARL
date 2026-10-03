@@ -51,11 +51,12 @@ The live state of the server: what it does now, the speed, the context, the memo
 
 ![The CARL dashboard](assets/dashboard.gif)
 
-**Settings (tab 5):** four panels. Push `[` or `]` to change the panel.
+**Settings (tab 5):** five panels. Push `[` or `]` to change the panel.
 - **Server:** change the model, the KV cache, the context and more. Then push `a` to restart with them. Colours show tuned values (green), changed values (yellow) and very slow values (red). A start that needs more GPU memory than the Mac has is refused (`FIT_CHECK=0` overrides).
 - **Models:** download, verify and delete models, or add one from Hugging Face.
 - **Auto fit** (`A` on the Server panel): the best stock model and settings for this Mac, why, and every model ranked. **Use this** sets them in one step.
 - **Auto-tune:** measure the best settings for a model on this Mac.
+- **Router:** who switches the model: the dashboard (the default), or OpenCode / Pi (router mode, for users who prefer to choose models on the fly). WARNING: every switch empties the prompt cache, so the next request re-reads the whole conversation.
 
 ![The Settings tab](assets/settings.png)
 
@@ -63,7 +64,7 @@ The live state of the server: what it does now, the speed, the context, the memo
 
 | Do this | In OpenCode 1.18 |
 |---|---|
-| **Switch the model** | type `/models` (or `/mo`, or press the leader key then **m**) and pick the entry that matches the server, e.g. `llamacpp/qwen3.6-35b-a3b` |
+| **Switch the model** | type `/models` (or `/mo`, or press the leader key then **m**). The list shows the models installed on the server, one entry each, under their CARL names (e.g. `llamacpp/qwen3.6-35b-a3b-iq3`). The dashboard's model mode (the default): pick the entry the server runs; router mode: the entry you pick is loaded |
 | **Set the thinking effort** | type `/variants` and pick a level, or press **ctrl+t** to step to the next one. The current variant shows next to the model name |
 | **Switch the agent** | `/agents`, or **Tab** to cycle: `build` (does the work) and `plan` (read-only). The **coder** subagent that CARL adds is not picked here: the main agent hands it large coding tasks |
 | **Talk to the coder directly** | type `@coder` and your task (Tab completes the name), e.g. `@coder add tests for parse_config`: the task goes straight to the coder subagent, the main agent doesn't have to decide to delegate. If you already had an agent of your own called `coder`, CARL's is `@carl-coder`. (Pi: ask in the message, "use the coder subagent to …": there it is the `subagent` tool) |
@@ -73,10 +74,12 @@ The variants are CARL's thinking levels:
 
 | Model entry | Variants (thinking effort) | Default |
 |---|---|---|
-| `llamacpp/qwen3.6-35b-a3b` (35B-A3B) | `none` = thinking off · `high` = on | `high` |
-| `llamacpp/qwen3.8-27b`, `llamacpp/qwen3.8-27b-abliterated-llama` (27B) | `none` = off · `low` · `medium` · `xhigh` | `low` |
+| the 35B-A3B builds (`qwen3.6-35b-a3b…`, `heretic-35b-a3b…`) | `none` = thinking off · `high` = on | `high` |
+| the 27B builds (`qwen3.8-27b…`, `orcarouter-27b…`) | `none` = off · `low` · `medium` · `xhigh` | `low` |
+| a model you added | from its card's *thinking* (on / off, or effort levels); on / off without one | |
 
-- **The model entry doesn't change the server's model.** The server answers with the model it has loaded; the entry only sets the label, the context limit and the thinking options. Change the server's model in the dashboard (Settings tab) or with `./carl.sh llama --model NAME`, then pick the matching entry in `/models`.
+- **By default the entry doesn't change the server's model.** The server answers with the model it has loaded; the entry sets the label, the context limit and the thinking options. Change the server's model in the dashboard (Settings tab) or with `./carl.sh llama --model NAME`, then pick its entry in `/models`. If the entry and the server differ, OpenCode shows a CARL warning. **Router mode** (Settings → Router, or `./carl.sh --router`) loads the model you pick instead.
+- **After a download or a delete,** update the lists: `./carl.sh install --config-only`, or `u` in the dashboard's Connect tab (it warns when they are out of date).
 - **`low` is right for agent work** on the 27B; `xhigh` thinks a long time even on simple tasks. A change applies from the next message.
 - **After `install.sh` runs again, fully restart OpenCode**: an open OpenCode keeps the old entries.
 
@@ -87,6 +90,7 @@ More: USERGUIDE.md, "Thinking on, off and effort".
 ![OpenCode with the CARL plugins](assets/opencode-plugins.png)
 
 - **Subagents panel** (right): what each running subagent does now. Below them: the subagents that finished (✓ or ✗, and the duration). A specialist **coder** subagent gets the large coding tasks.
+- **Model check:** a CARL warning when the model you picked isn't the one the server runs, isn't installed on it, or is being loaded (router mode).
 - **Session switcher** (in the prompt box): `‹ 1/3 ● title ›`. Click the arrows to go to the previous or next session. Click the title, or type `/switch`, to select a session from a list. `●` = busy, `○` = idle.
 
 ## Read more

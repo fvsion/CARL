@@ -59,8 +59,16 @@ def jtask(v: object) -> TaskId:
     return v if isinstance(v, (int, str)) and not isinstance(v, bool) else None
 
 
+# Long names of the short flags looked up: a router's model servers get the long forms
+# (the router writes its presets' keys as --long-name).
+FLAG_SYNONYMS = {"-ub": "--ubatch-size", "-b": "--batch-size", "-fa": "--flash-attn", "--temp": "--temperature",
+                 "-ngl": "--n-gpu-layers", "-sps": "--slot-prompt-similarity"}
+
+
 def flag(cmd: str, *names: str, default: Optional[str] = None) -> Optional[str]:
-    """The value of the first of names given on a command line ("-c 4096" or "-c=4096")."""
+    """The value of the first of names given on a command line ("-c 4096" or "-c=4096"); a
+    short name also matches its long form (FLAG_SYNONYMS)."""
+    names = tuple(x for n in names for x in (n, FLAG_SYNONYMS.get(n)) if x)
     for n in names:
         m = re.search(r"(?:^|\s)" + re.escape(n) + r"[ =](\S+)", cmd)
         if m:
@@ -199,6 +207,39 @@ class SlowStats:
 
 
 @dataclass
+class RouterModel:
+    """One model a llama.cpp router offers (/models) and its state."""
+    id: str
+    status: str             # unloaded | loading | loaded | sleeping | downloading
+    failed: bool = False    # its last load failed (exit_code in /models)
+    args: List[str] = field(default_factory=list)
+
+    @property
+    def active(self) -> bool:
+        return self.status in ("loading", "loaded", "sleeping")
+
+
+@dataclass
+class RouterInfo:
+    """A router (llama.mode = router): its models and the one loaded (or loading) now."""
+    models: List[RouterModel] = field(default_factory=list)
+
+    @property
+    def current(self) -> Optional[RouterModel]:
+        return next((m for m in self.models if m.active), None)
+
+    @classmethod
+    def from_json(cls, x: object) -> "RouterInfo":
+        out = []
+        for m in jlist(jdict(x).get("data")):
+            md = jdict(m)
+            st = jdict(md.get("status"))
+            out.append(RouterModel(id=str(md.get("id", "")), status=str(st.get("value", "?")),
+                                   failed=bool(st.get("failed")), args=[str(a) for a in jlist(st.get("args"))]))
+        return cls(out)
+
+
+@dataclass
 class ServerData:
     """One snapshot of the server and the Mac (taken every refresh)."""
     t: float = 0.0
@@ -230,6 +271,7 @@ class ServerData:
     tg_rate: Optional[float] = None     # tokens generated per second, live
     system: SystemStats = field(default_factory=SystemStats)
     log_path: Optional[str] = None
+    router: Optional[RouterInfo] = None # a llama.cpp router: its models (props, slots, cmd: the loaded one's)
 
     @property
     def alias(self) -> str:

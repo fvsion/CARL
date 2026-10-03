@@ -25,7 +25,7 @@ from .store import ModelList
 # Settings the launchers read from the environment: removed, so config.json (or the
 # rollback's own environment) decides and not the environment this monitor started in.
 CLEAN_ENV = ("CTX", "SLOTS", "KV", "KV_K", "KV_V", "MODEL", "MODEL_NAME", "ALIAS", "NET", "HOST", "TEMP", "TOP_P",
-             "TOP_K", "MIN_P", "PRESENCE", "SPEC", "SPEC_N", "CACHE_RAM")
+             "TOP_K", "MIN_P", "PRESENCE", "SPEC", "SPEC_N", "CACHE_RAM", "LLAMA_MODE")
 HF_REPO = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*")   # OWNER/REPO: nothing else goes into the API path
 
 
@@ -272,6 +272,20 @@ class ServerJobs:
         except Exception as e:      # bad name, no network, rate limit, unexpected answer: show it
             ui.hf = HFLookup(repo, f"Hugging Face lookup failed: {e}")
 
+    # ------------------------------------------------------------ router mode
+    def router_load(self, name: str, unload: bool = False) -> None:
+        """Load (the loaded model stops first: --models-max 1) or unload one of a router's models."""
+        def work() -> None:
+            what = "unload" if unload else "load"
+            try:
+                self.collector.endpoint.post(f"/models/{what}", {"model": name}, timeout=600)
+                self.ui.toast(f"{name}: " + ("unloaded" if unload else "loading (30 s to 2 min: the Router panel shows "
+                                                                       "when it is loaded)"), 10)
+            except api.FETCH_ERRORS as e:
+                self.ui.toast(f"{RED}{name}: {what} failed: {e}{R}", 10)
+        self.ui.toast(f"{'unloading' if unload else 'loading'} {name}…", 120 if not unload else 10)
+        threading.Thread(target=work, daemon=True).start()
+
     # ------------------------------------------------------------ Connect: the client installer
     def start_install(self, config_only: bool) -> None:
         """./carl.sh install for this Mac (OpenCode and Pi into ~/.local when missing, then their
@@ -322,7 +336,8 @@ class ServerJobs:
         dl.done = True
         ok = dl.proc.returncode == 0
         self.models.get(refresh=True)
-        self.ui.toast(f"{dl.name}: " + ("downloaded and verified" if ok else f"{RED}download failed{R}: " + " ".join(dl.tail)[-120:]), 12)
+        self.ui.toast(f"{dl.name}: " + ("downloaded and verified · OpenCode / Pi don't list it yet: Connect tab, u" if ok
+                                        else f"{RED}download failed{R}: " + " ".join(dl.tail)[-120:]), 12)
 
     def _poll_tune(self, tn: TuneRun) -> None:
         finished = tn.proc.poll() is not None

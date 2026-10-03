@@ -9,6 +9,8 @@ from dataclasses import dataclass
 from typing import Dict, List, Optional, Sequence, Tuple
 
 from .domain import cards
+from .domain.clientlist import client_list
+from .domain.router import Common, Preset, plan_model
 from .domain import models as dm
 from .domain.autofit import (AutoFit, Budget, Candidate, Goal, Plan, Scope, as_goal, as_scope, auto_fit,
                              best_downloaded, candidate)
@@ -21,9 +23,9 @@ from .domain.launch import launch_env as build_launch_env
 from .domain.ports import (Clock, Console, Downloader, GpuLimit, HostMemory, HubClient, JsonDocument, LegacyEnv,
                            ModelFolder, ShapeReader)
 from .domain.records import parse_catalog, parse_custom_card, parse_local_db
-from .domain.settings import SCHEMA, Config, migrate_config, migrate_env, models_dir_setting, validate_config
-from .domain.types import (Catalog, CustomCard, CustomInfo, HfFileList, HfRef, LocalDb, ModelInfo, SettingSource,
-                           SettingValue, Settings)
+from .domain.settings import LLAMA_KEYS, SCHEMA, Config, migrate_config, migrate_env, models_dir_setting, validate_config
+from .domain.types import (Catalog, CustomCard, CustomInfo, HfFileList, HfRef, JsonObject, LocalDb, ModelInfo,
+                           SettingSource, SettingValue, Settings)
 
 DOWNLOAD_HEADROOM = 5e9                    # free disk space to keep beyond the file
 
@@ -254,6 +256,56 @@ class Carl:
             return dm.select_named(models, explicit, self.expand(explicit)), models, None
         m, note, _ = self.auto_launch(models, cfg)
         return m, models, note
+
+    def client_models(self, cfg: Config) -> JsonObject:
+        """The installed models for the OpenCode / Pi configs (domain/clientlist.py): each with
+        its window per slot from its effective settings, and the model a start loads as the
+        default (none when nothing can start)."""
+        models = self.all_models(cfg)
+
+        def ctx_of(m: ModelInfo) -> int:
+            ctx = self.effective_tune(m, cfg)[0].get("ctx")
+            return ctx if isinstance(ctx, int) else dm.CTX_FLOOR
+        try:
+            default: Optional[str] = self.resolve_launch(None, cfg)[0].get("name")
+        except ConfigError:
+            default = None
+        return client_list(models, ctx_of, default)
+
+    def router_preset(self, cfg: Config, templates_dir: str) -> Tuple[Preset, Common]:
+        """Router mode's presets (domain/router.py): every downloaded model with the settings a
+        single-model start of it would use, the ones that don't fit left out, and the model a
+        start loads first. templates_dir: where the thinking-toggle chat templates are."""
+        ll = {k: cfg.llama.get(k, s.default) for k, s in LLAMA_KEYS.items()}
+        cache = ll["cache_ram"]
+        common = Common(batch=int(str(ll["batch"])), ubatch=int(str(ll["ub"])), ckpt=int(str(ll["ckpt"])),
+                        ckpt_step=int(str(ll["ckpt_step"])), cache_ram=cache if isinstance(cache, int) else None)
+        limit = self.gpu.limit()[0]
+        ram, vm = self.host.ram_bytes(), self.host.vm_network_up()
+        preset = Preset()
+        for m in self.all_models(cfg):
+            if m.get("status") != "downloaded":
+                continue
+            name, path = m.get("name", ""), m.get("path", "")
+            shape = self.local_shape(path)
+            if shape is None:
+                preset.skipped.append((name, "its GGUF header can't be read"))
+                continue
+            tmpl = os.path.join(templates_dir, os.path.basename(path)[:-len(".gguf")] + ".thinking-toggle.jinja")
+            plan, why = plan_model(name, path, self.effective_tune(m, cfg)[0], shape, self.files.size(path), limit,
+                                   ram, reserve_bytes(None, vm), common,
+                                   tmpl if ll["think_toggle"] and self.files.exists(tmpl) else None)
+            if plan:
+                preset.models.append(plan)
+            else:
+                preset.skipped.append((name, why))
+        try:
+            first: Optional[str] = self.resolve_launch(None, cfg)[0].get("name")
+        except ConfigError:
+            first = None
+        names = [p.name for p in preset.models]
+        preset.start = first if first in names else (names[0] if names else None)
+        return preset, common
 
     def model_file(self, name: Optional[str]) -> Optional[str]:
         """The absolute path when a start names a file rather than a model."""

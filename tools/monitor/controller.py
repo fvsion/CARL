@@ -14,7 +14,7 @@ from carl_core.domain.cards import editable_card
 from carl_core.domain.types import ModelInfo as CoreModelInfo
 
 from .card_form import CardForm
-from .clients import LABELS, config_text, fill_template, masked, served
+from .clients import LABELS, config_text, fill_template, masked, model_list, served
 from .collector import SHAPE_ERRORS
 from .fmt import R, RED, home_short, size
 from .jobs import ServerJobs
@@ -25,7 +25,7 @@ from .model import JSONDict, ModelInfo, ServerData, clean
 from .settings import NUMERIC, Pending, SettingsService, parse_typed, step_choice
 from .arrange import FILTERS, SORTS
 from .settings_view import SettingsView
-from .state import (SP_FIT, SP_MODELS, SP_SERVER, SP_TUNE, SUBPANELS, TABS, Confirm, PickItem, Picker, TextPrompt,
+from .state import (SP_FIT, SP_MODELS, SP_ROUTER, SP_SERVER, SP_TUNE, SUBPANELS, TABS, Confirm, PickItem, Picker, TextPrompt,
                     UIState)
 from .store import ModelList
 
@@ -92,7 +92,8 @@ class Controller:
         templates = {}
         if rel:     # read each time: install.sh may update the bundle while the monitor runs
             templates[kind] = fill_template(fsio.read_text(os.path.join(self.repo, "client", rel)), ep.host, ep.port, self.home)
-        text = config_text(kind, served(d, self.alias_from_server), templates, ep.base, ep.key)
+        s = served(d, self.alias_from_server)
+        text = config_text(kind, s, templates, ep.base, ep.key, model_list(self.models.client_list(), s))
         return masked(text, ep.key) if mask else text
 
     def alias_from_server(self) -> Optional[str]:
@@ -144,7 +145,7 @@ class Controller:
         """Run an action: a clicked region's or button's, or one a key stands for."""
         ui, d = self.ui, self.data
         if action.startswith(("set", "sp:", "pick", "mrow:", "smodel:", "msortset:", "mfilterset:", "c2no", "card",
-                              "fgoal:", "fscope:")) \
+                              "fgoal:", "fscope:", "rmode", "rload:", "runload:")) \
                 or action in SETTINGS_ACTIONS:
             self.settings_action(action)
         elif action.startswith("level:"):
@@ -261,7 +262,7 @@ class Controller:
             if mm:
                 try:
                     self.store.delete(mm)
-                    ui.toast(f"deleted {mm['name']}", 6)
+                    ui.toast(f"deleted {mm['name']} · update the OpenCode / Pi lists: Connect tab, u", 8)
                 except Exception as e:  # a file in use, permissions, ...: say so, keep running
                     ui.toast(f"{RED}delete failed: {e}{R}", 10)
                 self.models.get(refresh=True)
@@ -295,6 +296,10 @@ class Controller:
                 self.jobs.start_download(fit.pick.name)
             else:
                 ui.toast("auto fit's pick is already downloaded", 5)
+            return
+        # ---- router panel
+        if act.startswith(("rmode", "rload:", "runload:")):
+            self.router_action(act)
             return
         # ---- auto-tune panel
         if act in ("tprev", "tnext"):
@@ -369,6 +374,57 @@ class Controller:
         elif act == "setyes":
             ui.confirm = False
             self.jobs.restart(p, d)
+
+    def router_action(self, act: str) -> None:
+        """The Router panel: rmode:MODE asks to switch the model switching mode, rmodeyes saves it
+        (llama.mode) and restarts a running server in it; rload:ID / runload:ID load or unload a
+        router's model (in the background: a load takes 30 s to 2 min)."""
+        ui, d = self.ui, self.data
+        if act.startswith("rmode:"):
+            mode = act[6:]
+            if mode not in ("single", "router"):
+                return
+            running = "router" if d.router is not None else "single" if d.up else None
+            what = ("OpenCode / Pi switch models (router mode)" if mode == "router" else
+                    "the dashboard picks the model (single model)")
+            ui.confirm2 = Confirm("MODEL SWITCHING?", [
+                f"Switch to: {what}. Saved as llama.mode = {mode} in config.json.",
+                ("The server restarts in this mode now (requests in progress stop; the model loads again)."
+                 if running and running != mode else "The next server start uses it."),
+                *(["Router mode: every downloaded model that fits is offered; the clients' configs list them all "
+                   "(Connect tab: update them).",
+                   "WARNING: every switch empties the prompt cache: the next request re-reads the whole conversation "
+                   "(minutes for a long session), and so does switching back. Switch with this in consideration."]
+                  if mode == "router" else [])],
+                "rmodeyes", mode)
+            return
+        if act == "rmodeyes":
+            c, ui.confirm2 = ui.confirm2, None
+            target = c.model if c else None
+            if target not in ("single", "router"):
+                return
+            mode = str(target)
+            try:
+                cfg = self.store.load_config()
+                llama = cfg.setdefault("llama", {})
+                if mode == "single":
+                    llama.pop("mode", None)
+                else:
+                    llama["mode"] = mode
+                self.store.save_config(cfg)
+            except Exception as e:      # config.json unreadable or not writable: say so
+                ui.toast(f"{RED}config.json: {e}{R}", 10)
+                return
+            running = "router" if d.router is not None else "single" if d.up else None
+            if running and running != mode and not ui.restart:
+                if ui.pending is None:
+                    ui.pending = self.pending_init(d)
+                self.jobs.restart(ui.pending, d)
+            else:
+                ui.toast(f"saved: llama.mode = {mode}" + ("" if running == mode else " (the next start uses it)"), 8)
+            return
+        name = act.split(":", 1)[1]
+        self.jobs.router_load(name, unload=act.startswith("runload:"))
 
     def auto_choice(self, act: str) -> None:
         """The Auto fit panel's goal / scope: fgoal / fscope switch to the other one, fgoal:X /
@@ -562,6 +618,8 @@ class Controller:
                 self.settings_action(FIT_KEYS[rest])
                 return True
             return rest not in PANEL_PASSTHROUGH and not rest.isdigit() and rest != "A"
+        if ui.sp == SP_ROUTER:
+            return rest not in PANEL_PASSTHROUGH and not rest.isdigit()
         if ui.sp == SP_TUNE:
             if rest in TUNE_KEYS:
                 self.settings_action(TUNE_KEYS[rest])

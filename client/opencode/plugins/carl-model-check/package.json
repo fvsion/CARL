@@ -1,0 +1,18 @@
+{
+  "name": "carl-model-check",
+  "version": "1.0.0",
+  "description": "Warns in OpenCode when the model picked is not the one the CARL server runs (single-model mode), is not installed on it, or is being loaded (router mode).",
+  "type": "module",
+  "license": "MIT",
+  "exports": {
+    ".": {
+      "import": "./index.js"
+    },
+    "./server": {
+      "import": "./index.js"
+    }
+  },
+  "peerDependencies": {
+    "@opencode-ai/plugin": ">=1.14.0"
+  }
+}

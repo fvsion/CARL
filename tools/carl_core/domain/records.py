@@ -75,6 +75,8 @@ def _card(entry: Dict[str, JsonValue], names: Optional[AbstractSet[str]], at: st
     rank = entry.get("rank")
     if rank is not None and (not isinstance(rank, int) or isinstance(rank, bool) or rank < 1):
         raise ConfigError(f"{at}: rank must be a whole number >= 1 (1 = best quality)")
+    if "thinking" in entry and entry["thinking"] not in THINKING:
+        raise ConfigError(f"{at}: thinking must be one of: {', '.join(THINKING)}")
     alts = entry.get("pick_instead", [])
     if not isinstance(alts, list):
         raise ConfigError(f"{at}: pick_instead must be a list")
@@ -122,8 +124,6 @@ def parse_custom_card(raw: object, names: Optional[AbstractSet[str]], at: str,
             raise ConfigError(f"{at}: {key} must be true or false")
     if "arch" in card and card["arch"] not in ARCHS:
         raise ConfigError(f"{at}: arch must be one of: {', '.join(ARCHS)}")
-    if "thinking" in card and card["thinking"] not in THINKING:
-        raise ConfigError(f"{at}: thinking must be one of: {', '.join(THINKING)}")
     if "uncensored" in card and not card.get("abliterated"):
         raise ConfigError(f"{at}: the uncensored text is for abliterated models only (set abliterated first)")
     if card.get("auto_fit") and ("rank" not in card or "arch" not in card or card.get("abliterated")):

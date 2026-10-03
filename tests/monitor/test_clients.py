@@ -1,6 +1,7 @@
-"""Client setup in the Connect tab: the pasted provider block's id, and which clients
-install.sh already pointed at this server (its state files, also under their name from
-before the rename)."""
+"""Client setup in the Connect tab: the pasted provider block's id and its entries (one per
+installed model, as install.sh writes them), which clients install.sh already pointed at
+this server (its state files, also under their name from before the rename), and whether
+their model lists are out of date."""
 from __future__ import annotations
 
 import json
@@ -13,18 +14,54 @@ sys.dont_write_bytecode = True                                  # keep tools/ fr
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "tools"))
 
 from monitor import fsio
-from monitor.clients import Served, opencode_config, pi_config
+from monitor.clients import Served, drift, model_list, opencode_config, pi_config
 
 BASE = "http://127.0.0.1:8080"
+
+
+INSTALLED = {"schema": 1, "default": "moe", "models": [
+    {"id": "moe", "label": "MoE · IQ3", "ctx": 98304, "thinking": "on-off"},
+    {"id": "dense", "label": "Dense · Q4", "ctx": 131072, "thinking": "effort"}]}
 
 
 class SnippetTest(unittest.TestCase):
     def test_pasted_blocks_use_the_carl_id(self) -> None:
         s = Served("qwen", 98304)
-        oc = opencode_config(s, {}, BASE, "{file:/k}")
+        ml = model_list(None, s)                                       # no list: the served model alone
+        oc = opencode_config(s, {}, BASE, "{file:/k}", ml)
         self.assertEqual(list(oc["provider"]), ["carl"])
         self.assertEqual(oc["provider"]["carl"]["name"], "llamacpp [carl]")
-        self.assertEqual(list(pi_config(s, {}, BASE, "k")["providers"]), ["carl"])
+        self.assertEqual(list(oc["provider"]["carl"]["models"]), ["qwen"])
+        self.assertEqual(list(pi_config(s, {}, BASE, "k", ml)["providers"]), ["carl"])
+
+    def test_every_installed_model_with_the_running_window(self) -> None:
+        s = Served("dense", 65536)
+        ml = model_list(INSTALLED, s)
+        models = opencode_config(s, {}, BASE, "k", ml)["provider"]["carl"]["models"]
+        self.assertEqual(list(models), ["moe", "dense"])
+        self.assertEqual((models["moe"]["limit"]["context"], models["dense"]["limit"]["context"]), (98304, 65536))
+        self.assertEqual([m["id"] for m in pi_config(s, {}, BASE, "k", ml)["providers"]["carl"]["models"]], ["moe", "dense"])
+        self.assertEqual(list(opencode_config(s, {}, BASE, "k", model_list({"schema": 9}, s))["provider"]["carl"]["models"]),
+                         ["dense"])                                    # a bad list: the served model alone
+
+
+class DriftTest(unittest.TestCase):
+    def test_out_of_date_lists(self) -> None:
+        out = drift({"OpenCode": ["a", "gone"], "Pi": ["a", "b"], "broken": None}, ["a", "b"])
+        self.assertEqual([(d.client, d.added, d.removed) for d in out], [("OpenCode", ["b"], ["gone"])])
+        self.assertEqual(out[0].line(2), "OpenCode lists 2 models; installed now: 2 — added b; removed gone")
+
+    def test_listed_models_reads_our_provider(self) -> None:
+        with tempfile.TemporaryDirectory() as home:
+            os.makedirs(os.path.join(home, ".config/opencode"))
+            os.makedirs(os.path.join(home, ".pi/agent"))
+            with open(os.path.join(home, ".config/opencode/opencode.json"), "w", encoding="utf-8") as f:
+                json.dump({"provider": {"carl": {"models": {"a": {}, "b": {}}}, "mine": {"models": {"x": {}}}}}, f)
+            with open(os.path.join(home, ".pi/agent/models.json"), "w", encoding="utf-8") as f:
+                json.dump({"providers": {"llamacpp": {"models": [{"id": "a"}]}}}, f)
+            self.assertEqual(fsio.listed_models(home, "OpenCode", "carl"), ["a", "b"])
+            self.assertEqual(fsio.listed_models(home, "Pi", "llamacpp"), ["a"])
+            self.assertIsNone(fsio.listed_models(home, "Pi", "nope"))
 
 
 class InstalledHereTest(unittest.TestCase):

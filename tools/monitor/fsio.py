@@ -71,6 +71,23 @@ def client_state(folder: str) -> object:
     return None
 
 
+CLIENT_CONFIGS = {"OpenCode": (".config/opencode", "opencode.json"), "Pi": (".pi/agent", "models.json")}
+
+
+def listed_models(home: str, client: str, provider: str) -> Optional[List[str]]:
+    """The model ids a client's config lists under our provider (None when it can't be read)."""
+    folder, name = CLIENT_CONFIGS[client]
+    try:
+        with open(os.path.join(home, folder, name)) as f:
+            cfg = json.load(f)
+        prov = cfg["provider" if client == "OpenCode" else "providers"][provider]
+        ms = prov["models"]
+        ids = list(ms) if isinstance(ms, dict) else [m["id"] for m in ms if isinstance(m, dict) and "id" in m]
+        return [str(i) for i in ids]
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
 def installed_here(base: str, home: str) -> List[Tuple[str, str]]:
     """(client, provider id) pairs that install.sh on THIS Mac already pointed at base."""
     out = []

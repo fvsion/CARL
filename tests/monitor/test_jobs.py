@@ -160,7 +160,8 @@ class JobsTest(unittest.TestCase):
         self.jobs.poll()
         self.assertTrue(dl.done)
         self.assertEqual(dl.tail, ["verified"])
-        self.assertEqual(self.ui.toast_msg[0], "a: downloaded and verified")
+        self.assertTrue(self.ui.toast_msg[0].startswith("a: downloaded and verified"))
+        self.assertIn("Connect tab, u", self.ui.toast_msg[0])                 # the client lists need updating
 
     def test_tune_end_is_announced(self) -> None:
         log = os.path.join(self.tmp.name, "tune.out")

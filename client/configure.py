@@ -9,6 +9,10 @@ the state file existed are recognised by a signature (our provider names /
 API-key file path, our prompt text).
 
 Rules
+- Models: one entry per model installed on the server (carl_models.py, from
+  installed-models.json or the server's /v1/models), each served under its own
+  name with its family's thinking options; the block is rewritten each run, so
+  a deleted model's entry goes and a new one appears.
 - Providers: ours replace only our own earlier version. If the user has their
   own provider called "llamacpp", ours is installed alongside as "carl" and
   every reference uses that id.
@@ -27,6 +31,9 @@ Rules
   ours under the other names is taken out); a user's own "carl-coder" too: ours
   is skipped with a note.
 - Lists (plugin, instructions): ours are appended / removed, others kept.
+- OpenCode plugin carl-model-check (opencode.json "plugin", with our provider id as its
+  option): warns when the model picked isn't the one the server runs, isn't installed, or
+  is being loaded (router mode). NO_MODEL_CHECK=1 leaves it out.
 - Every changed file is backed up first (<file>.bak.<timestamp>).
 """
 from __future__ import annotations
@@ -41,6 +48,11 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
+
+sys.dont_write_bytecode = True                    # no __pycache__ in the client bundle
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import carl_models  # noqa: E402  (next to this file, in the client bundle)
+from carl_models import ModelList  # noqa: E402
 
 JsonObj = dict[str, Any]
 """A parsed JSON object (OpenCode / Pi configs are open-ended JSON)."""
@@ -75,6 +87,7 @@ OLD_OC_PLUGIN = "plugins/mtplx-session-headers"
 OLD_OC_PLUGIN_SIG = "MTPLXSessionHeaders"
 OLD_PI_EXT = "extensions/mtplx-request-policy.ts"
 OLD_PI_EXT_SIG = "Pi <-> MTPLX request bridge"
+MODEL_CHECK = "carl-model-check"                        # the OpenCode plugin that warns about the model
 CODER = "coder"                                         # the coder subagent's name in both clients
 CODER_ALT = "carl-coder"                                # ... when the user has their own "coder"
 CODER_NAMES = (CODER, CODER_ALT, "llm-deploy-coder")    # every name CARL used (the last before 1.2.0)
@@ -85,7 +98,6 @@ OLD_DEFAULTS: frozenset[str] = frozenset(
     {f"{p}/{m}" for p in (PROVIDER, OLD_NAMES.alt)
      for m in ("qwen3.8-27b-abliterated-llama", "qwen3.8-27b", "qwen3.6-35b-a3b")}
     | {"mtplx/qwen3.8-27b-abliterated-grant", "mtplx/qwen3.8-27b-abliterated"})
-DEFAULT_MODEL = "qwen3.6-35b-a3b"
 REPORT_KINDS = ("backed up", "added", "updated", "kept", "removed")
 # The host is substituted into JSON text and URLs: a hostname, IPv4 or IPv6 literal only.
 HOST_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9.:-]*")
@@ -99,10 +111,13 @@ class Options:
     home: str
     host: str
     llama_port: str
-    ctx: int
+    ctx: int             # the running model's window per slot (the server's /props)
+    models: ModelList    # the installed models (installed-models.json)
+    running: str | None  # the model the server runs now (it gets ctx)
     coder: bool
     sidebar: bool
     switcher: bool
+    model_check: bool
 
     @property
     def oc_dir(self) -> str:
@@ -152,12 +167,20 @@ def parse_args(argv: list[str]) -> Options:
     ap.add_argument("--host", required=True, type=host_arg)
     ap.add_argument("--llama-port", required=True, type=port_arg)
     ap.add_argument("--ctx", type=ctx_arg, required=True)
+    ap.add_argument("--models", required=True, help="installed-models.json (tools/carl.py client-models)")
+    ap.add_argument("--running", default=None, help="the model id the server runs now")
     ap.add_argument("--coder", type=switch_arg, default=True)
     ap.add_argument("--sidebar", type=switch_arg, default=True)
     ap.add_argument("--switcher", type=switch_arg, default=True)
+    ap.add_argument("--model-check", type=switch_arg, default=True)
     a = ap.parse_args(argv)
-    return Options(bundle=a.bundle, home=a.home, host=a.host, llama_port=a.llama_port,
-                   ctx=a.ctx, coder=a.coder, sidebar=a.sidebar, switcher=a.switcher)
+    try:
+        models = carl_models.load_list(a.models)
+    except (OSError, ValueError) as e:
+        ap.error(f"--models: {e}")
+    return Options(bundle=a.bundle, home=a.home, host=a.host, llama_port=a.llama_port, ctx=a.ctx, models=models,
+                   running=a.running, coder=a.coder, sidebar=a.sidebar, switcher=a.switcher,
+                   model_check=a.model_check)
 
 
 # ------------------------------------------------------------------ pure helpers
@@ -210,18 +233,9 @@ def split_agent(text: str) -> tuple[str, str]:
     return body, d.group(1)
 
 
-def set_ctx_oc(provider: JsonObj, ctx: int) -> None:
-    for m in provider.get("models", {}).values():
-        m["limit"]["context"] = ctx
-        m["limit"]["output"] = min(m["limit"]["output"], ctx // 2)
-        m["name"] = m["name"].replace("128K", f"{ctx // 1024}K")
-
-
-def set_ctx_pi(provider: JsonObj, ctx: int) -> None:
-    for m in provider.get("models", []):
-        m["contextWindow"] = ctx
-        m["maxTokens"] = min(m["maxTokens"], ctx // 2)
-        m["name"] = m["name"].replace("128K", f"{ctx // 1024}K")
+def default_model(ml: ModelList) -> str | None:
+    """The model to make the clients' default: the one a server start loads, else the first."""
+    return ml.default or (ml.ids[0] if ml.ids else None)
 
 
 def pick_ids(existing: JsonObj, state: JsonObj, is_ours: Callable[[JsonObj], bool]) -> dict[str, str]:
@@ -429,7 +443,7 @@ class Installer:
         ids = pick_ids(providers, st, ours_oc)
         new_id = ids[PROVIDER]
         prov = bundle["provider"][PROVIDER]
-        set_ctx_oc(prov, self.o.ctx)
+        prov["models"] = carl_models.opencode_models(self.o.models, self.o.running, self.o.ctx)
         if new_id != PROVIDER:
             prov["name"] = prov["name"] + f" [{ALT}]"
             rep.add("kept", f"OpenCode provider '{PROVIDER}' (yours); ours installed as '{new_id}'")
@@ -451,6 +465,7 @@ class Installer:
         st.pop("title_disabled", None)
 
         self._oc_remove_old_plugin(cfg)
+        self._oc_model_check(cfg, new_id)
 
         self._oc_coder(cfg, st, agent)
         for k in ("instructions", "agent", "plugin"):
@@ -480,12 +495,41 @@ class Installer:
             else:
                 self.report.add("kept", f"{self.short(plug)} (not ours)")
 
+    def _oc_model_check(self, cfg: JsonObj, provider_id: str) -> None:
+        """The model-check plugin: copied into plugins/, one entry in the plugin list with our
+        provider id (an entry of ours is replaced, other entries stay); out with --model-check 0."""
+        dest = os.path.join(self.o.oc_dir, "plugins", MODEL_CHECK)
+        entry = "file:" + dest
+
+        def is_ours(x: object) -> bool:
+            return x == entry or (isinstance(x, list) and len(x) >= 1 and x[0] == entry)
+        plist = cfg.get("plugin")
+        plist = plist if isinstance(plist, list) else []
+        had = [x for x in plist if is_ours(x)]
+        rest = [x for x in plist if not is_ours(x)]
+        if not self.o.model_check:
+            if had or os.path.isdir(dest):
+                shutil.rmtree(dest, ignore_errors=True)
+                cfg["plugin"] = rest
+                self.report.add("removed", f"OpenCode plugin {MODEL_CHECK}")
+            return
+        shutil.rmtree(dest, ignore_errors=True)
+        shutil.copytree(self.bundle_path(os.path.join("opencode/plugins", MODEL_CHECK)), dest)
+        want = [entry, {"provider": provider_id}]
+        if had != [want]:
+            self.report.add("updated" if had else "added", f"OpenCode plugin {MODEL_CHECK} (model warnings)")
+        cfg["plugin"] = rest + [want]
+
     def _oc_default_model(self, cfg: JsonObj, st: JsonObj, ids: dict[str, str],
                           first_install: bool, had_ours_before: bool, renamed: dict[str, str]) -> None:
         """model / small_model: only if unset or still what we set before. renamed: our
         provider ids taken out this run -> the id ours has now (named in the note)."""
         rep = self.report
-        ours_default = f"{ids['llamacpp']}/{DEFAULT_MODEL}"
+        model = default_model(self.o.models)
+        if model is None:
+            rep.add("kept", "OpenCode model (no model is installed on the server yet)")
+            return
+        ours_default = f"{ids['llamacpp']}/{model}"
         prev = {st.get("model"), st.get("small_model")} | (OLD_DEFAULTS if first_install and had_ours_before else set())
         for key in ("model", "small_model"):
             cur = cfg.get(key)
@@ -619,7 +663,7 @@ class Installer:
         ids = pick_ids(providers, st, ours_pi)
         new_id = ids[PROVIDER]
         prov = bundle["providers"][PROVIDER]
-        set_ctx_pi(prov, self.o.ctx)
+        prov["models"] = carl_models.pi_models(self.o.models, self.o.running, self.o.ctx)
         if new_id != PROVIDER:
             rep.add("kept", f"Pi provider '{PROVIDER}' (yours); ours installed as '{new_id}'")
         if providers.get(new_id) != prov:
@@ -644,7 +688,11 @@ class Installer:
         rep = self.report
         sp = os.path.join(self.o.pi_dir, "settings.json")
         sett = load(sp, {})
-        want = {"defaultProvider": ids[PROVIDER], "defaultModel": DEFAULT_MODEL, "defaultThinkingLevel": "low"}
+        model = default_model(self.o.models)
+        if model is None:
+            rep.add("kept", "Pi defaults (no model is installed on the server yet)")
+            return
+        want = {"defaultProvider": ids[PROVIDER], "defaultModel": model, "defaultThinkingLevel": "low"}
         prev = st.get("settings", {})
         legacy = first_install and had_ours_before and sett.get("defaultProvider") in (PROVIDER, OLD_NAMES.alt)
         if all(sett.get(k) is None or sett.get(k) == prev.get(k) or legacy for k in want):

@@ -30,6 +30,10 @@ CLI (./carl.sh models | download | verify use it through host/models.sh)
   carl.py verify NAME... | delete NAME | path NAME | get NAME FIELD | default | downloaded
                                        (default: auto fit's pick for this Mac, everyday goal)
   carl.py launch-env [--model NAME|PATH] [--no-config]   KEY=value lines for serve-llama.sh
+  carl.py router-preset --out FILE --templates DIR   router mode's presets INI (serve-llama.sh); prints
+                                       "start NAME", "model NAME SETUP" and "skip NAME: WHY" lines
+  carl.py client-models                the installed models for the OpenCode / Pi configs (JSON:
+                                       client/install.sh writes it to client/installed-models.json)
   carl.py config [show|path|get KEY|set KEY VALUE|unset KEY]   KEY like llama.net or models.NAME.ctx
   carl.py card NAME [set FIELD VALUE... | unset FIELD]   a model's card (custom models: yours, editable;
                                        catalogue models: read-only). FIELD like role, good_for, rank
@@ -48,6 +52,7 @@ from typing import Dict, List, Mapping, Optional, Sequence, Tuple  # noqa: E402
 
 from carl_core.app import Carl  # noqa: E402
 from carl_core.domain import cards as _cards  # noqa: E402
+from carl_core.domain.router import preset_ini  # noqa: E402
 from carl_core.domain import models as _dm  # noqa: E402
 from carl_core.domain.autofit import AutoFit as AutoFit, as_goal, as_scope  # noqa: E402
 from carl_core.domain.errors import ConfigError as ConfigError  # noqa: E402  (re-exported)
@@ -189,6 +194,12 @@ def resolve_launch(name: Optional[str] = None, cfg: Optional[Mapping[str, object
     """(model, all models, note) for a llama.cpp start: name, else config llama.model, else
     auto fit's pick (the best downloaded stock model that fits when the pick isn't downloaded)."""
     return app().resolve_launch(name, _config(cfg))
+
+
+def client_models(cfg: Optional[Mapping[str, object]] = None) -> JsonObject:
+    """The installed models for the OpenCode / Pi configs: {schema, default, models: [{id, label,
+    ctx, thinking}]} (client/carl_models.py turns them into entries)."""
+    return app().client_models(_config(cfg))
 
 
 def launch_env(name: Optional[str] = None, use_config: bool = True) -> Tuple[Dict[str, SettingValue], Optional[str]]:
@@ -393,6 +404,21 @@ def main(argv: List[str]) -> int:
         for m in all_models():
             if m.get("status") == "downloaded":
                 print(m.get("name"))
+    elif cmd == "router-preset":
+        use = "router-preset --out FILE --templates DIR"
+        out = _arg(a, a.index("--out") + 1, use) if "--out" in a else _arg([], 0, use)
+        tdir = _arg(a, a.index("--templates") + 1, use) if "--templates" in a else _arg([], 0, use)
+        preset, common = app().router_preset(app().load_config(), tdir)
+        with open(out, "w", encoding="utf-8") as fh:
+            fh.write(preset_ini(preset, common))
+        for p in preset.models:
+            print(f"model {p.name} {p.label()}")
+        for n, why in preset.skipped:
+            print(f"skip {n}: {why}")
+        if preset.start:
+            print(f"start {preset.start}")
+    elif cmd == "client-models":
+        print(json.dumps(client_models(), indent=2))
     elif cmd == "launch-env":
         model = _arg(a, a.index("--model") + 1, "launch-env [--model NAME|PATH] [--no-config]") if "--model" in a else None
         env, note = launch_env(model, use_config="--no-config" not in a)

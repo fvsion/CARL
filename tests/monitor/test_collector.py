@@ -10,8 +10,12 @@ import unittest
 sys.dont_write_bytecode = True                                  # keep tools/ free of __pycache__
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "tools"))
 
-from monitor.collector import Sample, choose_log, live_rates, parse_metrics
-from monitor.model import ServerData, SlotInfo, clean, clean_json, flag, flag_int
+import json
+from typing import Dict, List
+
+from monitor.api import Endpoint
+from monitor.collector import Collector, Sample, choose_log, live_rates, parse_metrics
+from monitor.model import RouterInfo, ServerData, SlotInfo, clean, clean_json, flag, flag_int
 
 METRICS = """# HELP llamacpp:prompt_tokens_total Number of prompt tokens processed.
 # TYPE llamacpp:prompt_tokens_total counter
@@ -22,6 +26,65 @@ llamacpp:spec_decode_accepted_by_position{position="1"} 200
 not-a-metric
 llamacpp:broken value
 """
+
+
+class FakeEndpoint(Endpoint):
+    """A server that answers from a dict (path -> body); every path asked is recorded."""
+
+    def __init__(self, answers: Dict[str, str]) -> None:
+        super().__init__("127.0.0.1", 8080, "k")
+        self.answers = answers
+        self.asked: List[str] = []
+
+    def get(self, path: str, timeout: float = 2) -> str:
+        self.asked.append(path)
+        if path not in self.answers:
+            raise OSError(f"no answer for {path}")
+        return self.answers[path]
+
+
+ROUTER_MODELS = {"data": [
+    {"id": "a", "status": {"value": "unloaded", "args": ["llama-server", "--port", "0"]}},
+    {"id": "b c", "status": {"value": "loaded", "args": ["llama-server", "--port", "51808", "--ctx-size", "8192"]}}]}
+
+
+class RouterTest(unittest.TestCase):
+    def test_router_snapshot_asks_only_about_the_loaded_model_without_autoload(self) -> None:
+        q = "?model=b%20c&autoload=false"
+        ep = FakeEndpoint({"/health": "{}", "/props": json.dumps({"role": "router"}), "/models": json.dumps(ROUTER_MODELS),
+                           "/props" + q: json.dumps({"model_alias": "b c", "total_slots": 1}),
+                           "/slots" + q: json.dumps([{"id": 0, "n_ctx": 8192}]), "/metrics" + q: "llamacpp:x 1\n"})
+        c = Collector(ep, True, "/nokey", None, None, None, "/tmp", 16384)
+        d = ServerData()
+        c._http(d)
+        assert d.router is not None
+        self.assertEqual([(m.id, m.status) for m in d.router.models], [("a", "unloaded"), ("b c", "loaded")])
+        self.assertEqual((d.alias, d.n_ctx, d.slots, d.metrics), ("b c", 8192, True, {"x": 1.0}))
+        model_paths = [p for p in ep.asked if "model=" in p]
+        self.assertTrue(model_paths and all(p.endswith("&autoload=false") for p in model_paths))
+
+    def test_no_model_loaded(self) -> None:
+        idle = {"data": [{"id": "a", "status": {"value": "unloaded"}}]}
+        ep = FakeEndpoint({"/health": "{}", "/props": json.dumps({"role": "router"}), "/models": json.dumps(idle)})
+        d = ServerData()
+        Collector(ep, True, "/nokey", None, None, None, "/tmp", 16384)._http(d)
+        self.assertEqual((d.alias, d.slots), ("", False))
+        self.assertIsNone(d.router.current if d.router else "no router")
+        self.assertFalse(any("model=" in p for p in ep.asked))
+
+    def test_single_server(self) -> None:
+        ep = FakeEndpoint({"/health": "{}", "/props": json.dumps({"model_alias": "m"}), "/slots": "[]",
+                           "/metrics": ""})
+        d = ServerData()
+        Collector(ep, True, "/nokey", None, None, None, "/tmp", 16384)._http(d)
+        self.assertIsNone(d.router)
+        self.assertEqual(d.alias, "m")
+        self.assertNotIn("/models", ep.asked)
+
+    def test_router_info_and_long_flags(self) -> None:
+        self.assertIsNone(RouterInfo.from_json({"data": "x"}).current)
+        self.assertEqual(flag("llama-server --temperature 0.6 --ubatch-size 512", "--temp"), "0.6")   # a router child
+        self.assertEqual(flag("llama-server --ubatch-size 512", "-ub"), "512")
 
 
 class MetricsTest(unittest.TestCase):
@@ -59,14 +122,14 @@ class LogChoiceTest(unittest.TestCase):
             console = os.path.join(home, ".console-8080.out")
             latest = os.path.join(home, "models/logs/llama-server-latest.log")
             d = ServerData(cmd=f"llama-server --log-file {log}", pid=1, etime="00:10")
-            self.assertEqual(choose_log(d, None, console, home), log)             # not written yet, no console
-            self.assertEqual(choose_log(ServerData(cmd="llama-server"), None, console, home), latest)
+            self.assertEqual(choose_log(d.cmd, None, console, home), log)             # not written yet, no console
+            self.assertEqual(choose_log("llama-server", None, console, home), latest)
             with open(console, "w") as f:
                 f.write("x")
-            self.assertEqual(choose_log(d, None, console, home), console)         # empty / missing log: console
+            self.assertEqual(choose_log(d.cmd, None, console, home), console)         # empty / missing log: console
             with open(log, "w") as f:
                 f.write("0.00.000.001 I x\n")
-            self.assertEqual(choose_log(d, None, console, home), log)
+            self.assertEqual(choose_log(d.cmd, None, console, home), log)
 
 
 class UntrustedTextTest(unittest.TestCase):

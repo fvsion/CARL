@@ -1,7 +1,9 @@
-"""HTTP to the llama.cpp server (read-only GETs)."""
+"""HTTP to the llama.cpp server: GETs, and the one write the dashboard makes, a router's
+/models/load and /models/unload (the Router panel's buttons)."""
 from __future__ import annotations
 
 import http.client
+import json
 import urllib.request
 from dataclasses import dataclass
 from typing import Dict
@@ -24,6 +26,15 @@ def get(url: str, key: str, timeout: float) -> str:
     return body.decode()
 
 
+def post_json(url: str, key: str, body: Dict[str, str], timeout: float) -> str:
+    """The body of a JSON POST to url. Raises one of FETCH_ERRORS."""
+    req = urllib.request.Request(url, data=json.dumps(body).encode(), method="POST",
+                                 headers={**auth_headers(key), "Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        out: bytes = r.read()
+    return out.decode()
+
+
 @dataclass
 class Endpoint:
     """Where the server is and the key it wants. The host follows the server when it
@@ -40,6 +51,10 @@ class Endpoint:
     def get(self, path: str, timeout: float = 2) -> str:
         """The body of GET path. Raises one of FETCH_ERRORS."""
         return get(self.base + path, self.key, timeout)
+
+    def post(self, path: str, body: Dict[str, str], timeout: float = 10) -> str:
+        """The body of a JSON POST to path. Raises one of FETCH_ERRORS."""
+        return post_json(self.base + path, self.key, body, timeout)
 
 
 def health_ok(host: str, port: int, key: str, timeout: float = 2) -> bool:

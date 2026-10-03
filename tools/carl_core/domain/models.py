@@ -43,7 +43,7 @@ def custom_entry(name: str, path: str, entry: LocalEntry, files: ModelFolder) ->
                                        else "Custom model (found in the models folder)")
     return {"name": name, "label": entry.get("label") or os.path.basename(path), "source": entry.get("source", "file"),
             "path": path, "bytes": files.size(path) if have else hf.get("bytes", 0), "status": status, "hf": hf,
-            "alias": entry.get("alias") or name, "summary": summary, "description": entry.get("description", ""),
+            "summary": summary, "description": entry.get("description", ""),
             "tune": {}, "why": {}, "ctx_zones": None, "measured": [], "local": entry, "custom": True}
 
 
@@ -128,7 +128,7 @@ def effective_tune(m: ModelInfo, cfg: Config,
         for k, v in layer.items():
             if k in vals:
                 vals[k], src[k] = v, source
-    vals["alias"] = vals["alias"] or m.get("alias") or m.get("name", "")
+    vals["alias"] = vals["alias"] or m.get("name", "")      # served under its own name (unique)
     return vals, src
 
 

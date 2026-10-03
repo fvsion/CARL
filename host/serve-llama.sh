@@ -19,6 +19,13 @@
 #
 # Network (host/common.sh): --vm = VMware's 192.168.42.1, --local = 127.0.0.1
 # (the default). Never 0.0.0.0.
+#
+# Model switching: --single (the default) runs one model; --router (or config.json
+# llama.mode = router, LLAMA_MODE=router) runs llama.cpp's router: every downloaded
+# model that fits, one loaded at a time, the one a client asks for (OpenCode /models).
+# Each model gets the settings a single start of it would use (config.json > Auto-tune
+# > catalogue: tools/carl.py router-preset); --model, --ctx, --kv and --slots don't
+# apply to a router start.
 # The API key file (~/.config/carl/api-key) is created on first use if missing
 # (ensure_api_key in host/common.sh; it copies a key from an earlier place once).
 # Interactive starts show the live monitor in this terminal; quitting it asks
@@ -33,12 +40,15 @@ CTX_FLAG=""
 SLOTS_FLAG=""
 MODEL_FLAG=""
 NET_FLAG=""
+MODE_FLAG=""
 pass=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
     -h|--help|--help-adv) exec "$HERE/serve.sh" llama "$1" ;;
     --local) NET_FLAG=local ;;
     --vm) NET_FLAG=vm ;;
+    --router) MODE_FLAG=router ;;
+    --single) MODE_FLAG=single ;;
     --host|--host=*)
       v="${1#--host}"; v="${v#=}"
       if [[ -z "$v" ]]; then shift; v="${1:-}"; fi
@@ -100,8 +110,10 @@ CARL_ENV="$(python3 "$HERE/../tools/carl.py" "${carl_args[@]}")" || exit 1
 CARL_SOURCES=""
 # MODEL, MODEL_NAME and CARL_SOURCES: carl.py resolved them (flag/env included);
 # for the other keys the environment wins.
-apply_settings "MODEL|MODEL_NAME|CARL_SOURCES|ALIAS|KV|CTX|SLOTS|SPEC|SPEC_N|TEMP|TOP_P|TOP_K|MIN_P|PRESENCE|REPEAT|NET|HOST|CACHE_RAM|UB|BATCH|CKPT|CKPT_STEP|THINK_TOGGLE|EXTRA_ARGS" \
+apply_settings "MODEL|MODEL_NAME|CARL_SOURCES|ALIAS|KV|CTX|SLOTS|SPEC|SPEC_N|TEMP|TOP_P|TOP_K|MIN_P|PRESENCE|REPEAT|NET|HOST|CACHE_RAM|UB|BATCH|CKPT|CKPT_STEP|THINK_TOGGLE|EXTRA_ARGS|LLAMA_MODE" \
   "MODEL|MODEL_NAME|CARL_SOURCES" <<< "$CARL_ENV"
+LLAMA_MODE="${MODE_FLAG:-${LLAMA_MODE:-single}}"
+case "$LLAMA_MODE" in single|router) ;; *) echo "error: LLAMA_MODE takes single or router, got '$LLAMA_MODE'" >&2; exit 2 ;; esac
 [[ -f "$MODEL" ]] || { echo "error: model file not found: $MODEL" >&2; exit 1; }
 ALIAS="${ALIAS:-$(basename "$MODEL" .gguf)}"
 # config.json llama.extra_args: more llama-server flags (command-line extras still
@@ -175,6 +187,56 @@ guard_other_models               # a second model can crash the Mac (host/common
 
 ensure_api_key "$API_KEY_FILE"
 
+# The thinking toggle's chat template for a model file: TMPL (regenerated when the model
+# or the generator is newer).
+TMPL_DIR="$HOME/models/templates"
+make_template() {
+  mkdir -p "$TMPL_DIR"
+  TMPL="$TMPL_DIR/$(basename "$1" .gguf).thinking-toggle.jinja"
+  if [[ ! -s "$TMPL" || "$1" -nt "$TMPL" || "$HERE/gguf-chat-template.py" -nt "$TMPL" ]]; then
+    python3 "$HERE/gguf-chat-template.py" "$1" "$TMPL" >/dev/null || rm -f "$TMPL"
+  fi
+}
+
+log_args=()
+if [[ "$LOG_FILE" != "none" ]]; then
+  mkdir -p "$(dirname "$LOG_FILE")"
+  ln -sfn "$LOG_FILE" "$(dirname "$LOG_FILE")/llama-server-latest.log"
+  log_args=(--log-file "$LOG_FILE" --log-timestamps --log-prefix)   # colours kept; tools/llama-log.sh strips them
+fi
+
+# Router mode: the presets for every downloaded model that fits (each with its own
+# settings, as a single start of it), the start model loaded at once, at most one
+# model in memory (--models-max 1: llama.cpp stops the loaded model before it loads
+# the next one). The router's own log carries its models' lines ("[port] ...").
+if [[ "$LLAMA_MODE" == router ]]; then
+  if [[ "${THINK_TOGGLE:-1}" != 0 ]]; then
+    while IFS= read -r name; do
+      p="$(python3 "$HERE/../tools/carl.py" path "$name" 2>/dev/null)" && [[ -f "$p" ]] && make_template "$p"
+    done < <(python3 "$HERE/../tools/carl.py" downloaded)
+  fi
+  PRESET="$CARL_CONF/router-presets.ini"
+  presets="$(python3 "$HERE/../tools/carl.py" router-preset --out "$PRESET" --templates "$TMPL_DIR")" || exit 1
+  grep -q '^model ' <<< "$presets" || { echo "error: router mode: no downloaded model fits this Mac (./carl.sh fit)" >&2; exit 1; }
+  echo "network: $NET_NOTE"
+  echo "router mode: OpenCode / Pi switch models (one loaded at a time; a switch takes 30 s - 2 min). Presets: $PRESET"
+  echo "  WARNING: every switch empties the prompt cache: the next request re-reads the whole conversation,"
+  echo "  and so does switching back. Switch with this in consideration."
+  while IFS= read -r line; do
+    case "$line" in
+      "model "*) echo "  offers  ${line#model }" ;;
+      "skip "*) echo "  left out ${line#skip }" ;;
+      "start "*) echo "  loads   ${line#start } first" ;;
+    esac
+  done <<< "$presets"
+  run_server "$PORT" "$LOG_FILE" llama-server \
+    --host "$HOST" --port "$PORT" --api-key-file "$API_KEY_FILE" \
+    --models-preset "$PRESET" --models-max 1 \
+    ${log_args[@]+"${log_args[@]}"} \
+    "$@"
+  exit $?
+fi
+
 # Slots and the RAM prompt cache, sized for this Mac (tools/llama-fit.py --plan).
 # The prompt cache holds conversations parked out of a slot (a third session, a
 # second subagent). Its size is what RAM allows after weights + KV + a reserve
@@ -214,19 +276,8 @@ fi
 # THINK_TOGGLE=0 uses the GGUF's template unmodified.
 tmpl_args=()
 if [[ "${THINK_TOGGLE:-1}" != 0 ]]; then
-  TMPL_DIR="$HOME/models/templates"; mkdir -p "$TMPL_DIR"
-  TMPL="$TMPL_DIR/$(basename "$MODEL" .gguf).thinking-toggle.jinja"
-  if [[ ! -s "$TMPL" || "$MODEL" -nt "$TMPL" || "$HERE/gguf-chat-template.py" -nt "$TMPL" ]]; then
-    python3 "$HERE/gguf-chat-template.py" "$MODEL" "$TMPL" || rm -f "$TMPL"
-  fi
+  make_template "$MODEL"
   [[ -s "$TMPL" ]] && tmpl_args=(--chat-template-file "$TMPL")
-fi
-
-log_args=()
-if [[ "$LOG_FILE" != "none" ]]; then
-  mkdir -p "$(dirname "$LOG_FILE")"
-  ln -sfn "$LOG_FILE" "$(dirname "$LOG_FILE")/llama-server-latest.log"
-  log_args=(--log-file "$LOG_FILE" --log-timestamps --log-prefix)   # colours kept; tools/llama-log.sh strips them
 fi
 
 spec_args=()

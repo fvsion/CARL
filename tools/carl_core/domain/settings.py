@@ -98,6 +98,7 @@ LLAMA_KEYS: Dict[str, SettingSpec] = {
     "model": _str("auto"),                                  # auto = auto fit's pick for this Mac
     "auto_goal": _choice("everyday", ("everyday", "hard-code")),        # auto fit: MoE first, or dense first
     "auto_fit": _choice("catalogue", ("catalogue", "downloaded")),      # auto fit picks from these models
+    "mode": _choice("single", ("single", "router"), "LLAMA_MODE"),   # router: clients switch models (opt-in)
     "net": _choice("local", NET_CHOICES, "NET"),
     "host": _str("", "HOST"),                               # one address of this Mac (wins over net)
     "cache_ram": SettingSpec("intauto", "auto", "CACHE_RAM", min=0, max=65536),

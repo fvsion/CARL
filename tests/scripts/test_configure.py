@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import socket
 import stat
 import subprocess
@@ -17,19 +18,27 @@ from typing import Any
 from _paths import CLIENT
 
 SCRIPT = os.path.join(CLIENT, "configure.py")
+# installed-models.json as tools/carl.py client-models writes it
+MODELS = {"schema": 1, "default": "qwen3.6-35b-a3b", "models": [
+    {"id": "qwen3.6-35b-a3b", "label": "Qwen3.6 35B-A3B · Q4", "ctx": 98304, "thinking": "on-off"},
+    {"id": "qwen3.8-27b", "label": "Qwen3.8 27B · Q4", "ctx": 131072, "thinking": "effort"}]}
 
 
 class ConfigureTests(unittest.TestCase):
     def setUp(self) -> None:
         self._tmp = tempfile.TemporaryDirectory()
         self.home = self._tmp.name
+        self.models: Any = MODELS
 
     def tearDown(self) -> None:
         self._tmp.cleanup()
 
     def run_configure(self, *extra: str, host: str = "192.168.42.1", ctx: str = "98304") -> subprocess.CompletedProcess[str]:
+        lst = os.path.join(self.home, "installed-models.json")
+        with open(lst, "w", encoding="utf-8") as f:
+            json.dump(self.models, f)
         return subprocess.run([sys.executable, SCRIPT, "--bundle", CLIENT, "--home", self.home, "--host", host,
-                               "--llama-port", "8080", "--ctx", ctx, *extra],
+                               "--llama-port", "8080", "--ctx", ctx, "--models", lst, *extra],
                               capture_output=True, text=True)
 
     def path(self, rel: str) -> str:
@@ -52,8 +61,13 @@ class ConfigureTests(unittest.TestCase):
         self.assertEqual(prov["options"]["baseURL"], "http://192.168.42.1:8080/v1")
         self.assertEqual(prov["options"]["apiKey"], "{file:" + self.home + "/.config/carl/api-key}")
         self.assertEqual(set(oc["provider"]), {"llamacpp"})
-        self.assertNotIn("plugin", oc)
-        self.assertTrue(all(m["limit"]["context"] == 65536 for m in prov["models"].values()))
+        check = self.path(".config/opencode/plugins/carl-model-check")
+        self.assertEqual(oc["plugin"], [["file:" + check, {"provider": "llamacpp"}]])      # the model warnings
+        self.assertTrue(os.path.isfile(os.path.join(check, "check.js")))
+        with open(os.path.join(check, "package.json"), encoding="utf-8") as f:     # OpenCode 1.18 loads exports["./server"]
+            self.assertIn("./server", json.load(f)["exports"])
+        self.assertEqual({k: m["limit"]["context"] for k, m in prov["models"].items()},
+                         {"qwen3.6-35b-a3b": 98304, "qwen3.8-27b": 131072})       # each model's own window
         self.assertEqual(oc["model"], "llamacpp/qwen3.6-35b-a3b")
         self.assertIn("coder", oc["agent"])
         pi = self.read_json(".pi/agent/models.json")
@@ -67,6 +81,64 @@ class ConfigureTests(unittest.TestCase):
         for rel in (".config/opencode/opencode.json", ".config/opencode/carl.json", ".pi/agent/models.json",
                     ".pi/agent/settings.json", ".pi/agent/carl.json"):
             self.assertEqual(stat.S_IMODE(os.stat(self.path(rel)).st_mode), 0o600, rel)
+
+    def test_one_entry_per_installed_model_with_its_thinking(self) -> None:
+        p = self.run_configure("--running", "qwen3.8-27b", ctx="65536")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        oc = self.read_json(".config/opencode/opencode.json")["provider"]["llamacpp"]["models"]
+        moe, dense = oc["qwen3.6-35b-a3b"], oc["qwen3.8-27b"]
+        self.assertEqual(moe["name"], "Qwen3.6 35B-A3B · Q4 — llama.cpp, 96K")
+        self.assertEqual(dense["name"], "Qwen3.8 27B · Q4 — llama.cpp, 64K")             # the running server's window
+        self.assertEqual(dense["limit"], {"context": 65536, "output": 32000})
+        self.assertEqual((moe["options"], dense["options"]), ({"reasoningEffort": "high"}, {"reasoningEffort": "low"}))
+        self.assertEqual({k for k, v in moe["variants"].items() if "disabled" not in v}, {"none", "high"})
+        self.assertEqual({k for k, v in dense["variants"].items() if "disabled" not in v}, {"none", "low", "medium", "xhigh"})
+        pi = self.read_json(".pi/agent/models.json")["providers"]["llamacpp"]["models"]
+        self.assertEqual([m["id"] for m in pi], ["qwen3.6-35b-a3b", "qwen3.8-27b"])
+        self.assertEqual(pi[0]["thinkingLevelMap"], {"minimal": None, "low": None, "medium": None, "xhigh": None})
+        self.assertEqual(pi[1]["contextWindow"], 65536)
+
+    def test_a_deleted_model_goes_and_our_default_follows(self) -> None:
+        self.assertEqual(self.run_configure().returncode, 0)
+        self.models = {"schema": 1, "default": "qwen3.8-27b", "models": [MODELS["models"][1]]}
+        p = self.run_configure()
+        self.assertEqual(p.returncode, 0, p.stderr)
+        oc = self.read_json(".config/opencode/opencode.json")
+        self.assertEqual(list(oc["provider"]["llamacpp"]["models"]), ["qwen3.8-27b"])
+        self.assertEqual(oc["model"], "llamacpp/qwen3.8-27b")                    # ours before, so it follows
+        self.assertEqual(self.read_json(".pi/agent/settings.json")["defaultModel"], "qwen3.8-27b")
+
+    def test_no_model_installed_yet(self) -> None:
+        self.models = {"schema": 1, "default": None, "models": []}
+        p = self.run_configure()
+        self.assertEqual(p.returncode, 0, p.stderr)
+        oc = self.read_json(".config/opencode/opencode.json")
+        self.assertEqual(oc["provider"]["llamacpp"]["models"], {})
+        self.assertNotIn("model", oc)
+        self.assertIn("no model is installed on the server yet", p.stdout)
+
+    def test_model_check_plugin_follows_the_provider_and_can_be_left_out(self) -> None:
+        self.write_json(".config/opencode/opencode.json", {"provider": {"llamacpp": {"npm": "mine", "models": {}}},
+                                                           "plugin": ["/home/u/mine.js"]})
+        self.assertEqual(self.run_configure().returncode, 0)
+        entry = "file:" + self.path(".config/opencode/plugins/carl-model-check")
+        oc = self.read_json(".config/opencode/opencode.json")
+        self.assertEqual(oc["plugin"], ["/home/u/mine.js", [entry, {"provider": "carl"}]])  # ours is "carl" here
+        p = self.run_configure("--model-check", "0")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(self.read_json(".config/opencode/opencode.json")["plugin"], ["/home/u/mine.js"])
+        self.assertFalse(os.path.exists(self.path(".config/opencode/plugins/carl-model-check")))
+        self.assertIn("removed   OpenCode plugin carl-model-check", p.stdout)
+
+    def test_a_bad_model_list_is_refused(self) -> None:
+        for bad in ({"schema": 2, "models": []}, {"schema": 1, "models": [{"id": "a b", "ctx": 4096, "thinking": "on-off"}]},
+                    {"schema": 1, "models": [{"id": "a", "ctx": 4096, "thinking": "maybe"}]},
+                    {"schema": 1, "models": [{"id": "a", "label": "x\x1b[2J", "ctx": 4096, "thinking": "on-off"}]}):
+            with self.subTest(bad=bad):
+                self.models = bad
+                p = self.run_configure()
+                self.assertEqual(p.returncode, 2)
+                self.assertIn("--models", p.stderr)
 
     def test_rerun_changes_nothing(self) -> None:
         self.assertEqual(self.run_configure().returncode, 0)
@@ -143,7 +215,8 @@ class ConfigureTests(unittest.TestCase):
         self.assertEqual(set(oc["provider"]), {"llamacpp"})
         self.assertEqual(oc["provider"]["llamacpp"]["options"]["apiKey"],
                          "{file:" + self.home + "/.config/carl/api-key}")             # rewritten to the new key path
-        self.assertEqual(oc["plugin"], ["/home/u/my-plugin"])                          # the user's plugin stays
+        self.assertEqual(oc["plugin"][0], "/home/u/my-plugin")                         # the user's plugin stays
+        self.assertEqual(len(oc["plugin"]), 2)                                          # + carl-model-check
         self.assertFalse(os.path.exists(self.path(".config/opencode/plugins/mtplx-session-headers")))
         self.assertEqual(self.read_json(".config/opencode/carl.json")["providers"], {"llamacpp": "llamacpp"})
         self.assertFalse(os.path.exists(self.path(".config/opencode/llm-deploy.json")))   # the old state file
@@ -445,6 +518,9 @@ class InstallScriptTests(unittest.TestCase):
     def setUp(self) -> None:
         self._tmp = tempfile.TemporaryDirectory()
         self.home = self._tmp.name
+        # a copied bundle, as in a VM (no ../tools/carl.py): nothing is written into the repo
+        self.bundle = os.path.join(self.home, "client")
+        shutil.copytree(CLIENT, self.bundle, ignore=shutil.ignore_patterns("installed-models.json", "__pycache__"))
 
     def tearDown(self) -> None:
         self._tmp.cleanup()
@@ -454,7 +530,7 @@ class InstallScriptTests(unittest.TestCase):
             sock.bind(("127.0.0.1", 0))
             port = str(sock.getsockname()[1])
         env = {k: v for k, v in os.environ.items() if k not in ("CARL_API_KEY", "LLAMA_CTX", "CODER", "NO_CODER")}
-        return subprocess.run(["bash", os.path.join(CLIENT, "install.sh"), "--host", "127.0.0.1", "--port", port],
+        return subprocess.run(["bash", os.path.join(self.bundle, "install.sh"), "--host", "127.0.0.1", "--port", port],
                               capture_output=True, text=True, stdin=subprocess.DEVNULL, env={**env, "HOME": self.home})
 
     def write(self, rel: str, text: str) -> None:
@@ -476,6 +552,26 @@ class InstallScriptTests(unittest.TestCase):
         with open(os.path.join(self.home, ".config/opencode/opencode.json"), encoding="utf-8") as f:
             self.assertEqual(json.load(f)["provider"]["llamacpp"]["options"]["apiKey"], "{file:" + carl + "/api-key}")
         self.assertNotIn("vmsecret", p.stdout + p.stderr)
+
+    def test_without_a_model_list_or_server_no_entries_and_a_note(self) -> None:
+        self.write(".config/carl/api-key", "k")
+        p = self.install()
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("no installed-models.json here", p.stdout)
+        self.assertIn("models for the clients: none yet", p.stdout)
+        with open(os.path.join(self.home, ".config/opencode/opencode.json"), encoding="utf-8") as f:
+            self.assertEqual(json.load(f)["provider"]["llamacpp"]["models"], {})
+
+    def test_a_copied_model_list_is_used(self) -> None:
+        self.write(".config/carl/api-key", "k")
+        with open(os.path.join(self.bundle, "installed-models.json"), "w", encoding="utf-8") as f:
+            json.dump(MODELS, f)
+        p = self.install()
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("models for the clients: qwen3.6-35b-a3b, qwen3.8-27b", p.stdout)
+        with open(os.path.join(self.home, ".pi/agent/models.json"), encoding="utf-8") as f:
+            self.assertEqual([m["id"] for m in json.load(f)["providers"]["llamacpp"]["models"]],
+                             ["qwen3.6-35b-a3b", "qwen3.8-27b"])
 
     def test_both_folders_reuse_the_old_key(self) -> None:
         self.write(".config/llm-deploy/api-key", "vmsecret")

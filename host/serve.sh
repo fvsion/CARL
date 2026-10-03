@@ -73,6 +73,12 @@ $(row "--host ADDR" "listen on one address of this Mac, e.g. its LAN address (ot
 $(row "" "Parallels / other VM network (10.211.55.2). It must exist on an interface; never 0.0.0.0")
 $(row "(neither)" "local, unless config.json says llama.net vm (Settings → network)")
 
+MODEL SWITCHING (llama, and $CMD without arguments)
+$(row "--single" "one model: the dashboard (or auto fit) picks it (the default)")
+$(row "--router" "router mode: OpenCode / Pi switch models; every downloaded model that fits, one loaded at a")
+$(row "" "time. WARNING: a switch empties the prompt cache (the next request re-reads the whole")
+$(row "" "conversation). llama.mode in config.json (Settings → Router) saves the choice")
+
 DEFAULTS YOU GET (no flags needed)
   Model qwen3.6-35b-a3b (the IQ3 build on 24 GB Macs), q4_0 KV cache, 2 slots (auto):
   the recommended setup for OpenCode with subagents. Each conversation keeps its own

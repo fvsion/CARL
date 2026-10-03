@@ -32,7 +32,7 @@ def shape(experts: int = 0, nextn: int = 1, kv_elems: int = 8192, rs_bytes: int 
 def entry(name: str, file: str, size: int = 10 * GIB, arch: str = "moe", ctx: int = 98304,
           zones: Optional[CtxZones] = None, rank: Optional[int] = None, abliterated: bool = False) -> CatalogEntry:
     e: CatalogEntry = {
-        "name": name, "label": name, "alias": name.split("-iq3")[0], "summary": f"{name} summary", "arch": arch,
+        "name": name, "label": name, "summary": f"{name} summary", "arch": arch,
         "abliterated": abliterated,
         "hf": {"repo": "owner/repo", "revision": "0" * 40, "file": file, "sha256": SHA_A, "bytes": size},
         "tune": {"kv": "q4_0", "ctx": ctx, "slots": "auto", "spec": "draft-mtp,ngram-mod", "spec_n": 2, "temp": 1.0},

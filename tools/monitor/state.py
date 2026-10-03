@@ -13,8 +13,8 @@ from .settings import Pending
 from .store import HFFile
 
 TABS = ["Overview", "Connect", "Requests", "Log", "Settings"]
-SUBPANELS = ["Server", "Models", "Auto fit", "Auto-tune"]
-SP_SERVER, SP_MODELS, SP_FIT, SP_TUNE = range(len(SUBPANELS))
+SUBPANELS = ["Server", "Models", "Auto fit", "Auto-tune", "Router"]
+SP_SERVER, SP_MODELS, SP_FIT, SP_TUNE, SP_ROUTER = range(len(SUBPANELS))
 
 
 class Process(Protocol):
@@ -127,7 +127,7 @@ class UIState:
     copied: Optional[str] = None
     levels: Dict[str, int] = field(default_factory=lambda: {x: 1 for x in LEVEL_NAMES})
     # Settings
-    sp: int = SP_SERVER             # panel: Server, Models, Auto fit, Auto-tune
+    sp: int = SP_SERVER             # panel: Server, Models, Auto fit, Auto-tune, Router
     pending: Optional[Pending] = None               # Server panel: the values being chosen
     set_run: Pending = field(default_factory=dict)  # what ran when they were first shown
     set_row: int = 0

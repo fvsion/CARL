@@ -152,6 +152,12 @@ class FakeStore:
         self.config = copy.deepcopy(cfg)
         self.saved.append(copy.deepcopy(cfg))
 
+    def client_models(self) -> JSONDict:
+        self._check()
+        return {"schema": 1, "default": "big", "models": [
+            {"id": x["name"], "label": x["name"], "ctx": 98304, "thinking": x.get("thinking", "on-off")}
+            for x in self.models if x["status"] == "downloaded"]}
+
     def launch_model(self, cfg: JSONDict) -> str:
         self._check()
         return "big"

@@ -21,72 +21,7 @@
         },
         "maxTokensField": "max_tokens"
       },
-      "models": [
-        {
-          "id": "qwen3.6-35b-a3b",
-          "name": "Qwen3.6 35B-A3B stock MoE — unsloth UD-Q4_K_M (llama.cpp, 128K)",
-          "reasoning": true,
-          "thinkingLevelMap": {
-            "minimal": null,
-            "low": null,
-            "medium": null,
-            "xhigh": null
-          },
-          "input": [
-            "text"
-          ],
-          "contextWindow": 131072,
-          "maxTokens": 32768,
-          "cost": {
-            "input": 0,
-            "output": 0,
-            "cacheRead": 0,
-            "cacheWrite": 0
-          }
-        },
-        {
-          "id": "qwen3.8-27b",
-          "name": "Qwen3.8 27B stock — unsloth UD-Q4_K_M (llama.cpp, 128K)",
-          "reasoning": true,
-          "thinkingLevelMap": {
-            "minimal": null,
-            "high": null,
-            "xhigh": "xhigh"
-          },
-          "input": [
-            "text"
-          ],
-          "contextWindow": 131072,
-          "maxTokens": 32768,
-          "cost": {
-            "input": 0,
-            "output": 0,
-            "cacheRead": 0,
-            "cacheWrite": 0
-          }
-        },
-        {
-          "id": "qwen3.8-27b-abliterated-llama",
-          "name": "Qwen3.8 27B Abliterated — orcarouter Q4_K_M (llama.cpp, 128K)",
-          "reasoning": true,
-          "thinkingLevelMap": {
-            "minimal": null,
-            "high": null,
-            "xhigh": "xhigh"
-          },
-          "input": [
-            "text"
-          ],
-          "contextWindow": 131072,
-          "maxTokens": 32768,
-          "cost": {
-            "input": 0,
-            "output": 0,
-            "cacheRead": 0,
-            "cacheWrite": 0
-          }
-        }
-      ]
+      "models": []
     }
   }
 }
