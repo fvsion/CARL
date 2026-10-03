@@ -1,14 +1,9 @@
 """The Overview cards (CONNECT, CONTEXT, MEMORY, ACTIVITY, MODEL, HEALTH, SYSTEM, recent
-requests, log) for llama.cpp and for MTPLX. Pure: they render a ServerData snapshot and
-a View; nothing here reads files, runs commands or talks to the server.
-
-MTPLX has no /slots or llama.cpp metrics: its cards read /v1/mtplx/snapshot (model,
-profile, window, in-flight request, session bank, memory, settings) and
-/v1/mtplx/flight (live decode). Same layout and heights as the llama cards."""
+requests, log) for the llama.cpp server. Pure: they render a ServerData snapshot and a
+View; nothing here reads files, runs commands or talks to the server."""
 from __future__ import annotations
 
 import collections
-import json
 import os
 from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Optional, Tuple
@@ -16,11 +11,11 @@ from typing import Callable, Dict, List, Optional, Tuple
 from .fmt import (B, CYN, DIM, GRN, MAG, NA, R, RED, YEL, Card, CardLine, Ln, Row, bar, buttons, draw_card, dur,
                   home_short, knum, lv, size, wrap)
 from .gguf import KV_BPE, kv_bytes_per_token
-from .logbook import TS, LogBook, RequestRecord, level_of, mx_request, mx_wall
-from .model import ServerData, SlowStats, flag, flag_int, jdict, jint, jlist, jnum
+from .logbook import TS, LogBook, RequestRecord, level_of
+from .model import ServerData, SlowStats, flag, flag_int
 
 LEVEL_NAMES = ("connect", "context", "memory", "activity", "model", "health", "system", "requests", "log", "modelinfo")
-NOLOG_TEXT = "no log file: MTPLX writes to the terminal that started it (start it with ./carl.sh to see it here)"
+NOLOG_TEXT = "no log file: the server writes to the terminal that started it (start it with ./carl.sh to see it here)"
 REQ_HEAD = (f"{'started':8}  {'context':>8}  {'new':>7}  {'read/s':>6}  {'output':>6}  {'gen/s':>5}  {'took':>6}  "
             f"{'drafts':>6}")
 
@@ -61,14 +56,11 @@ def status_of(d: ServerData, server_pid: Optional[int]) -> Tuple[str, str, str]:
         return "EXITED", "41", f"{RED}server process {server_pid} has exited{R}"
     if not d.up:
         return ("LOADING", "43", f"{YEL}loading the model…{R}") if d.pid else ("OFFLINE", "41", f"{RED}not reachable{R}")
-    if not d.slots and d.backend != "mtplx":
+    if not d.slots:
         return "UP", "42", "running (unknown server: limited stats)"
     if not d.busy:
         return "IDLE", "42", "idle, waiting for requests"
     nbusy = sum(1 for x in d.slot_list if x.busy)
-    active = jint(jdict(d.mx).get("active_requests"))
-    if d.backend == "mtplx" and active > 1:
-        return f"BUSY +{active - 1}", "46", f"1 request runs, {active - 1} wait (MTPLX runs one at a time)"
     if nbusy > 1:
         return f"BUSY ×{nbusy}", "46", f"{nbusy} requests at once (slots in parallel)"
     if d.decoded == 0:
@@ -267,7 +259,7 @@ def card_model(v: View, d: ServerData) -> Card:
             L.append(lv("batch", f"ub {flag(cmd, '-ub', default='N/A')} · flash-attn {flag(cmd, '-fa', default='N/A')} · "
                                  f"pid {d.pid} · up {d.etime or 'N/A'}"))
     else:
-        why = "MTPLX or unknown model" if d.pid else "no server process"
+        why = "unknown model" if d.pid else "no server process"
         L = [lv("file", f"{NA} {DIM}({why}){R}"), lv("weights", NA), lv("spec", NA)]
         if lvl >= 2:
             L += [lv(x, NA) for x in ("arch", "experts", "thinking", "batch")]
@@ -332,149 +324,16 @@ def card_system(v: View, d: ServerData) -> Card:
     return Card("SYSTEM", f"pressure {pc}{s.pressure}{R}", L)
 
 
-# ---------------------------------------------------------------- MTPLX cards
-def mx_card_context(v: View, d: ServerData) -> Card:
-    """MTPLX: the request's window, KV, and the session bank (RAM and SSD)."""
-    mx = jdict(d.mx)
-    plan, bank = jdict(mx.get("memory_plan")), jdict(mx.get("session_bank"))
-    n_ctx, used = d.n_ctx, d.prompt
-    lvl = v.level("context")
-    frac = used / n_ctx if n_ctx else 0
-    kvq = plan.get("kv_quantization") or "off"
-    per_tok = plan.get("kv_bytes_per_token_effective") or plan.get("kv_bytes_per_token")
-    window = knum(n_ctx) if n_ctx else NA
-    L: List[CardLine] = [
-        lv("request", f"{bar(frac, 16)} {knum(used)} / {window} tokens" if d.busy else f"{bar(0, 16)} 0 / {window} tokens"),
-        lv("KV", f"{MAG}{'bf16' if kvq == 'off' else kvq}{R} · {size(per_tok) if per_tok else NA}/token · "
-                 f"{size(plan.get('kv_reserve_bytes')) if plan.get('kv_reserve_bytes') else NA} reserved"),
-        lv("sessions", f"{bank.get('entries', 0)} in the bank · {size(bank.get('total_nbytes') or 0)} of "
-                       f"{size(bank.get('effective_max_bytes') or 0)} RAM")]
-    if lvl >= 1:
-        cold = jdict(bank.get("cold_tier"))
-        L.append(lv("SSD bank", f"{cold.get('writes_completed', 0)} saved · {cold.get('restore_hits', 0)} restored · "
-                                f"{cold.get('restore_misses', 0)} misses" if cold else NA))
-        lr = mx_request(mx["latest"]) if mx.get("latest") else None
-        L.append(lv("last", (f"{lr.restore} start · {knum(lr.cached)} tokens re-used, {knum(lr.new)} read" if lr else "none")
-                    + f" · miss: {bank.get('last_miss_reason') or 'none'}"))
-    if lvl >= 2:
-        L.append(lv("session", f"each ≤{size(bank.get('per_session_max_bytes') or 0)} in RAM · {bank.get('max_entries', 0)} "
-                               f"entries max · idle {dur(bank.get('idle_ttl_s'))}"))
-        L.append(lv("window", f"{knum(n_ctx)} served · {knum(plan.get('context_window_fit'))} would fit (MTPLX plan)"))
-        L.append(lv("note", str((jlist(plan.get("notes")) or ["none"])[0])[:90]))
-        L.append(lv("scheduler", f"{jdict(mx.get('scheduler')).get('mode', NA)}: one request at a time, the others wait"))
-    return Card("CONTEXT", f"{bar(frac, 10)} {frac * 100:3.0f}%", L)
-
-
-def mx_card_memory(v: View, d: ServerData) -> Card:
-    """MTPLX: MLX memory (weights, active, cache, peak)."""
-    mx = jdict(d.mx)
-    mem = jdict(mx.get("mem"))
-    L: List[CardLine] = [
-        lv("weights", size(mem.get("model_weights_bytes")) if mem.get("model_weights_bytes") else NA),
-        lv("active", f"{size(mem.get('active_memory_bytes') or 0)} · cache {size(mem.get('cache_memory_bytes') or 0)}"),
-        lv("peak", size(mem.get("peak_memory_bytes") or 0))]
-    if v.level("memory") >= 2:
-        L.append(_gpu_limit_line(v))
-        L.append(lv("allocator", f"{(mx.get('allocator_fraction') or 0) * 100:.0f}% of the MLX limit · "
-                                 f"bank {size(mem.get('session_bank_bytes') or 0)}"))
-    return Card("MEMORY", f"MLX {size(mem.get('active_memory_bytes') or 0)}", L)
-
-
-def _per_depth(v: object) -> Optional[List[float]]:
-    """Draft counts per depth, from a list or a {depth: count} object (not numbers count as 0)."""
-    if isinstance(v, dict):
-        v = [v[x] for x in sorted(v)]
-    return [jnum(x) or 0 for x in v] if isinstance(v, list) else None
-
-
-def mx_card_activity(v: View, d: ServerData) -> Card:
-    """MTPLX: what runs now, speeds, drafts accepted per depth, totals."""
-    mx = jdict(d.mx)
-    life, roll, fl = jdict(mx.get("lifetime")), jdict(mx.get("rolling")), d.flight
-    lvl = v.level("activity")
-    L: List[CardLine] = [lv("now", status_of(d, v.server_pid)[2])]
-    summary = f"{DIM}idle{R}"
-    if d.busy and not d.decoded:
-        remaining = max(d.prompt - d.cached - d.processed, 0)
-        rate = d.pp_rate
-        eta = dur(remaining / rate) if rate else "N/A"
-        L += [lv("prompt", f"{knum(d.prompt)} tokens · {knum(d.cached)} cached · {knum(remaining)} left"),
-              lv("speed", f"read {rate or 0:.0f} tok/s · ETA {YEL}{B}{eta}{R}")]
-        summary = f"ETA {eta}"
-    elif d.busy:
-        L += [lv("prompt", f"{knum(d.prompt)} tokens · read"),
-              lv("speed", f"generate {d.tg_rate or 0:.1f} tok/s · {d.decoded} tokens out")]
-        summary = f"{d.tg_rate or 0:.1f} tok/s"
-    else:
-        L += [lv("prompt", "0 tokens · 0 cached · 0 left"), lv("speed", f"0 tok/s · ETA {DIM}none{R}")]
-    if lvl >= 1:
-        L.append(lv("average", f"generate {roll['mean']:.1f} tok/s (5 min) · max {roll.get('max') or 0:.1f}" if roll.get("mean")
-                    else f"generate 0 tok/s {DIM}(no requests in 5 min){R}"))
-        r = mx_request(mx["latest"]) if mx.get("latest") else None
-        L.append(lv("last", f"read {r.pp or 0:.0f} · generate {r.tg or 0:.1f} tok/s · {knum(r.gen)} tokens" if r
-                    else f"{DIM}none{R}"))
-        acc, dr = _per_depth(fl.get("accepted_by_depth")), _per_depth(fl.get("drafted_by_depth"))
-        if acc is not None and dr is not None and sum(dr, 0.0):
-            L.append(lv("drafts", "  ".join(f"D{i + 1} {a / b * 100:.0f}%" for i, (a, b) in enumerate(zip(acc, dr)) if b)))
-        else:
-            L.append(lv("drafts", f"{r.acc * 100:.0f}% accepted (last request)" if r and r.acc is not None else NA))
-    if lvl >= 2:
-        L.append(lv("totals", f"{knum(life.get('prompt_tokens_total'))} read · {knum(life.get('cached_tokens_total'))} cached · "
-                              f"{knum(life.get('completion_tokens_total'))} generated"))
-        L.append(lv("requests", f"{life.get('requests_total', 0)} done · {life.get('cancelled_total', 0)} cancelled · "
-                                f"{max((mx.get('active_requests') or 0) - 1, 0)} waiting"))
-        L.append(lv("phase", f"{fl.get('phase') or 'idle'} · stalled {dur(fl.get('stalled_s')) if fl.get('stalled_s') else 'no'}"))
-    return Card("ACTIVITY", summary, L)
-
-
-def mx_card_model(v: View, d: ServerData) -> Card:
-    """MTPLX: model, profile, MTP depth, sampling, reasoning."""
-    mx = jdict(d.mx)
-    st, prof = jdict(mx.get("settings")), jdict(mx.get("profile"))
-    mc = jdict(st.get("model_controls"))
-    L: List[CardLine] = [
-        lv("model", mx.get("model_id") or NA),
-        lv("profile", f"{prof.get('name', NA)} · MTP depth {st.get('depth', NA)} of {st.get('depth_max', NA)}"),
-        lv("sampling", f"temperature {st.get('temperature', NA)} · top_p {st.get('top_p', NA)} · top_k {st.get('top_k', NA)}")]
-    if v.level("model") >= 2:
-        L.append(lv("weights", os.path.basename(str(mc.get("model_ref") or "")) or NA))
-        L.append(lv("arch", f"{st.get('architecture_id', NA)} · {st.get('support_level', NA)}"))
-        rp = jdict(st.get("reasoning_policy"))
-        L.append(lv("thinking", f"{st.get('reasoning', NA)} · efforts {', '.join(map(str, jlist(rp.get('effort_levels')))) or NA} "
-                                f"(default {rp.get('default_effort', NA)})"))
-        L.append(lv("server", f"MTPLX · pid {d.pid} · up {d.etime or 'N/A'}"))
-    return Card("MODEL", f"MTPLX · {prof.get('name', 'N/A')}", L)
-
-
-def mx_card_health(v: View, d: ServerData) -> Card:
-    """MTPLX: log counts, memory-guard events, memory pressure, sleep."""
-    mx = jdict(d.mx)
-    guard = jlist(mx.get("memory_guard_events"))
-    summary = f"{GRN}ok{R} {d.health_ms:.0f} ms" if d.health_ms is not None else NA
-    pressure = {1: "normal", 2: "WARNING", 4: "CRITICAL"}.get(jint(mx.get("memory_pressure_level"), -1), "N/A")
-    L: List[CardLine] = [
-        _log_counts(v),
-        lv("guard", (YEL if guard else "") + f"{len(guard)} memory-guard events" + (R if guard else "")
-           + f" · pressure {pressure}"),
-        _sleep_line(v, d)]
-    if v.level("health") >= 2:
-        L += _last_three([f"{YEL}{json.dumps(e)[:90]}{R}" for e in guard[-3:]], "memory guard: none") + _sleep_events(v)
-    return Card("HEALTH", summary, L)
-
-
 CardFn = Callable[[View, ServerData], Card]
 CARDS: Dict[str, CardFn] = {"connect": card_connect, "context": card_context, "memory": card_memory,
                             "activity": card_activity, "model": card_model, "health": card_health, "system": card_system}
-MX_CARDS: Dict[str, CardFn] = {"context": mx_card_context, "memory": mx_card_memory, "activity": mx_card_activity,
-                               "model": mx_card_model, "health": mx_card_health}
 
 
 def column(v: View, names: List[str], d: ServerData, w: int) -> List[Row]:
     """The named cards drawn one under the other, w columns wide."""
     rows: List[Row] = []
     for nm in names:
-        fn = MX_CARDS.get(nm) if d.backend == "mtplx" else None
-        card = (fn or CARDS[nm])(v, d)
+        card = CARDS[nm](v, d)
         rows += draw_card(nm, card.title, card.summary, card.lines, w, v.level(nm))
     return rows
 
@@ -490,15 +349,9 @@ def req_row(r: RequestRecord, wall: Callable[[Optional[float]], str]) -> str:
 
 def card_requests(v: View, d: ServerData, n: int) -> Card:
     """The last n finished requests, newest first (exactly n rows)."""
-    if d.backend == "mtplx":
-        mx = jdict(d.mx)
-        reqs = [mx_request(r) for r in jlist(mx.get("recent"))]
-        running = f" · {mx.get('active_requests')} running" if mx.get("active_requests") else ""
-        rows = [req_row(r, mx_wall) for r in reversed(reqs[-n:])] or [f"{DIM}no finished requests since MTPLX started{R}"]
-    else:
-        reqs = list(v.log.requests)
-        running = f" · {len(v.log.current)} running" if v.log.current else ""
-        rows = [req_row(r, v.log.wall) for r in reversed(reqs[-n:])] or [f"{DIM}no finished requests in this log yet{R}"]
+    reqs = list(v.log.requests)
+    running = f" · {len(v.log.current)} running" if v.log.current else ""
+    rows = [req_row(r, v.log.wall) for r in reversed(reqs[-n:])] or [f"{DIM}no finished requests in this log yet{R}"]
     L: List[CardLine] = [f"{DIM}{REQ_HEAD}{R}", *rows]
     L += [f"{DIM}–{R}"] * (n - len(rows))
     return Card("RECENT REQUESTS", f"{len(reqs)} finished{running} {DIM}· tab 3 for all{R}", L)

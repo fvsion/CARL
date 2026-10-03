@@ -1,4 +1,4 @@
-"""HTTP to the llama.cpp or MTPLX server (read-only GETs)."""
+"""HTTP to the llama.cpp server (read-only GETs)."""
 from __future__ import annotations
 
 import http.client
@@ -12,7 +12,7 @@ FETCH_ERRORS = (OSError, http.client.HTTPException, ValueError)
 
 
 def auth_headers(key: str) -> Dict[str, str]:
-    """The API key as a Bearer header (MTPLX needs it; llama.cpp ignores it)."""
+    """The API key as a Bearer header (the server runs with --api-key-file)."""
     return {"Authorization": f"Bearer {key}"} if key else {}
 
 
@@ -27,7 +27,7 @@ def get(url: str, key: str, timeout: float) -> str:
 @dataclass
 class Endpoint:
     """Where the server is and the key it wants. The host follows the server when it
-    listens on another address; the port changes when Settings switches the backend."""
+    listens on another address; the port changes when a start moves the server to another port."""
     host: str
     port: int
     key: str

@@ -10,7 +10,7 @@ Files
                                      Face downloads, files dropped into the models folder) and
                                      Auto-tune results for every model (per Mac)
   ~/.config/llm-deploy/config.json   the user's settings (monitor Settings tab, or by hand):
-                                     backend, per-model profiles, server and MTPLX options
+                                     server options and per-model profiles
   ~/models/gguf/*.gguf               the models folder (paths.models_dir); every .gguf here is
                                      listed, catalogued or not
 
@@ -26,7 +26,6 @@ CLI (./carl.sh models | download | verify use it through host/models.sh)
   carl.py hf-files REPO                the GGUF files of a Hugging Face repo
   carl.py verify NAME... | delete NAME | path NAME | get NAME FIELD | default | downloaded
   carl.py launch-env [--model NAME|PATH] [--no-config]   KEY=value lines for serve-llama.sh
-  carl.py mtplx-env                    KEY=value lines for serve.sh grant|pocket
   carl.py config [show|path|get KEY|set KEY VALUE|unset KEY]   KEY like llama.net or models.NAME.ctx
 
 This module is also the public API of the monitor (tools/llama-monitor.py): the functions
@@ -48,7 +47,7 @@ from carl_core.domain.fit import DEFAULT_CTX, human_gb  # noqa: E402
 from carl_core.domain.gguf import GIB as GIB, ModelShape  # noqa: E402
 from carl_core.domain.hf import parse_hf as parse_hf  # noqa: E402
 from carl_core.domain.launch import shell_lines as shell_lines  # noqa: E402
-from carl_core.domain.settings import (LLAMA_KEYS as _LLAMA, MODEL_KEYS as _MODEL, MTPLX_KEYS as _MTPLX,  # noqa: E402
+from carl_core.domain.settings import (LLAMA_KEYS as _LLAMA, MODEL_KEYS as _MODEL,  # noqa: E402
                                        PATH_KEYS as _PATHS, SCHEMA as SCHEMA, SECTIONS as _SECTIONS, Config, SettingSpec,
                                        get_path, key_path, set_path, unset_path, validate_config as _validate)
 from carl_core.domain.types import (Catalog, CustomInfo, HfFileList, JsonObject, JsonValue, LocalDb,  # noqa: E402
@@ -61,7 +60,6 @@ CONF_DIR = _PATHS_NOW.conf_dir
 CONFIG_FILE = _PATHS_NOW.config
 LOCAL_FILE = _PATHS_NOW.local
 OLD_LLAMA_ENV = _PATHS_NOW.legacy_llama
-OLD_MTPLX_ENV = _PATHS_NOW.legacy_mtplx
 
 
 def _spec_dicts(keys: Mapping[str, SettingSpec]) -> Dict[str, Dict[str, JsonValue]]:
@@ -71,7 +69,6 @@ def _spec_dicts(keys: Mapping[str, SettingSpec]) -> Dict[str, Dict[str, JsonValu
 # The settings schema as dicts ({"type", "default", "env", ...} per key), as the monitor reads it.
 MODEL_KEYS = _spec_dicts(_MODEL)
 LLAMA_KEYS = _spec_dicts(_LLAMA)
-MTPLX_KEYS = _spec_dicts(_MTPLX)
 PATH_KEYS = _spec_dicts(_PATHS)
 
 _APP: List[Carl] = []
@@ -181,10 +178,6 @@ def launch_env(name: Optional[str] = None, use_config: bool = True) -> Tuple[Dic
     return app().launch_env(name, use_config)
 
 
-def mtplx_env() -> Dict[str, SettingValue]:
-    return app().mtplx_env()
-
-
 # ---------------------------------------------------------------- downloads
 def hf_files(repo: str, revision: str = "main") -> HfFileList:
     """[(file, bytes, sha256)] of the GGUF files in a Hugging Face repo (first parts only)."""
@@ -248,6 +241,8 @@ def cmd_config(argv: Sequence[str]) -> None:
         return
     cfg = load_config()
     if sub == "show":
+        for w in app().config_warnings():
+            print(f"warning: {w}", file=sys.stderr)
         print(f"# {CONFIG_FILE}")
         print(json.dumps(cfg, indent=2))
         print("\n# keys (section.key: type, default)")
@@ -350,8 +345,6 @@ def main(argv: List[str]) -> int:
         if note:
             print(note, file=sys.stderr)
         print(shell_lines(env))
-    elif cmd == "mtplx-env":
-        print(shell_lines(mtplx_env()))
     elif cmd == "config":
         cmd_config(a)
     elif cmd in ("-h", "--help", "help"):

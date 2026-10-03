@@ -30,17 +30,16 @@ class AppTest(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         home = self.tmp.name
         opts = Options(host="127.0.0.1", port=8095, lines=6, interval=2.0, log=None, server_pid=None, console=None,
-                       once=True, tab=0, expand=False, home=home, key_file=os.path.join(home, "key"),
-                       ports={"llama": 8080, "mtplx": 8000})
+                       once=True, tab=0, expand=False, home=home, key_file=os.path.join(home, "key"))
         endpoint = Endpoint("127.0.0.1", 8095, "")
         collector = Collector(endpoint, True, opts.key_file, None, None, None, home, 16384)
         self.ui = ui = UIState()
         self.store = store = FakeStore()
         models = ModelList(store, lambda msg: ui.toast(msg, 10))
         svc = SettingsService(models, Schema(net_choices([])), "192.168.42.1", lambda: store.limit)
-        paths = Paths(repo=home, logs=os.path.join(home, "logs"), conf_dir=store.conf_dir, config_file=store.config_file)
-        jobs = ServerJobs(ui, collector, svc, paths, opts.ports, "192.168.42.1")
-        view = SettingsView(svc, opts.ports, store.config_file, home)
+        paths = Paths(repo=home, logs=os.path.join(home, "logs"), config_file=store.config_file)
+        jobs = ServerJobs(ui, collector, svc, paths, "192.168.42.1")
+        view = SettingsView(svc, store.config_file, home)
         self.app = App(opts, Machine(16384, 32 * GIB), collector, ui, svc, jobs, view, None, None)
         self.ctl = self.app.ctl
         self.app.frame(self.ctl.data)
@@ -100,9 +99,9 @@ class AppTest(unittest.TestCase):
         self.keys("5")
         p = self.ui.pending
         assert p is not None
-        self.assertEqual((p["backend"], p["model"]), ("llama", "auto"))
-        self.keys(DOWN)                                 # the model row
-        self.assertEqual(self.ui.set_row, 1)
+        self.assertEqual(p["model"], "auto")
+        self.assertNotIn("backend", p)                  # llama.cpp only: no backend row
+        self.assertEqual(self.ui.set_row, 0)            # the model row is the first
         self.keys("\r")
         assert self.ui.picker is not None
         self.assertEqual(self.ui.picker.items[0][0], "auto")
@@ -122,6 +121,39 @@ class AppTest(unittest.TestCase):
         self.assertEqual(self.ui.pending and self.ui.pending["kv"], "q4_0")
         self.keys("r")                                  # revert: from config.json again on the next frame
         self.assertEqual(self.ui.pending and self.ui.pending["model"], "auto")
+
+    def screen(self) -> str:
+        return "\n".join(self.app.frame(self.ctl.data))
+
+    def test_settings_survive_a_catalogue_that_cannot_be_read(self) -> None:
+        """A half-updated catalogue (or models.json) once crashed the Settings tab: every
+        panel must draw, say what is wrong, and take keys."""
+        self.store.broken = "host/catalog.json: models.x.rank: not a number"
+        self.keys("5")
+        text = self.screen()
+        self.assertIn("model list unavailable", text)
+        self.assertIn("models.x.rank: not a number", text)
+        self.keys(DOWN, "\x1b[C", UP, "\r", ESC, "x", "r")       # rows, a choice, the picker, defaults, revert
+        self.keys("]")
+        self.assertEqual(self.ui.sp, 1)
+        self.screen()
+        self.keys("]", DOWN)                            # Auto-tune panel (Enter would start a tune)
+        self.assertEqual(self.ui.sp, 2)
+        self.screen()
+        self.store.broken = None                       # fixed: the list comes back on the next read
+        self.app.svc.models.get(refresh=True)
+        self.assertIsNone(self.app.svc.models.error)
+        self.keys("[", "[")
+        self.assertNotIn("model list unavailable", self.screen())
+
+    def test_settings_panel_error_is_shown_not_raised(self) -> None:
+        def boom(*_: object) -> list:
+            raise RuntimeError("unexpected shape")
+        self.app.view.server = boom                     # type: ignore[method-assign]
+        self.keys("5")
+        text = self.screen()
+        self.assertIn("SETTINGS UNAVAILABLE", text)
+        self.assertIn("RuntimeError: unexpected shape", text)
 
     def test_apply_asks_first_and_no_cancels(self) -> None:
         self.keys("5", "a")

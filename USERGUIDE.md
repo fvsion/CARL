@@ -2,7 +2,7 @@
 
 CARL: Can't Afford Remote LLMs.
 
-CARL runs a local Qwen coding model on an Apple Silicon Mac. You use the model from OpenCode or Pi. This guide tells you how to set up, run and use CARL. The clients can run in a VMware Fusion VM on the Mac, or directly on the Mac. For the technical details (architecture, repository layout, backend differences, how the thinking control works, model and quant choices, measurements, design reasons), see [REFERENCE.md](REFERENCE.md). For the short overview, see [README.md](README.md).
+CARL runs a local Qwen coding model on an Apple Silicon Mac. You use the model from OpenCode or Pi. This guide tells you how to set up, run and use CARL. The clients can run in a VMware Fusion VM on the Mac, or directly on the Mac. For the technical details (architecture, repository layout, the llama.cpp server, how the thinking control works, model and quant choices, measurements, design reasons), see [REFERENCE.md](REFERENCE.md). For the short overview, see [README.md](README.md).
 
 Commands with the label **Mac** run in the CARL folder on the Mac (`~/LLM-Deploy`). Commands with the label **VM** run in the Kali VM. If you do not use a VM, all commands run on the Mac. See [Clients on the same Mac](#clients-on-the-same-mac-no-vm).
 
@@ -15,13 +15,12 @@ Commands with the label **Mac** run in the CARL folder on the Mac (`~/LLM-Deploy
 5. [Context window](#5-context-window)
 6. [KV cache: q4 or q8](#6-kv-cache-q4-or-q8)
 7. [Downloading and adding models](#7-downloading-and-adding-models)
-8. [The MTPLX presets](#8-the-mtplx-presets)
-9. [Logs and monitoring](#9-logs-and-monitoring)
-10. [Updating the client configs](#10-updating-the-client-configs)
-11. [Troubleshooting](#11-troubleshooting)
-12. [Benchmarking and testing](#12-benchmarking-and-testing)
-13. [Rules of thumb](#13-rules-of-thumb)
-14. [Command reference](#14-command-reference)
+8. [Logs and monitoring](#8-logs-and-monitoring)
+9. [Updating the client configs](#9-updating-the-client-configs)
+10. [Troubleshooting](#10-troubleshooting)
+11. [Benchmarking and testing](#11-benchmarking-and-testing)
+12. [Rules of thumb](#12-rules-of-thumb)
+13. [Command reference](#13-command-reference)
 
 ---
 
@@ -34,7 +33,7 @@ Commands with the label **Mac** run in the CARL folder on the Mac (`~/LLM-Deploy
 - [Homebrew](https://brew.sh), for `llama.cpp` (tested with 0.4.1 and 0.5.0), `aria2` and `ansifilter`.
 - `python3`. The first time that you use it, macOS offers to install it with the command-line developer tools. For the exact GPU limit, the `fit` command also uses `swift`. Both come with `xcode-select --install`.
 - 11–23 GB of free disk space for each model.
-- Optional: VMware Fusion with NAT (vmnet8) for VM clients. MTPLX 2.11.3 for the `grant` / `pocket` presets.
+- Optional: VMware Fusion with NAT (vmnet8) for VM clients.
 
 1. **Install the tools:**
    ```bash
@@ -45,11 +44,8 @@ Commands with the label **Mac** run in the CARL folder on the Mac (`~/LLM-Deploy
    - `ansifilter` makes the logs easy to read.
    - If you forget this step, `./carl.sh` finds the missing tools and asks to install them with Homebrew. `SKIP_DEPS=1` skips this check. Homebrew itself is not installed automatically.
 
-   Optional: for the MTPLX presets, install MTPLX:
-   ```bash
-   uv tool install --python 3.12 mtplx
-   ```
-2. **The API key:** the first server start makes the API key (`~/.mtplx/api-key`, mode 600) automatically, if it is missing. The MTPLX setup also makes an API key. Both backends use this one key.
+2. **The API key:** the first server start makes the API key (`~/.config/llm-deploy/api-key`, mode 600, in a folder with mode 700) automatically, if it is missing. This is the same folder as `config.json`.
+   - If you used CARL before 1.2.0, the first start of `./carl.sh llama` copies your old key (`~/.mtplx/api-key`) to the new path. It is the same key, so your clients continue to work.
    - The configs that `install.sh` writes refer to the key file. They do not contain the key.
 3. **Select and download a model.** The `fit` command shows which models fit in the GPU memory of this Mac. It also shows the largest context window for each model:
    ```bash
@@ -66,18 +62,18 @@ Commands with the label **Mac** run in the CARL folder on the Mac (`~/LLM-Deploy
    ./carl.sh llama --local    # force this Mac only (127.0.0.1)
    ./carl.sh llama --vm       # require the VM address (fails if Fusion's network is down)
    ```
-   - The server starts in the background. Then the **live monitor uses this terminal** ([section 9](#9-logs-and-monitoring)). SERVER shows "loading model…" for 10–60 s, then "idle".
+   - The server starts in the background. Then the **live monitor uses this terminal** ([section 8](#8-logs-and-monitoring)). SERVER shows "loading model…" for 10–60 s, then "idle".
    - The start-up banner shows the network mode and the values that the server selected, for example `slots: 2 (auto) x 98304 tokens, KV q4_0/q4_0, RAM prompt cache … MiB`.
    - The CONNECT section shows the URL and the API key. It also has buttons that copy a complete OpenCode or Pi config.
    - If you run `./carl.sh` with no arguments, it opens the dashboard ([section 2](#2-daily-use)). `./carl.sh -h` shows the help. To see the options of a command, run `./carl.sh help llama` (or a different command).
 
 ### Clients in the VM
 
-The VM needs Python 3 and curl. The staging folder for the client bundle is `~/Documents/mtplx-vm-client` on the Mac. The VM sees this folder through the Fusion shared folder at `/mnt/data/Documents/mtplx-vm-client`.
+The VM needs Python 3 and curl. The staging folder for the client bundle is `~/Documents/carl-vm-client` on the Mac (called `mtplx-vm-client` before 1.2.0; rename it or use the old one). The VM sees this folder through the Fusion shared folder at `/mnt/data/Documents/carl-vm-client`.
 
 1. **Copy the bundle in:**
    ```bash
-   cp -r /mnt/data/Documents/mtplx-vm-client/. ~/mtplx-vm-client/ && cd ~/mtplx-vm-client
+   cp -r /mnt/data/Documents/carl-vm-client/. ~/carl-vm-client/ && cd ~/carl-vm-client
    ```
 2. **Install OpenCode and Pi** (first time only). The installer gets both clients from npm. It does not use sudo. It installs into `~/.local`, and it gets Node 22 (Linux or macOS build) if necessary:
    ```bash
@@ -88,8 +84,8 @@ The VM needs Python 3 and curl. The staging folder for the client bundle is `~/D
    ```bash
    ./install.sh
    ```
-   - On the first run, the installer asks for the API key. Paste the contents of `~/.mtplx/api-key` from the Mac. Alternatively, put the key in a file with the name `api-key` next to `install.sh`, or set `MTPLX_API_KEY`.
-   - The installer keeps the key at `~/.config/mtplx/api-key`. It uses the key again on later runs.
+   - On the first run, the installer asks for the API key. Paste the contents of `~/.config/llm-deploy/api-key` from the Mac. Alternatively, put the key in a file with the name `api-key` next to `install.sh`, or set `CARL_API_KEY`.
+   - The installer keeps the key at `~/.config/llm-deploy/api-key`. It uses the key again on later runs.
    - At the end, the installer does a smoke test. If it shows `OK: llama.cpp reachable at http://192.168.42.1:8080/v1 -> "id":"qwen3.6-35b-a3b"` (the loaded model), you have a connection.
 4. **Start a client:** run `opencode` or `pi`. Both clients use the llama.cpp model by default. The OpenCode config is `~/.config/opencode/opencode.json`. The Pi configs are `~/.pi/agent/models.json` and `~/.pi/agent/settings.json`.
 
@@ -111,7 +107,7 @@ Use this procedure for a Mac without a VM, for example the Mac of a friend. The 
    ./client/install-clients.sh       # first time: OpenCode + Pi into ~/.local (fetches Node 22 for macOS if needed)
    ./client/install.sh --local       # configs pointing at this Mac's server, using its own key file
    ```
-   - On a Mac, `install.sh` uses `--local` by default. It sets the clients to the address that the server listens on now. This address is 127.0.0.1, or 192.168.42.1 if the server started for the VM. It reads the key directly from `~/.mtplx/api-key`.
+   - On a Mac, `install.sh` uses `--local` by default. It sets the clients to the address that the server listens on now. This address is 127.0.0.1, or 192.168.42.1 if the server started for the VM. It reads the key directly from `~/.config/llm-deploy/api-key`.
    - `install.sh` needs `python3`. If macOS asks you to install the command-line developer tools, accept. Alternatively, run `xcode-select --install`.
 3. **Start a client:** open a new terminal, so that `~/.local/bin` is on the `PATH`. Then run `opencode` or `pi`.
 
@@ -130,7 +126,7 @@ Use this procedure when the clients are not in the VMware Fusion VM and not on t
 - The address must exist on this Mac. The launcher always refuses `0.0.0.0`.
 - CAUTION: **With the LAN address, every computer on your network can connect to the server.** Only the API key protects it. Do not use the LAN address on a public or shared network.
 
-**2. Get the API key.** In the dashboard, open the Connect tab (tab 2), and push `k` to show the key. Or run `cat ~/.mtplx/api-key` on the server Mac.
+**2. Get the API key.** In the dashboard, open the Connect tab (tab 2), and push `k` to show the key. Or run `cat ~/.config/llm-deploy/api-key` on the server Mac.
 
 **3. On the client computer:** copy the `client/` folder to it. Then run:
 
@@ -139,7 +135,7 @@ Use this procedure when the clients are not in the VMware Fusion VM and not on t
 ./install.sh --host ADDR --key-file key.txt
 ```
 
-- `key.txt` is a file that contains only the key. Delete it after the installation; the installer keeps its own copy (`~/.config/mtplx/api-key`, mode 600).
+- `key.txt` is a file that contains only the key. Delete it after the installation; the installer keeps its own copy (`~/.config/llm-deploy/api-key`, mode 600).
 - If you do not give a key, the installer asks for it. The key does not show when you type it.
 - `--key KEY` also works. But then the key stays in your shell history. Thus, use the file or the prompt.
 
@@ -147,7 +143,7 @@ Use this procedure when the clients are not in the VMware Fusion VM and not on t
 
 1. **Make the zip:** `tools/make-share-zip.sh [OUT]` writes `../CARL-YYYYMMDD.zip`, or the file `OUT`. The zip holds one folder, `CARL/`.
    - The zip does not include caches, `.DS_Store` files or key files.
-   - Models, logs and the API key are outside the folder (`~/models`, `~/.mtplx`). Thus, the zip contains no personal data.
+   - Models, logs and the API key are outside the folder (`~/models`, `~/.config/llm-deploy`). Thus, the zip contains no personal data.
 2. **On the Mac of your friend:** unzip the file. Then do the steps in [Mac](#mac) and [Clients on the same Mac](#clients-on-the-same-mac-no-vm). In summary:
    - `brew install llama.cpp aria2 ansifilter`
    - `./carl.sh fit`
@@ -178,9 +174,9 @@ Use this procedure when the clients are not in the VMware Fusion VM and not on t
 ## 2. Daily use
 
 1. **Mac:** start Fusion (for VM clients). Then run `./carl.sh`.
-   - If a server runs already, the live monitor attaches to it ([section 9](#9-logs-and-monitoring)).
-   - If no server runs, it starts the backend that you used last (llama.cpp, or MTPLX `grant` / `pocket`) with your saved settings. The first time, it starts llama.cpp with the defaults.
-   - To open only the dashboard, run `./carl.sh --no-start` (or `./carl.sh dashboard`). It attaches to a server that runs. If no server runs, it starts nothing: select a backend in the Settings tab (tab 5), and push `a` to start it.
+   - If a server runs already on port 8080, the live monitor attaches to it ([section 8](#8-logs-and-monitoring)).
+   - If no server runs, it starts llama.cpp with your saved settings. If no model is downloaded, it first offers to download the default model for this Mac.
+   - To open only the dashboard, run `./carl.sh --no-start` (or `./carl.sh dashboard`). It attaches to a server that runs. If no server runs, it starts nothing: select a model in the Settings tab (tab 5), and push `a` to start it.
    - To start a specific server, give a command: for example `./carl.sh llama --model qwen3.8-27b` (see [section 3](#3-choosing-a-model)). Type `./carl.sh -h` for help.
    - CAUTION: **The server does not start if another model is in memory.** Two models do not fit. The launcher looks for any process larger than 8 GB, and it shows that process.
 2. **VM or Mac:** run `opencode` or `pi`. Select the model that matches the server (`/models` in OpenCode, `/model` in Pi). This is necessary only if the server model is not the default.
@@ -213,7 +209,6 @@ Use this procedure when the clients are not in the VMware Fusion VM and not on t
 | A 24 GB Mac, stock | `./carl.sh llama --model qwen3.8-27b-q3` | `qwen3.8-27b` (the Q3 uses the same name) |
 | A 24 GB Mac, stock, the smallest 27B (10.9 GB) | `./carl.sh llama --model qwen3.8-27b-iq3` | `qwen3.8-27b` (the IQ3 uses the same name) |
 | A 24 GB Mac, uncensored | `./carl.sh llama --model orcarouter-27b-q3` | `qwen3.8-27b-abliterated-llama` |
-| Short session, faster than llama.cpp 27B, max 48K (MTPLX) | `./carl.sh grant` | `qwen3.8-27b-abliterated-grant` |
 
 **Key points:**
 - CAUTION: **Only one model can run at a time.** Stop the current server before you start a different server. Two models do not fit in 36 GB, and the collision breaks the model that runs.
@@ -231,13 +226,12 @@ Qwen models "think" (hidden reasoning) before they answer. More thinking makes t
 
 ### OpenCode: `/variants` (or ctrl+t)
 
-In OpenCode 1.18 the thinking levels are model **variants**: type `/variants` and pick one, or press **ctrl+t** to step to the next. (There is no `/effort` command; `/models` switches the model.)
+In OpenCode 1.18 the thinking levels are model **variants**: type `/variants` and pick one, or press **ctrl+t** to step to the next. `/models` switches the model.
 
 | Model | Options | Default |
 |---|---|---|
 | Qwen3.8-27B (llama.cpp) | `none` = off, `low`, `medium`, `xhigh` | `low` |
 | Qwen3.6-35B-A3B | `none` = off, `high` = on | `high` |
-| MTPLX models | `low`, `medium`, `xhigh` (you cannot turn it off) | `low` |
 
 ### Pi: thinking level
 
@@ -279,7 +273,7 @@ The decode speed decreases from 20 to 14 to 12 tok/s. Use `--ctx 128k` or `--ctx
 
 **After you change `--ctx`, update the clients** (VM):
 ```bash
-cd ~/mtplx-vm-client && ./install.sh     # reads the running server's window
+cd ~/carl-vm-client && ./install.sh     # reads the running server's window
 ```
 Then restart OpenCode or Pi.
 
@@ -334,7 +328,7 @@ NOTE: The list contains the top-level sessions of this project that changed in t
 
 ### The coder subagent (OpenCode and Pi)
 
-`install.sh` adds a specialist **coder** subagent. It also adds a rule that tells the main agent when to use the coder. It does this **only when the server has 2+ slots, or when the server is MTPLX**. With one llama.cpp slot (for example, a 24 GB Mac with a 27B), each delegation removes the main session from its slot and forces a full read again. Thus, `install.sh` does not install the coder, or removes it. MTPLX keeps each session in its session bank, so the coder works there (REFERENCE.md, "MTPLX and the coder subagent").
+`install.sh` adds a specialist **coder** subagent. It also adds a rule that tells the main agent when to use the coder. It does this **only when the server has 2+ slots**. With one slot (for example, a 24 GB Mac with a 27B), each delegation removes the main session from its slot and forces a full read again. Thus, `install.sh` does not install the coder, or removes it.
 
 `install.sh` checks the server that runs now. Run `install.sh` again after you change models or slots. `CODER=1` forces the coder on. The main agent delegates **on its own**, and only in these conditions:
 1. **It is stuck:** a fix for the same code failed two times (its own attempts, or you tell it that earlier attempts failed).
@@ -364,13 +358,15 @@ The main agent keeps questions, explanations, code searches and small edits.
   - New modules follow the standards fully. For changes to current code, the coder applies the standards within the change. If a structure blocks a clean change, the coder reports the structure and does not refactor it silently.
   - A definition-of-done checklist runs before each report (tests green, typed, ports/adapters, secure, real input samples, no placeholders). The report has a "Standards" section.
 - **Same model:** the coder uses the loaded model. Thus, the gain is a new, focused context and more reasoning (OpenCode: effort medium), not a stronger model. With 2 slots, the main session keeps its cache while the coder works.
-- **To ask for it directly:** write "use the coder agent to …" in either client.
+- **To ask for it directly:**
+  - **OpenCode:** type `@coder` and your task in the prompt, e.g. `@coder add tests for parse_config` (subagents are in the `@` list; Tab completes the name). The task goes straight to the coder: the main agent does not have to decide to delegate. If you already had an agent of your own called `coder`, CARL's coder is `@carl-coder`. Writing "use the coder agent to …" works too.
+  - **Pi:** there is no command for it: the coder is the `subagent` tool. Ask for it in the message: "use the coder subagent to …".
 - **To turn it off:** run `NO_CODER=1 ./install.sh`.
 - **Where it is:**
   - The only source files are `client/agents/coder.md` (frontmatter description = when to use; body = its instructions) and `client/agents/delegation.md` (the rule for the main agent). To change the coder, edit those files and run `install.sh` again.
   - OpenCode: `agent.coder` in `opencode.json` (mode subagent, reasoning medium, no nested subagents, ≤80 steps), and `instructions`. Its prompt is in `~/.config/opencode/llm-deploy/coder.md`.
   - Pi: `~/.pi/agent/agents/coder.md`, the `subagent` extension, and a marked block in `~/.pi/agent/APPEND_SYSTEM.md`.
-  - `install.sh` never replaces your own `coder` agent, Pi `agents/coder.md` or `extensions/subagent`. Our agent then gets the name `llm-deploy-coder`, or the installer skips it and shows a note.
+  - `install.sh` never replaces your own `coder` agent, Pi `agents/coder.md` or `extensions/subagent`. Our agent then gets the name `carl-coder` (before 1.2.0: `llm-deploy-coder`; a new run renames CARL's own one, with a backup), or the installer skips it and shows a note (if you also have your own `carl-coder`).
 
 ## 6. KV cache: q4 or q8
 
@@ -406,10 +402,10 @@ CAUTION: Do not mix KV types (`KV_K=q8_0 KV_V=q4_0`). If you mix them, the serve
 ./carl.sh delete NAME               # delete a model file (and its partial download)
 ```
 
-- The files go to `~/models/gguf/`. To use a different folder, set `MODELS_DIR`, or `paths.models_dir` in the settings file ([section 9](#the-settings-file)).
+- The files go to `~/models/gguf/`. To use a different folder, set `MODELS_DIR`, or `paths.models_dir` in the settings file ([section 8](#the-settings-file)).
 - If a download stops, run the command again. The download continues from where it stopped.
 - If a file fails its checksum, its name changes to `*.bad`.
-- The dashboard can do the same: Settings tab, **Models** panel ([section 9](#9-logs-and-monitoring)).
+- The dashboard can do the same: Settings tab, **Models** panel ([section 8](#8-logs-and-monitoring)).
 
 **The catalogue** is [host/catalog.json](host/catalog.json). It holds the built-in models. For each model, it has:
 - `hf`: the download source: the Hugging Face repo, a pinned revision, the file, its SHA-256 and its size;
@@ -459,40 +455,21 @@ It does these steps. The model loads one time for each speculation mode.
    - If 96K does not fit (for example `orcarouter-27b-q3` on a 24 GB Mac), it selects the largest standard window that fits.
    - NOTE: The re-emit workload now copies `tools/carl_core/adapters/llama_server.py`. Thus, the re-emit scores are not directly comparable with older Auto-tune results.
 
-- CARL saves the result in `~/.config/llm-deploy/models.json`. Each later start of the model uses it. A value that you set in the settings file has priority ([section 9](#the-settings-file)).
-- CAUTION: **Auto-tune needs the GPU for itself.** It does not start if a server runs on port 8080 or 8000, or if another large process (more than 8 GB, `BIG_GB`) or a known model server is in memory. `ALLOW_SECOND_MODEL=1` skips that check. Stop the server first. The **Auto-tune** panel of the dashboard stops the server for you, and starts it again after the tune.
+- CARL saves the result in `~/.config/llm-deploy/models.json`. Each later start of the model uses it. A value that you set in the settings file has priority ([section 8](#the-settings-file)).
+- CAUTION: **Auto-tune needs the GPU for itself.** It does not start if a server runs on port 8080, or if another large process (more than 8 GB, `BIG_GB`) or a known model server is in memory. `ALLOW_SECOND_MODEL=1` skips that check. Stop the server first. The **Auto-tune** panel of the dashboard stops the server for you, and starts it again after the tune.
 - Auto-tune uses its own server on port 8093 (`--port` changes it). `--dry-run` shows the result, but does not save it.
 
 ---
 
-## 8. The MTPLX presets
-
-```bash
-./carl.sh grant        # grant-ai Qwen3.8-27B-Abliterated-MTPLX-4bit, :8000
-./carl.sh pocket       # PocketAiHub variant, :8000
-```
-
-- **To change the MTPLX settings,** use the Settings tab of the dashboard ([section 9](#9-logs-and-monitoring)). The settings are in the `mtplx` section of `~/.config/llm-deploy/config.json` ([The settings file](#the-settings-file)).
-- **The coder subagent works with MTPLX.** MTPLX runs one request at a time. The other requests wait. Each session comes back from the session bank of MTPLX.
-
-- **Use them only for short sessions under 48K.** After about 56K, MTPLX fails with HTTP 507 on this Mac.
-- **Keep the KV cache at bf16 (`KV_QUANT=off`).** The q8 option of MTPLX uses more memory, not less.
-- **You cannot turn off thinking** from the OpenCode effort menu with MTPLX.
-- **To stop, push `q` and then `s` in the monitor**, or use the `kill` command of [section 2](#2-daily-use) with `8000` in place of `8080`. `mtplx stop` cannot find a server that is bound to the VM address.
-
-For details, see REFERENCE.md, "MTPLX details, and why it is capped at 48K".
-
----
-
-## 9. Logs and monitoring
+## 8. Logs and monitoring
 
 ### Live dashboard
 
-The dashboard (the monitor) is `tools/llama-monitor.py`. It works with llama.cpp and with MTPLX.
+The dashboard (the monitor) is `tools/llama-monitor.py`.
 
 **It runs in the terminal from which you start the server.**
-- `./carl.sh` with no arguments opens the dashboard. It attaches to a server on port 8080 or 8000. If no server runs, it starts the backend that you used last (`~/.config/llm-deploy/last-backend`) with its saved settings. The first time, it starts llama.cpp with the defaults.
-- `./carl.sh llama` (or `grant`/`pocket`) starts the server in the background, in its own process group under `nohup`. Thus, Ctrl-C cannot stop the server by accident. Then the monitor uses the terminal.
+- `./carl.sh` with no arguments opens the dashboard. It attaches to a server on port 8080. If no server runs, it starts llama.cpp with your saved settings (it offers to download the default model for this Mac if no model is downloaded).
+- `./carl.sh llama` starts the server in the background, in its own process group under `nohup`. Thus, Ctrl-C cannot stop the server by accident. Then the monitor uses the terminal.
 - The server sends its console output to its log file, and also to `~/models/logs/.console-<port>.out`.
 - **To quit**, press `q` or Ctrl-C, or click the **[ Quit ]** button (top right). A dialog asks you to select:
   - **Stop server** (`s`);
@@ -519,7 +496,7 @@ The dashboard (the monitor) is `tools/llama-monitor.py`. It works with llama.cpp
 | **2 Connect** | Endpoint, model, API key, who can reach the server, connected clients, key file; setup steps for VM and Mac clients; buttons **[ OpenCode config ]**, **[ Pi config ]**, **[ curl test ]**. A button copies its snippet to the clipboard and shows it below. The screen masks the key unless you reveal it. The copy has the real key. CAUTION: Protect a copied config as you protect the key. |
 | **3 Requests** | All finished requests in the log, newest first: start time, context size, new tokens, read speed, output tokens, generation speed, duration, draft acceptance, prompt tokens from the cache. The title shows the averages. |
 | **4 Log** | The full server log, which you can scroll. Buttons and keys: wrap (`w`), errors and warnings only (`f`), follow (End). |
-| **5 Settings** | Three panels; `[` and `]` change the panel. **Server:** the backend (llama.cpp or MTPLX) and its server setup, with an explanation of the model and of each tuned value. **Models:** the catalogue and the models folder: download, verify, delete, add from Hugging Face. **Auto-tune:** measure a model on this Mac. See "The Settings tab" below. |
+| **5 Settings** | Three panels; `[` and `]` change the panel. **Server:** the model and the server setup, with an explanation of the model and of each tuned value. **Models:** the catalogue and the models folder: download, verify, delete, add from Hugging Face. **Auto-tune:** measure a model on this Mac. See "The Settings tab" below. |
 
 **The Overview cards:** click the title of a card to see more detail. Click again to see full detail. Click once more to collapse the card. The dots after the title show the level: `○○` collapsed, `●○` normal, `●●` full detail.
 
@@ -557,14 +534,8 @@ Each card keeps the same height while the server works. If a value is not availa
 Mouse: left-click only (titles, tabs, buttons). The wheel scrolls.
 
 **Notes:**
-- **The monitor only reads from the server.** On llama.cpp, it reads only `/health`, `/slots`, `/metrics`, `/props`, `/v1/models` and the log file. On MTPLX, it reads `/v1/mtplx/snapshot` and `/v1/mtplx/flight`. Thus, it is safe to use during a session. It changes the server only when you select that: stop the server, or apply new settings.
+- **The monitor only reads from the server.** On llama.cpp, it reads only `/health`, `/slots`, `/metrics`, `/props`, `/v1/models` and the log file. Thus, it is safe to use during a session. It changes the server only when you select that: stop the server, or apply new settings.
 - **The monitor calculates the context memory. It does not measure it.** The server does not log it. Thus, the monitor calculates it from the GGUF metadata of the model and the server flags (REFERENCE.md, "Context memory").
-- **With MTPLX** (port 8000), all cards show MTPLX data from `/v1/mtplx/snapshot` and `/v1/mtplx/flight`:
-  - the request progress and the ETA;
-  - the KV cache (bf16, 64 KiB for each token);
-  - the session bank (RAM and SSD), the MLX memory, the profile and the MTP depth;
-  - the draft acceptance by depth, and the finished requests.
-- NOTE: MTPLX has no log file. The LOG card shows the console output of MTPLX only if the dashboard started the server.
 
 ### The Settings tab
 
@@ -572,14 +543,12 @@ The Settings tab (tab 5) has three panels: **Server**, **Models** and **Auto-tun
 
 **Server panel: change the server settings:**
 1. Press `5`, or click **5 Settings**.
-2. Use ↑ ↓ to select a row. The first row is **backend** (llama.cpp or MTPLX). The rows below it are the settings of that backend:
-   - llama.cpp: model, KV cache, context/slot, slots, speculation, draft tokens, RAM cache, network, temperature, presence.
+2. Use ↑ ↓ to select a row. The rows are the llama.cpp settings: model, KV cache, context/slot, slots, speculation, draft tokens, RAM cache, network, temperature, presence.
    - On the **model** row, push Enter (or click the model name) to open a list of all models: the catalogue, the models folder and your Hugging Face downloads. `auto` is the default of this Mac. When you select a model, the rows change to the settings of that model (your profile, else its Auto-tune result, else its catalogue values).
    - The **network** row offers auto, local, vm and each address of this Mac (for example the LAN address). An address is saved as `llama.host`.
-   - MTPLX: preset (`grant` / `pocket`), context (32K / 48K / 56K), profile (`sustained` / `turbo` / `stable`), MTP depth (1–3), KV cache (`off` / `q8` / `q4`), network.
 
    Use ← → (or click `[<]` `[>]`) to change the value. A `*` shows a value that is different from the server that runs now.
-3. Look at the colour of the values (llama.cpp):
+3. Look at the colour of the values:
    - **green:** the tuned value for this model, or a fast setting;
    - **yellow:** changed from the tuned value, or slower;
    - A context of 96K or less is never yellow or red: 96K for each slot is the floor of the default window. Only larger windows get a warning (you can still select them).
@@ -594,28 +563,25 @@ The Settings tab (tab 5) has three panels: **Server**, **Models** and **Auto-tun
 
 - CAUTION: **Apply stops the server.** Requests in progress stop. Make sure that no client waits for an answer.
 - **If the new server does not start,** the monitor starts the old server again with its old values. A message shows the last lines of the error.
-- **The monitor saves the settings in `~/.config/llm-deploy/config.json`** ([The settings file](#the-settings-file)). `./carl.sh llama`, `grant` and `pocket` use this file the next time. Flags and environment variables have priority over the file.
-  - Server-wide values go to the `llama` or `mtplx` section. The monitor writes only values that are different from the defaults.
+- **The monitor saves the settings in `~/.config/llm-deploy/config.json`** ([The settings file](#the-settings-file)). `./carl.sh llama` uses this file the next time. Flags and environment variables have priority over the file.
+  - Server-wide values go to the `llama` section. The monitor writes only values that are different from the defaults.
   - Model values (KV cache, context, slots, speculation, sampling) go to the profile of the model (`models.<name>`). The monitor writes only the values that are different from the tuned values of that model.
 - **`x` (Tuned values)** sets the defaults, and the tuned values of the selected model. Then apply.
-- **A change of the backend stops the current server.** The monitor then starts the other backend on its own port (8080 for llama.cpp, 8000 for MTPLX). The dashboard follows the new server.
-- **After a change of the backend, the context or the slots,** run `install.sh` again on each client. The clients then get the new context limit, and the coder subagent is added or removed.
+- **After a change of the model, the context or the slots,** run `install.sh` again on each client. The clients then get the new context limit, and the coder subagent is added or removed.
 - **`r`** discards your changes and shows the values of the server that runs now.
+- **If the catalogue or `models.json` cannot be loaded** (for example a bad edit), the Settings tab shows the error in the panel. The other tabs continue to work.
 
 **Advanced settings:**
 1. Select the row **advanced**, and push → to show the advanced rows.
 2. Select a row. Use ← → to select a preset value.
 3. To type a value, push Enter. Type the number (for example `0.05`, or `96k` for a context). Push Enter to keep it, or Esc to cancel.
 
-| Backend | Advanced rows (default) | Launcher variable |
-|---|---|---|
-| llama.cpp | top_k (20), top_p (0.95), min_p (0), repeat penalty (1.0) | `TOP_K`, `TOP_P`, `MIN_P`, `REPEAT` |
-| llama.cpp | -ub batch (512), checkpoints (8), checkpoint step (4096) | `UB`, `CKPT`, `CKPT_STEP` (and `BATCH` for `-b`, default 2048) |
-| MTPLX | scheduler, batching preset, prefill chunk (default: the value of MTPLX) | `SCHEDULER`, `BATCHING`, `PREFILL_CHUNK` |
-| MTPLX | SSD sessions (on) | `SSD_CACHE` |
+| Advanced rows (default) | Launcher variable |
+|---|---|
+| top_k (20), top_p (0.95), min_p (0), repeat penalty (1.0) | `TOP_K`, `TOP_P`, `MIN_P`, `REPEAT` |
+| -ub batch (512), checkpoints (8), checkpoint step (4096) | `UB`, `CKPT`, `CKPT_STEP` (and `BATCH` for `-b`, default 2048) |
 
 - CAUTION: **The default values are tuned and measured** (REFERENCE.md). A change can make the model slower, or its answers worse. To go back, push `x` (Tuned values) and apply.
-- **MTPLX has no server sampling values.** The client sends temperature, top_p and top_k with each request.
 - The monitor saves the advanced values in the same settings file. You can also set them as environment variables, for example `TOP_K=40 ./carl.sh llama`.
 
 **Models panel:**
@@ -638,16 +604,15 @@ The dashboard and the launchers keep your settings in `~/.config/llm-deploy/conf
 
 | Section | What it holds |
 |---|---|
-| `backend` | `llama` or `mtplx`: the backend that the Settings tab selected last. (`./carl.sh` with no arguments uses `~/.config/llm-deploy/last-backend`.) |
 | `llama` | Server-wide llama.cpp settings: `model` (`auto` = the default of this Mac), `net`, `host`, `cache_ram`, `ub`, `batch`, `ckpt`, `ckpt_step`, `think_toggle`, `extra_args` (more `llama-server` flags, as a list) |
 | `models.<name>` | The profile of one model: `kv`, `ctx`, `slots`, `spec`, `spec_n`, `temp`, `top_p`, `top_k`, `min_p`, `presence`, `repeat`, `alias` |
-| `mtplx` | `preset`, `context`, `profile`, `depth`, `kv_quant`, `net`, `host`, `scheduler`, `batching`, `prefill_chunk`, `ssd_cache` |
 | `paths` | `models_dir` (default `~/models/gguf`) |
 
 - **Order of priority** for a llama.cpp start: command-line flags, then environment variables, then `config.json`, then the Auto-tune result of this Mac, then the catalogue (`host/catalog.json`), then the built-in defaults.
 - **CARL validates the file.** Each value must have the correct type, range or choice. A bad value stops the start with an error that names the key. CARL ignores an unknown key.
-- **Earlier versions used `llama.env` and `mtplx.env`** in the same folder. If `config.json` does not exist, CARL copies their values into it one time. After that, CARL does not read the old files.
-- `SETTINGS_FILE=none ./carl.sh llama` ignores `config.json` (the Auto-tune result and the catalogue still apply). `SETTINGS_FILE_MTPLX=none` ignores the `mtplx` section for `grant` and `pocket`.
+- **Earlier versions used `llama.env`** in the same folder. If `config.json` does not exist, CARL copies its values into it one time. After that, CARL does not read the old file.
+- **A file from before 1.2.0 can hold settings of features that 1.2.0 removed** (CHANGELOG.md). It still loads: CARL ignores them (`./carl.sh config show` warns about a removed section), and they go away the next time CARL saves the file.
+- `SETTINGS_FILE=none ./carl.sh llama` ignores `config.json` (the Auto-tune result and the catalogue still apply).
 - To go back to the defaults, delete the file, or remove a value with `config unset`.
 
 ```bash
@@ -676,7 +641,7 @@ ls ~/models/logs/                         # one log per server start; llama-serv
 
 **Quick server checks (Mac):**
 ```bash
-K=$(cat ~/.mtplx/api-key)
+K=$(cat ~/.config/llm-deploy/api-key)
 curl -s -H "Authorization: Bearer $K" http://192.168.42.1:8080/v1/models          # which model is loaded
 curl -s -H "Authorization: Bearer $K" http://192.168.42.1:8080/props | python3 -c 'import json,sys; print(json.load(sys.stdin)["default_generation_settings"]["n_ctx"])'   # context window
 PID=$(netstat -anv -p tcp | awk '$6=="LISTEN" && $4 ~ /[.]8080$/ {n=split($(NF-8),a,":"); print a[n]; exit}')   # the server process
@@ -687,7 +652,7 @@ NOTE: CARL does not use `lsof`. On a Mac with a stale network share (for example
 
 ---
 
-## 10. Updating the client configs
+## 9. Updating the client configs
 
 Run the installer again in these conditions:
 - the bundle in `client/` changed (new model, new options), or
@@ -695,10 +660,10 @@ Run the installer again in these conditions:
 
 ```bash
 # Mac (only if client/ changed): stage the bundle in the shared folder
-rsync -a --delete client/ ~/Documents/mtplx-vm-client/
+rsync -a --delete client/ ~/Documents/carl-vm-client/
 
 # VM
-cp -r /mnt/data/Documents/mtplx-vm-client/. ~/mtplx-vm-client/ && cd ~/mtplx-vm-client && ./install.sh
+cp -r /mnt/data/Documents/carl-vm-client/. ~/carl-vm-client/ && cd ~/carl-vm-client && ./install.sh
 ```
 
 Then **fully restart OpenCode or Pi**.
@@ -709,16 +674,19 @@ Then **fully restart OpenCode or Pi**.
   - `FILE.bak.<timestamp>`: the version from before each later change.
   - The summary shows the backups as `backed up`. If nothing changes, the installer writes nothing and makes no backup.
 - To go back to your own config, copy `FILE.before-carl` back to `FILE`. For example: `cp ~/.config/opencode/opencode.json.before-carl ~/.config/opencode/opencode.json`.
-- It stores the API key at `~/.config/mtplx/api-key`. The configs refer to this key file. They do not contain the key.
-- It replaces the `llamacpp` and `mtplx` providers as complete blocks. Thus, removed models do not stay in the config. (A deep merge never deletes keys, so old variants stayed in the configs.) It keeps your other providers and settings.
+- It stores the API key at `~/.config/llm-deploy/api-key` (mode 600). The configs refer to this key file. They do not contain the key.
+  - Before 1.2.0, the client copy was `~/.config/mtplx/api-key`. If the installer finds no other key, it uses that one. It changes old configs to the new path. It does not delete the old file (a provider of your own can use it): delete it yourself when nothing uses it.
+  - The order of the key sources: `--key` / `--key-file`, `$CARL_API_KEY`, `./api-key` next to `install.sh`, the key file of the server (on a Mac with `--local`), the key from an earlier run, a prompt.
+- It replaces the `llamacpp` provider as a complete block. Thus, removed models do not stay in the config. (A deep merge never deletes keys, so old variants stayed in the configs.) It keeps your other providers and settings.
+- It removes the client parts of the server support that 1.2.0 removed (a provider, an OpenCode plugin and a Pi extension; CHANGELOG.md), if an earlier CARL installed them. It removes only CARL's own items, with the usual backups.
 - It sets the llama.cpp context limit from the server.
-- It copies the plugin and the extension. Then it does a smoke test on the two ports.
+- It copies the plugins and the extensions. Then it does a smoke test of the server.
 
 **It does not overwrite settings that you own.** `client/configure.py` does the merge:
 - **It records our items** in `llm-deploy.json` next to each config (`~/.config/opencode/`, `~/.pi/agent/`). It identifies older installs by our provider names and the key path.
-- **Providers:** if you already have your own provider with the id `llamacpp` or `mtplx`, it stays. The installer then adds ours next to it as `llm-deploy` / `llm-deploy-mtplx`.
+- **Providers:** if you already have your own provider with the id `llamacpp`, it stays. The installer then adds ours next to it as `llm-deploy`.
 - **Default model:** it sets the OpenCode `model` / `small_model` and the Pi defaults only if they are unset, or if they still have the value that it set before. If your default model is your own, it stays, and `small_model` follows it.
-- **Agents, prompts, extensions:** it never replaces your own `coder` agent, Pi `agents/coder.md` or `extensions/subagent`. Our item becomes `llm-deploy-coder`, or the installer skips it and shows a note.
+- **Agents, prompts, extensions:** it never replaces your own `coder` agent, Pi `agents/coder.md` or `extensions/subagent`. Our coder becomes `carl-coder` (before 1.2.0: `llm-deploy-coder`), or the installer skips it and shows a note.
 - **Lists** (`plugin`, `instructions`): it adds our items to the end of the list, or removes them. It keeps your items.
 - **Report:** at the end, it shows a summary: added / updated / kept / removed.
 - **If you run it again with the same input, it changes nothing.**
@@ -731,12 +699,13 @@ The options of the installer:
 ./install.sh --vm [HOST]     # server at the VM host address (default 192.168.42.1)
 ./install.sh --local         # server on this Mac (the address it listens on, else 127.0.0.1)
 ./install.sh --host ADDR     # any address
-./install.sh [HOST] [MTPLX_PORT] [LLAMA_PORT]     # old positional form
+./install.sh --port N        # the llama.cpp port (default 8080)
+./install.sh HOST [X] [PORT] # old positional form: X (an old second port) is ignored with a note; PORT = the llama.cpp port
 ```
 
 ---
 
-## 11. Troubleshooting
+## 10. Troubleshooting
 
 | Symptom | Cause | Fix |
 |---|---|---|
@@ -748,7 +717,7 @@ The options of the installer:
 | `error: --vm: no interface has 192.168.42.1` | The Fusion network is not up | Start VMware Fusion, or use `--local`. |
 | The monitor HEALTH card shows **BROKEN** | GPU out-of-memory or compute errors in the log | Restart the server. Make sure that no other large program runs. |
 | `error: port 8080 is already in use by: llama-server ...` | A server already runs (one model at a time) | Stop it first: `./carl.sh monitor`, then `q` and `s`. Or use the `kill` command of [section 2](#2-daily-use). Or, only monitor it with `./carl.sh monitor`. |
-| `error: another large process (probably a model) is in memory` | A model server runs already: llama.cpp, MTPLX, or a server that was started in a different way. Two models do not fit in the GPU memory. | Stop the other server first. The message shows its process ID and its size. If the large process is not a model, start with `ALLOW_SECOND_MODEL=1`. |
+| `error: another large process (probably a model) is in memory` | A model server runs already: llama.cpp, or a server that was started in a different way. Two models do not fit in the GPU memory. | Stop the other server first. The message shows its process ID and its size. If the large process is not a model, start with `ALLOW_SECOND_MODEL=1`. |
 | Prompt progress stops for many minutes, then continues | The Mac went to sleep (lid closed on battery power, or `KEEP_AWAKE=0`) | Connect the power supply and keep the lid open. To check, run `pmset -g log \| grep -E "Sleep\|Wake"`. |
 | All requests fail with `Compute error`, but `/health` says ok | A GPU out-of-memory event. Usually, a second model started at the same time | Restart the server. CAUTION: Do not run two models at the same time. |
 | `HTTP 400 ... exceeds the available context size` | The session became larger than the server `--ctx`, and the client limit is higher | Restart the server with a larger `--ctx`, or run `install.sh` again so that the client compacts in time. Compact the session manually now. |
@@ -757,9 +726,8 @@ The options of the installer:
 | The first message takes minutes | Cold prompt: the system prompt and the tools (~9K), or a resumed long session | This is the expected result. The 35B reads prompts ~6× faster. Later turns use the cache again. |
 | Slow replies late in a long session | The decode speed decreases as the context gets larger (27B: ~7 tok/s at 60–80K) | Compact the session or start a new session. Or, use the 35B. |
 | The client shows the wrong model name | The client selection does not control the server | Select the entry that matches `./carl.sh --model ...`. |
-| `install.sh` waits at "MTPLX API key" and does not continue | The installer found no key | Paste the key, put it in `./api-key`, or set `MTPLX_API_KEY`. |
+| `install.sh` waits at the API key prompt and does not continue | The installer found no key | Paste the key, put it in `./api-key`, or set `CARL_API_KEY`. |
 | Smoke test: `--: llama.cpp not running` | The server is not up, or the VM cannot reach the Mac | Start the server. From the VM, run `curl -s http://192.168.42.1:8080/health`. |
-| MTPLX: HTTP 507 | The session is larger than ~56K | Use the llama.cpp preset for long sessions. |
 | The download stops or fails its checksum | Network interruption, or a corrupted file (`*.bad`) | First, delete the `.bad` file. Then run `download` again (it continues from where it stopped). |
 | The monitor or `./carl.sh` freezes, and Ctrl-C does not stop it (versions before 2026-10-03) | Old versions used `lsof` to find the server. `lsof` checks each mounted volume. On a stale network share (for example a disconnected Time Machine SMB volume), it hangs, and you cannot stop it. | Update CARL: it now uses `netstat`. To release the hang now, eject the stale volume in Finder (or `diskutil unmount force /Volumes/NAME`), then close the terminal. |
 | `CARL needs: llama.cpp aria2 ansifilter (not installed)` | Homebrew tools are missing | Answer `Y`, and CARL runs `brew install`. Or install them yourself. `SKIP_DEPS=1` skips the check. If Homebrew is missing, install it first (https://brew.sh). |
@@ -773,11 +741,11 @@ The options of the installer:
 
 ---
 
-## 12. Benchmarking and testing
+## 11. Benchmarking and testing
 
 CAUTION: Some of these commands restart the server. Run them only when no session is active and **no other server runs**. The scripts that restart the server (`llama-spec-sweep.sh`, `llama-ab.sh`) use port 8080 on the default address.
 
-The easy way to find the best speculation and context for a model on this Mac is Auto-tune: `./carl.sh tune NAME` ([section 7](#auto-tune)). Stop the server first: Auto-tune does not start while a server runs on port 8080 or 8000, or while another model is in memory.
+The easy way to find the best speculation and context for a model on this Mac is Auto-tune: `./carl.sh tune NAME` ([section 7](#auto-tune)). Stop the server first: Auto-tune does not start while a server runs on port 8080, or while another model is in memory.
 
 ```bash
 # Speculation configs (model via MODEL=path; draft count via spec:n)
@@ -797,7 +765,8 @@ tools/llama-wait-idle.sh 1200 && tools/llama-ab.sh all
 | `tools/llama-wait-idle.sh [SECS] [BASE]` | Waits until the server stays idle for SECS (default 1200). |
 | `tools/llama-sesstest.py` | A multi-turn test of a long session (56K start, ~7K appends). It records the RSS. |
 | `tools/req-capture-proxy.py LISTEN UPSTREAM LOG` | A pass-through with a log: it records what a client actually sends. It refuses a wildcard listen address (`0.0.0.0`, `::`), and it writes the log with mode 600. |
-| `tools/make-memtest-prompt.py` + `tools/sesstest.py` | A memory test for long MTPLX sessions. For `sesstest.py`, give `-` as KEY: it then reads the key file (`$API_KEY_FILE` or `~/.mtplx/api-key`), so the key does not show in the process list. |
+
+NOTE: Since 1.2.0, `llama-ab-measure.py`, `llama-kv-longctx.py` and `llama-sesstest.py` build their long prompts from the source files of this folder (Python, shell and JavaScript in `tools/`, `host/` and `client/`). Thus, their numbers are not directly comparable with older runs.
 
 The file headers give more details. `tools/carl_bench.py` holds the helpers that these small tools share (the API key, chat requests, the PID of the server from `netstat`, the server memory).
 
@@ -810,7 +779,7 @@ python3 -m unittest discover -s tests/monitor -t tests/monitor   # the dashboard
 
 ---
 
-## 13. Rules of thumb
+## 12. Rules of thumb
 
 - **Run only one model server at a time.**
 - **Keep the Mac connected to power and awake** during long work.
@@ -822,13 +791,13 @@ python3 -m unittest discover -s tests/monitor -t tests/monitor   # the dashboard
 
 ---
 
-## 14. Command reference
+## 13. Command reference
 
 **Mac:**
 
 | Command | Does |
 |---|---|
-| `./carl.sh` | open the dashboard: attach to a server on 8080 / 8000, else start the last used backend (`~/.config/llm-deploy/last-backend`) with its saved settings; the first time, llama.cpp with the defaults. It first checks for `llama-server`, `aria2c` and `ansifilter` (offers `brew install`), and offers to download a model if none is downloaded |
+| `./carl.sh` | open the dashboard: attach to a server on 8080, else start llama.cpp with the saved settings. It first checks for `llama-server`, `aria2c` and `ansifilter` (offers `brew install`), and offers to download a model if none is downloaded |
 | `./carl.sh llama` | llama.cpp, default model (`qwen3.6-35b-a3b`; the IQ3 build on 24 GB), q4 KV, 2 slots |
 | `./carl.sh monitor` | attach the live dashboard (a server start shows it automatically in the same terminal) |
 | `./carl.sh llama --local` / `--vm` | serve only this Mac / require the VM address (default: auto) |
@@ -836,11 +805,10 @@ python3 -m unittest discover -s tests/monitor -t tests/monitor   # the dashboard
 | `./carl.sh --no-start` (or `dashboard`) | the dashboard only: attach to a server, or open it offline (no model loads) |
 | `./install.sh --host ADDR --key-file FILE` | connect the clients to that address, with the key from a file (`--key KEY` also works) |
 | `./carl.sh llama --slots 1` / `--slots 2` | one conversation / main session and a subagent (default: auto = 2 when they fit) |
-| `./carl.sh help [COMMAND]` | help for one command: llama, grant, pocket, monitor, fit, models, download, verify, env, tuning |
+| `./carl.sh help [COMMAND]` | help for one command: llama, monitor, fit, models, download, verify, env, tuning |
 | `./carl.sh --model NAME\|PATH` | a different model (catalogue, models folder or Hugging Face download) or a `.gguf` path |
 | `./carl.sh --kv q8` / `--q8` / `--q4` | KV cache type |
 | `./carl.sh --ctx 192k` | context window |
-| `./carl.sh grant` / `pocket` | MTPLX presets (48K) |
 | `./carl.sh models` | the catalogue, the models folder and your downloads, with the download status |
 | `./carl.sh fit [--ram GB] [--ctx N]` | which models fit this Mac, and the largest context window for each model |
 | `tools/make-share-zip.sh [OUT]` | make a clean zip of the folder to share |
@@ -852,7 +820,7 @@ python3 -m unittest discover -s tests/monitor -t tests/monitor   # the dashboard
 | `./carl.sh config [show\|path\|get KEY\|set KEY VALUE\|unset KEY]` | the settings file `~/.config/llm-deploy/config.json`; KEY like `llama.net` or `models.NAME.ctx` |
 | `./host/models.sh list\|download\|verify\|delete NAME\|path NAME\|get NAME FIELD\|default\|downloaded` | the models tool (a wrapper around `tools/carl.py`; `./carl.sh models\|download\|verify\|delete` use it): list, download, verify, delete, the local path, one field, the default model for this Mac, the downloaded models |
 | `./carl.sh -h` | print the help: overview of all commands; `<command> -h` for one command |
-| `./carl.sh [preset] --help-adv` | all `llama-server` / `mtplx serve` flags |
+| `./carl.sh --help-adv` | all `llama-server` flags |
 | `tools/llama-log.sh [-f] [FILE]` | server log as plain text (no ANSI codes); `-f` follows the log |
 
 **Environment variables (llama preset):**
@@ -874,7 +842,7 @@ python3 -m unittest discover -s tests/monitor -t tests/monitor   # the dashboard
 | `MONITOR=0` | no monitor: the server runs in the foreground |
 | `ALLOW_SECOND_MODEL=1` | start even when a process larger than 8 GB (`BIG_GB`) is in memory. CAUTION: a second model can stop the Mac. |
 | `NET=local\|vm\|auto`, `VM_HOST` | network mode / the VM address (default 192.168.42.1) |
-| `SETTINGS_FILE=none` / `SETTINGS_FILE_MTPLX=none` | ignore the saved settings in `~/.config/llm-deploy/config.json` (llama.cpp / the `mtplx` section) |
+| `SETTINGS_FILE=none` | ignore the saved settings in `~/.config/llm-deploy/config.json` |
 | `MODELS_DIR` | the models folder (default `~/models/gguf`; also `paths.models_dir` in config.json) |
 | `SKIP_DEPS=1` | do not check for the Homebrew tools (`llama-server`, `aria2c`, `ansifilter`) |
 
@@ -885,7 +853,7 @@ The script sends all other arguments after the flags directly to `llama-server`.
 | Command | Does |
 |---|---|
 | `./install-clients.sh [opencode\|pi]` | install the clients |
-| `./install.sh [--vm\|--local\|--host ADDR]` | install or update the configs, then do a smoke test (auto: VM on Linux, local on macOS) |
+| `./install.sh [--vm\|--local\|--host ADDR] [--port N]` | install or update the configs, then do a smoke test (auto: VM on Linux, local on macOS) |
 | `LLAMA_CTX=96k ./install.sh` | force the client context limit |
 | OpenCode `/models` (`/mo`), `/variants` (ctrl+t cycles) | change the model, the thinking level |
 | Pi `/model` | change the model |

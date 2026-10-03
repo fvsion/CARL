@@ -23,6 +23,21 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual(w.carl.load_config(), cfg)          # read back from config.json, not migrated again
         self.assertEqual(len(w.config.saved), 1)
 
+    def test_pre_1_2_config_with_mtplx_loads(self) -> None:
+        """A config.json written while CARL had MTPLX: it loads, says what it ignores, and
+        the next save drops the removed keys."""
+        old = {"schema": 1, "backend": "mtplx", "llama": {"net": "vm"},
+               "mtplx": {"preset": "pocket", "context": 49152, "kv_quant": "off"}}
+        w = World(catalog(BIG, SMALL), config=old)
+        cfg = w.carl.load_config()
+        self.assertEqual(cfg.llama, {"net": "vm"})
+        self.assertEqual(len(w.carl.config_warnings()), 1)
+        self.assertIn("MTPLX support was removed", w.carl.config_warnings()[0])
+        w.carl.save_config(cfg)
+        self.assertEqual({k for k in w.config.doc} if isinstance(w.config.doc, dict) else set(),
+                         {"schema", "_comment", "llama"})
+        self.assertEqual(w.carl.config_warnings(), [])
+
     def test_no_config_at_all(self) -> None:
         w = World(catalog(BIG, SMALL))
         self.assertEqual(w.carl.load_config(), Config())

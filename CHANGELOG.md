@@ -3,6 +3,33 @@
 All notable changes to CARL. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Dates are local dates on the development Mac (M3 Pro, 36 GB).
 
+## 1.2.0 - 2026-10-03
+
+CARL now runs only llama.cpp.
+
+### Removed
+- **MTPLX support.** MTPLX was evaluated (2026-09/10) and removed. On 32–36 GB Macs, MTPLX 2.12 could not hold a usable session: HTTP 507 from ~4–56K tokens (it depends on the free memory), no real quantized KV cache in 2.11, and a 48K cap. llama.cpp holds 2 × 96K slots on the same Macs. The last version with MTPLX support is commit [470c316](https://github.com/fvsion/CARL/commit/470c316). Removed:
+  - the `grant` and `pocket` commands and presets. `./carl.sh grant` and `./carl.sh pocket` now print one line: MTPLX was removed in 1.2.0, use `./carl.sh llama`;
+  - the dashboard's MTPLX backend and cards (the backend row of the Settings tab, the MTPLX data from `/v1/mtplx/*`, the port 8000 following, `MTPLX_PORT`);
+  - the `mtplx` section and the `backend` key of `config.json`, `SETTINGS_FILE_MTPLX`, and `tools/carl.py mtplx-env`;
+  - OpenCode: the `mtplx` provider (or `llm-deploy-mtplx`) and the `mtplx-session-headers` plugin. Pi: the `mtplx` provider and the `mtplx-request-policy.ts` extension. `client/install.sh` removes these from an existing install (only CARL's own items; a provider that you own is never touched; the usual backups `FILE.bak.<time>` and `FILE.before-carl`);
+  - the coder subagent rule "or when the server is MTPLX": the coder is installed when the server has 2+ slots (`CODER=1` / `NO_CODER=1` still force it);
+  - `$MTPLX_API_KEY` (use `$CARL_API_KEY`);
+  - `tools/sesstest.py` and `tools/make-memtest-prompt.py` (MTPLX memory tests).
+
+### Changed
+- **API key path: `~/.config/llm-deploy/api-key`** for the server and the clients (mode 600, in a folder with mode 700; the folder of `config.json`). Before: `~/.mtplx/api-key` (server) and `~/.config/mtplx/api-key` (clients).
+  - Server: the first server start (`./carl.sh`, `./carl.sh llama`, or the dashboard's Settings tab) copies `~/.mtplx/api-key` to the new path if the new file is missing. It is the same key, so existing clients continue to work. The dashboard, Auto-tune, the bench tools and `tools/llama-wait-idle.sh` read the new path, and the old path while the new file does not exist. `API_KEY_FILE` still overrides the path. If there is no key, a new one is made at the new path.
+  - Clients: `client/install.sh` stores the key at the new path, and the OpenCode and Pi configs point at it. A new run changes old configs to the new path. Key sources, in order: `--key` / `--key-file`, `$CARL_API_KEY`, `./api-key` next to `install.sh`, on a Mac with `--local` the server key file (new path, else `~/.mtplx/api-key`), the key from an earlier run (new path, else `~/.config/mtplx/api-key`), a prompt. The old `~/.config/mtplx/api-key` stays (a provider of your own can use it): delete it when nothing uses it. On the server Mac the client copy and the server key are now the same file: if `install.sh` gets a different key there (`--key`), it keeps the old one as `api-key.bak.<time>` and says that the server uses the new key from its next start.
+- **`client/install.sh --port N`**: the llama.cpp port (default 8080). The old positional form `./install.sh [HOST] [MTPLX_PORT] [LLAMA_PORT]` still works: HOST is used, the MTPLX port is ignored with a deprecation note, and the third value is the llama.cpp port.
+- **The VM staging folder is now `~/Documents/carl-vm-client`** (before: `mtplx-vm-client`; rename it or continue to use the old one). `client/install-clients.sh` marks its PATH line in `~/.zshrc` / `~/.bashrc` with `# carl-vm-client`. It recognises the old `# mtplx-vm-client` marker, so it does not add a second line.
+- **Bench tools:** `tools/llama-ab-measure.py`, `tools/llama-kv-longctx.py` and `tools/llama-sesstest.py` used the source files of the installed MTPLX package as their long-context prompt corpus. They now use the source files of this repository (Python, shell and JS in `tools/`, `host/`, `client/`), so they no longer need uv or MTPLX. Their numbers are not directly comparable with older runs. `tools/llama-sesstest.py` builds its 56K-token opening prompt itself: its usage is now `llama-sesstest.py [BASE_URL]` (no `MSGS_DIR`).
+- **The Settings tab survives a bad catalogue or `models.json`:** it shows the load error in the panel instead of a crash.
+- **`./carl.sh` with no arguments** attaches the dashboard to a server on :8080 if one runs. Else it starts llama.cpp (and offers to download the default model for this Mac if no model is downloaded). `~/.config/llm-deploy/last-backend` is no longer used.
+- **The coder subagent's fallback name is `carl-coder`** (before: `llm-deploy-coder`). CARL's coder is still `coder`; only when you have an agent of your own called `coder` is ours `carl-coder` (OpenCode `agent.carl-coder`, Pi `agents/carl-coder.md`, and the delegation rule names it). A new `install.sh` run renames CARL's own `llm-deploy-coder` (to `carl-coder`, or to `coder` once your own `coder` is gone; Pi files are kept as `*.bak.<time>`). With the coder off (1 slot, `NO_CODER=1`) ours is removed under any of these names; your own agents are never touched.
+- **Talk to the coder directly** (README, USERGUIDE): in OpenCode type `@coder <task>` (or `@carl-coder`); in Pi ask for the coder subagent in the message. The docs no longer mention OpenCode commands that do not exist (`/model`, `/effort`).
+- **Old `config.json` files still load:** a `backend` key is ignored silently, an `mtplx` section is ignored with a warning (`./carl.sh config show` prints it). Both go away the next time CARL saves the file.
+
 ## 1.1.0 - 2026-10-03
 
 ### Added

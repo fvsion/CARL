@@ -1,9 +1,9 @@
 {
   "providers": {
     "llamacpp": {
-      "baseUrl": "http://__MTPLX_HOST__:__LLAMA_PORT__/v1",
+      "baseUrl": "http://__HOST__:__LLAMA_PORT__/v1",
       "api": "openai-completions",
-      "apiKey": "!cat ~/.config/mtplx/api-key",
+      "apiKey": "!cat ~/.config/llm-deploy/api-key",
       "authHeader": true,
       "compat": {
         "supportsDeveloperRole": false,
@@ -79,65 +79,6 @@
           ],
           "contextWindow": 131072,
           "maxTokens": 32768,
-          "cost": {
-            "input": 0,
-            "output": 0,
-            "cacheRead": 0,
-            "cacheWrite": 0
-          }
-        }
-      ]
-    },
-    "mtplx": {
-      "baseUrl": "http://__MTPLX_HOST__:__MTPLX_PORT__/v1",
-      "api": "openai-completions",
-      "apiKey": "!cat ~/.config/mtplx/api-key",
-      "authHeader": true,
-      "headers": {
-        "x-mtplx-client": "pi"
-      },
-      "compat": {
-        "supportsDeveloperRole": false,
-        "supportsReasoningEffort": true,
-        "thinkingFormat": "qwen",
-        "maxTokensField": "max_tokens"
-      },
-      "models": [
-        {
-          "id": "qwen3.8-27b-abliterated-grant",
-          "name": "Qwen3.8 27B Abliterated — grant-ai Q4_K_M-class (fast)",
-          "reasoning": true,
-          "thinkingLevelMap": {
-            "minimal": null,
-            "high": null,
-            "xhigh": "xhigh"
-          },
-          "input": [
-            "text"
-          ],
-          "contextWindow": 49152,
-          "maxTokens": 49152,
-          "cost": {
-            "input": 0,
-            "output": 0,
-            "cacheRead": 0,
-            "cacheWrite": 0
-          }
-        },
-        {
-          "id": "qwen3.8-27b-abliterated",
-          "name": "Qwen3.8 27B Abliterated — PocketAiHub Q4_K_L-class",
-          "reasoning": true,
-          "thinkingLevelMap": {
-            "minimal": null,
-            "high": null,
-            "xhigh": "xhigh"
-          },
-          "input": [
-            "text"
-          ],
-          "contextWindow": 49152,
-          "maxTokens": 49152,
           "cost": {
             "input": 0,
             "output": 0,

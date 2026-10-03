@@ -120,11 +120,11 @@ class FakeDoc:
 
 
 class FakeLegacy:
-    def __init__(self, llama: Optional[Dict[str, str]] = None, mtplx: Optional[Dict[str, str]] = None) -> None:
-        self.llama, self.mtplx = llama or {}, mtplx or {}
+    def __init__(self, llama: Optional[Dict[str, str]] = None) -> None:
+        self.llama = llama or {}
 
-    def read(self) -> Tuple[Dict[str, str], Dict[str, str]]:
-        return dict(self.llama), dict(self.mtplx)
+    def read(self) -> Dict[str, str]:
+        return dict(self.llama)
 
 
 class FakeHub:

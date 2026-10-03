@@ -135,8 +135,7 @@
       "role": "Quality agent coding, hard code",
       "good_for": [
         "hard code",
-        "agent coding",
-        "chat & writing"
+        "agent coding"
       ],
       "why_use": "The strongest stock model in CARL: all 27B parameters work on every token, so it handles harder code and reasoning than the A3B, and thinking has effort levels (low / medium / xhigh). The choice for quality agent coding when you can accept the speed.",
       "trade_offs": "Slow: ~4x slower writing than the A3B and ~6x slower prompt reading (a cold read of a full 96K session takes many minutes); its KV cache is 3x the A3B's.",

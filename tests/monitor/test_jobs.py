@@ -82,10 +82,8 @@ class JobsTest(unittest.TestCase):
         self.svc = SettingsService(self.models, Schema(net_choices([])), "127.0.0.1", lambda: self.store.limit)
         self.collector = Collector(Endpoint("127.0.0.1", self.port, ""), True, os.path.join(root, "key"), None, None,
                                    None, root, 16384)
-        self.paths = Paths(repo=root, logs=os.path.join(root, "logs"), conf_dir=self.store.conf_dir,
-                           config_file=self.store.config_file)
-        self.jobs = ServerJobs(self.ui, self.collector, self.svc, self.paths, {"llama": self.port, "mtplx": self.port},
-                               "127.0.0.1")
+        self.paths = Paths(repo=root, logs=os.path.join(root, "logs"), config_file=self.store.config_file)
+        self.jobs = ServerJobs(self.ui, self.collector, self.svc, self.paths, "127.0.0.1")
         self.pending = dict(self.svc.schema.defaults(), adv="hidden", model="big")
 
     def tearDown(self) -> None:
@@ -110,7 +108,7 @@ class JobsTest(unittest.TestCase):
         os.chmod(self.store.config_file, 0o644)
         os.environ["CTX"] = "123"                          # the environment does not leak into the start
         try:
-            self.jobs._restart(self.pending, ServerData(backend="llama"))
+            self.jobs._restart(self.pending, ServerData())
         finally:
             del os.environ["CTX"]
         msg = self.ui.toast_msg[0]
@@ -128,18 +126,19 @@ class JobsTest(unittest.TestCase):
     def test_successful_start_follows_the_new_server(self) -> None:
         self.launcher(HEALTH_SERVER)
         self.ui.pending = dict(self.pending)
-        self.jobs._restart(self.pending, ServerData(backend="llama"))
+        self.jobs._restart(self.pending, ServerData())
         self.assertTrue(self.ui.toast_msg[0].startswith("restarted with the new settings"))
         self.assertIsNone(self.ui.pending)
         self.assertIsNotNone(self.collector.server_pid)
-        self.assertEqual(self.store.saved[-1]["backend"], "llama")
+        self.assertNotIn("backend", self.store.saved[-1])
+        self.assertFalse(os.path.exists(os.path.join(self.store.conf_dir, "last-backend")))
 
     def test_server_env(self) -> None:
         env = server_env({"CTX": "1", "HOME": "/h", "SETTINGS_FILE": "x"}, 8095, {"MODEL": "/m/a.gguf"})
         self.assertEqual(env, {"HOME": "/h", "MONITOR": "0", "PORT": "8095", "MODEL": "/m/a.gguf"})
         env = server_env({}, 1, {"SETTINGS_FILE": "none", "CTX": "2"})
         self.assertEqual((env["SETTINGS_FILE"], env["CTX"]), ("none", "2"))
-        self.assertIn("KV_QUANT", CLEAN_ENV)
+        self.assertIn("SPEC_N", CLEAN_ENV)
 
     def test_download_progress_and_end(self) -> None:
         part = os.path.join(self.tmp.name, "a.gguf")

@@ -39,7 +39,7 @@ If you skip the `brew install`, `./carl.sh` finds the missing tools and asks to 
 Then run `opencode` or `pi` in a second terminal. `./carl.sh -h` shows all commands.
 
 - **The first time,** CARL starts llama.cpp with the model that fits your Mac (Qwen3.6-35B-A3B).
-- **The next time,** it starts the server and the settings that you used last.
+- **The next time,** it starts llama.cpp with the settings that you saved.
 - **If a server runs already,** the dashboard attaches to it.
 
 **Models:** `./carl.sh models` lists the built-in catalogue and each `.gguf` in `~/models/gguf`. `./carl.sh download hf:OWNER/REPO/FILE.gguf` gets any GGUF from Hugging Face. `./carl.sh tune NAME` measures the best settings for a model on your Mac.
@@ -51,7 +51,7 @@ The live state of the server: what it does now, the speed, the context, the memo
 ![The CARL dashboard](assets/dashboard.gif)
 
 **Settings (tab 5):** three panels. Push `[` or `]` to change the panel.
-- **Server:** change the backend (llama.cpp or MTPLX), the model, the KV cache, the context and more. Then push `a` to restart with them. Colours show tuned values (green), changed values (yellow) and very slow values (red).
+- **Server:** change the model, the KV cache, the context and more. Then push `a` to restart with them. Colours show tuned values (green), changed values (yellow) and very slow values (red).
 - **Models:** download, verify and delete models, or add one from Hugging Face.
 - **Auto-tune:** measure the best settings for a model on this Mac.
 
@@ -64,15 +64,15 @@ The live state of the server: what it does now, the speed, the context, the memo
 | **Switch the model** | type `/models` (or `/mo`, or press the leader key then **m**) and pick the entry that matches the server, e.g. `llamacpp/qwen3.6-35b-a3b` |
 | **Set the thinking effort** | type `/variants` and pick a level, or press **ctrl+t** to step to the next one. The current variant shows next to the model name |
 | **Switch the agent** | `/agents`, or **Tab** to cycle: `build` (does the work) and `plan` (read-only). The **coder** subagent that CARL adds is not picked here: the main agent hands it large coding tasks |
+| **Talk to the coder directly** | type `@coder` and your task (Tab completes the name), e.g. `@coder add tests for parse_config`: the task goes straight to the coder subagent, the main agent doesn't have to decide to delegate. If you already had an agent of your own called `coder`, CARL's is `@carl-coder`. (Pi: ask in the message, "use the coder subagent to …": there it is the `subagent` tool) |
 | **Show or hide the thinking** | `/thinking` (display only: it doesn't change how much the model thinks) |
 
-There is no `/model` or `/effort` command in OpenCode 1.18: use `/models` and `/variants`. The variants are CARL's thinking levels:
+The variants are CARL's thinking levels:
 
 | Model entry | Variants (thinking effort) | Default |
 |---|---|---|
 | `llamacpp/qwen3.6-35b-a3b` (35B-A3B) | `none` = thinking off · `high` = on | `high` |
 | `llamacpp/qwen3.8-27b`, `llamacpp/qwen3.8-27b-abliterated-llama` (27B) | `none` = off · `low` · `medium` · `xhigh` | `low` |
-| `mtplx/…` (MTPLX) | `low` · `medium` · `xhigh` (MTPLX can't turn thinking off) | `low` (pocket: `medium`) |
 
 - **The model entry doesn't change the server's model.** The server answers with the model it has loaded; the entry only sets the label, the context limit and the thinking options. Change the server's model in the dashboard (Settings tab) or with `./carl.sh llama --model NAME`, then pick the matching entry in `/models`.
 - **`low` is right for agent work** on the 27B; `xhigh` thinks a long time even on simple tasks. A change applies from the next message.

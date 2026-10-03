@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
 # Serve a GGUF model (default qwen3.6-35b-a3b; the IQ3 build on 24 GB) with
-# llama.cpp (llama-server) to this Mac and the VMware Fusion guest, with a real
-# quantized KV cache (MTPLX 2.11.3 cannot hold long sessions on this Mac -- see
-# REFERENCE.md section 3).
+# llama.cpp (llama-server) to this Mac and the VMware Fusion guest, with a
+# quantized KV cache (q4_0 by default) and 2 slots when they fit.
 #
 #   ./host/serve-llama.sh [--model NAME|PATH] [--kv q4|q8 | --q4 | --q8] [--ctx N|Nk] [--local|--vm] [extra llama-server flags...]
 #
@@ -19,7 +18,8 @@
 #
 # Network (host/common.sh): --vm = VMware's 192.168.42.1, --local = 127.0.0.1,
 # default auto (VM address if Fusion's network is up, else local). Never 0.0.0.0.
-# The API key file (~/.mtplx/api-key) is created on first use if missing.
+# The API key file (~/.config/llm-deploy/api-key) is created on first use if missing
+# (ensure_api_key in host/common.sh; it copies a key from before 1.2.0 once).
 # Interactive starts show the live monitor in this terminal; quitting it asks
 # whether to stop the server or leave it running.
 # Override via env, e.g.  CTX=163840 SPEC=ngram-mod ./host/serve-llama.sh
@@ -110,7 +110,7 @@ set -- ${extra_args[@]+"${extra_args[@]}"} "$@"
 resolve_host "$NET_FLAG"
 PORT="${PORT:-8080}"
 is_port "$PORT" || { echo "error: PORT must be a TCP port (1-65535), got '$PORT'" >&2; exit 2; }
-API_KEY_FILE="${API_KEY_FILE:-$HOME/.mtplx/api-key}"
+API_KEY_FILE="${API_KEY_FILE:-$CARL_KEY_FILE}"
 CTX="${CTX_FLAG:-${CTX:-98304}}"   # per slot: --ctx flag > CTX env > 96K. Measured on the 35B (q4_0 KV, 2026-10-01):
                                    # 64K reads a cold prompt at 229 tok/s, decodes 20 tok/s; 128K: 117 / 13.9.
                                    # Up to 128K-160K works (8/8 recall); REFERENCE.md lists the costs.

@@ -9,7 +9,7 @@ from support import GIB, shape
 from carl_core.domain import fit, hf
 from carl_core.domain.errors import ConfigError
 from carl_core.domain.gguf import kv_bytes_per_token, model_shape, parse_meta
-from carl_core.domain.launch import launch_env, mtplx_env, shell_lines
+from carl_core.domain.launch import launch_env, shell_lines
 from carl_core.domain.settings import Config
 from carl_core.domain.types import ModelInfo, SettingSource, Settings
 
@@ -94,10 +94,6 @@ class LaunchEnvTest(unittest.TestCase):
         self.assertEqual(env["EXTRA_ARGS"], "--no-mmap -fa on")
         self.assertEqual(env["CARL_SOURCES"], "ctx:auto-tune kv:catalogue spec:config slots:default")
         self.assertIn("SPEC_N=2", shell_lines(env).splitlines())
-
-    def test_mtplx_env(self) -> None:
-        self.assertEqual(mtplx_env(Config(mtplx={"profile": "turbo", "host": "", "preset": "pocket"})),
-                         {"PROFILE": "turbo"})
 
 
 class FitTest(unittest.TestCase):

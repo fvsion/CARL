@@ -72,10 +72,11 @@ hash -r
 
 # --- PATH --------------------------------------------------------------------
 # shellcheck disable=SC2016  # written to the rc file literally; the shell expands it there
-line='export PATH="$HOME/.local/bin:$PATH"  # mtplx-vm-client'
+line='export PATH="$HOME/.local/bin:$PATH"  # carl-vm-client'
 for rc in "$HOME/.zshrc" "$HOME/.bashrc"; do
   [[ -f "$rc" ]] || continue
-  grep -qF '# mtplx-vm-client' "$rc" || printf '\n%s\n' "$line" >> "$rc"
+  # "# mtplx-vm-client" marked the same line before 1.2.0: no second copy.
+  grep -qE '# (carl|mtplx)-vm-client' "$rc" || printf '\n%s\n' "$line" >> "$rc"
 done
 
 # --- Report ------------------------------------------------------------------
@@ -84,4 +85,4 @@ echo
 [[ "$WHAT" == both || "$WHAT" == pi ]] && echo "pi       $(pi --version 2>/dev/null || echo '(not on PATH?)')  -> $(command -v pi || true)"
 echo
 echo "Open a new shell (or: source ~/.zshrc), then run 'opencode' or 'pi'."
-[[ -f "$HOME/.config/mtplx/api-key" ]] || echo "Configs not found yet: run ./install.sh (on a Mac: ./install.sh --local) to point them at the server."
+[[ -f "$HOME/.config/llm-deploy/api-key" || -f "$HOME/.config/mtplx/api-key" ]] || echo "Configs not found yet: run ./install.sh (on a Mac: ./install.sh --local) to point them at the server."

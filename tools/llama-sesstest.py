@@ -1,26 +1,25 @@
 #!/usr/bin/env python3
 """Multi-turn same-session long-context test against llama-server.
 
-Usage: python3 tools/llama-sesstest.py MSGS_DIR [BASE_URL]
-(MSGS_DIR/memtest-msgs.json from tools/make-memtest-prompt.py). Turns: 56K
-prompt, short follow-up, then ~7-8K-token appends, printing llama-server
-timings (cached/processed prompt tokens, prompt & gen tok/s) and the
-server's RSS + system wired memory after each turn.
+Usage: python3 tools/llama-sesstest.py [BASE_URL]
+Turns: a ~56K-token prompt (this repo's smallest source files), a short
+follow-up, then ~7-8K-token appends (its largest files), printing llama-server
+timings (cached/processed prompt tokens, prompt & gen tok/s) and the server's
+RSS + system wired memory after each turn.
 """
 from __future__ import annotations
 
 import argparse
-import glob
-import json
-import os
 import sys
 import time
 import urllib.error
 
-from carl_bench import DEFAULT_BASE, Message, chat_body, completion_from, mtplx_source_dir, port_of, post_chat, \
-    read_api_key, read_source, server_memory, validate_base
+from carl_bench import DEFAULT_BASE, Message, chat_body, completion_from, port_of, post_chat, read_api_key, \
+    repo_sources, server_memory, validate_base
 
+PROMPT_CHARS = 215000           # ~56K tokens
 APPEND_CHARS = 30000
+APPENDS = 4                     # turns t3..t6
 
 
 def mem(port: int) -> str:
@@ -28,19 +27,27 @@ def mem(port: int) -> str:
     return f"rss={m.rss_gib:.1f}G wired={m.wired_gib:.1f}G swap_used={m.swap_used}"
 
 
-def load_messages(msgs_dir: str) -> list[Message]:
-    with open(os.path.join(msgs_dir, "memtest-msgs.json"), encoding="utf-8") as f:
-        msgs: list[Message] = json.load(f)
-    return msgs
+def first_messages(files: dict[str, str], limit: int = PROMPT_CHARS) -> list[Message]:
+    """The opening prompt: the smallest FILES (path -> source, smallest first) that fit LIMIT chars."""
+    buf: list[str] = []
+    n = 0
+    for rel, t in files.items():
+        if n + len(t) > limit:
+            continue
+        buf.append(f"### FILE: {rel}\n{t}")
+        n += len(t)
+    return [{"role": "system", "content": "You are a code reviewer."},
+            {"role": "user", "content": "\n\n".join(buf)
+             + "\n\nIn one sentence: which file above looks most related to memory planning?"}]
 
 
-def turns(site: str) -> list[tuple[str, str | None]]:
-    """t1 the prompt as is, t2 a short follow-up, t3-t6 one large MTPLX server file each."""
-    big = sorted(glob.glob(site + "/server/*.py"), key=os.path.getsize)
+def turns(files: dict[str, str]) -> list[tuple[str, str | None]]:
+    """t1 the prompt as is, t2 a short follow-up, t3-t6 one of the largest files each."""
+    big = list(files.values())[-APPENDS:][::-1]
     out: list[tuple[str, str | None]] = [
-        ("t1", None), ("t2", "Now name one other file above that deals with sessions, in one sentence.")]
-    for i, f in enumerate(big[-3:-7:-1], start=3):
-        out.append((f"t{i}", "Here is one more file:\n" + read_source(f)[:APPEND_CHARS] + "\n\nOne sentence: what does it do?"))
+        ("t1", None), ("t2", "Now name one other file above that deals with settings, in one sentence.")]
+    for i, text in enumerate(big, start=3):
+        out.append((f"t{i}", "Here is one more file:\n" + text[:APPEND_CHARS] + "\n\nOne sentence: what does it do?"))
     return out
 
 
@@ -61,12 +68,12 @@ def call(base: str, key: str, msgs: list[Message], tag: str) -> str | None:
 
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(description="Multi-turn same-session long-context test against llama-server.")
-    ap.add_argument("msgs_dir", help="directory with memtest-msgs.json (tools/make-memtest-prompt.py)")
     ap.add_argument("base", nargs="?", default=DEFAULT_BASE, help=f"server URL (default {DEFAULT_BASE})")
     a = ap.parse_args(argv)
     base, key = validate_base(a.base), read_api_key()
-    msgs = load_messages(a.msgs_dir)
-    for tag, q in turns(mtplx_source_dir()):
+    files = repo_sources()
+    msgs = first_messages(files)
+    for tag, q in turns(files):
         if q:
             msgs.append({"role": "user", "content": q})
         answer = call(base, key, msgs, tag)

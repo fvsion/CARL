@@ -2,27 +2,26 @@
 
 CARL: Can't Afford Remote LLMs.
 
-CARL runs a local Qwen coding model on an Apple Silicon Mac, for OpenCode or Pi. This document gives the technical details of CARL: the architecture, the files, how the two backends are different, and the measured results. It also tells how each model, backend and client controls "thinking". For setup and daily use, see [USERGUIDE.md](USERGUIDE.md). For the short overview, see [README.md](README.md).
+CARL runs a local Qwen coding model on an Apple Silicon Mac, for OpenCode or Pi. This document gives the technical details of CARL: the architecture, the files, the llama.cpp server, and the measured results. It also tells how each model and client controls "thinking". For setup and daily use, see [USERGUIDE.md](USERGUIDE.md). For the short overview, see [README.md](README.md).
 
-Each behaviour in this document was checked against the source code (MTPLX 2.11.3 in `~/.local/share/uv/tools/mtplx/…/mtplx/`, pi-ai 0.99.2, OpenCode 1.18.32, the GGUF chat templates). Other behaviours were measured on this Mac. If a statement is not verified, the text says so.
+Each behaviour in this document was checked against the source code (pi-ai 0.99.2, OpenCode 1.18.32, the GGUF chat templates). Other behaviours were measured on this Mac. If a statement is not verified, the text says so.
 
 ## Contents
 
 - [Architecture](#architecture)
 - [Repository layout](#repository-layout)
-1. [Backends: llama.cpp vs MTPLX](#1-backends-llamacpp-vs-mtplx)
+1. [The server: llama.cpp](#1-the-server-llamacpp)
 2. [llama.cpp details](#2-llamacpp-details)
-3. [MTPLX details, and why it is capped at 48K](#3-mtplx-details-and-why-it-is-capped-at-48k)
-4. [Model and quantization choices](#4-model-and-quantization-choices)
-5. [How thinking works](#5-how-thinking-works)
-6. [Thinking by model](#6-thinking-by-model)
-7. [Thinking by client and backend](#7-thinking-by-client-and-backend)
-8. [The full thinking matrix](#8-the-full-thinking-matrix)
-9. [Sampling and output limits](#9-sampling-and-output-limits)
-10. [Context limits: server vs client](#10-context-limits-server-vs-client)
-11. [Verifying behaviour](#11-verifying-behaviour)
-12. [OpenCode config](#12-opencode-config)
-13. [Performance (measured)](#13-performance-measured)
+3. [Model and quantization choices](#3-model-and-quantization-choices)
+4. [How thinking works](#4-how-thinking-works)
+5. [Thinking by model](#5-thinking-by-model)
+6. [Thinking by client](#6-thinking-by-client)
+7. [The full thinking matrix](#7-the-full-thinking-matrix)
+8. [Sampling and output limits](#8-sampling-and-output-limits)
+9. [Context limits: server vs client](#9-context-limits-server-vs-client)
+10. [Verifying behaviour](#10-verifying-behaviour)
+11. [OpenCode config](#11-opencode-config)
+12. [Performance (measured)](#12-performance-measured)
 
 ---
 
@@ -33,8 +32,7 @@ Each behaviour in this document was checked against the source code (MTPLX 2.11.
  ┌──────────────────────────────────────────┐          ┌──────────────────────────────────┐
  │ host/serve.sh  ──►  llama-server :8080    │  vmnet8  │ OpenCode ─┐                       │
  │   (default)         (llama.cpp, Metal)    │◄─────────┤           ├─ Bearer key from      │
- │                                           │  NAT     │ Pi ───────┘  ~/.config/mtplx/     │
- │ host/serve.sh grant|pocket ──► mtplx :8000│          │                                   │
+ │                                           │  NAT     │ Pi ───────┘  ~/.config/llm-deploy/│
  │                                           │          │ configs from client/install.sh    │
  │ binds 192.168.42.1 (VM) or 127.0.0.1      │          │ VM address 192.168.42.130         │
  │ monitor in the same terminal              │          │                                   │
@@ -45,11 +43,11 @@ Each behaviour in this document was checked against the source code (MTPLX 2.11.
       ~/.config/llm-deploy/config.json   your settings (Settings tab, ./carl.sh config)
       ~/.config/llm-deploy/models.json   custom models and Auto-tune results (this Mac)
       ~/models/templates/ patched chat templates (thinking toggle)
-      ~/.mtplx/api-key    shared API key (both backends; created on first start)
+      ~/.config/llm-deploy/api-key       shared API key (server and clients; created on first start)
 ```
 
 - **CAUTION:** Run only one server at a time. Each model needs about 14–23 GB, and two models do not fit in 36 GB. If you run two servers, GPU out-of-memory errors occur. The running server then stays broken until you restart it. The launchers refuse to start a second model ([section 2](#2-llamacpp-details), "Launch guard").
-- **Both backends use the OpenAI API** (`/v1/chat/completions`, `/v1/models`) and the same Bearer key.
+- **The server uses the OpenAI API** (`/v1/chat/completions`, `/v1/models`) and a Bearer key.
 - **Code layers on the Mac:** the shell launchers (`host/`) get their model and settings from `tools/carl.py`. `tools/carl.py` and `tools/gguf_shape.py` are thin facades over the package `tools/carl_core/`: a pure `domain/` (no I/O) and `adapters/` for the files, `sysctl` / `netstat`, Hugging Face, the downloads and `llama-server`. The monitor, `llama-fit.py` and `carl-tune.py` use the same facades ([Repository layout](#repository-layout)).
 - **The client side is a self-contained bundle** (`client/`). You can run it in the VM (copy it through the Fusion shared folder) or on the Mac itself (`./client/install.sh --local`).
 
@@ -60,79 +58,74 @@ Each behaviour in this document was checked against the source code (MTPLX 2.11.
 | `carl.sh` | The launcher in the project root. It runs `host/serve.sh` with the same arguments: `./carl.sh` opens the dashboard, `./carl.sh -h` shows the help. `./carl.sh --no-start` opens only the dashboard (nothing loads). `./host/serve.sh` continues to work. |
 | `CHANGELOG.md` | What changed in each release. |
 | `assets/` | The logo and the README screenshots. `tools/tuishot.py` makes the screenshots. |
-| `host/serve.sh` | The entry point on the Mac. Server commands: `llama`, `grant`, `pocket`. Tools: `monitor`, `fit`, `models`, `download`, `verify`, `tune`, `config`, `install`. `help [command]` shows the help for one command, and `-h` prints the overview. `--help-adv` lists every backend flag. With no arguments, it opens the dashboard. It runs MTPLX itself, and it gives `llama` to `serve-llama.sh`. |
-| `host/common.sh` | Both launchers use this file. It contains the network mode (`--vm` / `--local` / auto, never 0.0.0.0), the API-key creation, `ensure_deps` (the Homebrew tools), `port_pid` / `port_host` (port lookups with `netstat`), `apply_settings` (reads the `KEY=value` lines of `tools/carl.py` with an allow-list; values are never evaluated), `require_int` and `is_port` (input checks), the launch guard and `run_server`. `run_server` runs the server in the background in its own process group, with the monitor in front. If there is no terminal, it runs a plain foreground server. |
+| `host/serve.sh` | The entry point on the Mac. Server command: `llama`. Tools: `monitor`, `fit`, `models`, `download`, `verify`, `tune`, `config`, `install`. `help [command]` shows the help for one command, and `-h` prints the overview. `--help-adv` lists every `llama-server` flag. With no arguments, it opens the dashboard. It gives `llama` to `serve-llama.sh`. |
+| `host/common.sh` | `serve.sh` and `serve-llama.sh` use this file. It contains the network mode (`--vm` / `--local` / auto, never 0.0.0.0), the API key (creation, and the one-time copy from the old path), `ensure_deps` (the Homebrew tools), `port_pid` / `port_host` (port lookups with `netstat`), `apply_settings` (reads the `KEY=value` lines of `tools/carl.py` with an allow-list; values are never evaluated), `require_int` and `is_port` (input checks), the launch guard and `run_server`. `run_server` runs the server in the background in its own process group, with the monitor in front. If there is no terminal, it runs a plain foreground server. |
 | `host/serve-llama.sh` | The llama.cpp launcher: `--model`, `--kv q4\|q8`, `--ctx N\|Nk`, logging, keep-awake, thinking-toggle template. It gets the model and its settings from `tools/carl.py launch-env`. |
 | `host/catalog.json` | The built-in model catalogue. For each model: `hf` (repo, pinned revision, file, SHA-256, size), `summary`, `description`, the model card (`role`, `good_for`, `why_use`, `trade_offs`, `pick_instead`, `hardware`, `uncensored`, `rank`), `tune` (kv, ctx, slots, spec, spec_n, sampling), `why` (the reason for each tuned value), `ctx_zones`, `measured`. `default` and `default_small` select the default models. |
 | `host/models.sh` | A thin wrapper around `tools/carl.py`: `list`, `download NAME\|default\|all\|hf:OWNER/REPO/FILE.gguf`, `verify`, `delete`, `path`, `get`, `default`, `downloaded`. |
 | `host/gguf-chat-template.py` | Extracts the chat template of a GGUF. Then it adds the rule "`reasoning_effort: none` → thinking off" at the start of the template. |
 | `client/install-clients.sh` | Run it in the VM or on a Mac. It installs OpenCode and/or Pi from npm into `~/.local`. If necessary, it also installs a Linux or macOS Node 22. It does not use sudo. |
-| `client/install.sh` | Run it in the VM (`--vm`, default on Linux) or on the Mac (`--local`, default on macOS). It stores the API key. It makes a backup, then writes the OpenCode and Pi configs. It sets the context limit to the server value. It does a smoke test of both ports. |
+| `client/install.sh` | Run it in the VM (`--vm`, default on Linux) or on the Mac (`--local`, default on macOS). It stores the API key. It makes a backup, then writes the OpenCode and Pi configs. It sets the context limit to the server value. It does a smoke test of the server. |
 | `client/configure.py` | The non-destructive merge that `install.sh` uses (USERGUIDE.md, "Updating the client configs"). |
-| `client/opencode/opencode.json` | The OpenCode config template (`llamacpp` and `mtplx` providers). |
+| `client/opencode/opencode.json` | The OpenCode config template (the `llamacpp` provider). |
 | `client/agents/coder.md`, `client/agents/delegation.md` | The **coder** subagent (OpenCode and Pi both use it): its "when to use" description and its work method. Also the delegation rule for the main agent: delegate only if the agent is stuck after two failed fixes, or if the task is large. |
 | `client/pi/extensions/subagent/` | The official subagent extension for Pi (vendored, MIT). A patch makes it list the installed agents in the tool description. Thus, the model can delegate without help. |
 | `client/opencode/plugins/subagents-sidebar/` | An OpenCode TUI plugin: a live list of subagents in the sidebar. Running subagents on top (agent, task, elapsed time, current tool, context); finished ones below (✓/✗, duration; the 5 newest for 5 minutes, then a `+N more` line). It resets when you go to a different parent session. Click to open. `install.sh` installs it into `tui.json`. |
 | `client/opencode/plugins/session-switcher/` | An OpenCode TUI plugin: a session switcher in the prompt box (`‹ 2/3 ● title ›`), and `/switch` for a list of the recent sessions with their state. `install.sh` installs it into `tui.json`. |
-| `client/opencode/plugins/mtplx-session-headers/` | An OpenCode plugin: session headers that let MTPLX use its prompt cache again (MTPLX only). |
 | `client/pi/models.json` | The Pi config template. |
-| `client/pi/extensions/mtplx-request-policy.ts` | A Pi extension: it sets session ids and controls the output cap for the MTPLX models. |
 | `tools/carl_core/` | The models and settings logic, in layers. `domain/` is pure (no I/O): `types`, `settings`, `gguf`, `fit`, `models`, `hf`, `launch`, `records`, `tuning`, `ports`. `adapters/` does the I/O: `json_files`, `filesystem`, `gguf_reader`, `system` (sysctl, the GPU limit, the `netstat` parser), `huggingface`, `downloader`, `llama_server`, `console`. `app.py` holds the use cases, and `wiring.py` connects the adapters. |
-| `tools/carl.py` | A thin facade over `tools/carl_core` (its CLI and the API of the monitor). One place for the models and the settings: the catalogue, the models on this Mac (catalogue, models folder, Hugging Face downloads), `config.json` (validated) and the settings order. Downloads (pinned, SHA-256 verified), `launch-env` / `mtplx-env` for the launchers, `config show\|get\|set\|unset\|path`. The launchers, `llama-fit.py` and the monitor use it. |
+| `tools/carl.py` | A thin facade over `tools/carl_core` (its CLI and the API of the monitor). One place for the models and the settings: the catalogue, the models on this Mac (catalogue, models folder, Hugging Face downloads), `config.json` (validated) and the settings order. Downloads (pinned, SHA-256 verified), `launch-env` for the launchers, `config show\|get\|set\|unset\|path`. The launchers, `llama-fit.py` and the monitor use it. |
 | `tools/carl-tune.py` | Auto-tune (`./carl.sh tune NAME [--quick]`): memory fit, speculation modes, prompt reading at 8K/32K/64K, context zones. It saves the result in `~/.config/llm-deploy/models.json`. |
-| `tools/llama-monitor.py` | The live monitor (the dashboard) for llama.cpp and MTPLX. Tabs: Overview, Connect, Requests, Log, Settings. The Settings tab has three panels: Server (the backend, the model and its settings, with the reason for each tuned value; restarts the server), Models (download, verify, delete, add from Hugging Face) and Auto-tune. On the Server panel the model card sits under the settings, full width; a click on its title cycles collapsed / normal / full. A thin launcher over the `tools/monitor/` package. |
+| `tools/llama-monitor.py` | The live monitor (the dashboard) for llama.cpp. Tabs: Overview, Connect, Requests, Log, Settings. The Settings tab has three panels: Server (the model and its settings, with the reason for each tuned value; restarts the server), Models (download, verify, delete, add from Hugging Face) and Auto-tune. On the Server panel the model card sits under the settings, full width; a click on its title cycles collapsed / normal / full. A thin launcher over the `tools/monitor/` package. |
 | `tools/monitor/` | The dashboard's code: pure formatting, state, settings and views (`fmt`, `model`, `keys`, `settings`, `cards`, `views`, `settings_view`, `state`), adapters (`system` for ps/netstat/sysctl/pmset, `api`, `collector`, `logtail`, `store` over `carl.py`, `jobs` for restart, Auto-tune and downloads, `terminal`), wiring (`app`, `controller`, `cli`). |
 | `tools/llama-fit.py`, `tools/gguf_shape.py`, `tools/metal-limit.swift` | `serve.sh fit` and the memory check at server start. `gguf_shape.py` (now a thin facade over `carl_core`) reads the GGUF metadata and does the KV/state maths (the monitor uses it too). `metal-limit.swift` reads the GPU memory limit of the Mac. |
 | `tools/make-share-zip.sh` | Makes a clean zip of this folder that you can share. |
 | `tools/tuishot.py` | Renders terminal screenshots and GIFs (the dashboard, OpenCode) for the README. |
 | `tools/llama-log.sh` | Shows the server log as plain text. |
 | `tools/llama-spec-sweep.sh`, `tools/llama-spec-bench.py` | The speculative-decoding sweep and its benchmark. The edit workload re-emits the (rewritten, 1.1.0) source of the bench, so its edit numbers are not directly comparable with older measurements. |
-| `tools/llama-ab.sh`, `tools/llama-ab-measure.py`, `tools/llama-kv-longctx.py` | The KV-type and `-ub` A/B test, and the ~64K needle test. |
+| `tools/llama-ab.sh`, `tools/llama-ab-measure.py`, `tools/llama-kv-longctx.py` | The KV-type and `-ub` A/B test, and the ~64K needle test. Since 1.2.0, the long prompts come from the source files of this folder (Python, shell, JS in `tools/`, `host/`, `client/`), so the numbers are not directly comparable with older runs. |
 | `tools/llama-wait-idle.sh` | Waits until the server is idle. |
-| `tools/llama-sesstest.py` | A long-session test for llama.cpp. |
+| `tools/llama-sesstest.py` | A long-session test for llama.cpp. Its prompt corpus is the same as for `llama-kv-longctx.py`. |
 | `tools/req-capture-proxy.py` | A request-capture proxy. It refuses wildcard listen addresses, and it writes its log with mode 600. |
-| `tools/make-memtest-prompt.py`, `tools/sesstest.py` | A memory test for long MTPLX sessions. `sesstest.py` takes KEY `-` to read the key file (the key then does not show in `ps`). |
 | `tools/carl_bench.py` | Shared helpers for the small benchmark tools: the API key, chat requests, the PID of the listening server (`netstat`), the server memory. |
 | `tests/` | Unit tests. `python3 -m unittest discover -s tests` (the `carl_core` domain, app and adapters) `python3 -m unittest discover -s tests/scripts` (the shell helpers, `client/configure.py`, the small tools) and `python3 -m unittest discover -s tests/monitor -t tests/monitor` (the dashboard). They need no server and no model. |
 
 For the use of each tool, see USERGUIDE.md, "Benchmarking and testing".
 
-## 1. Backends: llama.cpp vs MTPLX
+## 1. The server: llama.cpp
 
-| | llama.cpp (`llama` preset) | MTPLX (`grant` / `pocket` presets) |
-|---|---|---|
-| Version | 0.4.1 (Homebrew), `llama-server` | 2.11.3 (`uv tool`), `mtplx serve` |
-| Port | 8080 | 8000 |
-| API | OpenAI API (`/v1/chat/completions`, `/v1/models`), Bearer key `~/.mtplx/api-key` | the same API and the same key |
-| Weights | GGUF (`~/models/gguf/`): the catalogue models, and any other GGUF | MLX (`~/.mtplx/models/`), only the two Qwen3.8-27B abliterated builds |
-| Models available | Qwen3.6-35B-A3B (default, `qwen3.6-35b-a3b`), Qwen3.8-27B stock, Qwen3.8-27B abliterated (orcarouter), and their Q3/IQ3 builds | Qwen3.8-27B abliterated only: `grant` = `grant-ai/Qwen3.8-27B-Abliterated-MTPLX-4bit` (15.8 GiB, ~16 tok/s); `pocket` = `PocketAiHub/Qwen3.8-27B-Abliterated-MTPLX-Optimized-Speed` (19.8 GiB, ~13 tok/s, an alternative abliteration) |
-| KV cache | Real q4_0 (default) or q8_0. Set it with `--kv`. | bf16 (`off`). Its q8 mode also keeps a bf16 copy (more memory). Its q4 mode is real, but it still fails at ~56K. |
-| Usable context | 96K per slot by default, up to 256K (`--ctx`) | 48K. Append turns after ~56K fail with HTTP 507. |
-| Memory behaviour | The server allocates the full KV cache at start. Memory stays flat during a session. | Memory grows for each session. Copy-on-write snapshots cause memory spikes on append turns. |
-| Prompt reuse | Context checkpoints (8, every 4K tokens) at user-message boundaries. RAM prompt cache, sized automatically to 1–8 GiB ([section 2](#ram-prompt-cache-and-checkpoints-measured-2026-10-02)). | Session bank with snapshots. It needs the session headers from the client plugin/extension. |
-| Speculation | MTP head + n-gram (`draft-mtp,ngram-mod`). The draft count is set for each model. | Native MTP, depth 2 (from `mtplx tune`) |
-| Decode (27B) | 10.5–11 tok/s on new text, 27 tok/s when it re-emits text | ~13–16 tok/s |
-| Prompt read speed (27B, cold) | ~85–90 tok/s at 2–9K, ~56–65 tok/s at 66K | ~75–100 tok/s |
-| Thinking off from OpenCode | Yes: `none` variant (patched template) | No: MTPLX changes `none` to `low`. |
-| Thinking off from Pi | Yes: `off` → `chat_template_kwargs.enable_thinking=false` | Yes: `off` → top-level `enable_thinking=false` |
-| Effort values accepted | Depends on the template of the model ([section 6](#6-thinking-by-model)) | low/medium/high/xhigh, with a smaller set for each model family. `high` → `xhigh` on Qwen3.8. |
-| Bad effort value | The Qwen3.8 template raises an error (the request fails). | HTTP 400 for unrecognized (junk) values. Values similar to "off" become `low`. |
-| Concurrency | 2 slots by default (`--slots auto`): two conversations at the same time, each with its own cache. More requests wait in a queue. | No slots. Serial scheduler: one request at a time. A retry during a long prefill gets HTTP 409. ([MTPLX and the coder subagent](#mtplx-and-the-coder-subagent-measured-2026-10-02)) |
-| Stop | In the monitor: `q`, then `s`. Or kill the PID that `netstat -anv -p tcp` shows for :8080 ([Port and PID lookups](#port-and-pid-lookups-no-lsof)) | The same on :8000 (`mtplx stop` cannot find a server bound to 192.168.42.1) |
-| Logs | `~/models/logs/llama-server-*.log` (`tools/llama-log.sh`) | No server log file. Request log in `~/.mtplx/logs/` (e.g. `request-log-8000.jsonl`). The console output goes to `~/models/logs/.console-8000.out` when the dashboard starts the server. |
-| Health | `/health`, `/props`, `/metrics`, `/slots` | `/health` (with memory and allocator details), `/v1/mtplx/snapshot`, `/v1/mtplx/flight` |
+| | llama.cpp (`./carl.sh llama`) |
+|---|---|
+| Version | 0.4.1 (Homebrew), `llama-server` |
+| Port | 8080 |
+| API | OpenAI API (`/v1/chat/completions`, `/v1/models`), Bearer key `~/.config/llm-deploy/api-key` |
+| Weights | GGUF (`~/models/gguf/`): the catalogue models, and any other GGUF |
+| Models available | Qwen3.6-35B-A3B (default, `qwen3.6-35b-a3b`), Qwen3.8-27B stock, Qwen3.8-27B abliterated (orcarouter), and their Q3/IQ3 builds |
+| KV cache | Real q4_0 (default) or q8_0, allocated one time with no bf16 copy. Set it with `--kv`. |
+| Usable context | 96K per slot by default, up to 256K (`--ctx`) |
+| Memory behaviour | The server allocates the full KV cache at start. Memory stays flat during a session (a 56K → 81K session was measured). |
+| Prompt reuse | Context checkpoints (8, every 4K tokens) at user-message boundaries. RAM prompt cache, sized automatically to 1–8 GiB ([section 2](#ram-prompt-cache-and-checkpoints-measured-2026-10-02)). |
+| Speculation | MTP head + n-gram (`draft-mtp,ngram-mod`). The draft count is set for each model. |
+| Decode (27B) | 10.5–11 tok/s on new text, 27 tok/s when it re-emits text |
+| Prompt read speed (27B, cold) | ~85–90 tok/s at 2–9K, ~56–65 tok/s at 66K |
+| Thinking off from OpenCode | Yes: `none` variant (patched template) |
+| Thinking off from Pi | Yes: `off` → `chat_template_kwargs.enable_thinking=false` |
+| Effort values accepted | Depends on the template of the model ([section 5](#5-thinking-by-model)) |
+| Bad effort value | The Qwen3.8 template raises an error (the request fails). |
+| Concurrency | 2 slots by default (`--slots auto`): two conversations at the same time, each with its own cache. More requests wait in a queue. |
+| Stop | In the monitor: `q`, then `s`. Or kill the PID that `netstat -anv -p tcp` shows for :8080 ([Port and PID lookups](#port-and-pid-lookups-no-lsof)) |
+| Logs | `~/models/logs/llama-server-*.log` (`tools/llama-log.sh`) |
+| Health | `/health`, `/props`, `/metrics`, `/slots` |
 
-**Which backend to use:**
-- Use llama.cpp for all long or important work.
-- Use MTPLX only for short sessions where its decode speed helps.
-- The Qwen3.6-35B-A3B on llama.cpp is faster than both.
+**Other servers considered:**
+- MTPLX was evaluated (2026-09/10) and removed in 1.2.0. On 32–36 GB Macs, it could not hold long sessions: HTTP 507 from ~4–56K tokens (it depends on the free memory), no real quantized KV cache in 2.11, and a 48K cap. llama.cpp holds 2 × 96K slots. The last version with MTPLX support is commit 470c316.
 - NOTE: oMLX (a different MLX server) was researched as an alternative and not used. It was not tested on this Mac.
 
 ---
 
 ## 2. llama.cpp details
 
-`host/serve.sh` runs MTPLX itself. It gives the `llama` command to `host/serve-llama.sh`. With no arguments, `./carl.sh` opens the dashboard. It attaches to a server on port 8080 or 8000. If no server runs, it starts the last used backend (`~/.config/llm-deploy/last-backend`, written at each start) with its saved settings. The first time, it starts llama.cpp with the defaults. `./carl.sh -h` prints the help. The flags that `serve-llama.sh` uses are in [Server flags](#server-flags).
+`host/serve.sh` gives the `llama` command to `host/serve-llama.sh`. With no arguments, `./carl.sh` opens the dashboard. It attaches to a server on port 8080. If no server runs, it starts llama.cpp with the saved settings. If no model is downloaded, it first offers to download the default model for this Mac. `./carl.sh -h` prints the help. The flags that `serve-llama.sh` uses are in [Server flags](#server-flags).
 
 - **Slots: 2 by default when they fit** (`--slots auto`).
   - **Reason:** OpenCode subagents are separate conversations. With one slot, a subagent evicts the main session. llama.cpp could park the main session in the RAM cache only if it fit. The states were 2.1–2.3 GiB, and the old cap was 2048 MiB (`exceeds cache size limit … skipping`). Thus, the server read the main session again after each subagent.
@@ -146,20 +139,19 @@ For the use of each tool, see USERGUIDE.md, "Benchmarking and testing".
 - **Two models at the same time do not fit.**
   - CAUTION: Do not load a second model while a server runs. The second load causes Metal out-of-memory errors.
   - After that, the first server returns `Compute error` for each request. But `/health` continues to report ok. Only a restart repairs the server.
-- **Launch guard** (`guard_other_models` in `host/common.sh`). Both launchers (`serve-llama.sh` and the MTPLX presets in `serve.sh`) refuse to start in these conditions:
+- **Launch guard** (`guard_other_models` in `host/common.sh`). `serve-llama.sh` and Auto-tune refuse to start in these conditions:
   - a process holds more than 8 GB of resident memory (`BIG_GB`, default 8);
-  - a process has a known server name (`llama-server`, `mtplx`, `ollama`, `LM Studio`).
+  - a process has a known model-server name (`llama-server`, `ollama`, `LM Studio`, …).
   - **Reason:** two models do not fit. A name check alone misses servers that started in a different way. On 2026-10-02, a second model crashed the Mac (it restarted).
   - `ALLOW_SECOND_MODEL=1` skips the check. Use it only if the large process is not a model.
 - **Sleep stops requests.** The launchers keep `caffeinate -i` active for the full life of the server. To disable this, set `KEEP_AWAKE=0`. If you close the lid on battery power, the Mac still goes to sleep.
   - **Evidence:** before this change, idle sleep (1 min on battery) froze a 74K prompt for 30+ min.
 - **The server ignores the model name in a request.** The GGUF that is loaded answers all requests. Thus, the model picker in the client must match the server.
-- **Template override.** The server uses `--chat-template-file ~/models/templates/<model>.thinking-toggle.jinja`. This file is generated at start ([section 5](#5-how-thinking-works)). To use the template of the GGUF, set `THINK_TOGGLE=0`.
+- **Template override.** The server uses `--chat-template-file ~/models/templates/<model>.thinking-toggle.jinja`. This file is generated at start ([section 4](#4-how-thinking-works)). To use the template of the GGUF, set `THINK_TOGGLE=0`.
 - **Speculation per model** (catalogue `tune.spec` and `tune.spec_n`, or the Auto-tune result): The 27B dense uses MTP + n-gram with 1 draft token. The 35B MoE (Q4) uses 2. More drafts help a MoE, because with 3B active parameters it costs little to verify more tokens. The IQ3 builds use MTP + n-gram with 1 draft token: 2 drafts lose on IQ quants ([IQ3 speculation](#iq3-speculation-measured-2026-10-03)).
 - **The monitor (since 2026-10-01):** `tools/llama-monitor.py`.
   - It has a header with the status and **[ Quit ]**.
   - Tabs: Overview (cards), Connect (URL, key, config copy), Requests, Log, Settings.
-  - It shows llama.cpp and MTPLX servers. For MTPLX, it reads `/v1/mtplx/snapshot` and `/v1/mtplx/flight` (USERGUIDE.md, "Logs and monitoring").
   - Use only the left click. The monitor does not use the right click, because terminals such as iTerm2 show their own context menu.
   - A config that you copy from the Connect tab contains the API key. On screen, the key stays masked until you reveal it.
 - **Launch model (since 2026-10-01).** When you start from a terminal, `run_server` (`host/common.sh`) does these steps:
@@ -168,23 +160,25 @@ For the use of each tool, see USERGUIDE.md, "Benchmarking and testing".
   - It then uses `exec` to change into the monitor.
   - **Result:** The server is a child process of the monitor, so the monitor must reap it. If the monitor does not reap it, a stopped or crashed server stays as a zombie process. `ps` still lists this zombie. The `pid_alive()` function of the monitor calls `waitpid(WNOHANG)` and treats state `Z` as dead.
   - Without a terminal (scripts, `nohup`, `MONITOR=0`), the launcher starts the server with `exec` in the foreground, as before. The benchmark tools need this behaviour.
-- **API key** (`ensure_api_key` in `host/common.sh`): if `~/.mtplx/api-key` is missing, the first server start makes a random 40-character key with mode 600. Clients keep their copy at `~/.config/mtplx/api-key`.
+- **API key** (`ensure_api_key` in `host/common.sh`): the server and the clients use `~/.config/llm-deploy/api-key` (mode 600, in a folder with mode 700; the folder of `config.json`). `API_KEY_FILE` overrides the path.
+  - If the file is missing, the first server start copies the key from the old path `~/.mtplx/api-key` (before 1.2.0). It is the same key, so existing clients continue to work. If there is no old key, it makes a random 40-character key.
+  - The dashboard, Auto-tune, the bench tools and `tools/llama-wait-idle.sh` read the new path. While the new file does not exist, they read the old path.
 - **Network modes** (`host/common.sh`):
   - `--vm` = 192.168.42.1. This is the VMware Fusion NAT network (vmnet8). The Mac is `192.168.42.1` on `bridge101`. The Kali VM is `192.168.42.130`. The VM and the Mac itself can both connect to this address. The mode fails if this address is missing.
   - `--local` = 127.0.0.1. Only the Mac can connect. Use it for OpenCode/Pi on the Mac, or on a Mac without VMware.
   - auto = VM if present, else local.
   - `--host ADDR` (or `HOST=ADDR`) has priority over the modes. ADDR must exist on an interface of this Mac: for example its LAN address, or the address on a Parallels network (often `10.211.55.2`). `VM_HOST=ADDR` changes the address of `--vm` and auto mode.
-  - The settings file can hold an address (`llama.host` or `mtplx.host` in `config.json`; the Settings tab writes it when you select an address in the network row). Order of priority: flag, environment, settings file.
+  - The settings file can hold an address (`llama.host` in `config.json`; the Settings tab writes it when you select an address in the network row). Order of priority: flag, environment, settings file.
   - The start-up banner shows the mode. For an address that is not 127.0.0.1 or the VM address, it shows a CAUTION: every computer that can reach the address can use the server, and only the API key protects it.
   - After a restart from the Settings tab, the health check also tries the selected address. Thus, a server on the LAN address is not taken as a failed start.
   - CAUTION: The script refuses 0.0.0.0 / `::`, also through `HOST=0.0.0.0`. The macOS firewall is off on this Mac, so a wildcard bind would make the model available to the LAN.
-  - `client/install.sh --local` sets the clients to the address on which the server actually listens. `--host ADDR` sets any address.
-  - API key for `client/install.sh` (first hit wins): `--key KEY` / `--key-file FILE`, `$MTPLX_API_KEY`, a file `api-key` next to the script, the server key on the same Mac (`~/.mtplx/api-key`), the key from a previous run, a hidden prompt. The installer stores it at `~/.config/mtplx/api-key` (mode 600). `--key` leaves the key in the shell history. The smoke test gives the key to `curl` through a header file (`curl -H @file`, curl 7.55 or later), so the key does not show in `ps`.
+  - `client/install.sh --local` sets the clients to the address on which the server actually listens. `--host ADDR` sets any address. `--port N` sets the llama.cpp port (default 8080). The old positional form `install.sh HOST [X] [PORT]` still works: the second value (an old port) is ignored with a note, and the third is the llama.cpp port.
+  - API key for `client/install.sh` (first hit wins): `--key KEY` / `--key-file FILE`, `$CARL_API_KEY`, a file `api-key` next to the script, on a Mac with `--local` the server key (`~/.config/llm-deploy/api-key`, else the old `~/.mtplx/api-key`), the key from a previous run (the same new path, else the old `~/.config/mtplx/api-key`), a hidden prompt. The installer stores it at `~/.config/llm-deploy/api-key` (mode 600), and the OpenCode and Pi configs point at that file. A new run changes old configs to the new path. It does not delete the old client file (a provider of your own can use it): delete it when nothing uses it. `--key` leaves the key in the shell history. The smoke test gives the key to `curl` through a header file (`curl -H @file`, curl 7.55 or later), so the key does not show in `ps`.
 - **Memory check before load.** `serve-llama.sh` runs `tools/llama-fit.py --check`. It warns when weights + KV + buffers are more than the GPU limit ([below](#gpu-memory-limit-and-what-fits)). The warning does not block the start.
 - **Port guard.** `serve-llama.sh` does not start if a process already listens on the port (`port_pid`, see below). It does this check before it touches `llama-server-latest.log` or loads anything. Before this guard, a second `serve.sh` (10:08 on 2026-10-01) failed to bind. But it had already pointed the `latest` symlink to its own 4-line failure log.
 - **`/metrics` gauges reset at each read.** (`--metrics` enables this Prometheus endpoint.) `prompt_tokens_seconds` and `predicted_tokens_seconds` cover only the time since the last scrape. Thus, you must calculate averages from the `*_total` counters. The monitor does this.
 - **The server does not log its KV cache size** at the default log level. Thus, the monitor calculates it ([below](#context-memory-kv-cache-and-recurrent-state)).
-- **Dependency check** (`ensure_deps` in `host/common.sh`). Before a start, the launchers look for `llama-server` (llama.cpp), `aria2c` and `ansifilter`. In a terminal, they offer to run `brew install` for the missing tools. Without a terminal, they show the command. Only `llama-server` is necessary; the others are optional. MTPLX presets check for `mtplx` instead of `llama-server`. `SKIP_DEPS=1` skips the check.
+- **Dependency check** (`ensure_deps` in `host/common.sh`). Before a start, the launchers look for `llama-server` (llama.cpp), `aria2c` and `ansifilter`. In a terminal, they offer to run `brew install` for the missing tools. Without a terminal, they show the command. Only `llama-server` is necessary; the others are optional. `SKIP_DEPS=1` skips the check.
 - **No model, or the default is not downloaded.** `./carl.sh` with no arguments offers to download the default for this Mac if no model is downloaded. If you answer no, it opens the dashboard without a server. If the default is not downloaded but another model is, `tools/carl.py` (`resolve_launch`) uses the first downloaded model, and says so.
 
 ### Port and PID lookups (no lsof)
@@ -212,15 +206,16 @@ netstat -anv -p tcp | awk '$6=="LISTEN" && $4 ~ /[.]8080$/ {n=split($(NF-8),a,":
 | 5 | Catalogue | `host/catalog.json`: `tune` of the model. For a custom model: values from its GGUF header |
 | 6 | Built-in defaults | q4_0, 96K, auto slots, MTP + n-gram n=1, temperature 1.0, … |
 
-- **`config.json` sections:** `backend`; `llama` (`model`, `net`, `host`, `cache_ram`, `ub`, `batch`, `ckpt`, `ckpt_step`, `think_toggle`, `extra_args`); `models.<name>` (`kv`, `ctx`, `slots`, `spec`, `spec_n`, `temp`, `top_p`, `top_k`, `min_p`, `presence`, `repeat`, `alias`); `mtplx` (`preset`, `context`, `profile`, `depth`, `kv_quant`, `net`, `host`, `scheduler`, `batching`, `prefill_chunk`, `ssd_cache`); `paths` (`models_dir`).
+- **`config.json` sections:** `llama` (`model`, `net`, `host`, `cache_ram`, `ub`, `batch`, `ckpt`, `ckpt_step`, `think_toggle`, `extra_args`); `models.<name>` (`kv`, `ctx`, `slots`, `spec`, `spec_n`, `temp`, `top_p`, `top_k`, `min_p`, `presence`, `repeat`, `alias`); `paths` (`models_dir`).
 - **Validation:** each key has a type, a range or a list of choices (`./carl.sh config show` lists them). A bad value stops the start with an error. An unknown key is ignored. CARL writes the file atomically, with mode 600.
-- **Migration:** before `config.json`, the dashboard wrote `llama.env` and `mtplx.env`. If `config.json` is missing, CARL converts these files into it one time.
-- `SETTINGS_FILE=none` skips `config.json` for llama.cpp. `SETTINGS_FILE_MTPLX=none` skips the `mtplx` section for `grant` / `pocket`.
+- **Migration:** before `config.json`, the dashboard wrote `llama.env`. If `config.json` is missing, CARL converts this file into it one time.
+- **Files from before 1.2.0** can hold settings of features that 1.2.0 removed (CHANGELOG.md). They load: CARL ignores them (`./carl.sh config show` warns about a removed section), and they go away the next time CARL saves the file.
+- `SETTINGS_FILE=none` skips `config.json`.
 - **Custom models:** each `.gguf` in the models folder (`paths.models_dir`, or `MODELS_DIR`) is a model, also if it is not in the catalogue. `./carl.sh download hf:OWNER/REPO/FILE.gguf` resolves the revision, the size and the SHA-256 from the Hugging Face API, records the model in `models.json`, downloads it and verifies it.
 
 ### Auto-tune
 
-`./carl.sh tune NAME [--quick]` (`tools/carl-tune.py`) measures one model on this Mac. It starts its own server on port 8093, one time for each speculation mode (about 5–10 min in all). It refuses to start if a server runs on 8080 or 8000, or if another large process is in memory (more than `BIG_GB`, default 8 GB, or a known model server; `ALLOW_SECOND_MODEL=1` skips this check, as for the launch guard).
+`./carl.sh tune NAME [--quick]` (`tools/carl-tune.py`) measures one model on this Mac. It starts its own server on port 8093, one time for each speculation mode (about 5–10 min in all). It refuses to start if a server runs on 8080, or if another large process is in memory (more than `BIG_GB`, default 8 GB, or a known model server; `ALLOW_SECOND_MODEL=1` skips this check, as for the launch guard).
 
 1. **Memory:** the largest window for each slot that fits the GPU limit, with 1 and 2 slots (the same maths as `./carl.sh fit`).
 2. **Speculation:** none, `ngram-mod` (n=2), and, if the GGUF has an MTP head, `draft-mtp` and `draft-mtp,ngram-mod` at n=1 and n=2 (`--quick`: n=1 only). Each mode generates prose, new code and a code re-emit, two times. The score is a weighted geometric mean (prose 0.4, code 0.4, re-emit 0.2). A mode with drafting must beat a simpler mode by 3% to win.
@@ -239,7 +234,7 @@ This table shows the flags that `host/serve-llama.sh` gives to `llama-server`, a
 
 | Setting | Value | Why |
 |---|---|---|
-| Bind | `--host 192.168.42.1 --port 8080 --api-key-file ~/.mtplx/api-key` | An address for the VM only; a shared key |
+| Bind | `--host 192.168.42.1 --port 8080 --api-key-file ~/.config/llm-deploy/api-key` | An address for the VM only; a shared key |
 | Offload | `-ngl 999` | The whole model is on the GPU (Metal). |
 | Flash attention | `-fa on` | Necessary for a quantized V cache. It was on for every measurement. |
 | KV cache | `-ctk q4_0 -ctv q4_0` (`--kv q8` → q8_0) | q4: +16% prefill and about 2 GB less memory than q8, the same decode speed, 8/8 needle recall at 66K. Do not mix K and V types (prefill is about 5× slower). |
@@ -247,9 +242,9 @@ This table shows the flags that `host/serve-llama.sh` gives to `llama-server`, a
 | Batching | `-b 2048 -ub 512` | `-ub 512` gave the best measured result (90.5 tok/s vs 88.6 / 86.1 for 1024 / 2048). |
 | Slots | `--slots auto` (default): 2 if two full context windows fit, else 1 → `--parallel 2 --kv-unified --kv-unified-per-slot CTX -c 2×CTX --no-cache-idle-slots -sps 0.5` | The main OpenCode session and a subagent each keep their own slot and cache (see above). |
 | Prompt cache | `--ctx-checkpoints 8 --checkpoint-min-step 4096 --cache-ram N` (N comes from the free RAM, 1–8 GiB) | Checkpoints let follow-up turns use the cache again, because the recurrent layers of Qwen cannot trim it. The RAM cache holds conversations that do not fit in the slots (a third session). Each held state is 2–2.5 GiB. Size = RAM − weights − KV − reserve (10 GiB with the VM network, else 6; `RESERVE_GB`). |
-| Templates | `--jinja --reasoning-format deepseek`, `preserve_thinking: true`, `--chat-template-file` (patched) | The server sends the reasoning to `reasoning_content`. `reasoning_effort: none` turns off thinking ([section 5](#5-how-thinking-works)). |
-| Sampling | `--temp 1.0 --top-p 0.95 --top-k 20 --min-p 0 --presence-penalty 0 --repeat-penalty 1.0` (`TEMP`, `TOP_P`, `TOP_K`, `MIN_P`, `PRESENCE`) | The Qwen recommendation for thinking mode ([section 9](#9-sampling-and-output-limits)). |
-| Speculation | `--spec-type draft-mtp,ngram-mod --spec-draft-n-max N` (type and N from the tune of each model: N 1 for the dense 27B and the IQ3 builds, 2 for the Q4 35B) | The best of 7 configs that were measured on each model ([section 13](#13-performance-measured), [IQ3 speculation](#iq3-speculation-measured-2026-10-03)). |
+| Templates | `--jinja --reasoning-format deepseek`, `preserve_thinking: true`, `--chat-template-file` (patched) | The server sends the reasoning to `reasoning_content`. `reasoning_effort: none` turns off thinking ([section 4](#4-how-thinking-works)). |
+| Sampling | `--temp 1.0 --top-p 0.95 --top-k 20 --min-p 0 --presence-penalty 0 --repeat-penalty 1.0` (`TEMP`, `TOP_P`, `TOP_K`, `MIN_P`, `PRESENCE`) | The Qwen recommendation for thinking mode ([section 8](#8-sampling-and-output-limits)). |
+| Speculation | `--spec-type draft-mtp,ngram-mod --spec-draft-n-max N` (type and N from the tune of each model: N 1 for the dense 27B and the IQ3 builds, 2 for the Q4 35B) | The best of 7 configs that were measured on each model ([section 12](#12-performance-measured), [IQ3 speculation](#iq3-speculation-measured-2026-10-03)). |
 | Logging | `--log-file ~/models/logs/llama-server-<ts>.log --log-timestamps --log-prefix` | `llama-server-latest.log` points to the newest log. Use `tools/llama-log.sh` to read it. |
 | Keep awake | `caffeinate -i -w <server pid>` | If the Mac goes to sleep, requests stop in the middle of the prompt. |
 | Monitor in the same terminal | `run_server` in `host/common.sh` | One command shows the server live. `MONITOR=0` gives a plain foreground server. |
@@ -362,71 +357,7 @@ The server has 2 slots. When a third conversation starts, it takes the slot of t
 - **q8_0 fits at 96K on 36 GB.** On the 35B, it reads approximately 4% faster, with the same decode speed and 0.36 GB more swap. q4_0 stays the default, because it uses less memory and has the recall tests.
 - NOTE: **The 27B with `--kv q8` has a small cache.** The automatic size is 1792 MiB. At 34 KiB for each token, this holds only ~54K tokens. Thus, the server reads an evicted long 27B conversation again in full. With q4_0, the 27B gets 4864 MiB (~276K tokens), which is sufficient.
 
-## 3. MTPLX details, and why it is capped at 48K
-
-### MTPLX cannot run a quantized KV cache correctly, thus a long context does not fit
-
-The original goal was Q8 KV with 128K+ context on MTPLX. This is not possible with MTPLX 2.11.3 on 36 GB. For this reason, the project moved to llama.cpp.
-
-| `--kv-quant` | What actually happens | KV per token | Active memory at 56K | Append turn (+7K) at 56K |
-|---|---|---|---|---|
-| `off` (bf16) | Plain bf16 cache | ~68 KB | 18.7 GiB | HTTP 507 (peak 31.6 GiB) |
-| `q8` | q8 pages **plus a full bf16 copy** in `_dequant_memo`. Each snapshot (`.state`) and each verify burst of more than 5 tokens builds this copy again. | ~99 KB (**more than `off`**) | 20.5 GiB | Cache evicted and read again, then HTTP 507 |
-| `q4` | Really quantized (chunked dequant, no copy: `memo_rebuilds=0`) | ~39 KB | 17.1 GiB | HTTP 507 (peak 32.0 GiB) |
-
-- **q8 is worse than no quantization.** The bf16 copy removes the benefit. Also, MTPLX always stores session snapshots as bf16.
-- **q4 decreases the steady-state memory, but not the peak.** On the append turn, MTPLX copies the full context (copy-on-write against the saved snapshot). It then prefills the new chunk in bf16. At approximately 56K, this spike is more than the Metal limit (0.75 × RAM ≈ 27 GiB), for all KV modes.
-- **Thus, the limit is the append spike, not the cache size.** In all modes, sessions stopped at 43–63K tokens with HTTP 507 `memory_refusal`. 48K with bf16 (`off`) is the largest window that continues to work in multi-turn agent use. bf16 is the simplest mode.
-- **The memory planner of MTPLX gives wrong expectations.** The `--kv-quant` maths (q8 factor 0.55, q4 0.3) promises 213K–262K windows. These windows are not possible on 36 GB.
-- **There is no upstream fix as of 2.11.3.** The 2.11.4 work (#499) writes snapshots to the SSD. It does not keep them quantized.
-
-By contrast, llama.cpp allocates a real q4_0/q8_0 cache one time, with no bf16 copy. It held a 56K → 81K session at flat memory.
-
-### Other MTPLX behaviour
-
-- **MTPLX needs session headers for cache reuse.**
-  - OpenCode: the `mtplx-session-headers` plugin sends `x-mtplx-client`, `x-mtplx-session-id` and `x-mtplx-client-turn-id`.
-  - Pi: `mtplx-request-policy.ts` sends the session ids and entry ids of Pi.
-  - Without these headers, each turn is a cold prompt.
-- **MTPLX removes client defaults:**
-  - The OpenCode plugin removes the 32,000-token output cap that OpenCode injects. It also removes the injected Qwen sampler (temperature 0.55, top_p 1, from OpenCode ≤1.18.20). Thus, the settings of MTPLX apply.
-  - The Pi extension removes the `max_tokens` value (49152) that Pi advertises for the MTPLX models.
-  - All other explicit values go through without change.
-- **Profile `sustained`** gave better results than `turbo` here. The profile overwrites some env vars. You can override only the keys in `PROFILE_ENV_USER_OVERRIDE_KEYS`.
-- **Thinking budget guard:** MTPLX has a reasoning budget for each effort level (low 1536, medium 3072, high 6144, xhigh 12288 tokens). But the guard is **disabled by default** (project policy since 2026-07-20). The model itself sets the reasoning length.
-- **The serial scheduler** puts a second request (e.g. the title agent of OpenCode) in a queue after the main request. One request waited 10.7 min and caused a cache clear. Retries during a long prefill get HTTP 409 `already in flight`.
-- **Saved settings:** the Settings tab of the dashboard writes the `mtplx` section of `~/.config/llm-deploy/config.json` (`preset`, `context`, `profile`, `depth`, `kv_quant`, `net`, `host`, and the advanced `scheduler`, `batching`, `prefill_chunk`, `ssd_cache`). `./carl.sh grant|pocket` reads it (`tools/carl.py mtplx-env`). The order of priority is: environment, then the file, then the preset defaults. `SETTINGS_FILE_MTPLX=none` ignores the file.
-
-### MTPLX and the coder subagent (measured 2026-10-02)
-
-The test used the `grant` 27B with a 48K context window.
-
-- **MTPLX has no slots.** The default serial scheduler runs one request at a time. The other requests wait.
-- **The session bank keeps each session.** A session is identified by the header `x-mtplx-session-id`. The OpenCode plugin sends this header.
-  - **RAM tier:** ~8.8 GB maximum, ≤4.4 GB for each session. It shrinks when the load increases.
-  - **SSD tier:** 100 GB in `~/.mtplx/session-bank`.
-- **The KV cache is bf16, 64 KiB for each token.** Thus, 48K costs 3 GiB for each session.
-
-| Step | Time | Note |
-|---|---|---|
-| Main session, ~25K tokens, cold | 304 s | |
-| Coder, ~17K tokens, cold | 196 s | |
-| Main session again | 3.8 s | 24,840 tokens re-used from RAM |
-| Coder follow-up | 13 s | 7,686 of 7,707 tokens re-used |
-| Main session, RAM tier full | 14.8 s | restored from the SSD tier |
-
-- **Memory:** the peak was 24.1 GiB. Swap was 0 with 2 sessions, and 1.9 GB with 3 sessions.
-- NOTE: MTPLX treats a request as a background (title) job if it has `max_tokens` ≤ 48, a different system prompt and no history. MTPLX does not keep such a request in the bank.
-- **Result:** `install.sh` now installs the coder also when the server is MTPLX.
-- **The context window is one value for the whole server.** You cannot give 56K to the main session and 48K to the coder.
-- **56K for both sessions does not work** (measured 2026-10-02, `--context-window 57344`, main ~40K + coder ~35K):
-  - The main session took 517 s cold, the coder 434 s cold. Then the MLX allocator went to 106% of its limit (critical pressure), with a peak of 28.6 GiB against the 28.1 GiB GPU limit.
-  - To continue, MTPLX evicted the main session from the RAM bank. The SSD tier had no copy (`ssd_prefix_miss`). Thus, the main session was read again in full (about 8.5 min). Swap went to 3.4 GB.
-  - Result: keep 48K for MTPLX. The Settings tab still offers 56K, with a warning.
-
----
-
-## 4. Model and quantization choices
+## 3. Model and quantization choices
 
 ### Why these models
 
@@ -511,25 +442,11 @@ IQ3_M is a good choice only where no larger file fits, for example on a 24 GB Ma
 | MTP + n-gram, n=2 | 8.7 | 9.7 | 23.3 |
 
 **Results:**
-- **MTP alone helps little on IQ3.** On the 35B IQ3, it adds about nothing. On the 27B IQ3, it adds only ~5–10%. On the Q4 builds (M3 Pro), MTP alone added 27–50% ([section 13](#13-performance-measured)). The IQ kernels make the verification of the drafts expensive. Thus, for MTP alone, the hypothesis "IQ quants do not do well with MTP" is correct.
+- **MTP alone helps little on IQ3.** On the 35B IQ3, it adds about nothing. On the 27B IQ3, it adds only ~5–10%. On the Q4 builds (M3 Pro), MTP alone added 27–50% ([section 12](#12-performance-measured)). The IQ kernels make the verification of the drafts expensive. Thus, for MTP alone, the hypothesis "IQ quants do not do well with MTP" is correct.
 - **2 drafts lose on IQ3.** On the 35B IQ3, MTP n=2 is about 15% slower on new text than no speculation.
 - **MTP + n-gram with 1 draft is the best on both models.** With the Auto-tune score (weighted geometric mean: prose 0.4, code 0.4, re-emit 0.2), it is about 4–5% better than n-gram alone on the 35B IQ3, and about 9% better on the 27B IQ3. n-gram alone is better only on a code re-emit on the 35B (117 vs 93 tok/s).
 - **Thus, the catalogue tune for both IQ3 builds is `draft-mtp,ngram-mod` with n=1.** The earlier setting of the 35B IQ3 (MTP + n-gram, n=2, copied from the Q4) was the second slowest mode on new text. The Q4 35B keeps n=2 (measured on the M3 Pro).
 - The Settings tab shows MTP with more than 1 draft on an IQ quant in red. To measure a model on your own Mac, run `./carl.sh tune NAME`.
-
-### Qwen3.6-35B-A3B on MTPLX at 48K? (not tested)
-
-- **It is possible.** MTPLX 2.11.3 supports the `qwen3_6` family and MoE models. MTPLX builds exist, e.g. `Youssofal/Qwen3.6-35B-A3B-MTPLX-Optimized-Speed-FP16` (21.0 GB, by the author of MTPLX, 2026-09-17) and `samuelfaj/Qwen3.6-35B-A3B-4bit-MTPLX-Optimized-Speed` (22.1 GB).
-- **Assessment: the benefit is probably too small.**
-  - On llama.cpp, the 35B already decodes at 42–45 tok/s (117 on edits). It reads prompts at ~500 tok/s, with 128K and a real q4 cache. At that speed, decode no longer limits the speed. Most time goes to the thinking length and the first cold prompt.
-  - On the dense 27B, MTPLX had approximately +45% decode speed (16 vs 11 tok/s). On a 3B-active MoE, both backends read few bytes for each token. Thus, the difference is unknown, and it can be smaller.
-  - The costs are known: the 48K cap, no thinking-off from OpenCode, bf16 KV, the fragile sessions of MTPLX, and one more 21 GB download. It is also the stock model, so it does not have the benefit of abliteration.
-  - It is possible that the 48K cap is higher for this model. It has fewer attention layers, so it has a smaller KV per token and a smaller append spike. But this was not measured.
-- **If you try it:**
-  1. Download the Youssofal Speed build.
-  2. Run `mtplx tune`.
-  3. Compare the short-session decode speed and prompt read speed with llama.cpp. Use the same prompts.
-  4. Adopt it only if it is clearly faster, for example +30% or more.
 
 ### The coder subagent
 
@@ -559,7 +476,7 @@ IQ3_M is a good choice only where no larger file fits, for example on a 24 GB Ma
   - The copy has a patch: the tool description lists the installed agents and their descriptions. The upstream version lists no agents, so the model could not select one itself.
   - The coder runs as a separate `pi --mode json -p --no-session` process with the same model. It has the tools read, bash, edit, write, grep, find, ls. It does not have `subagent`, so it cannot start nested subagents.
   - The rule is a marked block in `~/.pi/agent/APPEND_SYSTEM.md`.
-- **When `install.sh` installs it:** if the llama.cpp server has 2+ slots, or if the server is MTPLX ([MTPLX and the coder subagent](#mtplx-and-the-coder-subagent-measured-2026-10-02)). `CODER=1` / `NO_CODER=1` override this.
+- **When `install.sh` installs it:** if the server has 2+ slots. `CODER=1` / `NO_CODER=1` override this.
 - **Same model, different context.** The server loads only one model, so the coder does not add capability. The coder gets a new context with only the task, more reasoning and a stricter method. With 2 slots, the main session keeps its cache while the coder runs.
 - **Reason for the rule:** With only the agent description, the 35B never delegated. It did 4/4 tasks itself. These tasks included a multi-file package and a bug that the user reported as stuck.
 
@@ -582,7 +499,7 @@ IQ3_M is a good choice only where no larger file fits, for example on a 24 GB Ma
 
 ---
 
-## 5. How thinking works
+## 4. How thinking works
 
 Qwen models write hidden reasoning between `<think>` and `</think>`, before the answer. The **chat template** is a Jinja program in the model file. It decides if that block opens. It uses variables that the server gives to it:
 
@@ -592,18 +509,14 @@ Qwen models write hidden reasoning between `<think>` and `</think>`, before the 
 | `reasoning_effort` | Qwen3.8 only: sets how much the model thinks. Qwen3.6 does not have this variable. |
 | `preserve_thinking` | `true` → reasoning from earlier turns stays in the prompt (necessary for prompt-cache reuse) |
 
-Each backend sets these variables as follows:
-- **llama.cpp** gives these request fields to the template:
-  - top-level `reasoning_effort`
-  - all fields in `chat_template_kwargs`
-  - the server-wide `--chat-template-kwargs '{"preserve_thinking":true}'`.
+llama.cpp gives these request fields to the template:
+- top-level `reasoning_effort`
+- all fields in `chat_template_kwargs`
+- the server-wide `--chat-template-kwargs '{"preserve_thinking":true}'`.
 
-  `--reasoning-format deepseek` moves the thinking text into the `reasoning_content` field of the response.
-- **MTPLX** sets `enable_thinking` itself:
-  - It uses the top-level `enable_thinking` of the request. If that is not present, it uses `chat_template_kwargs.enable_thinking`. If that is also not present, it uses the server default (on).
-  - It then resolves the effort against the levels that the model family declares.
+`--reasoning-format deepseek` moves the thinking text into the `reasoning_content` field of the response.
 
-**The patch (llama.cpp only).** OpenCode can send only `reasoning_effort`. The Qwen3.8 template has no effort value that means "off". For this reason, `host/serve-llama.sh` extracts the template from the GGUF (`host/gguf-chat-template.py`). It then adds one rule at the start. The rest of the template does not change:
+**The patch.** OpenCode can send only `reasoning_effort`. The Qwen3.8 template has no effort value that means "off". For this reason, `host/serve-llama.sh` extracts the template from the GGUF (`host/gguf-chat-template.py`). It then adds one rule at the start. The rest of the template does not change:
 
 ```jinja
 {%- if reasoning_effort is defined and reasoning_effort in ('none', 'minimal', 'off', 'disable', 'disabled') %}{%- set enable_thinking = false %}{%- endif %}
@@ -613,7 +526,7 @@ The patched copy is cached as `~/models/templates/<model>.thinking-toggle.jinja`
 
 ---
 
-## 6. Thinking by model
+## 5. Thinking by model
 
 | | Qwen3.8-27B (abliterated orcarouter; stock unsloth) | Qwen3.6-35B-A3B (stock unsloth) |
 |---|---|---|
@@ -630,34 +543,23 @@ The patched copy is cached as `~/models/templates/<model>.thinking-toggle.jinja`
 
 ---
 
-## 7. Thinking by client and backend
+## 6. Thinking by client
 
 ### What each client sends
 
-| Client → backend | Config mechanism | Thinking on | Thinking off |
+| Client → server | Config mechanism | Thinking on | Thinking off |
 |---|---|---|---|
 | OpenCode → llama.cpp | `@ai-sdk/openai-compatible`, `options.reasoningEffort` + variants | top-level `reasoning_effort: "<level>"` | top-level `reasoning_effort: "none"` (patched template → `enable_thinking=false`) |
-| OpenCode → MTPLX | same | top-level `reasoning_effort: "<level>"` | **not possible:** MTPLX changes `none`/`minimal`/`off`/`disable(d)` to `low` |
 | Pi → llama.cpp | `thinkingFormat: "chat-template"` + `chatTemplateKwargs` | `chat_template_kwargs {enable_thinking: true, preserve_thinking: true, reasoning_effort: "<level>"}` | `chat_template_kwargs {enable_thinking: false, preserve_thinking: true}` (no effort value) |
-| Pi → MTPLX | `thinkingFormat: "qwen"`, `supportsReasoningEffort: true` | top-level `enable_thinking: true` + `reasoning_effort: "<level>"` | top-level `enable_thinking: false` (MTPLX obeys it) |
 
 **OpenCode precedence:** provider options → model `options` → agent `options` → **variant**.
 - OpenCode merges the variant last, so the variant has priority.
 - If the variant name is unknown (old config), OpenCode uses the base options of the model. It gives no warning.
 - For this reason, fully restart OpenCode after `install.sh`.
 
-### How MTPLX resolves effort
-
-From `mtplx/reasoning_effort.py` and `_reasoning_effort_for_state`:
-1. Thinking off (`enable_thinking=false`) → no effort at all.
-2. Values similar to "off" (`none`, `minimal`, `off`, `disable`, `disabled`) → `low`. On MTPLX, they cannot mean "off".
-3. `auto` or no value → the family default. For Qwen3.8, the default is **`medium`**.
-4. A real level that the family does not declare → the nearest declared level *above* it. If there is no level above, the nearest level below. Qwen3.8 declares `low/medium/xhigh`, so **`high` → `xhigh`**.
-5. Unrecognized (junk) values → HTTP 400.
-
 ---
 
-## 8. The full thinking matrix
+## 7. The full thinking matrix
 
 What you select → what occurs.
 
@@ -671,12 +573,8 @@ What you select → what occurs.
 | | `xhigh` | `xhigh` | long thinking |
 | `llamacpp/qwen3.6-35b-a3b` | `none` | `none` | **off** |
 | | `high` (default) | `high` | on (the template ignores the level) |
-| `mtplx/…-grant`, `mtplx/qwen3.8-27b-abliterated` | `low` (default) | `low` | low |
-| | `medium` | `medium` | medium |
-| | `xhigh` | `xhigh` | xhigh |
-| | (no off option) | | `none` would become `low` with no warning, so the config disables it |
 
-`minimal` and `high` are disabled for the Qwen3.8 entries. On llama.cpp, `minimal` would mean "off", but on MTPLX it would mean `low`. `high` is not a Qwen3.8 level. For the 35B, `low`, `medium` and `xhigh` are disabled, because they have no different effect.
+`minimal` and `high` are disabled for the Qwen3.8 entries. `minimal` would only repeat `none` ("off"). `high` is not a Qwen3.8 level (the template raises an error). For the 35B, `low`, `medium` and `xhigh` are disabled, because they have no different effect.
 
 ### Pi (thinking level)
 
@@ -684,23 +582,22 @@ What you select → what occurs.
 |---|---|---|---|
 | `qwen3.8-27b-abliterated-llama` | off, low, medium, xhigh | `enable_thinking: false` → off | sent as `chat_template_kwargs.reasoning_effort` |
 | `qwen3.6-35b-a3b` | off, high | off | `high` = on (level ignored) |
-| MTPLX models | off, low, medium, xhigh | top-level `enable_thinking: false` → off | sent as `reasoning_effort`; `high` is hidden (MTPLX would change it to `xhigh`), as in OpenCode |
 
 The Pi `thinkingLevelMap` hides levels with `null`. `minimal` is hidden for all models.
 
 ### Raw API (curl, scripts)
 
-| Goal | llama.cpp | MTPLX |
-|---|---|---|
-| Thinking off | `"reasoning_effort":"none"` (patched) or `"chat_template_kwargs":{"enable_thinking":false}` | `"enable_thinking":false` or `"chat_template_kwargs":{"enable_thinking":false}` |
-| Set a level (Qwen3.8) | `"reasoning_effort":"low"\|"medium"\|"xhigh"` | `"reasoning_effort":"low"\|"medium"\|"high"(→xhigh)\|"xhigh"` |
-| Avoid | `"reasoning_effort":"high"` on Qwen3.8 (template error) | Do not expect `"reasoning_effort":"none"` to turn thinking off |
+| Goal | llama.cpp |
+|---|---|
+| Thinking off | `"reasoning_effort":"none"` (patched) or `"chat_template_kwargs":{"enable_thinking":false}` |
+| Set a level (Qwen3.8) | `"reasoning_effort":"low"\|"medium"\|"xhigh"` |
+| Avoid | `"reasoning_effort":"high"` on Qwen3.8 (template error) |
 
 **Timing:** A change applies from the next message. A reply that is in progress keeps its mode.
 
 ---
 
-## 9. Sampling and output limits
+## 8. Sampling and output limits
 
 ### Qwen's recommendations (model cards, checked 2026-10-01)
 
@@ -720,7 +617,6 @@ Qwen ran its agentic coding benchmarks (SWE-bench, Terminal-Bench, Claude Code h
 | Thinking on, any llama.cpp model (normal use) | 1.0 / 0.95 / 20 / 0 / presence 0 / repetition 1.0 | `serve-llama.sh` sets these values explicitly (`TEMP`, `TOP_P`, `TOP_K`, `MIN_P`, `PRESENCE` override them). The clients send no sampling fields. The capture proxy showed only `model`, `stream`, `store`, `reasoning_effort`. |
 | OpenCode `none` variant (thinking off) | 0.7 / 0.80 / 20 / 0 / presence 1.5 | The variant sends `temperature`, `top_p`, `presence_penalty` with `reasoning_effort: none`. OpenCode forwards variant options into the request body. This is the same mechanism that carried `chat_template_kwargs` in the 2026-09-24 captures. These fields were not captured again yet. |
 | Pi `off` (thinking off) | thinking-mode values | Pi changes only `chat_template_kwargs` for each level. It cannot change the sampling for each level. Small effect: direct answers are slightly more random. |
-| MTPLX (`grant`, `pocket`) | 1.0 / 0.95 / 20 | The MTPLX Qwen3.8 family sampler (`QWEN3_8_SAMPLER_DEFAULTS`). The OpenCode plugin removes the 0.55 / 1.0 that OpenCode ≤1.18.20 injects. |
 
 - **Reason for explicit flags:** The five catalogue GGUFs that were checked contain 1.0 / 20 / 0.95 (`general.sampling.*`). The flags also cover the two IQ3 builds and custom models, which were not checked. But a GGUF without these values would get the generic llama.cpp defaults with no warning (temperature 0.8, top_k 40, min_p 0.05).
 - **35B-A3B choices:** Temperature 1.0 with presence 0 agrees with the Qwen agentic benchmark settings.
@@ -728,38 +624,34 @@ Qwen ran its agentic coding benchmarks (SWE-bench, Terminal-Bench, Claude Code h
   - For precise code work, use `TEMP=0.6`.
   - Neither setting was compared here.
 
-| | llama.cpp | MTPLX |
-|---|---|---|
-| Output cap | None by default (`n_predict -1`): the model generates until it stops or the context is full | The server sets it. The plugin/extension removes the client caps. |
-| Client sends | OpenCode: no `max_tokens` (seen with the capture proxy). Pi: `max_tokens` = `maxTokens` (`install.sh` caps it at half the window). | OpenCode: the injected cap is removed. Pi: the advertised cap is removed. |
+| | llama.cpp |
+|---|---|
+| Output cap | None by default (`n_predict -1`): the model generates until it stops or the context is full |
+| Client sends | OpenCode: no `max_tokens` (seen with the capture proxy). Pi: `max_tokens` = `maxTokens` (`install.sh` caps it at half the window). |
 
-CAUTION: On MTPLX, keep the presence and frequency penalties at 0. Penalties disable its context-copy drafting.
-
-NOTE: On llama.cpp, the presence 1.5 of the non-thinking variant is the Qwen recommendation for that mode.
+NOTE: The presence 1.5 of the non-thinking variant is the Qwen recommendation for that mode.
 
 ---
 
-## 10. Context limits: server vs client
+## 9. Context limits: server vs client
 
-- **The server setting `--ctx` (llama.cpp) or `--context-window` (MTPLX) is the real limit.**
+- **The server setting `--ctx` is the real limit.**
 - **The client limit only decides when the client compacts.** The client limits are `limit.context` in OpenCode and `contextWindow` in Pi. The clients do not send these values to the server.
 - **Client limit above server limit:** When the session is larger than the server context window, each request fails with `HTTP 400 exceed_context_size_error`. The client never compacts by itself.
 - **Server limit above client limit:** This causes no problem. The extra memory is not used.
-- **`client/install.sh` keeps the two limits the same** for llama.cpp. The order of the sources is: `LLAMA_CTX`, then `/props` → `default_generation_settings.n_ctx` of the running server, then 96K (98304). It caps the output at half the context window, and sets MTPLX to 48K. After you change `--ctx`, run it again. Then restart the client.
+- **`client/install.sh` keeps the two limits the same.** The order of the sources is: `LLAMA_CTX`, then `/props` → `default_generation_settings.n_ctx` of the running server, then 96K (98304). It caps the output at half the context window. After you change `--ctx`, run it again. Then restart the client.
 
 ---
 
-## 11. Verifying behaviour
+## 10. Verifying behaviour
 
 ```bash
-K=$(cat ~/.mtplx/api-key)
+K=$(cat ~/.config/llm-deploy/api-key)
 
 # Is thinking off? Look at reasoning_content length (llama.cpp)
 curl -s -H "Authorization: Bearer $K" -H 'Content-Type: application/json' http://192.168.42.1:8080/v1/chat/completions \
   -d '{"model":"x","reasoning_effort":"none","messages":[{"role":"user","content":"Is 91 prime?"}]}' \
   | python3 -c 'import json,sys; m=json.load(sys.stdin)["choices"][0]["message"]; print(len(m.get("reasoning_content") or ""), "reasoning chars")'
-
-# Same for MTPLX (:8000): use "enable_thinking":false instead of reasoning_effort
 
 # Is the patched template loaded?
 PID=$(netstat -anv -p tcp | awk '$6=="LISTEN" && $4 ~ /[.]8080$/ {n=split($(NF-8),a,":"); print a[n]; exit}')
@@ -784,7 +676,7 @@ python3 tools/req-capture-proxy.py 192.168.42.1:8080 127.0.0.1:8081 ~/models/log
 
 ---
 
-## 12. OpenCode config
+## 11. OpenCode config
 
 The installer writes these settings into `~/.config/opencode/opencode.json` (template: `client/opencode/opencode.json`):
 
@@ -793,18 +685,16 @@ The installer writes these settings into `~/.config/opencode/opencode.json` (tem
 | `llamacpp/qwen3.6-35b-a3b` (also its IQ3) | server `--ctx` | `none` (off), `high` (on) | `high`; **the default model** |
 | `llamacpp/qwen3.8-27b` (stock; also its Q3 and IQ3) | server `--ctx` | `none` (off), `low`, `medium`, `xhigh` | `low` |
 | `llamacpp/qwen3.8-27b-abliterated-llama` (orcarouter; also its Q3) | server `--ctx` | `none` (off), `low`, `medium`, `xhigh` | `low` |
-| `mtplx/qwen3.8-27b-abliterated-grant` | 48K | `low`, `medium`, `xhigh` | |
-| `mtplx/qwen3.8-27b-abliterated` (PocketAiHub) | 48K | `low`, `medium`, `xhigh` | |
 
 - **Timeouts:** the config sets `timeout: false` and `chunkTimeout: 900000` (15 min). A long cold prompt can take many minutes before the first token.
 - **Title agent:** the title agent of OpenCode stays on (earlier versions disabled it). With 2 slots, it runs at the same time as the main session. It does not wait in a queue behind the main session.
-- **Plugins:** `subagents-sidebar` and `session-switcher` are TUI plugins in `~/.config/opencode/tui.json`. To update them, run `install.sh` again and restart OpenCode. `mtplx-session-headers` is in the `plugin` list. It has an effect only on the `mtplx` provider.
+- **Plugins:** `subagents-sidebar` and `session-switcher` are TUI plugins in `~/.config/opencode/tui.json`. To update them, run `install.sh` again and restart OpenCode.
 - **Coder subagent:** see [The coder subagent](#the-coder-subagent).
-- **Pi** (`~/.pi/agent/models.json`, `~/.pi/agent/settings.json`): defaults (only if they are unset or still ours) are provider `llamacpp`, model `qwen3.6-35b-a3b`, thinking `low`. For the thinking format, see [section 7](#7-thinking-by-client-and-backend).
+- **Pi** (`~/.pi/agent/models.json`, `~/.pi/agent/settings.json`): defaults (only if they are unset or still ours) are provider `llamacpp`, model `qwen3.6-35b-a3b`, thinking `low`. For the thinking format, see [section 6](#6-thinking-by-client).
 
 ---
 
-## 13. Performance (measured)
+## 12. Performance (measured)
 
 All values come from this M3 Pro 36 GB with llama.cpp 0.4.1. The decode speed is in tok/s, for 400-token generations: prose / code / edit (the model writes a 1.9K-token file again).
 
@@ -827,4 +717,4 @@ The bold rows are the catalogue settings (`tune.spec`, `tune.spec_n`): MTP + ngr
 | KV cache at 128K, q4_0 / q8_0 (calculated) | 2.25 / 4.25 GiB (18 KiB/token at q4) | 0.70 / 1.33 GiB (5.6 KiB/token at q4) |
 | Long-context recall | 8/8 needles at 66K, q4 and q8 | not measured |
 
-For the 35B at 64K–150K, see [Context length](#context-length-what-longer-windows-cost). For MTPLX, see [section 3](#3-mtplx-details-and-why-it-is-capped-at-48k).
+For the 35B at 64K–150K, see [Context length](#context-length-what-longer-windows-cost).

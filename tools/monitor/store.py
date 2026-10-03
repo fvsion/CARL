@@ -53,6 +53,8 @@ class CarlStore:
         return models
 
     def find(self, name: str, models: List[ModelInfo]) -> Optional[ModelInfo]:
+        if not models:          # carl.find would read the list again (and raise what made it empty)
+            return None
         m: Optional[ModelInfo] = self._carl.find(name, models)
         return m
 
@@ -122,7 +124,8 @@ class CarlStore:
 
 class ModelList:
     """The model list, re-read from the store at most every 10 s (it lists the models
-    folder and reads config.json), plus what "auto" means on this Mac."""
+    folder and reads config.json), plus what "auto" means on this Mac. error: why the
+    last read failed (a broken catalogue, models.json or config.json), None when it worked."""
 
     def __init__(self, store: ModelStore, on_error: Callable[[str], None],
                  clock: Callable[[], float] = time.time) -> None:
@@ -130,6 +133,7 @@ class ModelList:
         self.on_error = on_error
         self.clock = clock
         self.items: List[ModelInfo] = []
+        self.error: Optional[str] = None
         self.t = 0.0
         self._auto: Optional[Tuple[float, str]] = None     # (list time, model name)
 
@@ -137,13 +141,17 @@ class ModelList:
         if refresh or self.clock() - self.t > 10:
             try:
                 self.items = self.store.all_models()
+                self.error = None
             except Exception as e:      # carl.py's errors vary (config, catalogue, disk): show, keep the old list
-                self.on_error(f"models: {e}")
+                if self.error != str(e):
+                    self.on_error(f"models: {e}")
+                self.error = str(e)
             self.t = self.clock()
         return self.items
 
     def by_name(self, name: Optional[str]) -> Optional[ModelInfo]:
-        return self.store.find(name, self.get()) if name else None
+        ms = self.get()
+        return self.store.find(name, ms) if name and ms else None
 
     def choices(self) -> List[str]:
         """"auto", then the downloaded models, then the others."""
@@ -163,6 +171,9 @@ class ModelList:
                 cfg.get("llama", {}).pop("model", None)
                 name = self.store.launch_model(cfg)
             except Exception:           # nothing downloaded, bad config, ...: the catalogue's default
-                name = self.store.catalog_default()
+                try:
+                    name = self.store.catalog_default()
+                except Exception:       # the catalogue itself can't be read (self.error says why)
+                    name = "auto"
             self._auto = (self.t, name)
         return self._auto[1]

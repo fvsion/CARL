@@ -7,7 +7,7 @@ from typing import Any
 
 from mon_support import GIB, shape
 from monitor.cards import (View, card_activity, card_connect, card_context, card_health, card_requests, column,
-                           kv_info, log_view, mx_card_context, req_row, status_of)
+                           kv_info, log_view, req_row, status_of)
 from monitor.fmt import ANSI, Ln, vlen
 from monitor.logbook import LogBook, RequestRecord
 from monitor.model import ServerData, SlotInfo, SlowStats
@@ -17,7 +17,7 @@ CMD = "llama-server -m /m/a.gguf -c 196608 --parallel 2 -ctk q4_0 -ctv q8_0 --ca
 
 def view(**kw: Any) -> View:
     base = dict(levels={}, host="127.0.0.1", port=8080, base="http://127.0.0.1:8080", key="secretkey1234",
-                key_file="/home/u/.mtplx/api-key", key_shown=False, server_pid=None, log=LogBook(), log_path=None,
+                key_file="/home/u/.config/llm-deploy/api-key", key_shown=False, server_pid=None, log=LogBook(), log_path=None,
                 model_path="/m/a.gguf", model_size=13 * GIB, gpu_limit=(25 * GIB, "test"), slow=SlowStats(),
                 total_mem=32 * GIB, home="/home/u")
     base.update(kw)
@@ -41,8 +41,6 @@ class StatusTest(unittest.TestCase):
         self.assertEqual(status_of(ServerData(up=True, slots=True, busy=True, decoded=3), None)[0], "GENERATING")
         two = ServerData(up=True, slots=True, busy=True, slot_list=[SlotInfo(0, True, 1, 1, 1, 0, 0, 0)] * 2)
         self.assertEqual(status_of(two, None)[0], "BUSY ×2")
-        mx = ServerData(up=True, backend="mtplx", busy=True, mx={"active_requests": 3})
-        self.assertEqual(status_of(mx, None)[0], "BUSY +2")
 
 
 class CardsTest(unittest.TestCase):
@@ -74,11 +72,6 @@ class CardsTest(unittest.TestCase):
         d = ServerData(up=True, slots=True, busy=True, prompt=10000, cached=0, processed=4000, pp_rate=200.0)
         card = card_activity(view(), d)
         self.assertEqual(ANSI.sub("", card.summary), "ETA 30s")
-
-    def test_mtplx_context_survives_odd_snapshots(self) -> None:
-        card = mx_card_context(view(levels={"context": 2}), ServerData(backend="mtplx", mx={"memory_plan": "x", "session_bank": [],
-                                                                                            "latest": {"x": 1}}))
-        self.assertEqual(card.title, "CONTEXT")
 
     def test_column_rows_are_exactly_w_wide(self) -> None:
         rows = column(view(), ["connect", "context", "memory", "activity", "model", "health", "system"], ServerData(), 70)

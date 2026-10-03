@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 import os
 import tempfile
-from typing import Dict, Mapping, Optional, Tuple
+from typing import Dict, Mapping, Optional
 
 from ..domain.errors import ConfigError
 from ..domain.types import JsonValue
@@ -70,11 +70,10 @@ def read_env_file(path: str) -> Dict[str, str]:
 
 
 class LegacyEnvFiles:
-    """llama.env / mtplx.env written by earlier monitors (implements LegacyEnv)."""
+    """llama.env written by earlier monitors (implements LegacyEnv)."""
 
-    def __init__(self, llama_env: str, mtplx_env: str) -> None:
+    def __init__(self, llama_env: str) -> None:
         self.llama_env = llama_env
-        self.mtplx_env = mtplx_env
 
-    def read(self) -> Tuple[Dict[str, str], Dict[str, str]]:
-        return read_env_file(self.llama_env), read_env_file(self.mtplx_env)
+    def read(self) -> Dict[str, str]:
+        return read_env_file(self.llama_env)

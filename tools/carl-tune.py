@@ -35,6 +35,7 @@ from typing import List, Optional  # noqa: E402
 
 import carl  # noqa: E402
 from carl_core.adapters import llama_server  # noqa: E402
+from carl_core.adapters.api_key import key_file, read_key  # noqa: E402
 from carl_core.adapters.console import StepPrinter  # noqa: E402
 from carl_core.adapters.system import (listening_ports, llama_server_version, processes, sysctl_int,  # noqa: E402
                                        sysctl_text)
@@ -43,8 +44,7 @@ from carl_core.domain.settings import Config  # noqa: E402
 from carl_core.domain.tuning import AutoTuner, TunePlan, blocking_processes  # noqa: E402
 from carl_core.domain.types import ModelInfo, TuneRecord  # noqa: E402
 
-GUARDED_PORTS = (8080, 8000)                   # the llama.cpp and MTPLX servers CARL starts
-API_KEY_FILE = os.path.expanduser("~/.mtplx/api-key")
+GUARDED_PORTS = (8080,)                        # the llama.cpp server CARL starts
 DEFAULT_BIG_GB = 8
 
 
@@ -82,14 +82,6 @@ def guard_gpu(port: int) -> None:
     if big:
         raise ConfigError("another large process (probably a model) is in memory: " + "; ".join(big)
                           + ". Stop it first, or set ALLOW_SECOND_MODEL=1 if it is not a model.")
-
-
-def read_api_key() -> str:
-    try:
-        with open(API_KEY_FILE, encoding="utf-8") as f:
-            return f.read().strip()
-    except OSError:
-        return ""
 
 
 def save(m: ModelInfo, record: TuneRecord) -> None:
@@ -139,7 +131,7 @@ def main(argv: List[str]) -> int:
         m = downloaded_model(args.model)
         server = llama_server.LlamaServerControl(
             launcher=os.path.join(carl.REPO, "host", "serve-llama.sh"), model_path=m.get("path", ""), port=args.port,
-            api_key=read_api_key(), log_path=os.path.expanduser(f"~/models/logs/.tune-{args.port}.out"),
+            api_key=read_key(key_file()), log_path=os.path.expanduser(f"~/models/logs/.tune-{args.port}.out"),
             listening=listening_ports)
         run(args, server, m)
         return 0

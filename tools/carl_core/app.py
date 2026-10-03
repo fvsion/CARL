@@ -15,7 +15,6 @@ from .domain.gguf import ModelShape
 from .domain.hf import (commit_sha, download_url, gguf_files, local_file_name, model_name, parse_hf,
                         revision_api_path, tree_api_path, validate_repo)
 from .domain.launch import launch_env as build_launch_env
-from .domain.launch import mtplx_env as build_mtplx_env
 from .domain.ports import (Clock, Console, Downloader, GpuLimit, HubClient, JsonDocument, LegacyEnv, ModelFolder,
                            ShapeReader)
 from .domain.records import parse_catalog, parse_local_db
@@ -56,14 +55,19 @@ class Carl:
 
     # ------------------------------------------------------------ config.json
     def load_config(self) -> Config:
-        """config.json, validated; migrated once from llama.env / mtplx.env when missing."""
+        """config.json, validated; migrated once from llama.env when missing."""
         raw = self.stores.config.load()
         if raw is not None:
             return validate_config(raw)[0]
-        migrated = migrate_env(*self.stores.legacy.read())
+        migrated = migrate_env(self.stores.legacy.read())
         if migrated is None:
             return Config()
         return self.save_config(migrated)
+
+    def config_warnings(self) -> List[str]:
+        """What config.json holds that CARL ignores (unknown or removed keys)."""
+        raw = self.stores.config.load()
+        return validate_config(raw)[1] if raw is not None else []
 
     def save_config(self, cfg: Config) -> Config:
         self.stores.config.save(cfg.to_file())
@@ -162,9 +166,6 @@ class Carl:
         advice = dm.tune_advice(m, vals, src)
         note = "\n".join(n for n in (note, advice) if n) or None
         return build_launch_env(m, vals, src, cfg), note
-
-    def mtplx_env(self) -> Dict[str, SettingValue]:
-        return build_mtplx_env(self.load_config())
 
     # ------------------------------------------------------------ Hugging Face + downloads
     def hf_files(self, repo: str, revision: str = "main") -> HfFileList:

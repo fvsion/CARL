@@ -3,8 +3,10 @@ from __future__ import annotations
 
 import argparse
 import os
-from dataclasses import dataclass, field
-from typing import Dict, Mapping, Optional, Sequence
+from dataclasses import dataclass
+from typing import Mapping, Optional, Sequence
+
+from carl_core.adapters.api_key import key_file
 
 
 @dataclass
@@ -23,10 +25,9 @@ class Options:
     # from the environment
     home: str = ""
     demo: bool = False          # CARL_DEMO=1: README screenshots hide the key and the home path
-    key_file: str = ""          # API_KEY_FILE
+    key_file: str = ""          # API_KEY_FILE, else ~/.config/llm-deploy/api-key (carl_core.domain.apikey)
     env_host: Optional[str] = None      # HOST
     vm_addr: str = "192.168.42.1"       # VM_HOST
-    ports: Dict[str, int] = field(default_factory=dict)    # default port per backend (LLAMA_PORT, MTPLX_PORT)
 
 
 def _env_int(env: Mapping[str, str], name: str, default: int) -> int:
@@ -53,6 +54,5 @@ def parse(argv: Optional[Sequence[str]], description: str, env: Mapping[str, str
     return Options(host=a.host, port=a.port, lines=a.lines, interval=a.interval, log=a.log, server_pid=a.server_pid,
                    console=a.console, once=a.once, tab=a.tab, expand=a.expand,
                    home=home, demo=env.get("CARL_DEMO") == "1",
-                   key_file=os.path.expanduser(env.get("API_KEY_FILE", "~/.mtplx/api-key")),
-                   env_host=env.get("HOST") or None, vm_addr=env.get("VM_HOST", "192.168.42.1"),
-                   ports={"llama": _env_int(env, "LLAMA_PORT", 8080), "mtplx": _env_int(env, "MTPLX_PORT", 8000)})
+                   key_file=key_file(env, home),
+                   env_host=env.get("HOST") or None, vm_addr=env.get("VM_HOST", "192.168.42.1"))

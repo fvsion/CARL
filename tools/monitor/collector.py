@@ -1,5 +1,5 @@
 """Takes a snapshot of the server and the Mac: its process (ps, netstat), its HTTP API
-(/health, /slots, /metrics, /props, MTPLX's snapshot and flight), memory and power, and
+(/health, /slots, /metrics, /props), memory and power, and
 its log. Read-only towards the server."""
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from . import fsio, gguf, system
 from .api import FETCH_ERRORS, Endpoint
 from .logtail import LogTail
-from .model import JSONDict, ServerData, Shape, SlotInfo, SlowStats, clean_json, flag, jdict, jint, jlist, jnum, jtask
+from .model import JSONDict, ServerData, Shape, SlotInfo, SlowStats, clean_json, flag, jdict
 from .system import TcpRow
 
 _POSITION = re.compile(r'position="(\d+)"')
@@ -65,40 +65,10 @@ def live_rates(d: ServerData, last: Optional[Sample]) -> Tuple[Optional[float], 
     return None, None
 
 
-def apply_mtplx(d: ServerData, mx: JSONDict, flight: JSONDict) -> Tuple[Optional[float], Optional[float]]:
-    """Fill d from MTPLX's snapshot and flight; returns its own (prompt, generation) rates."""
-    d.backend, d.mx = "mtplx", mx
-    d.n_ctx = jint(mx.get("context_window"))
-    d.busy = bool(mx.get("active_requests"))
-    d.prompt = d.cached = d.processed = d.decoded = 0
-    d.task = None
-    inf = jdict((jlist(mx.get("in_flight")) or [None])[0])
-    act = jdict((jlist(flight.get("active")) or [None])[0])
-    d.flight = act
-    pp: Optional[float] = None
-    tg: Optional[float] = None
-    if inf:
-        ps = jdict(inf.get("prefill_state"))
-        d.prompt = jint(inf.get("prompt_tokens")) or jint(ps.get("tokens_total")) or jint(act.get("prompt_tokens"))
-        d.task = jtask(inf.get("request_id"))
-        if act.get("phase") == "prefill" or (ps and not act.get("gen_tokens")):
-            d.cached = jint(ps.get("cached_tokens"))
-            d.processed = max(jint(ps.get("tokens_done")) - d.cached, 0)
-            pp = jnum(ps.get("live_prefill_tok_s")) or jnum(ps.get("prefill_tok_s"))
-        else:
-            d.processed = d.prompt
-            d.decoded = jint(act.get("gen_tokens")) or 1
-            tg = jnum(act.get("tps_now")) or jnum(act.get("tps_avg"))
-    return pp, tg
-
-
-def choose_log(d: ServerData, log_arg: Optional[str], console: str, home: str, now: float) -> Optional[str]:
-    """The log to show: the server's --log-file (or --log), else its console output (all MTPLX
-    has: only when it is newer than the server), else the latest llama.cpp log."""
+def choose_log(d: ServerData, log_arg: Optional[str], console: str, home: str) -> Optional[str]:
+    """The log to show: the server's --log-file (or --log), else its console output, else
+    the latest llama.cpp log."""
     path = flag(d.cmd, "--log-file") or log_arg
-    if d.backend == "mtplx" or "mtplx serve" in d.cmd:
-        fresh = os.path.exists(console) and (not d.pid or os.path.getmtime(console) >= now - system.etime_seconds(d.etime))
-        return console if fresh else None
     if not path or not os.path.exists(path) or os.path.getsize(path) == 0:
         return console if os.path.exists(console) else (path or os.path.join(home, "models/logs/llama-server-latest.log"))
     return path
@@ -131,7 +101,7 @@ class Collector:
         self.gpu_limit: Optional[Tuple[int, str]] = None   # filled by a background thread
 
     def follow(self, port: int, pid: Optional[int], console: str) -> None:
-        """Watch the server on port (a backend switch changes the port)."""
+        """Watch the server on port (a start for another port moves the dashboard there)."""
         if port != self.endpoint.port:
             self.endpoint.port = port
             self.pid, self.pid_t, self.props, self.props_t, self.last = pid, time.time(), {}, 0.0, None
@@ -172,15 +142,13 @@ class Collector:
         ep.key = fsio.read_key(self.key_file) or ep.key
         self._process(d, tcp)
         self._model(d)
-        mx_rates = self._http(d)
+        self._http(d)
         d.pp_rate, d.tg_rate = live_rates(d, self.last)
         if d.slots:
             self.last = Sample(d.task, d.t, d.processed, d.decoded)
-        if d.backend == "mtplx":
-            d.pp_rate, d.tg_rate = mx_rates
         d.system = system.read_system(self.page)
         console = self.console or os.path.join(self.home, f"models/logs/.console-{ep.port}.out")
-        d.log_path = choose_log(d, self.log_arg, console, self.home, time.time())
+        d.log_path = choose_log(d, self.log_arg, console, self.home)
         self.tail.update(d.log_path)
         return d
 
@@ -204,15 +172,15 @@ class Collector:
             self.model_path, self.shape, self.model_size = mpath, gguf.read_shape(mpath), os.path.getsize(mpath)
         d.shape = self.shape if mpath else None
 
-    def _http(self, d: ServerData) -> Tuple[Optional[float], Optional[float]]:
-        """Fill d from the server's API; returns MTPLX's own (prompt, generation) rates."""
+    def _http(self, d: ServerData) -> None:
+        """Fill d from the server's API."""
         ep = self.endpoint
         try:
             t0 = time.time()
             ep.get("/health")
             d.health_ms, d.up = (time.time() - t0) * 1000, True
         except FETCH_ERRORS:
-            return None, None
+            return
         try:
             all_slots = get_json(ep, "/slots")
             if not isinstance(all_slots, list) or not all(isinstance(x, dict) for x in all_slots):
@@ -236,16 +204,3 @@ class Collector:
                 pass
             self.props_t = time.time()
         d.props = self.props
-        if not d.slots:         # MTPLX: no /slots; its own snapshot (+ flight for live decode) instead
-            try:
-                mx = get_json(ep, "/v1/mtplx/snapshot", 4)
-            except FETCH_ERRORS:
-                return None, None
-            if not isinstance(mx, dict):
-                return None, None
-            try:
-                flight = jdict(get_json(ep, "/v1/mtplx/flight", 2))
-            except FETCH_ERRORS:
-                flight = {}
-            return apply_mtplx(d, mx, flight)
-        return None, None

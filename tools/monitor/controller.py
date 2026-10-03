@@ -169,9 +169,9 @@ class Controller:
         if act == "museit" and m:
             chosen = ui.pending if ui.pending is not None else self.pending_init(d)
             ui.pending = chosen
-            chosen["backend"], chosen["model"] = "llama", m["name"]
+            chosen["model"] = m["name"]
             svc.load_profile(chosen, m["name"])
-            ui.sp, ui.set_row = 0, 1
+            ui.sp, ui.set_row = 0, 0                    # the model row
             ui.toast(f"{m['name']} selected: Apply (a) to start it" + ("" if m["status"] == "downloaded" else " after the download"), 6)
             return
         if act == "mdl" and m:
@@ -269,8 +269,8 @@ class Controller:
             if not svc.fit_cached(p)[0]:
                 ui.toast("this setup does not fit or is not downloaded: see the fit line", 6)
                 return
-            if d.cmd and "llama-server" not in d.cmd and "mtplx" not in d.cmd:
-                ui.toast("another server (not llama.cpp or MTPLX) uses this port: stop it first", 8)
+            if d.cmd and "llama-server" not in d.cmd:
+                ui.toast("another server (not llama.cpp) uses this port: stop it first", 8)
                 return
             ui.confirm = True
         elif act == "setno":

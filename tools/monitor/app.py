@@ -16,7 +16,7 @@ from .api import Endpoint
 from .cards import View, status_of
 from .collector import Collector
 from .controller import Controller, Region
-from .fmt import B, DIM, GRN, R, RED, YEL, Row, fit, pill, vlen
+from .fmt import B, DIM, GRN, R, RED, YEL, Row, draw_card, fit, indent, pill, vlen, wwrap
 from .jobs import Paths, ServerJobs
 from .keys import InputBuffer
 from .model import ServerData
@@ -74,10 +74,9 @@ class App:
         models = ModelList(store, on_error=lambda msg: ui.toast(f"{RED}{msg}{R}", 10))
         schema = Schema(net_choices(system.local_addrs(opts.vm_addr)))
         svc = SettingsService(models, schema, opts.vm_addr, gpu_limit=lambda: (collector.gpu_limit or store.gpu_limit())[0])
-        paths = Paths(REPO, logs=os.path.join(opts.home, "models", "logs"), conf_dir=store.conf_dir,
-                      config_file=store.config_file)
-        jobs = ServerJobs(ui, collector, svc, paths, opts.ports, opts.vm_addr)
-        view = SettingsView(svc, opts.ports, store.config_file, opts.home)
+        paths = Paths(REPO, logs=os.path.join(opts.home, "models", "logs"), config_file=store.config_file)
+        jobs = ServerJobs(ui, collector, svc, paths, opts.vm_addr)
+        view = SettingsView(svc, store.config_file, opts.home)
         kind = logo_mode(os.environ) if not opts.once else None
         png = None
         if kind:
@@ -106,9 +105,8 @@ class App:
         regions.clear()
         label, bg, _ = status_of(d, self.collector.server_pid)
         up = f" · up {d.etime}" if d.etime else ""
-        backend = {"mtplx": "MTPLX"}.get(d.backend, "llama.cpp") if d.up else ""
         left = (f"{'' if self.logo else '😎 '}{B}CARL{R}  {pill(label, bg)}  {B}{d.alias}{R}"
-                f"{DIM}{(' · ' + backend) if backend else ''}{up}{R}")
+                f"{DIM}{' · llama.cpp' if d.up else ''}{up}{R}")
         right = f"{DIM}{time.strftime('%H:%M:%S')}{R}  " + ("" if once else f"{B}{RED}{QUIT_LABEL}{R}")
         head = fit(left, cols - self.logo_cols - vlen(right) - 1) + " " + right
         regions.append(Region(1, cols - len(QUIT_LABEL) + 1, cols + 1, "quit"))
@@ -173,13 +171,16 @@ class App:
             return out + self.view.picker(ui.picker, cols, height - 2)
         if ui.confirm2:
             return out + self.view.confirm(ui.confirm2, cols)
-        if ui.sp == 0:
-            body = self.view.server(ui, self.ensure_pending(d), d, cols, height - 2, self.endpoint.port)
-        elif ui.sp == 1:
-            mdir = self.store.models_dir()
-            body = self.view.models(ui, cols, height - 2, ModelsDir(mdir, disk_free(mdir)))
-        else:
-            body = self.view.tune(ui, cols, d.up)
+        try:
+            if ui.sp == 0:
+                body = self.view.server(ui, self.ensure_pending(d), d, cols, height - 2, self.endpoint.port)
+            elif ui.sp == 1:
+                mdir = self.store.models_dir()
+                body = self.view.models(ui, cols, height - 2, ModelsDir(mdir, disk_free(mdir)))
+            else:
+                body = self.view.tune(ui, cols, d.up)
+        except Exception as e:      # the catalogue, models.json or config.json can't be read: say so, keep running
+            body = panel_error(e, cols)
         return (out + body)[:height]
 
     def ensure_pending(self, d: ServerData) -> Pending:
@@ -245,6 +246,14 @@ class App:
             term.restore()
             if ui.exit_msg:
                 print(ui.exit_msg)
+
+
+def panel_error(e: Exception, cols: int) -> List[Row]:
+    """A Settings panel that could not be drawn: the reason instead of a crash."""
+    lines = [f"{RED}{x}{R}" for x in wwrap(f"{type(e).__name__}: {e}", cols - 6)[:6]]
+    lines += ["", f"{DIM}The catalogue (host/catalog.json), models.json or config.json could not be read. Fix the file"
+                  f" (./carl.sh models and ./carl.sh config show name the problem); this panel tries again.{R}"]
+    return indent(draw_card("seterror", "SETTINGS UNAVAILABLE", "", lines, cols - 1, 2))
 
 
 def disk_free(path: str) -> int:

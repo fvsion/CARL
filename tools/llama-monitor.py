@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""CARL dashboard: the live monitor for the llama.cpp or MTPLX server.
+"""CARL dashboard: the live monitor for the llama.cpp server.
 
-Starting a server from a terminal (./carl.sh llama|grant|pocket) shows
+Starting a server from a terminal (./carl.sh, ./carl.sh llama) shows
 this monitor there, with the server running in the background. Quitting asks
 whether to stop the server or leave it running; `./carl.sh monitor`
 re-attaches later.

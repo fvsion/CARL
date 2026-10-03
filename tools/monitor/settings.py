@@ -1,7 +1,7 @@
 """The Settings tab's model: its rows, how values are shown and coloured, whether a setup
 fits the GPU, and how the chosen values map to ~/.config/llm-deploy/config.json.
 
-The Settings tab chooses the backend (llama.cpp or MTPLX) and its settings, saves them to
+The Settings tab chooses the llama.cpp server's model and settings, saves them to
 config.json (tools/carl.py; the launchers read it: flags > environment > config.json >
 Auto-tune > catalogue) and restarts the server. Pure, except SettingsService, which reads
 models, tunes and config.json through the ModelStore port."""
@@ -13,8 +13,8 @@ from dataclasses import dataclass
 from typing import Callable, Dict, List, NamedTuple, Optional, Sequence, Tuple, Union
 
 from .fmt import GRN, R, RED, YEL, ctx_label, size
-from .gguf import GIB, OVERHEAD, kv_bytes_per_token
-from .model import JSONDict, ModelInfo, ServerData, Shape, flag, flag_int, jdict, jint
+from .gguf import OVERHEAD, kv_bytes_per_token
+from .model import JSONDict, ModelInfo, ServerData, Shape, flag, flag_int, jdict
 from .store import ModelList
 
 Value = Union[str, int]
@@ -32,7 +32,6 @@ class SettingRow(NamedTuple):
     default: Value
 
 
-BACKEND_ROW = SettingRow("backend", "backend", ["llama", "mtplx"], None, "llama")
 ADV_ROW = SettingRow("adv", "advanced", ["hidden", "shown"], None, "hidden")
 LLAMA_ADV = [
     SettingRow("top_k", "top_k", ["20", "40", "0"], "m:top_k", "20"),
@@ -43,18 +42,12 @@ LLAMA_ADV = [
     SettingRow("ckpt", "checkpoints", ["8", "4", "16"], "llama:ckpt", "8"),
     SettingRow("ckstep", "ckpt step", ["4096", "1024", "2048", "8192"], "llama:ckpt_step", "4096"),
 ]
-MTPLX_ADV = [
-    SettingRow("sched", "scheduler", ["default", "serial", "cooperative", "ar_batch", "hyper"], "mtplx:scheduler", "default"),
-    SettingRow("batching", "batching", ["default", "latency", "agent", "solo", "throughput"], "mtplx:batching", "default"),
-    SettingRow("pchunk", "prefill chunk", ["default", "1024", "2048", "4096"], "mtplx:prefill_chunk", "default"),
-    SettingRow("ssd", "SSD sessions", ["on", "off", "write-only"], "mtplx:ssd_cache", "on"),
-]
 
 
 @dataclass(frozen=True)
 class Schema:
-    """The rows of both backends. The network rows offer auto, local, vm and this Mac's
-    own addresses (an address = llama.host / mtplx.host in config.json)."""
+    """The Server panel's rows. The network row offers auto, local, vm and this Mac's
+    own addresses (an address = llama.host in config.json)."""
     net_choices: Tuple[str, ...]
 
     @property
@@ -74,29 +67,13 @@ class Schema:
             SettingRow("presence", "presence", ["0", "1.5"], "m:presence", "0"),
         ]
 
-    @property
-    def mtplx(self) -> List[SettingRow]:
-        """The MTPLX rows (without the advanced ones)."""
-        return [
-            SettingRow("preset", "preset", ["grant", "pocket"], "mtplx:preset", "grant"),
-            SettingRow("mctx", "context", [32768, 49152, 57344], "mtplx:context", 49152),
-            SettingRow("profile", "profile", ["sustained", "turbo", "stable"], "mtplx:profile", "sustained"),
-            SettingRow("depth", "MTP depth", ["1", "2", "3"], "mtplx:depth", "2"),
-            SettingRow("mkv", "KV cache", ["off", "q8", "q4"], "mtplx:kv_quant", "off"),
-            SettingRow("mnet", "network", list(self.net_choices), "mtplx:net", "auto"),
-        ]
-
-    def saved_rows(self, backend: str) -> List[SettingRow]:
-        """The rows one backend saves to config.json."""
-        return self.mtplx + MTPLX_ADV if backend == "mtplx" else self.llama + LLAMA_ADV
-
-    def all_rows(self) -> List[SettingRow]:
-        """Every saved row of both backends."""
-        return self.llama + LLAMA_ADV + self.mtplx + MTPLX_ADV
+    def saved_rows(self) -> List[SettingRow]:
+        """The rows saved to config.json (the advanced ones included)."""
+        return self.llama + LLAMA_ADV
 
     def defaults(self) -> Pending:
         """Every row at its default."""
-        return {r.key: r.default for r in [BACKEND_ROW] + self.llama + self.mtplx + LLAMA_ADV + MTPLX_ADV}
+        return {r.key: r.default for r in self.saved_rows()}
 
 
 def net_choices(addrs: Sequence[str]) -> Tuple[str, ...]:
@@ -106,23 +83,19 @@ def net_choices(addrs: Sequence[str]) -> Tuple[str, ...]:
 
 # row key -> key of the model's profile (config.json models.<name>, Auto-tune, catalogue)
 MODEL_ROW_KEYS = {r.key: r.loc[2:] for r in Schema(()).llama + LLAMA_ADV if r.loc and r.loc.startswith("m:")}
-NUMERIC = {"ctx", "mctx", "temp", "presence", "top_k", "top_p", "min_p", "repeat", "specn", "ub", "ckpt", "ckstep",
-           "pchunk", "cache"}       # Enter types a value
-INT_KEYS = {"ctx", "mctx", "cache", "top_k", "specn", "ub", "ckpt", "ckstep", "pchunk"}
-FROM_RUNNING = {"kv", "ctx", "temp", "presence", "spec", "specn", "preset", "mctx", "profile", "depth", "mkv",
-                "top_k", "top_p", "min_p", "repeat", "ckpt", "ckstep", "ub", "slots"}
-UNMARKED = {"slots", "cache", "net", "mnet", "adv", "sched", "batching", "pchunk", "model"}   # no * when they differ
-REINSTALL = {"ctx", "slots", "mctx", "backend"}         # clients need install.sh again when these change
-MX_WEIGHTS = {"grant": 16.9e9, "pocket": 17.5e9}         # MTPLX 27B builds (bytes, from their memory plans)
-MX_KV_TOK = {"off": 65536, "q8": 34816, "q4": 18432}      # KV bytes per token of the 27B (bf16 / q8 / q4)
-BACKEND_NAMES = {"llama": "llama.cpp", "mtplx": "MTPLX"}
+NUMERIC = {"ctx", "temp", "presence", "top_k", "top_p", "min_p", "repeat", "specn", "ub", "ckpt", "ckstep",
+           "cache"}       # Enter types a value
+INT_KEYS = {"ctx", "cache", "top_k", "specn", "ub", "ckpt", "ckstep"}
+FROM_RUNNING = {"kv", "ctx", "temp", "presence", "spec", "specn", "top_k", "top_p", "min_p", "repeat", "ckpt", "ckstep",
+                "ub", "slots"}
+UNMARKED = {"slots", "cache", "net", "adv", "model"}   # no * when they differ
+REINSTALL = {"ctx", "slots"}         # clients need install.sh again when these change
 
 ADV_WARN = ("CAUTION: these values are tuned and measured (REFERENCE.md).",
             "         A change can make the model slower, or its answers worse. Defaults (x) sets them back.")
 _NET_HELP = ("auto = the VM address if VMware's network is up, else this Mac only · an address = that interface "
              "(LAN: other computers can reach it)")
 SET_HELP = {
-    "backend": "llama.cpp: GGUF models, quantized KV, 2 slots, long context · MTPLX: MLX 27B builds, faster decode, ≤48K",
     "model": "Enter: pick from every model (catalogue, models folder, Hugging Face downloads) · auto = this Mac's default · "
              "any other model: ] Models panel → Add from Hugging Face (h)",
     "kv": "q4_0: less memory, the tested default · q8_0: more exact long-range recall, about 2x the KV memory",
@@ -134,13 +107,7 @@ SET_HELP = {
     "net": _NET_HELP,
     "temp": "1.0 = Qwen's thinking-mode value (default) · 0.6 = more precise coding (35B card)",
     "presence": "0 = default · 1.5 = fewer repetition loops (35B card, general use)",
-    "preset": "grant = grant-ai 4-bit build · pocket = PocketAiHub speed build (both abliterated Qwen3.8-27B)",
-    "mctx": "one window for the whole server · 48K is the tested limit; 56K failed with 2 sessions (REFERENCE.md, MTPLX)",
-    "profile": "sustained = the long-context default · turbo = faster short bursts · stable = conservative",
-    "depth": "MTP draft depth: 2 measured best on the M3 Pro (AR 7.5, D1 13.4, D2 23.6, D3 20.8 tok/s)",
-    "mkv": "off = bf16 (tested) · q8 / q4 = less memory, but long sessions failed on MTPLX 2.11 (REFERENCE.md)",
-    "mnet": _NET_HELP,
-    "adv": "more server settings: sampling, batch and checkpoints (llama.cpp); scheduler and caches (MTPLX)",
+    "adv": "more server settings: sampling, batch and checkpoints",
     "top_k": "sample from the k most likely tokens; Qwen: 20 · 0 = off",
     "top_p": "nucleus sampling; Qwen: 0.95 (thinking), 0.8 (no thinking: the client sends it)",
     "min_p": "drop tokens below min_p × the top probability; Qwen: 0",
@@ -148,20 +115,14 @@ SET_HELP = {
     "ub": "-ub physical batch; 512 measured best on Metal (90.5 vs 88.6 / 86.1 tok/s for 1024 / 2048)",
     "ckpt": "context checkpoints per slot (each ~63 MiB on the 35B, ~150 MiB on the 27B); more did not help (Phase 6)",
     "ckstep": "minimum tokens between checkpoints; 1024 vs 4096 made no difference in the Phase 6 test",
-    "sched": "MTPLX scheduler; default (serial) runs one request at a time: measured best for MTP decode",
-    "batching": "MTPLX concurrent batching preset; default = latency",
-    "pchunk": "MTPLX prefill chunk in tokens; default = the profile's value",
-    "ssd": "MTPLX session bank on the SSD: on = sessions come back after the RAM bank is full (14.8 s for 24K)",
 }
 
 
 def rows(p: Pending, schema: Schema, model_choices: Callable[[], List[str]]) -> List[SettingRow]:
-    """The rows shown for the pending backend (advanced ones when shown)."""
-    mx = p.get("backend") == "mtplx"
-    adv = (MTPLX_ADV if mx else LLAMA_ADV) if p.get("adv") == "shown" else []
-    base = schema.mtplx if mx else [
-        r._replace(choices=list(model_choices())) if r.key == "model" else r for r in schema.llama]
-    return [BACKEND_ROW] + base + [ADV_ROW] + adv
+    """The rows shown (the advanced ones when shown); the model row offers model_choices()."""
+    adv = LLAMA_ADV if p.get("adv") == "shown" else []
+    base = [r._replace(choices=list(model_choices())) if r.key == "model" else r for r in schema.llama]
+    return base + [ADV_ROW] + adv
 
 
 def _is_number(v: object) -> bool:
@@ -170,7 +131,7 @@ def _is_number(v: object) -> bool:
 
 def fmt_val(key: str, v: object) -> Value:
     """A config / tune value as the Settings rows show it."""
-    if key in ("ctx", "mctx", "cache"):
+    if key in ("ctx", "cache"):
         return int(str(v)) if str(v).isdigit() else (v if isinstance(v, (str, int)) else str(v))
     if key in ("temp", "repeat") and _is_number(v):
         return f"{float(str(v)):.1f}"
@@ -180,10 +141,8 @@ def fmt_val(key: str, v: object) -> Value:
 
 
 def shown_value(key: str, v: object) -> str:
-    """A row value on screen: contexts as 96K, backends by name."""
-    if key in ("ctx", "mctx"):
-        return ctx_label(v)
-    return BACKEND_NAMES.get(str(v), str(v)) if isinstance(v, str) else str(v)
+    """A row value on screen: contexts as 96K."""
+    return ctx_label(v) if key == "ctx" else str(v)
 
 
 def parse_typed(key: str, text: str) -> Tuple[Optional[Value], str]:
@@ -194,10 +153,10 @@ def parse_typed(key: str, text: str) -> Tuple[Optional[Value], str]:
         whole = int(num)
     except (ValueError, OverflowError):
         return None, f"not a number: {v!r}"
-    if num < 0 or (key in ("ctx", "mctx") and not 4096 <= num <= 262144) or (key in ("top_p", "min_p") and num > 1):
+    if num < 0 or (key == "ctx" and not 4096 <= num <= 262144) or (key in ("top_p", "min_p") and num > 1):
         return None, f"{v} is out of range for {key}"
     if key in INT_KEYS:
-        return (whole if key in ("ctx", "mctx", "cache") else str(whole)), ""
+        return (whole if key in ("ctx", "cache") else str(whole)), ""
     return (f"{num:g}" if num != whole else f"{num:.1f}" if key in ("temp", "repeat") else f"{whole}"), ""
 
 
@@ -208,21 +167,10 @@ def step_choice(choices: Sequence[Value], cur: Value, step: int) -> Value:
 
 
 def running_settings(d: ServerData, vm_addr: str, find: Callable[[str], Optional[ModelInfo]]) -> Pending:
-    """The values the running server uses: llama.cpp from its command line, MTPLX from its snapshot."""
+    """The values the running llama.cpp server uses, from its command line ({} when none runs)."""
     cmd = d.cmd
     host = flag(cmd, "--host", default="") or ""
     net = "vm" if host == vm_addr else "local" if host in ("127.0.0.1", "::1") else host or "N/A"
-    if d.backend == "mtplx" and d.mx:
-        mx = d.mx
-        st, plan, sched = jdict(mx.get("settings")), jdict(mx.get("memory_plan")), jdict(mx.get("scheduler"))
-        mid = str(mx.get("model_id") or "") + " " + str(jdict(st.get("model_controls")).get("model_ref") or "")
-        return {"backend": "mtplx", "preset": "pocket" if "pocket" in mid.lower() else "grant",
-                "mctx": jint(mx.get("context_window")) or "N/A",
-                "profile": str(jdict(mx.get("profile")).get("name", "N/A")),
-                "depth": str(st.get("depth", "N/A")), "mkv": str(plan.get("kv_quantization") or "off"), "mnet": net,
-                "sched": str(sched.get("mode", "N/A")), "batching": str(sched.get("preset", "N/A")),
-                "pchunk": str(jdict(sched.get("config")).get("prefill_chunk_tokens", "N/A")),
-                "ssd": str(jdict(jdict(mx.get("session_bank")).get("cold_tier")).get("mode", "N/A"))}
     if "llama-server" not in cmd:
         return {}
     mpath = flag(cmd, "-m", "--model") or ""
@@ -231,7 +179,7 @@ def running_settings(d: ServerData, vm_addr: str, find: Callable[[str], Optional
     def f(*names: str, default: str = "N/A") -> str:
         return flag(cmd, *names) or default
 
-    return {"backend": "llama", "model": m["name"] if m else (os.path.basename(mpath) or "N/A"),
+    return {"model": m["name"] if m else (os.path.basename(mpath) or "N/A"),
             "kv": f("-ctk", "--cache-type-k", default="f16"),
             "ctx": flag_int(cmd, "--kv-unified-per-slot", default=0) or d.n_ctx or "N/A",
             "slots": f("--parallel", "-np", default="1"), "cache": flag_int(cmd, "--cache-ram", default=0),
@@ -244,12 +192,10 @@ def running_settings(d: ServerData, vm_addr: str, find: Callable[[str], Optional
 def settings_to_config(p: Pending, cfg: JSONDict, schema: Schema, model: Optional[str],
                        tuned: Optional[JSONDict]) -> JSONDict:
     """config.json with the pending settings: server-wide values that differ from the defaults,
-    and (llama.cpp) model's profile = the values that differ from its tune (Auto-tune /
-    catalogue). model / tuned: the model a start loads and its tune. Returns a new dict."""
+    and the model's profile = the values that differ from its tune (Auto-tune / catalogue).
+    model / tuned: the model a start loads and its tune. Returns a new dict."""
     cfg = copy.deepcopy(cfg)
-    be = str(p["backend"])
-    cfg["backend"] = be
-    for key, _, _, loc, default in schema.saved_rows(be):
+    for key, _, _, loc, default in schema.saved_rows():
         if not loc or loc.startswith("m:"):
             continue
         sec, ck = loc.split(":")
@@ -261,11 +207,11 @@ def settings_to_config(p: Pending, cfg: JSONDict, schema: Schema, model: Optiona
                 s["host"] = v
                 s.pop("net", None)
                 continue
-        if str(v) == str(default) or (sec == "mtplx" and v == "default"):
+        if str(v) == str(default):
             s.pop(ck, None)
         else:
             s[ck] = v
-    if be == "llama" and model is not None and tuned is not None:
+    if model is not None and tuned is not None:
         prof = {pk: p[key] for key, pk in MODEL_ROW_KEYS.items() if str(fmt_val(key, tuned[pk])) != str(p[key])}
         cfg.setdefault("models", {})
         if prof:
@@ -290,27 +236,9 @@ def env_from_cmd(cmd: str) -> Dict[str, str]:
     return {k: v for k, v in e.items() if v}
 
 
-def env_from_mtplx(cmd: str) -> Dict[str, str]:
-    """Environment that makes serve.sh start the same MTPLX server as cmd (the rollback)."""
-    e = {"SETTINGS_FILE_MTPLX": "none", "MODEL": flag(cmd, "--model") or "", "MODEL_ID": flag(cmd, "--model-id") or "",
-         "HOST": flag(cmd, "--host") or "127.0.0.1", "CONTEXT": flag(cmd, "--context-window") or "",
-         "PROFILE": flag(cmd, "--profile") or "", "DEPTH": flag(cmd, "--depth") or "",
-         "KV_QUANT": flag(cmd, "--kv-quant") or ""}
-    return {k: v for k, v in e.items() if v}
-
-
 # ---------------------------------------------------------------- fit maths
 def _fits(ok: bool) -> str:
     return f"{GRN if ok else RED}{'fits' if ok else 'does not fit'}{R}"
-
-
-def mtplx_fit(preset: str, mkv: str, mctx: int, limit: int) -> FitResult:
-    """Does an MTPLX 27B with this KV type and window fit in limit bytes of GPU memory?"""
-    need = MX_WEIGHTS.get(preset, 17e9) + MX_KV_TOK.get(mkv, 65536) * mctx + 3 * GIB   # + MTPLX's runtime transients
-    ok = need <= limit
-    warn = f" · {YEL}over 48K: two sessions do not fit (tested){R}" if mctx > 49152 else ""
-    return ok, (f"{_fits(ok)}: MTPLX {preset} needs about {size(need)} "
-                f"for {ctx_label(mctx)} ({'bf16' if mkv == 'off' else mkv}) of {size(limit)}{warn}")
 
 
 def llama_need(weights: int, shape: Shape, kv: str, ctx: int, n: int) -> float:
@@ -357,11 +285,17 @@ class SettingsService:
         return name if name != "auto" else self.models.auto_model()
 
     def recommended(self, name: str, with_config: bool = False) -> Tuple[JSONDict, Dict[str, str]]:
-        """(values, source per key) for a model: Auto-tune > catalogue (> config.json when with_config)."""
+        """(values, source per key) for a model: Auto-tune > catalogue (> config.json when with_config).
+        A config.json that can't be read counts as empty (the controller reports it)."""
         m = self.models.by_name(name)
         if not m:
             return self.store.builtin_tune(), {}
-        cfg = self.store.load_config() if with_config else self.store.empty_config()
+        cfg = self.store.empty_config()
+        if with_config:
+            try:
+                cfg = self.store.load_config()
+            except Exception:       # carl.ConfigError or a broken file: the tune without your overrides
+                pass
         return self.store.effective_tune(m, cfg)
 
     def load_profile(self, p: Pending, name: str) -> None:
@@ -377,33 +311,32 @@ class SettingsService:
     def pending_init(self, d: ServerData, cfg: JSONDict) -> Pending:
         """Start from config.json and the running server (so Apply without changes restarts the same setup)."""
         run = self.running(d)
-        p: Pending = {"backend": run.get("backend") or cfg.get("backend", "llama"), "adv": "hidden"}
-        for key, _, _, loc, default in self.schema.all_rows():
+        p: Pending = {"adv": "hidden"}
+        for key, _, _, loc, default in self.schema.saved_rows():
             if not loc or loc.startswith("m:"):
                 continue
             sec, ck = loc.split(":")
             v = jdict(cfg.get(sec)).get(ck)
             p[key] = default if v in (None, "") else fmt_val(key, v)
-        for sec, key in (("llama", "net"), ("mtplx", "mnet")):
-            if jdict(cfg.get(sec)).get("host"):
-                p[key] = cfg[sec]["host"]
+        llama_cfg = jdict(cfg.get("llama"))
+        if llama_cfg.get("host"):
+            p["net"] = llama_cfg["host"]
         run_model = run.get("model")
-        p["model"] = (run_model if run.get("backend") == "llama" and isinstance(run_model, str) and self.models.by_name(run_model)
+        p["model"] = (run_model if isinstance(run_model, str) and self.models.by_name(run_model)
                       else p.get("model", "auto"))
         self.load_profile(p, str(p["model"]))
-        if run.get("backend"):
+        if run:
             for key in FROM_RUNNING:
                 if key in run and run[key] not in (None, "N/A"):
                     p[key] = fmt_val(key, run[key])
-            llama_cfg = jdict(cfg.get("llama"))
-            if run["backend"] == "llama" and "net" not in llama_cfg and not llama_cfg.get("host"):
+            if "net" not in llama_cfg and not llama_cfg.get("host"):
                 p["net"] = run.get("net", p["net"]) if run.get("net") in self.schema.net_choices else p["net"]
         return p
 
     def defaults_for(self, p: Pending) -> Pending:
-        """Every row at its default, the backend / advanced / model kept, the model rows at its tune."""
+        """Every row at its default, advanced / model kept, the model rows at its tune."""
         q = self.schema.defaults()
-        q.update(backend=p["backend"], adv=p.get("adv", "hidden"), model=p.get("model", "auto"))
+        q.update(adv=p.get("adv", "hidden"), model=p.get("model", "auto"))
         vals = self.recommended(self.resolved_model(q))[0]           # the model's tune, without my overrides
         for key, pk in MODEL_ROW_KEYS.items():
             q[key] = fmt_val(key, vals[pk])
@@ -412,8 +345,6 @@ class SettingsService:
     def value_color(self, key: str, p: Pending) -> str:
         """Colour of a pending value: green = the tuned value for this model / a fast setting, yellow =
         changed from the tune or slower, red = very slow or broken on this model."""
-        if p.get("backend") != "llama":
-            return ""
         name = self.resolved_model(p)
         m = self.models.by_name(name)
         if key == "ctx" and m and str(p["ctx"]).isdigit():
@@ -435,8 +366,6 @@ class SettingsService:
 
     def fit_line(self, p: Pending) -> FitResult:
         """(ok, text): does the pending setup fit the GPU limit, and is the model downloaded?"""
-        if p["backend"] == "mtplx":
-            return mtplx_fit(str(p["preset"]), str(p["mkv"]), int(p["mctx"]), self.gpu_limit())
         name = self.resolved_model(p)
         m = self.models.by_name(name)
         if not m:
@@ -468,8 +397,6 @@ class SettingsService:
     def config_with(self, p: Pending) -> JSONDict:
         """config.json as it would be saved with these settings."""
         cfg = self.store.load_config()
-        if p["backend"] != "llama":
-            return settings_to_config(p, cfg, self.schema, None, None)
         name = self.resolved_model(p)
         return settings_to_config(p, cfg, self.schema, name, self.recommended(name)[0])
 

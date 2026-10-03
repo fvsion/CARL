@@ -1,15 +1,13 @@
 #!/usr/bin/env bash
 # shellcheck disable=SC2088  # help texts show paths as ~/...: printed, not expanded
-# Entry point for the local model servers that OpenCode / Pi in the VMware
+# Entry point for the local llama.cpp server that OpenCode / Pi in the VMware
 # Fusion guest use over the NAT network (vmnet8). One server at a time: two
 # models don't fit in 36 GB together.
 #
-#   ./host/serve.sh                       the dashboard: attaches to a running server, else starts the
-#                                         last used backend (llama, grant or pocket) with its saved
-#                                         settings; the first time: llama.cpp with the defaults
-#   ./host/serve.sh -h | help [TOPIC]     help per command: llama grant pocket monitor models env tuning
+#   ./host/serve.sh                       the dashboard: attaches to a running server on :8080, else
+#                                         starts llama.cpp with its saved settings (config.json)
+#   ./host/serve.sh -h | help [TOPIC]     help per command: llama monitor models env tuning
 #   ./host/serve.sh llama [opts]          llama.cpp on :8080 (host/serve-llama.sh)
-#   ./host/serve.sh grant|pocket          MTPLX on :8000 (bf16 KV, 48K: see REFERENCE.md section 3)
 #   ./host/serve.sh monitor               live dashboard (tools/llama-monitor.py); a server start in a
 #                                         terminal shows it automatically (MONITOR=0 = off)
 #   --local | --vm                        network mode for any server command (host/common.sh)
@@ -34,18 +32,16 @@ CARL (Can't Afford Remote LLMs) -- run a local LLM server on this Mac for OpenCo
 VMware Fusion VM or from this Mac itself. One server at a time.
 
 USAGE
-$(use "$CMD" "the dashboard: attach to the running server, or start the last")
-$(use "" "used one (saved settings; the first time: llama.cpp, defaults)")
+$(use "$CMD" "the dashboard: attach to the running server, or start llama.cpp")
+$(use "" "with its saved settings (the first time: the defaults)")
 $(use "$CMD <command> [options]" "")
 $(use "$CMD -h | help <command>" "this page / detailed help for one command")
 $(use "$CMD <command> --help" "same")
 
-SERVER COMMANDS
+SERVER COMMAND
 $(row "llama" "llama.cpp server on :8080. Defaults: model qwen3.6-35b-a3b (fast MoE; IQ3 on 24 GB), q4_0 KV,")
 $(row "" "96K per slot, 2 slots when they fit (main session + a subagent), RAM cache sized to free memory.")
 $(row "" "Shows the live monitor in this terminal.")
-$(row "grant" "MTPLX server on :8000, grant-ai Qwen3.8-27B abliterated, 48K")
-$(row "pocket" "MTPLX server on :8000, PocketAiHub Qwen3.8-27B abliterated, 48K")
 
 TOOLS
 $(row "dashboard, --no-start" "the dashboard only: attach to a running server, else open it offline (no model")
@@ -64,9 +60,9 @@ $(row "verify [NAME...]" "re-check downloaded models' size and SHA-256 (no names
 $(row "delete NAME" "delete a downloaded model file")
 $(row "tune NAME [--quick]" "auto-tune a model for this Mac: speculation, context window, slots (~5-10 min)")
 $(row "config [show|set K V]" "the settings file ~/.config/llm-deploy/config.json (show lists every key)")
-$(row "help [TOPIC]" "this page, or: llama grant pocket monitor fit models download verify env tuning")
+$(row "help [TOPIC]" "this page, or: llama monitor fit models download verify env tuning")
 
-NETWORK (every server command)
+NETWORK (llama, and $CMD without arguments)
 $(row "--vm" "listen on 192.168.42.1 (VMware Fusion); fails if Fusion's network is down")
 $(row "--local" "listen on 127.0.0.1: OpenCode/Pi on this Mac only")
 $(row "--host ADDR" "listen on one address of this Mac, e.g. its LAN address (other computers) or a")
@@ -139,7 +135,7 @@ $(row "" "plus HOST, PORT, API_KEY_FILE: see 'help env'")
 BEHAVIOUR
   Refuses to start if the port is in use (another server is running).
   Warns before loading if the model + window won't fit the GPU memory (see: fit; FIT_CHECK=0 skips).
-  Creates ~/.mtplx/api-key on first use if it doesn't exist.
+  Creates the API key ~/.config/llm-deploy/api-key on first use if it doesn't exist.
   In a terminal: the server runs in the background (output in its log file) and the
   monitor runs here; quitting asks stop-or-leave-running. Not a terminal (scripts,
   nohup) or MONITOR=0: the server runs in the foreground as before.
@@ -153,30 +149,6 @@ EXAMPLES
   $CMD llama --model ~/models/gguf/Other.gguf
   $CMD llama --local
   SPEC=none MONITOR=0 $CMD llama
-EOF
-}
-
-help_mtplx() {
-  cat <<EOF
-grant | pocket -- MTPLX servers on 192.168.42.1:8000 (short sessions only)
-
-USAGE
-  $CMD grant  [mtplx serve flags...]   grant-ai/Qwen3.8-27B-Abliterated-MTPLX-4bit (15.8 GiB)
-  $CMD pocket [mtplx serve flags...]   PocketAiHub/Qwen3.8-27B-Abliterated-MTPLX-Optimized-Speed (19.8 GiB)
-  $CMD grant --help-adv                every mtplx serve flag
-
-ENVIRONMENT
-$(row "CONTEXT=49152" "context window. Appends past ~56K fail with HTTP 507 on this Mac")
-$(row "KV_QUANT=off" "off | q8 | q4. Keep off: q8 keeps a bf16 copy (more memory), q4 still fails ~56K")
-$(row "PROFILE=sustained" "MTPLX profile (beat turbo here)")
-$(row "DEPTH=2" "MTP draft depth (from mtplx tune)")
-$(row "MODEL / MODEL_ID" "HF repo or path / served model id")
-$(row "--local | --vm" "network mode, as for llama")
-$(row "" "plus HOST, PORT, API_KEY_FILE, KEEP_AWAKE, MONITOR: see 'help env'")
-
-NOTES
-  Thinking can't be turned off from OpenCode on MTPLX (none -> low). Pi's "off" works.
-  Why 48K: REFERENCE.md section 3.
 EOF
 }
 
@@ -203,18 +175,17 @@ EOF
 
 help_env() {
   cat <<EOF
-Settings shared by every server command (set as env vars: VAR=value $CMD llama)
+Server settings from the environment (VAR=value $CMD llama; flags win)
 
 $(row "NET=auto" "auto | vm | local (same as --vm / --local). auto = VM address if present, else 127.0.0.1")
 $(row "VM_HOST=192.168.42.1" "the VMware Fusion vmnet8 address used by --vm / auto")
 $(row "HOST" "explicit bind address (wins over NET). 0.0.0.0 is refused: the LAN could reach it")
-$(row "PORT" "8080 (llama) / 8000 (grant, pocket)")
-$(row "API_KEY_FILE" "~/.mtplx/api-key, the Bearer key both backends use (created if missing)")
+$(row "PORT" "8080")
+$(row "API_KEY_FILE" "~/.config/llm-deploy/api-key, the server's Bearer key (created if missing)")
 $(row "KEEP_AWAKE=1" "caffeinate -i while the server runs (a sleeping Mac stalls requests)")
 $(row "MONITOR=1" "show the monitor in this terminal on start; 0 = foreground server, no monitor")
 $(row "ALLOW_SECOND_MODEL=1" "start although a process > 8 GB (BIG_GB) is in memory; a second model can crash the Mac")
-$(row "SETTINGS_FILE=none" "ignore ~/.config/llm-deploy/config.json for llama (flags > env > config.json > Auto-tune > catalogue)")
-$(row "SETTINGS_FILE_MTPLX=none" "the same for grant / pocket (config.json \"mtplx\" section)")
+$(row "SETTINGS_FILE=none" "ignore ~/.config/llm-deploy/config.json (flags > env > config.json > Auto-tune > catalogue)")
 $(row "MODELS_DIR" "the models folder (default ~/models/gguf; config.json paths.models_dir)")
 EOF
 }
@@ -236,7 +207,6 @@ Tuning notes (measured on this M3 Pro 36 GB; details in REFERENCE.md)
   Memory         KV allocated up front. 27B: ~20 GB RSS at 128K q4. 35B: ~22.8 GB.
                  $CMD fit shows what fits this Mac (fit --ram 24: a 24 GB Mac).
   Reasoning      27B: low/medium/xhigh (default low), none = off. 35B: on/off only.
-  MTPLX          stay <=48K, KV_QUANT=off.
 EOF
 }
 
@@ -244,7 +214,6 @@ show_help() {
   case "${1:-}" in
     ""|main) help_main ;;
     llama) help_llama ;;
-    grant|pocket|mtplx) help_mtplx ;;
     monitor) help_monitor ;;
     fit) exec python3 "$HERE/../tools/llama-fit.py" --help ;;
     models|download|verify|delete) help_models ;;
@@ -290,39 +259,35 @@ client_install() {
 # ---- dispatch -------------------------------------------------------------
 # shellcheck source=SCRIPTDIR/common.sh
 source "$HERE/common.sh"
-LAST_FILE="$HOME/.config/llm-deploy/last-backend"
+LLAMA_PORT=8080
 if [[ $# -eq 0 ]]; then
   # No arguments: the dashboard. Attach to a server that runs already (one model
-  # at a time), else start the last used backend with its saved settings.
-  for p in 8080 8000; do
-    if [[ -n "$(port_pid "$p")" ]]; then
-      exec python3 "$HERE/../tools/llama-monitor.py" --port "$p"
-    fi
-  done
-  last="$(cat "$LAST_FILE" 2>/dev/null || true)"
-  case "$last" in llama|grant|pocket) ;; *) last=llama ;; esac
-  if [[ "$last" == llama ]]; then
-    ensure_deps
-    # No model yet (a fresh clone): offer this Mac's default, else open the
-    # dashboard without a server (its Settings tab starts one later).
-    if [[ -z "$("$HERE/models.sh" downloaded)" ]]; then
-      d="$(python3 "$HERE/../tools/llama-fit.py" --pick-default 2>/dev/null || true)"; d="${d:-$("$HERE/models.sh" default)}"
-      echo "No model is downloaded yet. This Mac's default: $d ($("$HERE/models.sh" get "$d" bytes | awk '{printf "%.1f GB", $1/1e9}'))."
-      a=n
-      [[ -t 0 ]] && read -r -p "Download it now? [Y/n] " a
-      if [[ -t 0 && ! "$a" =~ ^[Nn] ]]; then
-        "$HERE/models.sh" download "$d" || exit 1
-      else
-        echo "Opening the dashboard without a server. Later: $CMD download default"
-        exec python3 "$HERE/../tools/llama-monitor.py" --port 8080
-      fi
+  # at a time), else start llama.cpp with its saved settings.
+  if [[ -n "$(port_pid "$LLAMA_PORT")" ]]; then
+    exec python3 "$HERE/../tools/llama-monitor.py" --port "$LLAMA_PORT"
+  fi
+  ensure_deps
+  # No model yet (a fresh clone): offer this Mac's default, else open the
+  # dashboard without a server (its Settings tab starts one later).
+  if [[ -z "$("$HERE/models.sh" downloaded)" ]]; then
+    d="$(python3 "$HERE/../tools/llama-fit.py" --pick-default 2>/dev/null || true)"; d="${d:-$("$HERE/models.sh" default)}"
+    echo "No model is downloaded yet. This Mac's default: $d ($("$HERE/models.sh" get "$d" bytes | awk '{printf "%.1f GB", $1/1e9}'))."
+    a=n
+    [[ -t 0 ]] && read -r -p "Download it now? [Y/n] " a
+    if [[ -t 0 && ! "$a" =~ ^[Nn] ]]; then
+      "$HERE/models.sh" download "$d" || exit 1
+    else
+      echo "Opening the dashboard without a server. Later: $CMD download default"
+      exec python3 "$HERE/../tools/llama-monitor.py" --port "$LLAMA_PORT"
     fi
   fi
-  echo "starting $last ($([[ -s "$LAST_FILE" ]] && echo "last used" || echo "default")); $CMD -h for help"
-  set -- "$last"
+  echo "starting llama.cpp (saved settings: $CMD config show); $CMD -h for help"
+  set -- llama
 fi
 case "$1" in
   help|-h|--help) show_help "${2:-}"; exit 0 ;;
+  # The MTPLX presets were removed in 1.2.0: say where to go instead of "unknown command".
+  grant|pocket) echo "error: '$1' (an MTPLX preset) was removed in CARL 1.2.0: CARL runs llama.cpp only. Use: $CMD llama (see CHANGELOG.md)" >&2; exit 2 ;;
 esac
 # "<command> -h|--help" -> that command's help (--help-adv is handled below)
 for a in "${@:2}"; do
@@ -334,9 +299,7 @@ case "$1" in
   dashboard|--no-start)
     # The dashboard without starting a server: attach to one that runs, else
     # open it offline (its Settings tab can start a server).
-    shift; port=8080
-    [[ -n "$(port_pid 8080)" ]] || { [[ -n "$(port_pid 8000)" ]] && port=8000; }
-    exec python3 "$HERE/../tools/llama-monitor.py" --port "$port" "$@" ;;
+    shift; exec python3 "$HERE/../tools/llama-monitor.py" --port "$LLAMA_PORT" "$@" ;;
   install) shift; client_install "$@"; exit $? ;;
   monitor) shift; exec python3 "$HERE/../tools/llama-monitor.py" "$@" ;;
   fit) shift; exec python3 "$HERE/../tools/llama-fit.py" "$@" ;;
@@ -344,113 +307,20 @@ case "$1" in
   config) shift; exec python3 "$HERE/../tools/carl.py" config "$@" ;;
   tune) shift; exec python3 "$HERE/../tools/carl-tune.py" "$@" ;;
   download|verify|delete) exec "$HERE/models.sh" "$@" ;;
+  llama) shift ;;
+  -*) ;;                                    # a leading flag means llama
+  *) echo "error: unknown command '$1'" >&2; echo >&2; help_main >&2; exit 2 ;;
 esac
-
-PRESET="llama"
-if [[ "$1" != -* ]]; then PRESET="$1"; shift; fi
-case "$PRESET" in
-  llama|grant|pocket) ;;
-  *) echo "error: unknown command '$PRESET'" >&2; echo >&2; help_main >&2; exit 2 ;;
-esac
-# Remember the backend: ./host/serve.sh with no arguments starts it next time.
-# Not for a server on another port (a test server).
-if [[ " $* " != *" --help-adv "* && ( -z "${PORT:-}" || "$PORT" == 8080 || "$PORT" == 8000 ) ]]; then
-  # shellcheck disable=SC2174  # 0700 is meant for the settings folder only, not ~/.config
-  mkdir -p -m 700 "$(dirname "$LAST_FILE")" && printf '%s\n' "$PRESET" > "$LAST_FILE" 2>/dev/null || true
-fi
 
 for arg in "$@"; do
   if [[ "$arg" == --help-adv ]]; then
-    if [[ "$PRESET" == "llama" ]]; then
-      echo "# llama-server --help (llama.cpp's full server option list). These scripts only"
-      echo "# use a handful; options such as -hf/--hf-repo (download a GGUF from Hugging Face),"
-      echo "# multimodal, LoRA and router/multi-model flags are llama.cpp features we don't use."
-      echo
-      llama-server --help
-    else
-      echo "# mtplx serve --help (MTPLX's full option list; the scripts set only a few)."
-      echo
-      mtplx serve --help
-    fi
+    echo "# llama-server --help (llama.cpp's full server option list). These scripts only"
+    echo "# use a handful; options such as -hf/--hf-repo (download a GGUF from Hugging Face),"
+    echo "# multimodal, LoRA and router/multi-model flags are llama.cpp features we don't use."
+    echo
+    llama-server --help
     exit 0
   fi
 done
 
-if [[ "$PRESET" == "llama" ]]; then
-  exec "$(dirname "$0")/serve-llama.sh" "$@"
-fi
-
-# Saved MTPLX settings (config.json "mtplx", via tools/carl.py): environment >
-# config.json > preset defaults. SETTINGS_FILE_MTPLX=none ignores them.
-MX_USED=()
-if [[ "${SETTINGS_FILE_MTPLX:-}" != none ]]; then
-  MX_ENV="$(python3 "$HERE/../tools/carl.py" mtplx-env)" || exit 1
-  apply_settings "CONTEXT|PROFILE|DEPTH|KV_QUANT|NET|HOST|SCHEDULER|BATCHING|PREFILL_CHUNK|SSD_CACHE" "" <<< "$MX_ENV"
-  MX_USED=(${SETTINGS_USED[@]+"${SETTINGS_USED[@]}"})
-fi
-
-# MTPLX presets: bf16 KV + 48K. (The planner "fits" -- off 114,688/49,152,
-# q8 212,992/94,208, q4 262,144/172,032 for grant/pocket -- don't hold in
-# practice: appends past ~56K spike past the allocator limit.)
-case "$PRESET" in
-  grant)
-    : "${MODEL:=grant-ai/Qwen3.8-27B-Abliterated-MTPLX-4bit}"
-    : "${MODEL_ID:=qwen3.8-27b-abliterated-grant}"
-    : "${KV_QUANT:=off}"       # full bf16 KV
-    : "${CONTEXT:=49152}"      # 48K
-    : "${PROFILE:=sustained}"  # model card: sustained beats turbo on 4-bit builds
-    : "${DEPTH:=2}"            # mtplx tune: AR 7.5, D1 13.4, D2 23.6, D3 20.8 tok/s
-    ;;
-  pocket)
-    : "${MODEL:=PocketAiHub/Qwen3.8-27B-Abliterated-MTPLX-Optimized-Speed}"
-    : "${MODEL_ID:=qwen3.8-27b-abliterated}"
-    : "${KV_QUANT:=off}"       # full bf16 KV
-    : "${CONTEXT:=49152}"      # 48K
-    : "${PROFILE:=sustained}"  # 13.3 vs 10.3 tok/s for turbo on this Mac
-    : "${DEPTH:=2}"            # mtplx tune: AR 6.8, D1 15.4, D2 20.0, D3 19.1 tok/s
-    ;;
-esac
-
-# --local / --vm / --host ADDR (host/common.sh): the same network modes as the llama preset.
-NET_FLAG=""; pass=()
-while [[ $# -gt 0 ]]; do
-  case "$1" in
-    --local) NET_FLAG=local ;;
-    --vm) NET_FLAG=vm ;;
-    --host|--host=*) v="${1#--host}"; v="${v#=}"; if [[ -z "$v" ]]; then shift; v="${1:-}"; fi
-                     [[ -n "$v" ]] || { echo "error: --host needs an address" >&2; exit 2; }; HOST="$v" ;;
-    *) pass+=("$1") ;;
-  esac
-  shift
-done
-set -- ${pass[@]+"${pass[@]}"}
-ensure_deps mtplx
-resolve_host "$NET_FLAG"
-PORT="${PORT:-8000}"
-is_port "$PORT" || { echo "error: PORT must be a TCP port (1-65535), got '$PORT'" >&2; exit 2; }
-API_KEY_FILE="${API_KEY_FILE:-$HOME/.mtplx/api-key}"
-ensure_api_key "$API_KEY_FILE"
-if pid=$(port_pid "$PORT") && [[ -n "$pid" ]]; then
-  echo "error: port $PORT is already in use by: $(ps -o command= -p "${pid%%$'\n'*}" | cut -c1-100)" >&2
-  exit 1
-fi
-guard_other_models               # a second model can crash the Mac (host/common.sh)
-
-echo "network: $NET_NOTE"
-echo "preset=$PRESET model=$MODEL id=$MODEL_ID kv=$KV_QUANT ctx=$CONTEXT profile=$PROFILE depth=$DEPTH"
-(( ${#MX_USED[@]} )) && echo "saved settings: ${MX_USED[*]} (./carl.sh config show)"
-# MTPLX writes its log to stdout: in monitor mode that is the console file.
-run_server "$PORT" none mtplx serve \
-  --model "$MODEL" \
-  --model-id "$MODEL_ID" \
-  --host "$HOST" \
-  --port "$PORT" \
-  --api-key-file "$API_KEY_FILE" \
-  --kv-quant "$KV_QUANT" \
-  --context-window "$CONTEXT" \
-  --profile "$PROFILE" \
-  --depth "$DEPTH" \
-  --no-stats-footer \
-  ${SCHEDULER:+--scheduler-mode "$SCHEDULER"} ${BATCHING:+--batching-preset "$BATCHING"} \
-  ${PREFILL_CHUNK:+--prefill-chunk-tokens "$PREFILL_CHUNK"} ${SSD_CACHE:+--ssd-session-cache "$SSD_CACHE"} \
-  "$@"
+exec "$HERE/serve-llama.sh" "$@"

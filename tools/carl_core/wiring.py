@@ -43,10 +43,6 @@ class CarlPaths:
     def legacy_llama(self) -> str:            # before config.json (migrated once)
         return os.path.join(self.conf_dir, "llama.env")
 
-    @property
-    def legacy_mtplx(self) -> str:
-        return os.path.join(self.conf_dir, "mtplx.env")
-
     @classmethod
     def from_env(cls, env: Mapping[str, str]) -> CarlPaths:
         """CARL_CATALOG and CARL_CONF_DIR override the defaults (tests use a temporary folder)."""
@@ -57,6 +53,6 @@ class CarlPaths:
 def build_carl(paths: CarlPaths, env: Mapping[str, str]) -> Carl:
     stores = Stores(catalog=JsonFile(paths.catalog), catalog_path=paths.catalog, config=JsonFile(paths.config),
                     local=JsonFile(paths.local), local_path=paths.local,
-                    legacy=LegacyEnvFiles(paths.legacy_llama, paths.legacy_mtplx))
+                    legacy=LegacyEnvFiles(paths.legacy_llama))
     return Carl(stores, LocalModelFolder(), SHAPES, GPU, HfHttpClient(), Aria2OrCurl(), SystemClock(), StdConsole(),
                 home=os.path.expanduser("~"), env_models_dir=env.get("MODELS_DIR") or None)

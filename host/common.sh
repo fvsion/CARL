@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-# Shared by host/serve.sh (MTPLX presets) and host/serve-llama.sh. Sourced, not run.
+# Shared by host/serve.sh and host/serve-llama.sh. Sourced, not run.
 #
 # Network mode -- where the server listens:
 #   --vm     VM_HOST (default 192.168.42.1, VMware Fusion's vmnet8 address on
@@ -39,8 +39,8 @@ require_int() {
   fi
 }
 
-# apply_settings ALLOWED FORCED: read KEY=value lines (tools/carl.py launch-env /
-# mtplx-env) from stdin and set each KEY matching the ALLOWED regex, unless the
+# apply_settings ALLOWED FORCED: read KEY=value lines (tools/carl.py launch-env)
+# from stdin and set each KEY matching the ALLOWED regex, unless the
 # environment already sets it (KEYs matching FORCED are always set). Values are
 # assigned with printf -v, never evaluated. SETTINGS_USED lists what was set.
 SETTINGS_USED=()
@@ -95,36 +95,46 @@ resolve_host() {
   esac
 }
 
-# ensure_api_key FILE: create a random Bearer key on first use (friend's Mac,
-# no MTPLX installed). Clients copy it: client/install.sh, or the monitor's CONNECT section.
+# The server's Bearer key. Clients copy it: client/install.sh, or the monitor's
+# CONNECT section. Before 1.2.0 it lived in MTPLX's folder (LEGACY_KEY_FILE);
+# the first start copies it here once, so clients configured with it keep working.
+CARL_KEY_FILE="$HOME/.config/llm-deploy/api-key"
+LEGACY_KEY_FILE="$HOME/.mtplx/api-key"
+
+# tilde PATH: PATH as ~/... for messages (bash 3.2 would print a quoted \~ as is).
+tilde() { local t='~'; printf '%s' "${1/#"$HOME"/$t}"; }
+
+# ensure_api_key FILE: make sure FILE holds the key, readable by its owner only.
+# For the default FILE, a key from before 1.2.0 is copied over once (same value);
+# otherwise a random key is created on first use.
 ensure_api_key() {
-  local f="$1"
-  # An existing key (e.g. MTPLX's own) is kept, readable by its owner only.
+  local f="$1" dir
   if [[ -s "$f" ]]; then chmod go-rwx "$f" 2>/dev/null || true; return 0; fi
-  mkdir -p "$(dirname "$f")"; chmod 700 "$(dirname "$f")"
+  dir="$(dirname "$f")"
+  mkdir -p "$dir"; chmod 700 "$dir"
+  if [[ "$f" == "$CARL_KEY_FILE" && -s "$LEGACY_KEY_FILE" ]]; then
+    ( umask 077; cp "$LEGACY_KEY_FILE" "$f" ) && chmod 600 "$f"
+    echo "moved the API key to $f (copied from $(tilde "$LEGACY_KEY_FILE"); clients keep working)" >&2
+    return 0
+  fi
   # pipefail off here: head closing the pipe ends tr with SIGPIPE, which would
   # fail the subshell (and, under set -e, silently end the server start).
   ( set +o pipefail; umask 077; LC_ALL=C tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 40 > "$f" )
   echo "created API key: $f (clients need it: ./carl.sh monitor shows it, or client/install.sh)" >&2
 }
 
-# ensure_deps [mtplx]: the Homebrew tools CARL needs (llama-server from llama.cpp,
+# ensure_deps: the Homebrew tools CARL needs (llama-server from llama.cpp,
 # aria2c, ansifilter). Missing ones are installed with Homebrew after asking (in
 # a terminal), or listed with the command to run. Homebrew itself is not
 # installed automatically (it needs the user's password). SKIP_DEPS=1 skips this.
 ensure_deps() {
   [[ "${SKIP_DEPS:-0}" == 1 ]] && return 0
-  local missing=() need_llama=1 a
-  [[ "${1:-}" == mtplx ]] && need_llama=0
+  local missing=() a
   # Homebrew's bin on PATH (what `brew shellenv` adds), for shells that lack it
   [[ -x /opt/homebrew/bin/brew && ":$PATH:" != *":/opt/homebrew/bin:"* ]] && PATH="/opt/homebrew/bin:/opt/homebrew/sbin:$PATH"
-  (( need_llama )) && ! command -v llama-server >/dev/null && missing+=(llama.cpp)
+  command -v llama-server >/dev/null || missing+=(llama.cpp)
   command -v aria2c >/dev/null || missing+=(aria2)
   command -v ansifilter >/dev/null || missing+=(ansifilter)
-  if [[ "${1:-}" == mtplx ]] && ! command -v mtplx >/dev/null; then
-    echo "error: mtplx is not installed (grant / pocket need it; see USERGUIDE.md). llama.cpp: ${CMD:-./carl.sh} llama" >&2
-    exit 1
-  fi
   (( ${#missing[@]} )) || return 0
   echo "CARL needs: ${missing[*]} (not installed)"
   if ! command -v brew >/dev/null; then
@@ -138,11 +148,11 @@ ensure_deps() {
     if [[ ! "$a" =~ ^[Nn] ]]; then
       brew install "${missing[@]}" || { echo "error: brew install failed" >&2; exit 1; }
       hash -r
-      (( need_llama )) && ! command -v llama-server >/dev/null && { echo "error: llama-server still not found" >&2; exit 1; }
+      command -v llama-server >/dev/null || { echo "error: llama-server still not found" >&2; exit 1; }
       return 0
     fi
   fi
-  if (( need_llama )) && [[ " ${missing[*]} " == *" llama.cpp "* ]]; then
+  if [[ " ${missing[*]} " == *" llama.cpp "* ]]; then
     echo "error: llama-server not found. Run: brew install ${missing[*]}" >&2; exit 1
   fi
   echo "note: optional tools missing (downloads and logs work without them): brew install ${missing[*]}" >&2
@@ -151,9 +161,11 @@ ensure_deps() {
 # guard_other_models: refuse to load a second model. Two models do not fit in
 # GPU memory on these Macs: the second one can crash the Mac (it rebooted on
 # 2026-10-02) or break the first server. Name checks miss servers started some
-# other way (the MTPLX app, a renamed binary), so this checks memory: any
-# process with more than BIG_GB (default 8) GB resident, plus every known server
-# name. ALLOW_SECOND_MODEL=1 skips the check.
+# other way (an app, a renamed binary), so this checks memory: any process with
+# more than BIG_GB (default 8) GB resident, plus every known server name. The
+# list keeps mtplx although CARL no longer starts it: an MTPLX server left over
+# from an older CARL (or started by hand) still holds a model in GPU memory.
+# ALLOW_SECOND_MODEL=1 skips the check.
 guard_other_models() {
   [[ "${ALLOW_SECOND_MODEL:-0}" == 1 ]] && return 0
   require_int BIG_GB "${BIG_GB:-8}" 1

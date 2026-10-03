@@ -37,14 +37,13 @@ class CoerceTest(unittest.TestCase):
 
 class ValidateConfigTest(unittest.TestCase):
     def test_valid_document(self) -> None:
-        cfg, warn = validate_config({"schema": 1, "_comment": "x", "backend": "llama",
+        cfg, warn = validate_config({"schema": 1, "_comment": "x",
                                      "llama": {"model": "m", "net": "local", "ub": "1k"},
                                      "models": {"m.v2": {"ctx": "128k", "spec": "ngram-mod"}}})
         self.assertEqual(warn, [])
-        self.assertEqual(cfg.backend, "llama")
         self.assertEqual(cfg.llama, {"model": "m", "net": "local", "ub": 1024})
         self.assertEqual(cfg.profile("m.v2"), {"ctx": 131072, "spec": "ngram-mod"})
-        self.assertEqual(cfg.to_json(), {"schema": 1, "backend": "llama",
+        self.assertEqual(cfg.to_json(), {"schema": 1,
                                          "llama": {"model": "m", "net": "local", "ub": 1024},
                                          "models": {"m.v2": {"ctx": 131072, "spec": "ngram-mod"}}})
 
@@ -53,36 +52,48 @@ class ValidateConfigTest(unittest.TestCase):
         self.assertEqual(warn, ["llama.nope: unknown setting (ignored)", "extra: unknown section (ignored)",
                                 "models.m.x: unknown setting (ignored)"])
 
+    def test_removed_mtplx_keys_load_and_are_dropped(self) -> None:
+        """A config.json from before 1.2.0: backend (any value) is ignored silently, the
+        mtplx section (even with values no longer valid anywhere) with one warning."""
+        for backend in ("mtplx", "llama", "ollama", None, 3):
+            with self.subTest(backend=backend):
+                cfg, warn = validate_config({"schema": 1, "backend": backend, "llama": {"net": "vm"},
+                                             "mtplx": {"preset": "grant", "context": "huge", "kv_quant": "q9"}})
+                self.assertEqual(cfg.llama, {"net": "vm"})
+                self.assertEqual(warn, ["mtplx: MTPLX support was removed in CARL 1.2.0 (ignored; dropped when "
+                                        "the settings are next saved)"])
+                self.assertEqual(cfg.to_file(), {"schema": 1, "_comment": CONFIG_COMMENT, "llama": {"net": "vm"}})
+        _, warn = validate_config({"backend": "llama"})
+        self.assertEqual(warn, [])
+
     def test_bad_documents(self) -> None:
-        for raw, msg in (([], "must hold a JSON object"), ({"backend": "ollama"}, "is not llama or mtplx"),
+        for raw, msg in (([], "must hold a JSON object"),
                          ({"llama": ["x"]}, "llama: must be a JSON object"),
                          ({"models": {"m": {"ctx": 10}}}, "models.m.ctx: 10 is out of range")):
             with self.subTest(raw=raw), self.assertRaisesRegex(ConfigError, msg):
                 validate_config(raw)
 
     def test_file_form_has_comment_and_drops_empty_sections(self) -> None:
-        doc = Config(backend="mtplx", models={"gone": {}}).to_file()
-        self.assertEqual(doc, {"schema": 1, "_comment": CONFIG_COMMENT, "backend": "mtplx"})
+        doc = Config(models={"gone": {}}).to_file()
+        self.assertEqual(doc, {"schema": 1, "_comment": CONFIG_COMMENT})
 
 
 class MigrationTest(unittest.TestCase):
     def test_llama_env_maps_to_sections(self) -> None:
-        cfg = migrate_env({"MODEL_NAME": "qwen", "NET": "vm", "CTX": "65536", "SPEC": "ngram-mod", "UNKNOWN": "1"},
-                          {"PROFILE": "turbo", "DEPTH": "3"})
+        cfg = migrate_env({"MODEL_NAME": "qwen", "NET": "vm", "CTX": "65536", "SPEC": "ngram-mod", "UNKNOWN": "1"})
         assert cfg is not None
         self.assertEqual(cfg.llama, {"model": "qwen", "net": "vm"})
         self.assertEqual(cfg.profile("qwen"), {"ctx": 65536, "spec": "ngram-mod"})
-        self.assertEqual(cfg.mtplx, {"profile": "turbo", "depth": 3})
 
     def test_model_values_need_a_named_model(self) -> None:
-        cfg = migrate_env({"CTX": "65536", "NET": "local"}, {})
+        cfg = migrate_env({"CTX": "65536", "NET": "local"})
         assert cfg is not None
         self.assertEqual(cfg.models, {})
         self.assertEqual(cfg.llama, {"net": "local"})
 
     def test_nothing_or_invalid(self) -> None:
-        self.assertIsNone(migrate_env({}, {}))
-        self.assertIsNone(migrate_env({"NET": "moon"}, {}))
+        self.assertIsNone(migrate_env({}))
+        self.assertIsNone(migrate_env({"NET": "moon"}))
 
 
 class KeyPathTest(unittest.TestCase):
@@ -93,12 +104,12 @@ class KeyPathTest(unittest.TestCase):
             key_path("llama..net")
 
     def test_get_set_unset(self) -> None:
-        doc: JsonObject = {"schema": 1, "backend": "llama"}
+        doc: JsonObject = {"schema": 1, "note": "text"}
         set_path(doc, ["models", "m", "ctx"], "64k")
         self.assertEqual(get_path(doc, ["models", "m", "ctx"]), "64k")
-        self.assertIsNone(get_path(doc, ["backend", "x"]))
-        with self.assertRaisesRegex(ConfigError, "backend is not a section"):
-            set_path(doc, ["backend", "x"], 1)
+        self.assertIsNone(get_path(doc, ["note", "x"]))
+        with self.assertRaisesRegex(ConfigError, "note is not a section"):
+            set_path(doc, ["note", "x"], 1)
         unset_path(doc, ["models", "m", "ctx"])
         unset_path(doc, ["nothing", "here"])
         self.assertEqual(doc["models"], {"m": {}})

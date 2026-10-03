@@ -12,7 +12,6 @@ import time
 from dataclasses import dataclass
 from typing import Counter, Deque, Dict, Optional
 
-from .model import JSONDict, jdict, jnum
 
 TS = re.compile(r"^(\d+)\.(\d+)\.(\d+)\.(\d+) ([IWED]) ")
 _TASK = re.compile(r"task (\d+)")
@@ -37,8 +36,8 @@ def offset(line: str) -> Optional[float]:
 
 @dataclass
 class RequestRecord:
-    """One request: while it runs (from the log) or finished (log or MTPLX snapshot).
-    t0 / t1 are seconds since the server started (llama.cpp) or epoch seconds (MTPLX)."""
+    """One request: while it runs or finished (from the log). t0 / t1 are seconds since the
+    server started."""
     task: Optional[int] = None
     slot: int = 0
     t0: Optional[float] = None
@@ -50,36 +49,6 @@ class RequestRecord:
     tg: Optional[float] = None      # tokens generated per second
     acc: Optional[float] = None     # share of draft tokens accepted
     error: bool = False
-    restore: str = "cold"   # MTPLX: how the session started (cold, warm, ...)
-    cached: float = 0       # MTPLX: tokens re-used from the session bank
-
-
-def _pick(rec: JSONDict, *names: str) -> object:
-    """The first of names that is set (not None) in rec."""
-    for n in names:
-        v = rec.get(n)
-        if v is not None:
-            return v
-    return None
-
-
-def mx_request(raw: object) -> RequestRecord:
-    """One finished MTPLX request (an entry of the snapshot's recent / latest)."""
-    r = jdict(raw)
-    t1, took = jnum(_pick(r, "completed_at_s")), jnum(_pick(r, "request_elapsed_s"))
-    drafted = jnum(_pick(r, "drafted_tokens")) or 0
-    restore = _pick(r, "session_restore_mode")
-    return RequestRecord(
-        t0=(t1 - took) if (t1 and took) else t1, t1=t1,
-        ctx=jnum(_pick(r, "context_len", "prompt_tokens")) or 0,
-        new=jnum(_pick(r, "new_prefill_tokens")) or 0,
-        pp=jnum(_pick(r, "prefill_tok_s", "prompt_tps")),
-        gen=jnum(_pick(r, "completion_tokens")) or 0,
-        tg=jnum(_pick(r, "display_decode_tok_s", "decode_tok_s")),
-        acc=(jnum(_pick(r, "accepted_drafts")) or 0) / drafted if drafted else None,
-        restore="cold" if restore is None else str(restore),
-        cached=jnum(_pick(r, "cached_tokens")) or 0,
-        error=bool(_pick(r, "error")))
 
 
 class LogBook:
@@ -146,7 +115,3 @@ class LogBook:
         """A log offset as the local wall-clock time."""
         return time.strftime("%H:%M:%S", time.localtime(self.start + off)) if self.start and off is not None else "--:--:--"
 
-
-def mx_wall(ts: Optional[float]) -> str:
-    """An MTPLX epoch timestamp as the local wall-clock time."""
-    return time.strftime("%H:%M:%S", time.localtime(ts)) if ts else "–"

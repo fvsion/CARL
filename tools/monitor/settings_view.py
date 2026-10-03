@@ -11,7 +11,7 @@ from typing import List, Mapping
 from .fmt import (B, CYN, DIM, GRN, R, RED, YEL, CardLine, Ln, Row, bar, buttons, ctx_label, draw_card, dur, fit,
                   home_short, indent, lv, size, vlen, wwrap)
 from .model import ModelInfo, ServerData, jdict
-from .settings import (ADV_WARN, BACKEND_NAMES, LLAMA_ADV, MODEL_ROW_KEYS, NUMERIC, SET_HELP, UNMARKED, Pending,
+from .settings import (ADV_WARN, LLAMA_ADV, MODEL_ROW_KEYS, NUMERIC, SET_HELP, UNMARKED, Pending,
                        SettingsService, fmt_val, shown_value)
 from .state import SUBPANELS, Confirm, Download, PickItem, Picker, TuneRun, UIState
 
@@ -79,9 +79,8 @@ def speed_line(m: ModelInfo, tune: object) -> str:
 class SettingsView:
     """Draws the Settings panels."""
 
-    def __init__(self, svc: SettingsService, ports: Mapping[str, int], config_file: str, home: str) -> None:
+    def __init__(self, svc: SettingsService, config_file: str, home: str) -> None:
         self.svc = svc
-        self.ports = ports
         self.config_file = config_file
         self.home = home
 
@@ -95,11 +94,13 @@ class SettingsView:
         ui.set_row = min(ui.set_row, len(rws) - 1)
         w = cols - 1
         vw = 28 if w >= 110 else 18                        # value column: room for "draft-mtp,ngram-mod"
-        L: List[CardLine] = [f"{DIM}{'':2}{'setting':<14}{'new':<{vw + 8}}{'running now':<18}{R}"]
-        same_backend = run.get("backend") == p["backend"]
+        L: List[CardLine] = []
+        if svc.models.error:                                # a broken catalogue / models.json: say so here
+            L += [f"{RED}{x}{R}" for x in wwrap(f"model list unavailable: {svc.models.error}", w - 6)[:3]]
+            L += [f"{DIM}fix the file (./carl.sh models shows the same error); the list is read again every 10 s{R}", ""]
+        L.append(f"{DIM}{'':2}{'setting':<14}{'new':<{vw + 8}}{'running now':<18}{R}")
         for i, (key, label, _, _, _) in enumerate(rws):
-            L.append(self._row(ui, p, run, i, key, label, same_backend, vw))
-        L += [""] * max(len(svc.schema.llama) + 2 - len(rws), 0)  # the same height for both backends
+            L.append(self._row(ui, p, run, i, key, label, vw))
         key = rws[ui.set_row].key
         adv_on = p.get("adv") == "shown"
         hint = f"  {CYN}(type a value, Enter){R}" if key in NUMERIC else f"  {CYN}(Enter: choose){R}" if key == "model" else ""
@@ -119,18 +120,17 @@ class SettingsView:
             L.append(buttons("", [("Apply and restart (a)" if run else "Start server (a)", "setapply" if ok else "setnofit"),
                                   ("Revert (r)", "setrevert"), ("Tuned values (x)", "setdefaults")]))
         L.append(f"{DIM}↑↓ select · ←→ change · * differs from the running server · wheel / PgUp PgDn scroll · "
-                 f"backend, context or slots: run install.sh again{R}")
-        srv = BACKEND_NAMES.get(str(run.get("backend")), "no server")
+                 f"context or slots: run install.sh again{R}")
+        srv = "llama.cpp" if run else "no server"
         rows = indent(draw_card("settings", "SERVER SETTINGS", f"{DIM}running: {srv} · port {port}{R}", L, w, 2))
-        if p["backend"] == "llama":
-            ui.levels.setdefault("modelinfo", 1)
-            rows += indent(self.model_info(p, key, w, ui.levels["modelinfo"]))
+        ui.levels.setdefault("modelinfo", 1)
+        rows += indent(self.model_info(p, key, w, ui.levels["modelinfo"]))
         if ui.confirm:
-            rows = indent(self._confirm_restart(p, run, srv, port, min(w, 80))) + rows
+            rows = indent(self._confirm_restart(bool(run), port, min(w, 80))) + rows
         ui.set_scroll = max(0, min(ui.set_scroll, len(rows) - height))
         return rows[ui.set_scroll:ui.set_scroll + height]
 
-    def _row(self, ui: UIState, p: Pending, run: Pending, i: int, key: str, label: str, same_backend: bool, vw: int) -> Ln:
+    def _row(self, ui: UIState, p: Pending, run: Pending, i: int, key: str, label: str, vw: int) -> Ln:
         """One setting: [<] new value [>]  * running value. The value is coloured (value_color)."""
         sel = i == ui.set_row
         val = shown_value(key, p[key])
@@ -138,10 +138,10 @@ class SettingsView:
             val = f"auto: {self.svc.resolved_model(p)}"
         if sel and ui.edit is not None:
             val = ui.edit + "▏"
-        rv: object = run.get(key, "N/A") if (same_backend or key == "backend") else "N/A"
+        rv: object = run.get(key, "N/A")
         rv = "" if key == "adv" else rv
         rvs = "auto" if key == "cache" and rv == 0 else shown_value(key, rv)
-        mark = (f"{YEL}*{R}" if run and (same_backend or key == "backend") and str(p[key]) != str(run.get(key))
+        mark = (f"{YEL}*{R}" if run and str(p[key]) != str(run.get(key))
                 and key not in UNMARKED else " ")
         col = self.svc.value_color(key, p) or CYN
         pre = f"{CYN}{B}›{R} " if sel else "  "
@@ -156,13 +156,9 @@ class SettingsView:
         text += f" {mark}  {DIM}{fit(rvs, 30) if vlen(rvs) > 30 else rvs}{R}"
         return Ln(text, spans=spans)
 
-    def _confirm_restart(self, p: Pending, run: Pending, srv: str, port: int, w: int) -> List[Row]:
-        be = str(p["backend"])
-        switch = run.get("backend") and run.get("backend") != be
-        new = BACKEND_NAMES[be]
-        first = ("This stops the server and starts it again with the new settings." if run and not switch else
-                 f"This stops {srv} and starts {new} on port {self.ports[be]}." if run else
-                 f"This starts {new} on port {self.ports[be] if be != 'llama' else port}.")
+    def _confirm_restart(self, run: bool, port: int, w: int) -> List[Row]:
+        first = ("This stops the server and starts it again with the new settings." if run else
+                 f"This starts llama.cpp on port {port}.")
         return draw_card("confirm", "START?" if not run else "RESTART?", "", [
             "", first,
             "Requests in progress stop. The model loads again (about 30 s to 2 min)." if run else "The model loads (about 30 s to 2 min).",

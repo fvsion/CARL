@@ -3,7 +3,7 @@
 
 Usage: python3 tools/llama-kv-longctx.py LABEL [TARGET_TOKENS=65536] [BASE_URL]
 
-Builds a deterministic ~TARGET_TOKENS haystack (MTPLX source code) with 8
+Builds a deterministic ~TARGET_TOKENS haystack (this repo's source code) with 8
 "needle" facts at fixed depths (2%..98%), then runs one session:
   t1  cold prefill of the whole haystack + question: recall all 8 needles
       -> prefill tok/s, recall score (the q4 K-cache quality risk is
@@ -20,18 +20,16 @@ production default (temp 1.0), so expect +-5% run-to-run noise on tok/s.
 from __future__ import annotations
 
 import argparse
-import glob
-import os
 import random
 import re
 import sys
 import time
 from dataclasses import dataclass
 
-from carl_bench import DEFAULT_BASE, Message, chat_body, completion_from, mtplx_source_dir, port_of, post_chat, \
-    read_api_key, read_source, server_memory, validate_base
+from carl_bench import DEFAULT_BASE, Message, chat_body, completion_from, port_of, post_chat, read_api_key, \
+    repo_sources, server_memory, validate_base
 
-CHARS_PER_TOKEN = 3.7          # measured on this corpus (207K chars ~ 56K tokens)
+CHARS_PER_TOKEN = 3.7          # measured on Python source (207K chars ~ 56K tokens)
 DEPTHS = (0.02, 0.10, 0.25, 0.40, 0.55, 0.70, 0.85, 0.98)
 
 
@@ -69,11 +67,6 @@ def build_haystack(files: dict[str, str], target_tokens: int, seed: int = 42) ->
     return Haystack(haystack, parts, needles, re.findall(r"\ndef (\w{6,})\(", fifth))
 
 
-def corpus(site: str) -> dict[str, str]:
-    files = sorted(glob.glob(site + "/**/*.py", recursive=True), key=lambda f: (os.path.getsize(f), f))
-    return {os.path.relpath(f, site): read_source(f) for f in files}
-
-
 class Session:
     """One conversation with the server; each call prints its timings and memory."""
 
@@ -107,7 +100,10 @@ def main(argv: list[str]) -> int:
     if a.target < 1024:
         raise SystemExit("error: TARGET_TOKENS must be at least 1024")
     base, key = validate_base(a.base), read_api_key()
-    h = build_haystack(corpus(mtplx_source_dir()), a.target)
+    h = build_haystack(repo_sources(), a.target)
+    if len(h.text) < 0.9 * a.target * CHARS_PER_TOKEN:
+        print(f"note: the corpus holds only ~{len(h.text) / CHARS_PER_TOKEN / 1000:.0f}K tokens, "
+              f"less than the {a.target // 1000}K asked for", file=sys.stderr, flush=True)
 
     s = Session(base, key, a.label, h.text + "\n\nThe text above contains access codes for vault-1 "
                 "through vault-8 in comments. Reply with ONLY a JSON object mapping each vault name to its code.")

@@ -1,4 +1,4 @@
-"""The KEY=value lines the launchers read (serve-llama.sh: launch-env, serve.sh: mtplx-env).
+"""The KEY=value lines the launcher reads (serve-llama.sh: tools/carl.py launch-env).
 
 The shell scripts read these lines with `read`/`printf -v`, never eval, and every value is
 also restricted to a safe character set, so a config value can't inject shell syntax.
@@ -9,7 +9,7 @@ import re
 from typing import Dict, Mapping
 
 from .errors import ConfigError
-from .settings import LLAMA_KEYS, MODEL_KEYS, MTPLX_KEYS, Config
+from .settings import LLAMA_KEYS, MODEL_KEYS, Config
 from .types import ModelInfo, SettingSource, SettingValue, Settings
 
 _SAFE_VALUE = re.compile(r"[A-Za-z0-9_.,:/~+@ =-]*")
@@ -51,7 +51,3 @@ def launch_env(m: ModelInfo, vals: Settings, src: Mapping[str, SettingSource], c
     env["CARL_SOURCES"] = " ".join(f"{k}:{src[k]}" for k in SOURCE_KEYS)
     return env
 
-
-def mtplx_env(cfg: Config) -> Dict[str, SettingValue]:
-    """Settings for serve.sh grant|pocket: the mtplx values config.json sets."""
-    return {s.env: cfg.mtplx[k] for k, s in MTPLX_KEYS.items() if s.env and cfg.mtplx.get(k) not in (None, "")}

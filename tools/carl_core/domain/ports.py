@@ -64,9 +64,9 @@ class JsonDocument(Protocol):
 
 
 class LegacyEnv(Protocol):
-    """The KEY=value files earlier versions wrote (llama.env, mtplx.env)."""
+    """The KEY=value file earlier versions wrote (llama.env)."""
 
-    def read(self) -> Tuple[Dict[str, str], Dict[str, str]]: ...
+    def read(self) -> Dict[str, str]: ...
 
 
 class HubClient(Protocol):

@@ -1,15 +1,13 @@
 """Shared helpers for the small measurement tools in tools/ (llama-spec-bench.py,
-llama-ab-measure.py, llama-kv-longctx.py, llama-sesstest.py, sesstest.py,
-make-memtest-prompt.py): the API key, chat requests to llama-server / MTPLX,
-the listening server's pid and memory, and the MTPLX source tree they use as a
-test corpus.
+llama-ab-measure.py, llama-kv-longctx.py, llama-sesstest.py): the API key, chat
+requests to llama-server, the listening server's pid and memory, and this repo's
+own source files, which they use as a long-context test corpus.
 
 The parse_* functions are pure (tested in tests/scripts/test_carl_bench.py);
 the others run commands or talk to the server.
 """
 from __future__ import annotations
 
-import glob
 import json
 import os
 import re
@@ -20,8 +18,12 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, TypedDict
 
+from carl_core.adapters.api_key import key_file
+
 DEFAULT_BASE = "http://192.168.42.1:8080"
-DEFAULT_KEY_FILE = "~/.mtplx/api-key"
+REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+CORPUS_DIRS = ("tools", "host", "client")           # the repo's code (not the docs, not the tests)
+CORPUS_SUFFIXES = (".py", ".sh", ".js", ".ts")
 NETSTAT = "/usr/sbin/netstat"
 DEFAULT_PAGE_SIZE = 16384          # Apple silicon; vm_stat states it in its header
 
@@ -34,7 +36,7 @@ class Message(TypedDict):
 
 
 class Timings(TypedDict, total=False):
-    """llama-server's per-request "timings" (absent on MTPLX)."""
+    """llama-server's per-request "timings"."""
     prompt_n: int
     prompt_per_second: float
     predicted_n: int
@@ -119,8 +121,9 @@ def chat_body(messages: list[Message], max_tokens: int, model: str = "x", **samp
 
 # ------------------------------------------------------------------ adapters
 def read_api_key(path: str | None = None) -> str:
-    """The server's Bearer key: PATH, else $API_KEY_FILE, else ~/.mtplx/api-key."""
-    p = os.path.expanduser(path or os.environ.get("API_KEY_FILE") or DEFAULT_KEY_FILE)
+    """The server's Bearer key: PATH, else $API_KEY_FILE, else ~/.config/llm-deploy/api-key
+    (the pre-1.2.0 ~/.mtplx/api-key while only that exists)."""
+    p = os.path.expanduser(path) if path else key_file()
     try:
         with open(p, encoding="utf-8") as f:
             key = f.read().strip()
@@ -170,18 +173,19 @@ def server_memory(port: int) -> MemorySnapshot:
                           swap_used=parse_swap_used(run(["sysctl", "-n", "vm.swapusage"])))
 
 
-def mtplx_source_dir() -> str:
-    """The installed MTPLX package (uv tool install), whose source files serve as
-    a deterministic long-context corpus."""
-    try:
-        tools = run(["uv", "tool", "dir"]).strip()
-    except (OSError, subprocess.CalledProcessError):
-        raise SystemExit("error: uv is not installed (these tests read the MTPLX source installed with uv tool)") from None
-    hits = sorted(glob.glob(os.path.join(tools, "mtplx", "lib", "python3.*", "site-packages", "mtplx")))
-    if not hits:
-        raise SystemExit(f"error: no MTPLX install under {tools}/mtplx (uv tool install mtplx); "
-                         "these tests use its source files as the long-context corpus")
-    return hits[-1]
+def repo_sources(root: str = REPO) -> dict[str, str]:
+    """This repo's source files (path relative to root -> text), smallest first: a
+    deterministic long-context corpus (~560K characters, ~150K tokens) that needs
+    nothing installed. It changes when the code changes, so compare runs of one version."""
+    found: list[tuple[int, str]] = []
+    for top in CORPUS_DIRS:
+        for d, dirs, files in os.walk(os.path.join(root, top)):
+            dirs[:] = sorted(x for x in dirs if not x.startswith((".", "__")))
+            for f in files:
+                if f.endswith(CORPUS_SUFFIXES):
+                    p = os.path.join(d, f)
+                    found.append((os.path.getsize(p), os.path.relpath(p, root)))
+    return {rel: read_source(os.path.join(root, rel)) for _, rel in sorted(found)}
 
 
 def read_source(path: str) -> str:

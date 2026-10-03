@@ -1,4 +1,4 @@
-"""Server log parsing (real llama.cpp lines), MTPLX request records, and the log tail."""
+"""Server log parsing (real llama.cpp lines) and the log tail."""
 from __future__ import annotations
 
 import os
@@ -10,7 +10,7 @@ import unittest
 sys.dont_write_bytecode = True                                  # keep tools/ free of __pycache__
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "tools"))
 
-from monitor.logbook import LogBook, level_of, mx_request, offset
+from monitor.logbook import LogBook, level_of, offset
 from monitor.logtail import LogTail, log_start
 
 REQUEST = """2.09.112.847 I slot launch_slot_: id  1 | task 118 | processing task, is_child = 0
@@ -57,20 +57,6 @@ class LogBookTest(unittest.TestCase):
         self.assertEqual(self.book.wall(10), "--:--:--")
         self.book.start = time.mktime((2026, 10, 2, 14, 4, 5, 0, 0, -1))
         self.assertEqual(self.book.wall(65), "14:05:10")
-
-
-class MxRequestTest(unittest.TestCase):
-    def test_fields_and_defaults(self) -> None:
-        r = mx_request({"completed_at_s": 100.0, "request_elapsed_s": 12.5, "drafted_tokens": 100, "accepted_drafts": 60,
-                        "prompt_tokens": 15000, "new_prefill_tokens": 3000, "prompt_tps": 400.0, "completion_tokens": 250,
-                        "decode_tok_s": 22.5, "cached_tokens": 12000, "error": "boom"})
-        self.assertEqual((r.t0, r.t1, r.ctx, r.new, r.gen, r.cached), (87.5, 100.0, 15000, 3000, 250, 12000))
-        self.assertEqual((r.pp, r.tg, r.acc, r.restore, r.error), (400.0, 22.5, 0.6, "cold", True))
-
-    def test_bad_types_count_as_missing(self) -> None:
-        r = mx_request({"context_len": "lots", "drafted_tokens": None, "completed_at_s": True})
-        self.assertEqual((r.ctx, r.acc, r.t1), (0, None, None))
-        self.assertEqual(mx_request("not an object").ctx, 0)
 
 
 class LogTailTest(unittest.TestCase):

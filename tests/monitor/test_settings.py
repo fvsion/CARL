@@ -7,9 +7,9 @@ import unittest
 from mon_support import GIB, FakeStore, model, model_list, shape
 from monitor.fmt import GRN, RED, YEL
 from monitor.model import ServerData
-from monitor.settings import (BACKEND_ROW, MODEL_ROW_KEYS, Schema, SettingsService, env_from_cmd, env_from_mtplx,
-                              fmt_val, llama_fit, max_ctx_per_slot, mtplx_fit, net_choices, parse_typed, rows,
-                              running_settings, settings_to_config, shown_value, step_choice)
+from monitor.settings import (LLAMA_ADV, MODEL_ROW_KEYS, Schema, SettingsService, env_from_cmd, fmt_val, llama_fit,
+                              max_ctx_per_slot, net_choices, parse_typed, rows, running_settings, settings_to_config,
+                              shown_value, step_choice)
 
 SCHEMA = Schema(net_choices(["192.168.1.5"]))
 LLAMA_CMD = ("/opt/llama-server -m /m/big.gguf --host 127.0.0.1 -c 196608 --parallel 2 -ctk q4_0 -ctv q4_0 "
@@ -33,7 +33,7 @@ class ValuesTest(unittest.TestCase):
 
     def test_shown_value(self) -> None:
         self.assertEqual(shown_value("ctx", 65536), "64K")
-        self.assertEqual(shown_value("backend", "mtplx"), "MTPLX")
+        self.assertEqual(shown_value("kv", "q4_0"), "q4_0")
         self.assertEqual(shown_value("cache", 4096), "4096")
 
     def test_parse_typed(self) -> None:
@@ -54,14 +54,15 @@ class ValuesTest(unittest.TestCase):
         self.assertEqual(step_choice([32768, 65536], "65536", -1), 32768)
         self.assertEqual(step_choice(["a", "b"], "zzz", 1), "b")         # not a choice: from the first
 
-    def test_rows_per_backend(self) -> None:
-        llama = rows({"backend": "llama", "adv": "hidden"}, SCHEMA, lambda: ["auto", "big"])
-        self.assertEqual(llama[0], BACKEND_ROW)
+    def test_rows(self) -> None:
+        llama = rows({"adv": "hidden"}, SCHEMA, lambda: ["auto", "big"])
+        self.assertEqual(llama[0].key, "model")                    # no backend row: llama.cpp only
         self.assertEqual([r.key for r in llama][-2:], ["presence", "adv"])
-        self.assertEqual(llama[1].choices, ["auto", "big"])
+        self.assertEqual(llama[0].choices, ["auto", "big"])
         self.assertIn("192.168.1.5", next(r for r in llama if r.key == "net").choices or [])
-        mx = rows({"backend": "mtplx", "adv": "shown"}, SCHEMA, lambda: [])
-        self.assertEqual([r.key for r in mx][-5:], ["adv", "sched", "batching", "pchunk", "ssd"])
+        shown = rows({"adv": "shown"}, SCHEMA, lambda: [])
+        self.assertEqual(shown[-len(LLAMA_ADV):], LLAMA_ADV)
+        self.assertEqual(set(SCHEMA.defaults()), {r.key for r in SCHEMA.llama + LLAMA_ADV})
 
     def test_model_row_keys(self) -> None:
         self.assertEqual(MODEL_ROW_KEYS["specn"], "spec_n")
@@ -73,23 +74,11 @@ class RunningTest(unittest.TestCase):
     def test_llama_command_line(self) -> None:
         ml = model_list()
         run = running_settings(ServerData(cmd=LLAMA_CMD, n_ctx=98304), "192.168.42.1", ml.by_name)
-        self.assertEqual((run["backend"], run["model"], run["kv"], run["ctx"], run["slots"]), ("llama", "big", "q4_0", 98304, "2"))
+        self.assertEqual((run["model"], run["kv"], run["ctx"], run["slots"]), ("big", "q4_0", 98304, "2"))
         self.assertEqual((run["cache"], run["net"], run["presence"], run["ub"]), (4096, "local", "N/A", "512"))
 
     def test_not_a_known_server(self) -> None:
         self.assertEqual(running_settings(ServerData(cmd="python3 other.py"), "x", lambda n: None), {})
-
-    def test_mtplx_snapshot(self) -> None:
-        d = ServerData(backend="mtplx", cmd="mtplx serve --host 192.168.42.1",
-                       mx={"model_id": "PocketAiHub/x", "context_window": 49152, "profile": {"name": "turbo"},
-                           "settings": {"depth": 3}, "memory_plan": {"kv_quantization": "q8"},
-                           "scheduler": {"mode": "serial", "preset": "latency", "config": {"prefill_chunk_tokens": 2048}},
-                           "session_bank": {"cold_tier": {"mode": "off"}}})
-        run = running_settings(d, "192.168.42.1", lambda n: None)
-        self.assertEqual(run, {"backend": "mtplx", "preset": "pocket", "mctx": 49152, "profile": "turbo", "depth": "3",
-                               "mkv": "q8", "mnet": "vm", "sched": "serial", "batching": "latency", "pchunk": "2048",
-                               "ssd": "off"})
-
 
 class ConfigMappingTest(unittest.TestCase):
     def pending(self, **kw: object) -> dict:
@@ -102,7 +91,7 @@ class ConfigMappingTest(unittest.TestCase):
                          spec="draft-mtp,ngram-mod", specn="1", temp="1.0", presence="0", top_k="20", top_p="0.95",
                          min_p="0", repeat="1.0")
         cfg = settings_to_config(p, {"schema": 1, "llama": {"net": "vm", "ckpt": "16"}}, SCHEMA, "big", tuned)
-        self.assertEqual(cfg["backend"], "llama")
+        self.assertNotIn("backend", cfg)
         self.assertEqual(cfg["llama"], {"host": "192.168.1.5", "model": "big", "cache_ram": 4096, "ub": "1024"})
         self.assertEqual(cfg["models"], {})
 
@@ -113,22 +102,12 @@ class ConfigMappingTest(unittest.TestCase):
                                  mon_tune())
         self.assertEqual(cfg["models"], {"big": {"kv": "q8_0", "ctx": 65536, "temp": "0.6"}, "other": {"ctx": 1}})
 
-    def test_mtplx_default_values_are_dropped(self) -> None:
-        p = self.pending(backend="mtplx", preset="pocket", mctx=32768, sched="default", mnet="local")
-        src = {"schema": 1, "mtplx": {"scheduler": "serial", "context": 57344}}
-        cfg = settings_to_config(p, src, SCHEMA, None, None)
-        self.assertEqual(cfg["mtplx"], {"preset": "pocket", "context": 32768, "net": "local"})
-        self.assertNotIn("models", cfg)
-        self.assertEqual(src["mtplx"], {"scheduler": "serial", "context": 57344})    # the input is not changed
-
     def test_rollback_environments(self) -> None:
         env = env_from_cmd(LLAMA_CMD)
         self.assertEqual(env["MODEL"], "/m/big.gguf")
         self.assertEqual((env["CTX"], env["SLOTS"], env["KV_K"], env["CACHE_RAM"], env["SETTINGS_FILE"]),
                          ("196608", "2", "q4_0", "4096", "none"))
         self.assertNotIn("TOP_P_X", env)
-        mx = env_from_mtplx("mtplx serve --model /x/m --model-id m --host 0.0.0.0 --depth 2")
-        self.assertEqual(mx, {"SETTINGS_FILE_MTPLX": "none", "MODEL": "/x/m", "MODEL_ID": "m", "HOST": "0.0.0.0", "DEPTH": "2"})
 
 
 def mon_tune() -> dict:
@@ -148,13 +127,6 @@ class FitMathTest(unittest.TestCase):
         self.assertTrue(ok1)
         self.assertIn("for 1 ×", text1)
         self.assertFalse(llama_fit("m", 30 * GIB, shp, "q4_0", 65536, "1", 25 * GIB)[0])
-
-    def test_mtplx_fit(self) -> None:
-        ok, text = mtplx_fit("grant", "off", 49152, 25 * GIB)
-        self.assertTrue(ok)
-        self.assertIn("MTPLX grant needs about", text)
-        self.assertIn("(bf16)", text)
-        self.assertIn("over 48K", mtplx_fit("pocket", "q8", 57344, 25 * GIB)[1])
 
     def test_max_ctx_per_slot(self) -> None:
         shp = shape(kv_elems=10240, rs_bytes=0, ctx_train=40960)
@@ -180,17 +152,16 @@ class ServiceTest(unittest.TestCase):
         self.assertEqual(self.svc.value_color("spec", dict(p, model="nomtp")), RED)              # no MTP head
         self.assertEqual(self.svc.value_color("spec", dict(p, model="iq", specn="2")), RED)      # IQ quant, n > 1
         self.assertEqual(self.svc.value_color("net", p), "")
-        self.assertEqual(self.svc.value_color("ctx", dict(p, backend="mtplx")), "")
 
     def test_pending_init_from_config_and_the_running_server(self) -> None:
         p = self.svc.pending_init(ServerData(cmd=LLAMA_CMD, n_ctx=98304), self.store.load_config())
-        self.assertEqual((p["backend"], p["model"], p["cache"], p["ctx"], p["slots"], p["net"]),
-                         ("llama", "big", 2560, 98304, "2", "local"))
+        self.assertEqual((p["model"], p["cache"], p["ctx"], p["slots"], p["net"]),
+                         ("big", 2560, 98304, "2", "local"))
         self.assertEqual(p["temp"], "1.0")         # what runs wins over the profile's 0.6
         p2 = self.svc.pending_init(ServerData(), self.store.load_config())
         self.assertEqual((p2["model"], p2["temp"], p2["net"]), ("auto", "0.6", "auto"))
 
-    def test_defaults_for_keeps_backend_and_model(self) -> None:
+    def test_defaults_for_keeps_model_and_advanced(self) -> None:
         q = self.svc.defaults_for(dict(SCHEMA.defaults(), model="big", adv="shown", kv="q8_0", cache=8192))
         self.assertEqual((q["model"], q["adv"], q["kv"], q["cache"]), ("big", "shown", "q4_0", "auto"))
 
@@ -209,6 +180,25 @@ class ServiceTest(unittest.TestCase):
         saved = self.store.saved[-1]
         self.assertEqual(saved["llama"], {"cache_ram": 2560})
         self.assertEqual(saved["models"]["big"], {"kv": "q8_0", "temp": "0.6"})
+
+    def test_unreadable_catalogue_or_config(self) -> None:
+        """A catalogue / models.json that can't be read: no model is known, nothing raises."""
+        self.store.broken = "catalog.json: bad"
+        svc = service(self.store)
+        self.assertIsNone(svc.models.by_name("big"))
+        self.assertEqual(svc.models.error, "catalog.json: bad")
+        self.assertEqual(svc.resolved_model({"model": "auto"}), "auto")
+        p = svc.pending_init(ServerData(cmd=LLAMA_CMD, n_ctx=98304), self.store.load_config())
+        self.assertEqual(p["model"], "auto")
+        self.assertIn("unknown model", svc.fit_line(p)[1])
+        self.assertEqual(svc.recommended("big")[1], {})
+
+        class BadConfig(FakeStore):
+            def load_config(self) -> dict:
+                raise ValueError("config.json: llama.net: 'moon' is not one of auto, local, vm")
+        bad = BadConfig()
+        vals, _ = service(bad).recommended("big", with_config=True)     # the tune without the overrides
+        self.assertEqual(vals["kv"], "q4_0")
 
     def test_auto_model_and_max_ctx(self) -> None:
         self.assertEqual(self.svc.resolved_model({"model": "auto"}), "big")

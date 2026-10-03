@@ -1,6 +1,6 @@
 """Data the dashboard collects and shows, as types. Pure: no I/O.
 
-Server JSON (/slots, /props, the MTPLX snapshot) and carl.py's model records are
+Server JSON (/slots, /props) and carl.py's model records are
 untrusted dicts: read them with jdict / jlist / jnum / jint, which fall back to an
 empty or default value when a field has an unexpected type."""
 from __future__ import annotations
@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple, TypedDict, Union
 
 JSONDict = Dict[str, Any]
-TaskId = Union[int, str, None]      # llama.cpp: the slot's task number; MTPLX: the request id
+TaskId = Union[int, str, None]      # the slot's task number
 
 
 _CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]")
@@ -211,7 +211,6 @@ class ServerData:
     cmd: str = ""
     shape: Optional[Shape] = None
     health_ms: Optional[float] = None
-    backend: str = "llama"              # llama | mtplx
     slots: bool = False                 # llama.cpp's /slots answered
     slot_list: List[SlotInfo] = field(default_factory=list)
     n_ctx: int = 0
@@ -224,8 +223,6 @@ class ServerData:
     metrics: Dict[str, float] = field(default_factory=dict)        # /metrics without the llamacpp: prefix
     accepted_by_pos: Dict[int, float] = field(default_factory=dict)  # draft tokens accepted per position
     props: JSONDict = field(default_factory=dict)
-    mx: Optional[JSONDict] = None       # MTPLX /v1/mtplx/snapshot
-    flight: JSONDict = field(default_factory=dict)   # MTPLX: the active request of /v1/mtplx/flight
     pp_rate: Optional[float] = None     # prompt tokens read per second, live
     tg_rate: Optional[float] = None     # tokens generated per second, live
     system: SystemStats = field(default_factory=SystemStats)
@@ -233,5 +230,5 @@ class ServerData:
 
     @property
     def alias(self) -> str:
-        """The served model's name: llama.cpp's alias or MTPLX's model id ("" if unknown)."""
-        return str(self.props.get("model_alias") or jdict(self.mx).get("model_id") or "")
+        """The served model's name: llama.cpp's alias ("" if unknown)."""
+        return str(self.props.get("model_alias") or "")

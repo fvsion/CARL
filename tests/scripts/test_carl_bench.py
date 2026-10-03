@@ -1,8 +1,11 @@
-"""tools/carl_bench.py: parsing of real netstat / vm_stat / sysctl output."""
+"""tools/carl_bench.py: parsing of real netstat / vm_stat / sysctl output, the API key
+file it reads, and the repo-source corpus the long-context tools use."""
 from __future__ import annotations
 
 import os
+import tempfile
 import unittest
+from unittest import mock
 
 import _paths  # puts tools/ on sys.path
 import carl_bench as cb
@@ -64,6 +67,38 @@ class ParseTests(unittest.TestCase):
         c = cb.completion_from({"choices": [{"message": {"content": "ok"}}],
                                 "timings": {"prompt_n": 5}, "usage": {"prompt_tokens": 7}})
         self.assertEqual((c.content, c.timings.get("prompt_n"), c.usage.get("prompt_tokens")), ("ok", 5, 7))
+
+
+
+class KeyAndCorpusTests(unittest.TestCase):
+    def test_read_api_key_new_path_then_pre_1_2_fallback(self) -> None:
+        with tempfile.TemporaryDirectory() as home:
+            old = os.path.join(home, ".mtplx", "api-key")
+            os.makedirs(os.path.dirname(old))
+            with open(old, "w", encoding="utf-8") as f:
+                f.write(" oldkey \n")
+            env = {"HOME": home}
+            with mock.patch.dict(os.environ, env), mock.patch.dict(os.environ, {"API_KEY_FILE": ""}):
+                self.assertEqual(cb.read_api_key(), "oldkey")
+                new = os.path.join(home, ".config", "llm-deploy", "api-key")
+                os.makedirs(os.path.dirname(new))
+                with open(new, "w", encoding="utf-8") as f:
+                    f.write("newkey")
+                self.assertEqual(cb.read_api_key(), "newkey")
+                self.assertEqual(cb.read_api_key(old), "oldkey")
+            with mock.patch.dict(os.environ, {"HOME": home, "API_KEY_FILE": os.path.join(home, "none")}):
+                with self.assertRaisesRegex(SystemExit, "cannot read the API key file"):
+                    cb.read_api_key()
+
+    def test_repo_sources_is_this_repo_smallest_first(self) -> None:
+        files = cb.repo_sources()
+        self.assertIn("tools/carl_bench.py", files)
+        self.assertIn("host/serve-llama.sh", files)
+        self.assertTrue(all(p.split("/")[0] in cb.CORPUS_DIRS and p.endswith(cb.CORPUS_SUFFIXES) for p in files))
+        self.assertFalse(any("__pycache__" in p for p in files))
+        sizes = [len(t.encode()) for t in files.values()]
+        self.assertEqual(sizes, sorted(sizes))
+        self.assertGreater(sum(sizes), 4 * 65536)          # enough for a 64K-token haystack
 
 
 if __name__ == "__main__":

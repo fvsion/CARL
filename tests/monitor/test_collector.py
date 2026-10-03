@@ -1,5 +1,5 @@
-"""Turning server answers into a snapshot: /metrics, /slots, MTPLX's snapshot and flight, live
-rates, the log choice, and untrusted strings."""
+"""Turning server answers into a snapshot: /metrics, /slots, live rates, the log choice, and
+untrusted strings."""
 from __future__ import annotations
 
 import os
@@ -10,7 +10,7 @@ import unittest
 sys.dont_write_bytecode = True                                  # keep tools/ free of __pycache__
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "tools"))
 
-from monitor.collector import Sample, apply_mtplx, choose_log, live_rates, parse_metrics
+from monitor.collector import Sample, choose_log, live_rates, parse_metrics
 from monitor.model import ServerData, SlotInfo, clean, clean_json, flag, flag_int
 
 METRICS = """# HELP llamacpp:prompt_tokens_total Number of prompt tokens processed.
@@ -52,30 +52,6 @@ class RatesTest(unittest.TestCase):
         self.assertEqual(live_rates(ServerData(t=12.0, busy=False, task=5), Sample(5, 10.0, 0, 0)), (None, None))
 
 
-class MtplxTest(unittest.TestCase):
-    SNAP = {"context_window": 49152, "active_requests": 1,
-            "in_flight": [{"prompt_tokens": 12000, "request_id": "req-7",
-                           "prefill_state": {"tokens_done": 9000, "cached_tokens": 4000, "live_prefill_tok_s": 350.5}}]}
-
-    def test_prefill(self) -> None:
-        d = ServerData()
-        pp, tg = apply_mtplx(d, self.SNAP, {"active": [{"phase": "prefill"}]})
-        self.assertEqual((d.backend, d.n_ctx, d.busy, d.prompt, d.cached, d.processed, d.task),
-                         ("mtplx", 49152, True, 12000, 4000, 5000, "req-7"))
-        self.assertEqual((pp, tg), (350.5, None))
-
-    def test_decode(self) -> None:
-        d = ServerData()
-        snap = dict(self.SNAP, in_flight=[{"prompt_tokens": 12000}])
-        pp, tg = apply_mtplx(d, snap, {"active": [{"phase": "decode", "gen_tokens": 40, "tps_now": 22.5}]})
-        self.assertEqual((d.processed, d.decoded, pp, tg), (12000, 40, None, 22.5))
-
-    def test_idle_and_odd_shapes(self) -> None:
-        d = ServerData()
-        apply_mtplx(d, {"in_flight": "none", "active_requests": 0}, {"active": {"x": 1}})
-        self.assertEqual((d.backend, d.busy, d.prompt, d.flight), ("mtplx", False, 0, {}))
-
-
 class LogChoiceTest(unittest.TestCase):
     def test_log_file_console_and_latest(self) -> None:
         with tempfile.TemporaryDirectory() as home:
@@ -83,17 +59,14 @@ class LogChoiceTest(unittest.TestCase):
             console = os.path.join(home, ".console-8080.out")
             latest = os.path.join(home, "models/logs/llama-server-latest.log")
             d = ServerData(cmd=f"llama-server --log-file {log}", pid=1, etime="00:10")
-            self.assertEqual(choose_log(d, None, console, home, 0), log)             # not written yet, no console
-            self.assertEqual(choose_log(ServerData(cmd="llama-server"), None, console, home, 0), latest)
+            self.assertEqual(choose_log(d, None, console, home), log)             # not written yet, no console
+            self.assertEqual(choose_log(ServerData(cmd="llama-server"), None, console, home), latest)
             with open(console, "w") as f:
                 f.write("x")
-            self.assertEqual(choose_log(d, None, console, home, 0), console)         # empty / missing log: console
+            self.assertEqual(choose_log(d, None, console, home), console)         # empty / missing log: console
             with open(log, "w") as f:
                 f.write("0.00.000.001 I x\n")
-            self.assertEqual(choose_log(d, None, console, home, 0), log)
-            mx = ServerData(cmd="mtplx serve --port 8000", backend="mtplx", pid=1, etime="00:10")
-            self.assertEqual(choose_log(mx, None, console, home, os.path.getmtime(console)), console)
-            self.assertIsNone(choose_log(mx, None, console, home, os.path.getmtime(console) + 3600))   # older than the server
+            self.assertEqual(choose_log(d, None, console, home), log)
 
 
 class UntrustedTextTest(unittest.TestCase):

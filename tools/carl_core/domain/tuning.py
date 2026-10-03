@@ -259,6 +259,7 @@ class AutoTuner:
 
 
 # ---------------------------------------------------------------- the GPU-to-itself guard
+# mtplx stays although CARL no longer starts it: a leftover MTPLX server still holds a model.
 _MODEL_SERVER = re.compile(r"(^|/)(llama-server|mtplx|ollama|LM Studio)")
 
 

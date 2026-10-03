@@ -1,8 +1,9 @@
 """The settings schema, value validation and config.json (validation, migration, key paths).
 
-config.json sections: backend, llama (server-wide), models.<name> (per-model profile),
-mtplx, paths. Every value is validated against its SettingSpec; unknown keys are ignored
-with a warning so a newer config.json still loads in an older CARL.
+config.json sections: llama (server-wide), models.<name> (per-model profile), paths.
+Every value is validated against its SettingSpec; unknown keys are ignored with a warning
+so a newer config.json still loads in an older CARL. Keys of removed features (see
+REMOVED) are ignored too and disappear the next time the file is saved.
 """
 from __future__ import annotations
 
@@ -15,10 +16,15 @@ from .types import JsonObject, JsonValue, SettingValue, Settings
 SCHEMA = 1
 DEFAULT_MODELS_DIR = "~/models/gguf"
 CONFIG_COMMENT = ("CARL settings. Edit here or in the monitor's Settings tab. "
-                  "Sections: backend, llama, models.<name> (per-model profile), mtplx, paths. "
+                  "Sections: llama, models.<name> (per-model profile), paths. "
                   "Precedence: flags > environment > this file > Auto-tune > catalogue. "
                   "./carl.sh config show lists every key.")
-BACKENDS = ("llama", "mtplx")
+# Top-level keys of removed features: ignored on load (None = silently, else this warning)
+# and dropped on the next save. "backend" chose llama.cpp or MTPLX before 1.2.0.
+REMOVED: Dict[str, Optional[str]] = {
+    "backend": None,
+    "mtplx": "mtplx: MTPLX support was removed in CARL 1.2.0 (ignored; dropped when the settings are next saved)",
+}
 
 SettingType = Literal["int", "float", "intauto", "bool", "list", "choice", "str"]
 Number = Union[int, float]
@@ -95,21 +101,8 @@ LLAMA_KEYS: Dict[str, SettingSpec] = {
     "think_toggle": SettingSpec("bool", True, "THINK_TOGGLE"),
     "extra_args": SettingSpec("list", []),                  # passed to llama-server as-is
 }
-MTPLX_KEYS: Dict[str, SettingSpec] = {
-    "preset": _choice("grant", ("grant", "pocket")),
-    "context": _int(49152, 4096, 262144, "CONTEXT"),
-    "profile": _choice("sustained", ("sustained", "turbo", "stable"), "PROFILE"),
-    "depth": _int(2, 1, 4, "DEPTH"),
-    "kv_quant": _choice("off", ("off", "q8", "q4"), "KV_QUANT"),
-    "net": _choice("auto", NET_CHOICES, "NET"),
-    "host": _str("", "HOST"),
-    "scheduler": _str("", "SCHEDULER"),
-    "batching": _str("", "BATCHING"),
-    "prefill_chunk": _str("", "PREFILL_CHUNK"),
-    "ssd_cache": _str("", "SSD_CACHE"),
-}
 PATH_KEYS: Dict[str, SettingSpec] = {"models_dir": _str(DEFAULT_MODELS_DIR)}
-SECTIONS: Dict[str, Dict[str, SettingSpec]] = {"llama": LLAMA_KEYS, "mtplx": MTPLX_KEYS, "paths": PATH_KEYS}
+SECTIONS: Dict[str, Dict[str, SettingSpec]] = {"llama": LLAMA_KEYS, "paths": PATH_KEYS}
 
 
 def to_json(v: SettingValue) -> JsonValue:
@@ -172,14 +165,12 @@ def coerce(spec: SettingSpec, v: object, where: str) -> SettingValue:
 @dataclass
 class Config:
     """A validated config.json. Absent values mean "not set" (a lower layer decides)."""
-    backend: Optional[str] = None
     llama: Settings = field(default_factory=dict)
-    mtplx: Settings = field(default_factory=dict)
     paths: Settings = field(default_factory=dict)
     models: Dict[str, Settings] = field(default_factory=dict)
 
     def section(self, name: str) -> Settings:
-        return {"llama": self.llama, "mtplx": self.mtplx, "paths": self.paths}[name]
+        return {"llama": self.llama, "paths": self.paths}[name]
 
     def profile(self, model: str) -> Settings:
         """The per-model settings for one model ({} when there are none)."""
@@ -188,9 +179,7 @@ class Config:
     def to_json(self) -> JsonObject:
         """The dict form load_config() returns (schema first, empty sections left out)."""
         out: JsonObject = {"schema": SCHEMA}
-        if self.backend is not None:
-            out["backend"] = self.backend
-        for name in ("llama", "mtplx", "paths"):
+        for name in SECTIONS:
             sec = self.section(name)
             if sec:
                 out[name] = {k: to_json(v) for k, v in sec.items()}
@@ -228,10 +217,10 @@ def validate_config(raw: object) -> Tuple[Config, List[str]]:
     for key, val in raw.items():
         if key in ("schema", "_comment"):
             continue
-        if key == "backend":
-            if val not in BACKENDS:
-                raise ConfigError(f"backend: {val!r} is not llama or mtplx")
-            cfg.backend = str(val)
+        if key in REMOVED:
+            note = REMOVED[key]
+            if note:
+                warn.append(note)
         elif key in SECTIONS:
             cfg.section(key).update(_validate_section(val, SECTIONS[key], key, warn))
         elif key == "models":
@@ -250,13 +239,13 @@ def _env_to_key(keys: Mapping[str, SettingSpec]) -> Dict[str, str]:
     return {s.env: k for k, s in keys.items() if s.env}
 
 
-def migrate_env(llama_env: Mapping[str, str], mtplx_env: Mapping[str, str]) -> Optional[Config]:
-    """config.json from the old llama.env / mtplx.env KEY=value files (written by earlier
-    monitors). None when there is nothing to migrate or the old values are invalid."""
-    if not llama_env and not mtplx_env:
+def migrate_env(llama_env: Mapping[str, str]) -> Optional[Config]:
+    """config.json from the old llama.env KEY=value file (written by earlier monitors).
+    None when there is nothing to migrate or the old values are invalid."""
+    if not llama_env:
         return None
     raw: Dict[str, Dict[str, object]] = {}
-    env_llama, env_model, env_mx = _env_to_key(LLAMA_KEYS), _env_to_key(MODEL_KEYS), _env_to_key(MTPLX_KEYS)
+    env_llama, env_model = _env_to_key(LLAMA_KEYS), _env_to_key(MODEL_KEYS)
     model = llama_env.get("MODEL_NAME", "auto")
     profile: Dict[str, object] = {}
     for e, v in llama_env.items():
@@ -266,9 +255,6 @@ def migrate_env(llama_env: Mapping[str, str], mtplx_env: Mapping[str, str]) -> O
             raw.setdefault("llama", {})[env_llama[e]] = v
         elif e in env_model and model != "auto":   # per-model values need a named model
             profile[env_model[e]] = v
-    for e, v in mtplx_env.items():
-        if e in env_mx:
-            raw.setdefault("mtplx", {})[env_mx[e]] = v
     doc: Dict[str, object] = dict(raw)
     if profile:
         doc["models"] = {model: profile}

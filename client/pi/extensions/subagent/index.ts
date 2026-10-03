@@ -511,8 +511,8 @@ function agentListing(agents: AgentConfig[]): string[] {
 function delegationPrompt(agents: AgentConfig[]): { promptSnippet?: string; promptGuidelines?: string[] } {
 	const names = agents.map((a) => a.name);
 	if (!names.length) return {};
-	// "llm-deploy-coder" when the user already had their own agent called "coder"
-	const coder = names.find((n) => n === "coder") ?? names.find((n) => n === "llm-deploy-coder");
+	// "carl-coder" when the user already had their own agent called "coder" (client/configure.py)
+	const coder = names.find((n) => n === "coder") ?? names.find((n) => n === "carl-coder");
 	return {
 		promptSnippet: `subagent: hand a task to a specialist agent with its own fresh context (agents: ${names.join(", ")})`,
 		promptGuidelines: coder

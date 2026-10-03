@@ -35,7 +35,8 @@ def model(name: str, status: str = "downloaded", quant: str = "Q4_K_M", mtp: boo
 
 
 class FakeStore:
-    """ModelStore in memory. config holds config.json; saved collects every save."""
+    """ModelStore in memory. config holds config.json; saved collects every save. broken:
+    the catalogue / models.json can't be read (every model call raises it, like carl.py does)."""
 
     def __init__(self, models: Optional[List[ModelInfo]] = None, config: Optional[JSONDict] = None,
                  limit: int = 25 * GIB) -> None:
@@ -47,8 +48,14 @@ class FakeStore:
         self.limit = limit
         self.config_file = "/home/u/.config/llm-deploy/config.json"
         self.conf_dir = "/home/u/.config/llm-deploy"
+        self.broken: Optional[str] = None
+
+    def _check(self) -> None:
+        if self.broken:
+            raise ValueError(self.broken)
 
     def all_models(self) -> List[ModelInfo]:
+        self._check()
         return list(self.models)
 
     def find(self, name: str, models: List[ModelInfo]) -> Optional[ModelInfo]:
@@ -95,9 +102,11 @@ class FakeStore:
         self.saved.append(copy.deepcopy(cfg))
 
     def launch_model(self, cfg: JSONDict) -> str:
+        self._check()
         return "big"
 
     def catalog_default(self) -> str:
+        self._check()
         return "big"
 
     def models_dir(self) -> str:
