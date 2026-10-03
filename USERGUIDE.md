@@ -216,6 +216,7 @@ Each model is served under its own name, and the clients list it under the same 
 | A 24 GB Mac (or any Mac), uncensored and fast: the abliterated A3B | `./carl.sh llama --model heretic-35b-a3b-iq3` | `heretic-35b-a3b-iq3` |
 | A 24 GB Mac, uncensored 27B with subagents (2 × 96K) | `./carl.sh llama --model orcarouter-27b-iq3` | `orcarouter-27b-iq3` |
 | A 24 GB Mac, uncensored 27B, better quality (1 slot) | `./carl.sh llama --model orcarouter-27b-q3` | `orcarouter-27b-q3` |
+| **A 16 GB Mac** (auto fit's pick there), or 3-4 subagents at once on a small model | `./carl.sh llama --model qwen3.8-9b` | `qwen3.8-9b` |
 
 **Key points:**
 - CAUTION: **Only one model can run at a time.** Stop the current server before you start a different server. Two models do not fit in 36 GB, and the collision breaks the model that runs.
@@ -224,6 +225,8 @@ Each model is served under its own name, and the clients list it under the same 
 - **Stock vs abliterated:** the stock models (`qwen3.8-27b`, the 35B) keep their refusals. The orcarouter builds do not have refusals. Only `orcarouter-27b` has full measurements in CARL. The stock 27B has the same architecture and speed profile.
 - **Q3 vs Q4:** Q3 is 2.5–3.5 GB smaller, but its quality is lower (more slips in long agent sessions). Use Q3 if Q4 does not fit.
 - **IQ3:** the IQ3 builds are smaller again, and their quality is lower again. The IQ formats unpack more slowly on Metal. MTP helps them less, and 2 drafts make them slower. Thus, their tuned speculation is MTP + n-gram with 1 draft (REFERENCE.md, "IQ3 speculation"). Use IQ3 only if nothing larger fits.
+- **The 9B** (`qwen3.8-9b`, 5.8 GB) is empero-ai's community distillation of Qwen3.8 into a 9B (not an official Qwen release; Qwen publishes no 9B in the 3.8 line). It is the one catalogue model that fits a 16 GB Mac with 2 × 96K. It decodes at ~25 tok/s on an M2 Max: the Qwen3.6/3.8 hybrid layers are slow on Metal (llama-bench without CARL's flags agrees), so where the 35B-A3B IQ3 fits, that is faster and better, also for several subagents at once. Thinking is on / off only.
+- **More slots (3-4)** run more subagents at the same time. The Server panel offers 3 and 4 only when they fit this Mac with the model, window and KV cache you chose; CARL stops at 4 because each request slows down as more run at once (the 9B: 25 tok/s alone, 41 in total with 4, ~10 each; 8 would fit but ~6 each). Auto-tune's parallel step measures it for each model.
 - **Other models:** each `.gguf` in `~/models/gguf` is a model too. See [section 7](#7-downloading-and-adding-models).
 
 ### Router mode: switch models from OpenCode or Pi
@@ -515,6 +518,8 @@ CARL can't tell what a model is for from its file name, so a custom model starts
   `set` checks the whole card; a bad value prints `error: …` and exits with 1. Yes / no fields take `yes`, `no`, `true`, `false`, `on`, `off`. `pick_instead` also takes a JSON list (`'[{"model": "qwen3.8-27b", "when": "harder code"}]'`).
 - The card is saved in `~/.config/carl/models.json`, under the model (`card`). Deleting the model removes its card. A `pick_instead` entry whose model is gone later is left out.
 - **Catalogue models are read-only:** `e` and `card NAME set` say so. Their cards come from `host/catalog.json`.
+- **When the catalogue adds a model you had added yourself** (the same file in the models folder), the catalogue entry takes it over: its Auto-tune result and your `config.json` profile move to the catalogue name, your card for it no longer applies, and CARL says so once.
+- **thinking:** without a value in the card, CARL reads it from the GGUF header (a chat template with effort levels, or thinking on / off only); the edit form starts with that value.
 - After you save, the MODEL card, the role and tags in every model list, sort by quality and the filters use the card at once.
 
 ### Auto-tune
@@ -531,7 +536,8 @@ It does these steps. The model loads one time for each speculation mode.
 1. **Memory:** the largest context window that fits, with 1 slot and with 2 slots.
 2. **Speculation:** none, n-gram, and, if the file has an MTP head, MTP and MTP + n-gram with 1 and 2 drafts (`--quick`: the MTP modes with 1 draft only). N-gram alone uses 2 drafts, and also 1 when the file has no MTP head (n-gram is its only speculation then). Each mode writes prose, new code and a code re-emit, two times. The score is a weighted geometric mean (prose 0.4, code 0.4, re-emit 0.2). A mode with drafting must be 3% better than a simpler mode to win.
 3. **Prompt reading:** a cold read at 8K, 32K and 64K tokens (`--quick`: no 64K; `--long`: also 128K and 192K, as far as the model's window fits this Mac, with the decode speed after each read, and an estimate of the time before the deep reads start). From these, it calculates the time to read a full window. This gives the context zones of this Mac: a cold read of the full window in 3 min or less = fast (green), in 10 min or less = slow (yellow), more = very slow (red). The fast zone always includes 96K: CARL never shows 96K or less as slow.
-4. **Result:** q4_0 KV, the best speculation, the context window and the slots (2 if two windows fit).
+4. **Parallel requests** (not in `--quick`): the server stops, and `llama-batched-bench` measures the total decode and read speed with 1, 2, 3 and 4 requests at once (subagents working at the same time). The MODEL card shows it.
+5. **Result:** q4_0 KV, the best speculation, the context window and the slots (2 if two windows fit).
    - **The context is never less than 96K if 96K fits one slot.** Users need that much context to work.
    - Above 96K, Auto-tune keeps the catalogue window if a cold read of it is not worse than slow on this Mac and it fits. Otherwise, it selects the largest standard window in the fast zone (minimum 96K).
    - If 96K does not fit (for example `orcarouter-27b-q3` on a 24 GB Mac), it selects the largest standard window that fits.
@@ -636,7 +642,7 @@ Auto fit picks the best **stock** model that fits this Mac, for a goal:
 - **Stock only:** auto fit and every automatic default never pick an abliterated model. You pick those by hand. Models that you added (Hugging Face, the models folder) are candidates only when their [card](#cards-for-custom-models) switches `auto_fit` on (with a rank and an arch, and not abliterated): your rank is not measured. `./carl.sh download default` and the download offer only name catalogue models.
 - **Candidates (`llama.auto_fit`):** `catalogue` (default) = every catalogue model: it offers the download of the pick, and until then a start with `model auto` uses the best downloaded model that fits; `downloaded` = only the models on this Mac.
 - **Where it is used:** `llama.model = auto`, `./carl.sh download default`, the download offer of `./carl.sh` on a new Mac, the `auto` entry of the model list and the **Auto fit** panel in the Settings tab.
-- `./carl.sh fit` shows the pick for each goal and why each better-ranked model was passed over; `./carl.sh fit --ram 24` (or 16, 36, 64, ...) shows another Mac. The picks: 16 GB nothing fits; 24 GB `qwen3.6-35b-a3b-iq3` / `qwen3.8-27b-iq3` (everyday / hard code); 32 GB and up: `qwen3.6-35b-a3b` / `qwen3.8-27b` (on 32 GB only while VMware's network is down: with it up, CARL keeps 10 GiB for macOS and the VM and the everyday pick becomes the IQ3). All with 2 × 96K. Previews (`--ram`) estimate the GPU limit at 2/3 of RAM below 32 GB and 3/4 from 32 GB up; a real Mac reports its own limit.
+- `./carl.sh fit` shows the pick for each goal and why each better-ranked model was passed over; `./carl.sh fit --ram 24` (or 16, 36, 64, ...) shows another Mac. The picks: 16 GB `qwen3.8-9b` (both goals: no MoE build fits, so the everyday goal falls back to it); 24 GB `qwen3.6-35b-a3b-iq3` / `qwen3.8-27b-iq3` (everyday / hard code); 32 GB and up: `qwen3.6-35b-a3b` / `qwen3.8-27b` (on 32 GB only while VMware's network is down: with it up, CARL keeps 10 GiB for macOS and the VM and the everyday pick becomes the IQ3). All with 2 × 96K. Previews (`--ram`) estimate the GPU limit at 2/3 of RAM below 32 GB and 3/4 from 32 GB up; a real Mac reports its own limit.
 
 **A start over the GPU limit is refused.** `serve-llama.sh` (and so `./carl.sh llama` and the dashboard) checks the setup before the model loads. If it needs more than the GPU limit, it stops with what it needs against the limit, the largest window that fits, and auto fit's alternative. Expert override: `FIT_CHECK=0 ./carl.sh llama ...` (it may fail to load, or swap the Mac to a crawl).
 

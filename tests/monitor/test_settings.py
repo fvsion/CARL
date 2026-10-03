@@ -164,6 +164,14 @@ class ServiceTest(unittest.TestCase):
         p2 = self.svc.pending_init(ServerData(), self.store.load_config())
         self.assertEqual((p2["model"], p2["temp"], p2["net"]), ("auto", "0.6", "local"))
 
+    def test_slots_3_and_4_only_when_they_fit(self) -> None:
+        p = dict(SCHEMA.defaults(), adv="hidden", model="big")
+        choices = next(r for r in self.svc.rows(p) if r.key == "slots").choices
+        most = self.svc.max_slots(p)
+        self.assertEqual(choices, ["auto", "1", "2", "3", "4"][: 3 + max(most - 2, 0)])
+        tiny = SettingsService(self.svc.models, SCHEMA, "192.168.42.1", lambda: 1)   # nothing fits
+        self.assertEqual(next(r for r in tiny.rows(p) if r.key == "slots").choices, ["auto", "1", "2"])
+
     def test_defaults_for_keeps_model_and_advanced(self) -> None:
         q = self.svc.defaults_for(dict(SCHEMA.defaults(), model="big", adv="shown", kv="q8_0", cache=8192))
         self.assertEqual((q["model"], q["adv"], q["kv"], q["cache"]), ("big", "shown", "q4_0", "auto"))

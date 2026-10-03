@@ -4,7 +4,7 @@ Adapters in carl_core.adapters implement them; tests use in-memory fakes.
 """
 from __future__ import annotations
 
-from typing import Dict, List, Mapping, Optional, Protocol, Tuple
+from typing import Dict, List, Mapping, Optional, Protocol, Sequence, Tuple
 
 from .gguf import ModelShape
 from .types import HfRef, JsonObject, JsonValue
@@ -121,6 +121,11 @@ class TuneServer(Protocol):
 
     def count_tokens(self, text: str) -> Optional[int]:
         """Tokens in a text (None when the server can't tell)."""
+        ...
+
+    def parallel(self, counts: Sequence[int], prompt: int, gen: int, kv: str) -> Dict[int, Tuple[float, float]]:
+        """With the server stopped: {n: (decode tok/s, prompt tok/s)} in total for n requests at once,
+        each reading `prompt` tokens and writing `gen` (llama-batched-bench); {} when it can't run."""
         ...
 
 

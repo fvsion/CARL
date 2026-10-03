@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple, cast
 
 from .domain import cards
 from .domain.clientlist import client_list
@@ -109,7 +109,34 @@ class Carl:
 
     # ------------------------------------------------------------ models
     def all_models(self, cfg: Config) -> List[ModelInfo]:
-        return dm.build_models(self.load_catalog(), self.load_local(), self.models_dir(cfg), self.files, self.home)
+        cat, db, mdir = self.load_catalog(), self.load_local(), self.models_dir(cfg)
+        renames = dm.adoptions(cat, db, mdir, self.home)
+        if renames:
+            self.adopt(db, renames)
+        return dm.build_models(cat, db, mdir, self.files, self.home)
+
+    def adopt(self, db: LocalDb, renames: Dict[str, str]) -> None:
+        """A catalogue entry took over custom models: their records and config.json profiles
+        (and llama.model) move to the catalogue name, once, with a note on stderr."""
+        for note in dm.adopt(db, renames):
+            self.console.error(f"note: {note}")
+        self.save_local(db)
+        raw = self.stores.config.load()
+        if raw is None:
+            return
+        cfg = validate_config(migrate_config(raw)[0])[0]
+        changed = False
+        for old, new in renames.items():
+            if old in cfg.models:
+                prof = cfg.models.pop(old)
+                cfg.models.setdefault(new, prof)
+                changed = True
+            if cfg.llama.get("model") == old:
+                cfg.llama["model"] = new
+                changed = True
+        if changed:
+            self.save_config(cfg)
+            self.console.error("note: config.json now names them by their catalogue names")
 
     def find(self, name: str, models: List[ModelInfo]) -> Optional[ModelInfo]:
         return dm.find_model(models, name, self.expand(name))
@@ -257,11 +284,23 @@ class Carl:
         m, note, _ = self.auto_launch(models, cfg)
         return m, models, note
 
+    def with_thinking(self, m: ModelInfo) -> ModelInfo:
+        """A downloaded custom model without a card "thinking": its GGUF header says (a template
+        with effort levels, or thinking on / off only)."""
+        if m.get("thinking") or m.get("status") != "downloaded":
+            return m
+        shape = self.local_shape(m.get("path", ""))
+        if shape is None:
+            return m
+        out = cast(ModelInfo, dict(m))
+        out["thinking"] = "effort" if shape.get("effort_levels") else "on-off"
+        return out
+
     def client_models(self, cfg: Config) -> JsonObject:
         """The installed models for the OpenCode / Pi configs (domain/clientlist.py): each with
         its window per slot from its effective settings, and the model a start loads as the
         default (none when nothing can start)."""
-        models = self.all_models(cfg)
+        models = [self.with_thinking(m) for m in self.all_models(cfg)]
 
         def ctx_of(m: ModelInfo) -> int:
             ctx = self.effective_tune(m, cfg)[0].get("ctx")

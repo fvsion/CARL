@@ -749,6 +749,86 @@
       "hardware": "24 GB Macs and up",
       "uncensored": "Uncensored: the refusal behaviour was removed from the weights (abliteration), so it answers requests the stock model declines, e.g. security research and exploit analysis, red-team prompts, frank medical, legal or drug questions, mature fiction. It adds no knowledge or skill and keeps the stock model's mistakes; you are responsible for how you use it.",
       "rank": 5
+    },
+    {
+      "name": "qwen3.8-9b",
+      "label": "Qwen3.8 9B Distill · Q4_K_M",
+      "family": "qwen3.8-9b",
+      "arch": "dense",
+      "thinking": "on-off",
+      "params": "9B dense (distilled)",
+      "quant": "Q4_K_M",
+      "abliterated": false,
+      "mtp": true,
+      "min_ram_gb": 16,
+      "tested": true,
+      "summary": "The small one (5.8 GB): 16 GB Macs, or more subagents at once.",
+      "description": "empero-ai's Qwen3.8-9B-Distill: a community full-parameter distillation of Qwen3.8 (2.4T-A95B) into the Qwen3.5-9B hybrid architecture (Apache-2.0); not an official Qwen release (Qwen publishes no 9B in the 3.8 line). The publisher's Q4_K_M, with the MTP head. It thinks by default; thinking is on / off only (no effort levels). The hybrid layers decode slowly on Metal: ~25 tok/s on an M2 Max (llama-bench agrees: CARL's flags cost nothing), about half the 35B-A3B MoE, which reads only 3B parameters per token. Its small weights leave room for 2 x 96K on a 16 GB Mac, where no other catalogue model fits, or for 3-4 slots on larger Macs.",
+      "tune": {
+        "kv": "q4_0",
+        "ctx": 98304,
+        "slots": "auto",
+        "temp": 1.0,
+        "top_p": 0.95,
+        "top_k": 20,
+        "min_p": 0,
+        "presence": 0,
+        "spec": "draft-mtp,ngram-mod",
+        "spec_n": 1
+      },
+      "why": {
+        "kv": "q4_0 K and V: measured +16% cold prompt reading and ~2 GB less memory than q8_0 on the 35B, the same decode speed and 8/8 needle recall at 66K. Never mix K and V types: mixed q8_0/q4_0 reads prompts ~5x slower on Metal.",
+        "temp": "Qwen's thinking-mode recommendation: temperature 1.0, top_p 0.95, top_k 20, min_p 0. Clients that send their own values (OpenCode's no-thinking variant) win per request.",
+        "spec": "MTP + n-gram, n=1. Auto-tune on an M2 Max 32 GB (2026-10-03, llama.cpp 0.5.0, tok/s prose/code/re-emit): none 24.8/24.1/24.3, n-gram n=2 23.7/24.3/112.5, MTP n=1 24.9/24.1/27.7, MTP+n-gram n=1 25.8/25.8/103.7 (the best score). New text barely speeds up; re-emitting code does ~4x.",
+        "ctx": "96K per slot, the floor CARL keeps (agents need that much context). The model reads prompts at ~290 tok/s (8K) to ~256 (32K) here, so windows above 96K are slow to re-read.",
+        "slots": "auto: 2 slots when two windows fit (a 16 GB Mac fits 2 x 96K). For more subagents at once set 3-4 where they fit (Server panel): measured on an M2 Max (llama-batched-bench, 1K-token prompts) 25 / 29 / 41 tok/s in total with 1 / 2 / 4 requests at once, so 4 at once is 1.6x the throughput but ~10 tok/s each. 8 slots would fit, but each request falls to ~6 tok/s (45 in total): CARL stops at 4."
+      },
+      "ctx_zones": {
+        "good": 98304,
+        "slow": 131072,
+        "very_slow": 212992
+      },
+      "speed": {
+        "prose": 25.8,
+        "code": 25.8,
+        "edit": 103.7,
+        "machine": "M2 Max 32 GB",
+        "date": "2026-10-03",
+        "mode": "draft-mtp,ngram-mod n=1"
+      },
+      "measured": [
+        {
+          "machine": "M2 Max 32 GB",
+          "date": "2026-10-03",
+          "decode": "~25 tok/s new text, ~104 re-emitting (MTP+n-gram n=1); 29 / 41 tok/s in total with 2 / 4 requests at once",
+          "prefill": "~290 tok/s at 8K, ~256 at 32K"
+        }
+      ],
+      "hf": {
+        "repo": "empero-ai/Qwen3.8-9B-Distill-GGUF",
+        "revision": "760121cd70bb4c36b2b5ec58eb765e0df5987efe",
+        "file": "Qwen3.8-9B-Q4_K_M.gguf",
+        "sha256": "df13d66021cef676f82be74053220fd75af6bf2a6a7fb77f5222ab9e50744a7a",
+        "bytes": 5780090176
+      },
+      "rank": 6,
+      "role": "The small one: 16 GB Macs and more subagents at once",
+      "good_for": [
+        "chat & writing"
+      ],
+      "why_use": "The smallest good model (5.8 GB): 2 x 96K slots fit a 16 GB Mac, where no other catalogue model fits, and on larger Macs it leaves room for 3-4 slots of subagents.",
+      "trade_offs": "A community distillation, not an official Qwen model, and only 9B: weaker than the 27B and the 35B-A3B on hard tasks, not tested at length for agent coding. Slow for its size on Metal (~25 tok/s): where the 35B-A3B IQ3 fits it is faster and better, also for several subagents at once (46 to 66 tok/s with 1 to 4 at once).",
+      "pick_instead": [
+        {
+          "model": "qwen3.6-35b-a3b-iq3",
+          "when": "it fits (24 GB and up): faster and better, also for several subagents at once"
+        },
+        {
+          "model": "qwen3.8-27b-iq3",
+          "when": "hard code and you can wait"
+        }
+      ],
+      "hardware": "16 GB Macs (the one catalogue model that fits there with 2 x 96K); larger Macs for 3-4 slots"
     }
   ]
 }

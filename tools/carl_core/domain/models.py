@@ -8,7 +8,7 @@ for a custom model, defaults from its GGUF header) > built-in defaults.
 from __future__ import annotations
 
 import os
-from typing import Dict, List, Optional, Set, Tuple, cast
+from typing import Dict, List, Mapping, Optional, Set, Tuple, cast
 
 from .cards import apply_card
 from .errors import ConfigError
@@ -52,6 +52,39 @@ def expand_home(path: str, home: str) -> str:
     return home + path[1:] if path == "~" or path.startswith("~/") else path
 
 
+def adoptions(catalog: Catalog, db: LocalDb, models_dir: str, home: str) -> Dict[str, str]:
+    """Custom models a catalogue entry now names (the same file in the models folder):
+    {custom name: catalogue name}. The catalogue entry takes them over (adopt)."""
+    files = {local_file_name((m.get("hf") or {}).get("file", "")): m.get("name", "") for m in catalog.get("models", [])
+             if (m.get("hf") or {}).get("file")}
+    names = {m.get("name") for m in catalog.get("models", [])}
+    out: Dict[str, str] = {}
+    for name, e in db["models"].items():
+        path = expand_home(e.get("path", ""), home)
+        if name not in names and path and os.path.dirname(path) == models_dir and os.path.basename(path) in files:
+            out[name] = files[os.path.basename(path)]
+    return out
+
+
+def adopt(db: LocalDb, renames: Mapping[str, str]) -> List[str]:
+    """Move adopted custom models' Auto-tune results (and verification date) to their catalogue
+    name, unless it has its own, and drop the custom entries (their cards: the catalogue's
+    card applies now). Changes db; returns a note per model."""
+    notes = []
+    for old, new in renames.items():
+        e = db["models"].pop(old, None) or {}
+        target = db["models"].setdefault(new, {})
+        moved = [k for k in ("tune", "verified") if k in e and k not in target]
+        for k in moved:
+            target[k] = e[k]
+        if not target:
+            db["models"].pop(new)
+        notes.append(f"{old} is now the catalogue model {new}" + (f" (its {' and '.join(moved)} moved there)"
+                                                                     if moved else "")
+                     + ("; your card for it no longer applies: the catalogue's card does" if e.get("card") else ""))
+    return notes
+
+
 def build_models(catalog: Catalog, db: LocalDb, models_dir: str, files: ModelFolder, home: str) -> List[ModelInfo]:
     """Every model CARL knows: the catalogue, each custom download, then each other .gguf
     in the models folder (split parts and vision projectors left out). A custom model's
@@ -68,10 +101,13 @@ def build_models(catalog: Catalog, db: LocalDb, models_dir: str, files: ModelFol
                      "status": status_of(path, hf.get("bytes"), files), "local": db["models"].get(m.get("name", ""), {})})
         out.append(info)
     names = {m["name"] for m in out}
+    catalogue_files = set(seen_files)
     for name, e in db["models"].items():
         if name in names or not e.get("path"):
             continue
         path = expand_home(e.get("path", ""), home)
+        if os.path.dirname(path) == models_dir and os.path.basename(path) in catalogue_files:
+            continue                        # a catalogue entry names this file now (adoptions)
         if os.path.dirname(path) == models_dir:
             seen_files.add(os.path.basename(path))
         out.append(custom_entry(name, path, e, files))
@@ -102,7 +138,7 @@ def custom_defaults(shape: Optional[ModelShape]) -> Tuple[Settings, CustomInfo]:
         tune["spec"], tune["spec_n"] = "ngram-mod", 2
         return tune, info
     info = {"arch": "moe" if shape["experts"] else "dense", "mtp": bool(shape["nextn"]), "quant": shape["ftype"],
-            "ctx_train": shape["ctx_train"]}
+            "ctx_train": shape["ctx_train"], "thinking": "effort" if shape.get("effort_levels") else "on-off"}
     # MTP + n-gram at n=1 measured best on Q4 and IQ3 alike; without an MTP head, n-gram only
     tune["spec"], tune["spec_n"] = ("draft-mtp,ngram-mod", 1) if info["mtp"] else ("ngram-mod", 2)
     tune["ctx"] = min(CUSTOM_CTX, ctx_train(shape))

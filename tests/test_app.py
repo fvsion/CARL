@@ -53,6 +53,27 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual(w.carl.load_config(), cfg)
         self.assertEqual((len(w.config.saved), len(w.console.errors)), (1, 1))     # converted and said once
 
+    def test_a_catalogue_entry_adopts_the_custom_model_with_its_file(self) -> None:
+        """The catalogue gained an entry for a file the user had added: one model, under the
+        catalogue's name, with the user's Auto-tune result and config profile moved to it."""
+        tune = {"date": "2026-10-03", "settings": {"ctx": 65536}}
+        local = {"schema": 1, "models": {"mine": {"path": f"{MDIR}/Small-IQ3.gguf", "source": "hf", "tune": tune,
+                                                  "card": {"role": "my small one"}}}}
+        w = World(catalog(BIG, SMALL), files={f"{MDIR}/Small-IQ3.gguf": 10 * GIB}, local=local,
+                  config={"schema": 1, "llama": {"model": "mine"}, "models": {"mine": {"kv": "q8_0"}}})
+        names = [m.get("name") for m in w.carl.all_models(w.carl.load_config())]
+        self.assertEqual(names.count("small"), 1)
+        self.assertNotIn("mine", names)
+        db = w.local.doc
+        assert isinstance(db, dict)
+        self.assertEqual(db["models"], {"small": {"tune": tune}})
+        cfg = w.carl.load_config()
+        self.assertEqual((cfg.llama.get("model"), cfg.profile("small")), ("small", {"kv": "q8_0"}))
+        self.assertTrue(any("mine is now the catalogue model small" in e for e in w.console.errors))
+        n = len(w.console.errors)
+        w.carl.all_models(w.carl.load_config())
+        self.assertEqual(len(w.console.errors), n)                         # once
+
     def test_no_config_at_all(self) -> None:
         w = World(catalog(BIG, SMALL))
         self.assertEqual(w.carl.load_config(), Config())

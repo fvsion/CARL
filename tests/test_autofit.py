@@ -20,7 +20,8 @@ CATALOG = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 # 35B-A3B: 10 attention layers x 2 KV heads x 512 = 10240 KV elements per token (5.6 KiB at q4_0)
 # 27B:     16 attention layers x 4 KV heads x 512 = 32768 (18.0 KiB at q4_0)
 SHAPES = {"qwen3.6-35b-a3b": shape(experts=256, kv_elems=10240, rs_bytes=65863680),
-          "qwen3.8-27b": shape(experts=0, kv_elems=32768, rs_bytes=156893184)}
+          "qwen3.8-27b": shape(experts=0, kv_elems=32768, rs_bytes=156893184),
+          "qwen3.8-9b": shape(experts=0, kv_elems=16384, rs_bytes=52690944)}
 THIS_MAC_LIMIT = 26800603136                  # an M2 Max 32 GB: Metal's recommendedMaxWorkingSetSize (25.0 GiB)
 RESERVE, RESERVE_VM = 6 * GIB, 10 * GIB
 
@@ -47,7 +48,6 @@ class RealCatalogueTest(unittest.TestCase):
 
     # RAM GB -> (everyday pick, hard-code pick); None = nothing fits. All at 2 x 96K (q4_0).
     EXPECTED: Dict[int, Tuple[Optional[str], Optional[str]]] = {
-        16: (None, None),                                       # 10.0 GiB: not even the IQ3 weights fit
         24: ("qwen3.6-35b-a3b-iq3", "qwen3.8-27b-iq3"),        # 16.0 GiB
         32: ("qwen3.6-35b-a3b", "qwen3.8-27b"),                # 24.0 GiB (estimate, 3/4 like a real M2 Max): Q4 needs 23.3
         36: ("qwen3.6-35b-a3b", "qwen3.8-27b"),                # 27.0 GiB
@@ -111,11 +111,19 @@ class RealCatalogueTest(unittest.TestCase):
         self.assertIn("qwen3.6-35b-a3b (rank 3): not downloaded", [r.line() for r in start.rejected])
         self.assertIs(best_downloaded(start, cands), start)            # downloaded already: itself
 
-    def test_nothing_fits_lists_every_candidate(self) -> None:
+    def test_16gb_gets_the_9b_as_the_fallback(self) -> None:
         fit = auto_fit(real_catalogue(), mac(16), "everyday")
+        self.assertEqual((fit.name, fit.fallback), ("qwen3.8-9b", True))     # no MoE build fits 16 GB
+        self.assertEqual((fit.plan.slots, fit.plan.ctx) if fit.plan else None, (2, 98304))
+        hard = auto_fit(real_catalogue(), mac(16), "hard-code")            # 10.0 GiB: the one dense build that fits
+        self.assertEqual((hard.name, hard.fallback), ("qwen3.8-9b", False))
+
+    def test_nothing_fits_lists_every_candidate(self) -> None:
+        fit = auto_fit(real_catalogue(), mac(8), "everyday")
         self.assertIsNone(fit.pick)
         self.assertEqual([r.name for r in fit.rejected],
-                         ["qwen3.8-27b", "qwen3.8-27b-q3", "qwen3.6-35b-a3b", "qwen3.8-27b-iq3", "qwen3.6-35b-a3b-iq3"])
+                         ["qwen3.8-27b", "qwen3.8-27b-q3", "qwen3.6-35b-a3b", "qwen3.8-27b-iq3", "qwen3.6-35b-a3b-iq3",
+                          "qwen3.8-9b"])
         self.assertIn("no ranked stock model fits", fit.because())
         self.assertIn("nothing fits", fit.summary())
 

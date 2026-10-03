@@ -268,7 +268,9 @@ def card_model(v: View, d: ServerData) -> Card:
 
 def _log_counts(v: View) -> str:
     c = v.log.counts
-    return lv("log", f"{(RED + str(c['E']) + R) if c['E'] else 0} errors · {(YEL + str(c['W']) + R) if c['W'] else 0} warnings")
+    routine = f" {DIM}· {c['notice']} routine notices{R}" if c["notice"] else ""
+    return lv("log", f"{(RED + str(c['E']) + R) if c['E'] else 0} errors · {(YEL + str(c['W']) + R) if c['W'] else 0} "
+                     f"warnings{routine}")
 
 
 def _sleep_line(v: View, d: ServerData) -> str:

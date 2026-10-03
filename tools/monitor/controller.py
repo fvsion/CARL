@@ -653,12 +653,12 @@ class Controller:
             return
         values: JSONDict = dict(editable_card(cast(CoreModelInfo, m)))     # the same record, carl.py's type
         notes = {} if "label" in values else {"label": f"(the file name: {os.path.basename(m['path'])})"}
-        if m["status"] == "downloaded" and not ("arch" in values and "quant" in values):
+        if m["status"] == "downloaded" and not ("arch" in values and "quant" in values and "thinking" in values):
             try:
                 info = self.store.header_info(m["path"])
             except Exception:           # an unreadable header: the user fills them in
                 info = {}
-            for key in ("arch", "quant"):
+            for key in ("arch", "quant", "thinking"):
                 if key not in values and info.get(key) not in (None, "", "?"):
                     values[key] = info[key]
                     notes[key] = "(from the GGUF header)"

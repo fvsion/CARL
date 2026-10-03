@@ -60,5 +60,19 @@ class ParsersTest(unittest.TestCase):
                          [(101, 9437184, "/opt/homebrew/bin/llama-server"), (7, 120, "/System/Applications/LM Studio")])
 
 
+
+
+class BatchedBenchTest(unittest.TestCase):
+    def test_parse_the_table(self) -> None:
+        from carl_core.adapters.llama_server import parse_batched
+        text = """|    PP |     TG |    B |   N_KV |   T_PP s | S_PP t/s |   T_TG s | S_TG t/s |      T s |    S t/s |
+|-------|--------|------|--------|----------|----------|----------|----------|----------|----------|
+|  1024 |    128 |    1 |   1152 |    2.131 |   480.59 |    5.021 |    25.49 |    7.152 |   161.08 |
+|  1024 |    128 |    8 |   9216 |   28.402 |   288.43 |   22.740 |    45.03 |   51.141 |   180.21 |
+"""
+        self.assertEqual(parse_batched(text), {1: (25.49, 480.59), 8: (45.03, 288.43)})
+        self.assertEqual(parse_batched("no table"), {})
+
+
 if __name__ == "__main__":
     unittest.main()

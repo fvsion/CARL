@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import unittest
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 
 from support import GIB, shape
 from carl_core.domain import tuning as t
@@ -109,6 +109,10 @@ class FakeServer:
     def count_tokens(self, text: str) -> Optional[int]:
         return len(text) // 4
 
+    def parallel(self, counts: Sequence[int], prompt: int, gen: int, kv: str) -> Dict[int, Tuple[float, float]]:
+        self.stops += 1
+        return {n: (25.0 * (1 + 0.1 * (n - 1)), 480.0 / (1 if n == 1 else 1.6)) for n in counts}
+
 
 class Steps:
     def __init__(self) -> None:
@@ -148,6 +152,7 @@ class AutoTunerTest(unittest.TestCase):
         self.assertGreaterEqual(server.stops, 1)
         self.assertEqual(set(rec), {"date", "machine", "llama_cpp", "settings", "ctx_zones", "results", "max_ctx", "depth"})
         self.assertNotIn("decode_at_depth", rec["results"])
+        self.assertNotIn("parallel", rec["results"])                                   # quick: skipped
 
     def test_picks_less_than_96k_when_it_does_not_fit(self) -> None:
         rec = t.AutoTuner(FakeServer(self.SPEEDS), Steps()).run(plan(limit=int(15.45 * GIB)))
@@ -177,6 +182,8 @@ class LongTest(unittest.TestCase):
         for (got, _), want in zip(reads, (8192, 32768, 65536, 131072, 196608)):
             self.assertAlmostEqual(got, want, delta=64)
         self.assertEqual(len(rec["results"]["decode_at_depth"]), 5)
+        self.assertEqual([p[0] for p in rec["results"]["parallel"]], [1, 2, 3, 4])         # not quick: measured
+        self.assertTrue(any("decoding in total: 1 at once 25 tok/s" in x for x in steps.lines))
         self.assertEqual(server.started[-1][2], t.LONG_READ_CTX)            # the reading server holds 192K + room
         self.assertTrue(any("the deep reads (128K, 192K) take about" in x for x in steps.lines))
         self.assertEqual((rec["depth"], len(rec["results"]["speculation"])), ("long", 6))   # the default modes too

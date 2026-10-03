@@ -82,7 +82,7 @@ NET_AUTO_NOTE = ("llama.net: 'auto' was removed in CARL 1.3.0; the server now li
 MODEL_KEYS: Dict[str, SettingSpec] = {
     "kv": _choice("q4_0", ("q4_0", "q8_0", "f16"), "KV"),
     "ctx": _int(98304, 4096, 262144, "CTX"),
-    "slots": _choice("auto", ("auto", "1", "2", "3", "4"), "SLOTS"),
+    "slots": _choice("auto", ("auto", "1", "2", "3", "4"), "SLOTS"),    # 3-4: only where they fit (the start check)
     "spec": _choice("draft-mtp,ngram-mod", ("none", "draft-mtp", "ngram-mod", "draft-mtp,ngram-mod"), "SPEC"),
     "spec_n": _int(1, 1, 8, "SPEC_N"),
     "temp": _float(1.0, 0, 2, "TEMP"),

@@ -122,7 +122,7 @@ $(row "--model NAME|PATH" "a model name (see: models, fit) or a .gguf path. Defa
 $(row "--kv q4|q8" "KV cache quantization for K and V (default q4 = q4_0). --q4 / --q8 shorthands")
 $(row "--ctx N|Nk" "window per slot, 4k..256k (default 96k; 128k-160k for long sessions, slower: see REFERENCE.md). Re-run client/install.sh after changing it")
 $(row "--local | --vm" "listen on 127.0.0.1 (default) / on 192.168.42.1 for a VM client (see 'help env')")
-$(row "--slots N|auto" "parallel conversations (default auto = 2 if they fit, else 1). 2 = main session + a subagent, each with its own cache and the full --ctx window; KV memory x N")
+$(row "--slots N|auto" "parallel conversations, 1-4 (default auto = 2 if they fit, else 1). 2 = main session + a subagent; 3-4 = more subagents at once, where they fit. Each has its own cache and the full --ctx window: KV memory x N")
 $(row "--help-adv" "every llama-server flag (anything else you pass goes to llama-server)")
 $(row "-h, --help" "this page")
 

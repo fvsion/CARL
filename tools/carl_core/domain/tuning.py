@@ -46,6 +46,8 @@ TEST_CTX, TEST_CTX_QUICK = 69632, 36864    # the window benchmarks run with (64K
 LONG_READ_CTX = 200704                     # long mode's reads: 192K + room
 READ_ROOM = 2048                           # a read needs this much window beyond its prompt
 LONG_DECODE_TOKENS = 64                    # long mode: tokens generated after each read (decode at depth)
+PARALLEL_COUNTS = (1, 2, 3, 4)             # requests at once (default and long modes): up to CARL's 4 slots
+PARALLEL_PROMPT, PARALLEL_GEN = 512, 96
 STANDARD_WINDOWS = (32768, 49152, 65536, 98304, 131072, 163840)
 FALLBACK_WINDOW = 32768
 ZONE_SECONDS = {"good": 180, "slow": 600, "very_slow": 1200}   # cold read of a full window
@@ -246,7 +248,7 @@ class TunePlan:
         return speculation_modes(self.has_mtp, self.quick)
 
     def steps(self) -> int:
-        return 1 + len(self.modes()) + 2            # memory, each mode, prompt reading, result
+        return 1 + len(self.modes()) + 2 + (0 if self.quick else 1)    # memory, modes, reading, [parallel], result
 
 
 class AutoTuner:
@@ -313,6 +315,19 @@ class AutoTuner:
         self.progress.note(f"context zones (cold read of a full window): fast to {zones['good'] // 1024}K (3 min), "
                            f"slow to {zones['slow'] // 1024}K (10 min), very slow to {zones['very_slow'] // 1024}K (20 min)")
 
+        parallel: List[List[float]] = []
+        if not plan.quick:
+            self._next("parallel requests")
+            got_par = self.server.parallel(PARALLEL_COUNTS, PARALLEL_PROMPT, PARALLEL_GEN, TUNE_KV)
+            parallel = [[n, round(tg, 1), round(pp, 1)] for n, (tg, pp) in sorted(got_par.items())]
+            if parallel:
+                one = parallel[0][1] or 1.0
+                self.progress.note("decoding in total: " + " · ".join(
+                    f"{int(n)} at once {tg:.0f} tok/s ({tg / n:.1f} each)" for n, tg, _ in parallel)
+                    + f" · {parallel[-1][1] / one:.1f}x with {int(parallel[-1][0])}")
+            else:
+                self.progress.note("parallel requests: not measured (llama-batched-bench didn't run)")
+
         ctx = choose_ctx(plan.base_ctx, zones, m1)
         slots = "2" if need_bytes(shape, weights, ctx, 2, TUNE_KV) <= limit else "1"
         self._next("result")
@@ -320,6 +335,8 @@ class AutoTuner:
         results_out: TuneResults = {"speculation": results, "prompt_read": [[g, t] for g, t in reads]}
         if decodes:
             results_out["decode_at_depth"] = [[g, t] for g, t in decodes]
+        if parallel:
+            results_out["parallel"] = parallel
         return {"date": plan.date, "machine": plan.machine, "llama_cpp": plan.llama_cpp,
                 "settings": {"kv": TUNE_KV, "spec": spec, "spec_n": n, "ctx": ctx, "slots": slots},
                 "ctx_zones": zones,

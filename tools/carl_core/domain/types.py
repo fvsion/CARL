@@ -52,6 +52,7 @@ class _TuneResultsBase(TypedDict):
 
 class TuneResults(_TuneResultsBase, total=False):
     decode_at_depth: List[List[float]]      # long mode: (tokens read, decode tok/s after them)
+    parallel: List[List[float]]             # (requests at once, decode tok/s in total, prompt tok/s in total)
 
 
 class TuneRecord(TypedDict, total=False):
@@ -181,6 +182,7 @@ class CustomInfo(TypedDict, total=False):
     mtp: bool
     quant: str
     ctx_train: int
+    thinking: str           # on-off | effort (the chat template's)
 
 
 # [(file, bytes, sha256)] of a Hugging Face repo's GGUF files.

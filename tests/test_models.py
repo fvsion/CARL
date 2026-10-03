@@ -95,7 +95,7 @@ class CustomDefaultsTest(unittest.TestCase):
     def test_96k_for_dense_and_moe_capped_by_training(self) -> None:
         tune, info = dm.custom_defaults(shape(experts=0, nextn=1))
         self.assertEqual((tune["ctx"], tune["spec"], tune["spec_n"]), (98304, "draft-mtp,ngram-mod", 1))
-        self.assertEqual(info, {"arch": "dense", "mtp": True, "quant": "Q4_K_M", "ctx_train": 262144})
+        self.assertEqual(info, {"arch": "dense", "mtp": True, "quant": "Q4_K_M", "ctx_train": 262144, "thinking": "on-off"})
         self.assertEqual(dm.custom_defaults(shape(experts=128))[0]["ctx"], 98304)
         self.assertEqual(dm.custom_defaults(shape(ctx_train=32768))[0]["ctx"], 32768)
         self.assertEqual(dm.custom_defaults(shape(ctx_train=0))[0]["ctx"], 98304)

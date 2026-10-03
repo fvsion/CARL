@@ -90,6 +90,13 @@ class AppRouterTest(unittest.TestCase):
 
 
 class ClientListTest(unittest.TestCase):
+    def test_a_custom_models_thinking_comes_from_its_header(self) -> None:
+        sh = dict(shape(), effort_levels=True)
+        w = World(catalog(BIG, SMALL), files={f"{MDIR}/mine.gguf": GIB},
+                  shapes=FakeShapes(local={f"{MDIR}/mine.gguf": sh}))     # type: ignore[dict-item]
+        doc = w.carl.client_models(w.carl.load_config())
+        self.assertEqual([(m["id"], m["thinking"]) for m in doc["models"]], [("mine", "effort")])
+
     def test_only_downloaded_models(self) -> None:
         ms: list[ModelInfo] = [{"name": "a", "label": "A · Q4", "status": "downloaded", "thinking": "effort"},
                                {"name": "b", "status": "missing"},

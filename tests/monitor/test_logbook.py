@@ -35,6 +35,18 @@ ROUTER = """0.00.106.007 I srv  load_startup: (startup) loading model qwen3.6-35
 """
 
 
+class RoutineTest(unittest.TestCase):
+    def test_routine_warnings_are_notices(self) -> None:
+        book = LogBook()
+        for line in ("0.01.000.000 W srv          stop: cancel task, id_task = 70",
+                     "0.01.000.001 W srv  llama_server: notice: server default port will be changed to :9931 in a future release",
+                     "0.01.000.002 W slot create_check: id  1 | task 5 | erasing old context checkpoint (pos_min = 1)",
+                     "0.01.000.003 W srv  something unexpected happened",
+                     "0.01.000.004 E srv  send_error: task id = 9, error: boom"):
+            book.add(line)
+        self.assertEqual((book.counts["W"], book.counts["notice"], book.counts["E"]), (1, 3, 1))
+
+
 class RouterLogTest(unittest.TestCase):
     """A router's log: its model servers' lines lose the [PORT] prefix and move onto the router's
     clock; its forwarding lines (the dashboard's own polls) are not shown; loads are recorded."""
@@ -69,7 +81,8 @@ class LogBookTest(unittest.TestCase):
         self.assertEqual(self.book.current, {})
 
     def test_counts_and_errors(self) -> None:
-        self.assertEqual((self.book.counts["W"], self.book.counts["E"], self.book.counts["oom"]), (1, 1, 1))
+        self.assertEqual((self.book.counts["W"], self.book.counts["notice"], self.book.counts["E"], self.book.counts["oom"]),
+                         (0, 1, 1, 1))                         # the reasoning notice is routine
         self.assertEqual(len(self.book.errors), 1)
 
     def test_a_running_request(self) -> None:

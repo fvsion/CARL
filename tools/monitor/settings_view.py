@@ -83,6 +83,13 @@ def speed_line(m: ModelInfo, tune: object) -> str:
     return f"{DIM}not measured yet: run Auto-tune{R}"
 
 
+def parallel_text(par: object) -> str:
+    """Auto-tune's parallel step: total decode speed with n requests at once, and each one's."""
+    rows = [r for r in (par if isinstance(par, list) else []) if isinstance(r, list) and len(r) >= 2]
+    return "decoding in total: " + " · ".join(f"{int(r[0])} at once {float(r[1]):.0f} tok/s ({float(r[1]) / r[0]:.0f} each)"
+                                              for r in rows if r[0])
+
+
 def arrange_lines(sort: int, filt: int, w: int) -> List[CardLine]:
     """Compact sort / filter controls (a narrow list): "sort: quality ▾ 2/5", click for a drop-down."""
     so, fi = arrange_label(sort, filt)
@@ -313,6 +320,10 @@ class SettingsView:
         if m.get("thinking"):
             L.append(f"{B}{'Thinking':<11}{R}{CHOICE_TEXT.get(str(m['thinking']), str(m['thinking']))}")
         L += cwrap(f"{B}{'Speed':<11}{R}{speed_line(m, tune)}", tw, " " * 11)
+        par = jdict(jdict(tune).get("results")).get("parallel") or []
+        if par:
+            L += cwrap(f"{B}{'Parallel':<11}{R}{parallel_text(par)} {DIM}(measured here; more slots: Server panel){R}",
+                       tw, " " * 11)
         if lvl == 2:
             if m.get("uncensored"):
                 L += [""] + label_wrap("Uncensored", str(m["uncensored"]), tw, RED)
@@ -765,6 +776,9 @@ class SettingsView:
             if pr:
                 L += cwrap("  prompt reading: " + " · ".join(f"{int(n) // 1024}K at {tps:.0f} tok/s" for n, tps in pr),
                            tw, "  ")
+            par = jdict(t.get("results")).get("parallel") or []
+            if par:
+                L += cwrap(f"  {parallel_text(par)}", tw, "  ")
             dd = jdict(t.get("results")).get("decode_at_depth") or []
             if dd:
                 L += cwrap("  decoding after a read of: " + " · ".join(f"{int(n) // 1024}K {tps:.1f} tok/s" for n, tps in dd),

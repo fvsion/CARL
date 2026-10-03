@@ -12,7 +12,8 @@ import signal
 import subprocess
 import time
 import urllib.request
-from typing import Callable, Dict, Optional, Set
+import re
+from typing import Callable, Dict, Optional, Sequence, Set, Tuple
 
 from ..domain.errors import ConfigError
 from ..domain.types import JsonObject, JsonValue
@@ -21,6 +22,20 @@ START_TIMEOUT = 600          # a cold load of a large model from disk takes minu
 STOP_TIMEOUT = 60
 HEALTH_TIMEOUT = 2
 PORT_FREE_WAIT = 60
+PARALLEL_TIMEOUT = 1800      # llama-batched-bench: a dense 27B with 8 requests takes minutes
+# a llama-batched-bench table row: | PP | TG | B | N_KV | T_PP s | S_PP t/s | T_TG s | S_TG t/s | T s | S t/s |
+_BATCH_ROW = re.compile(r"^\|\s*(\d+)\s*\|\s*(\d+)\s*\|\s*(\d+)\s*\|\s*\d+\s*\|\s*[\d.]+\s*\|\s*([\d.]+)\s*\|"
+                        r"\s*[\d.]+\s*\|\s*([\d.]+)\s*\|")
+
+
+def parse_batched(text: str) -> Dict[int, Tuple[float, float]]:
+    """{requests: (decode tok/s, prompt tok/s)} from llama-batched-bench's table."""
+    out: Dict[int, Tuple[float, float]] = {}
+    for line in text.splitlines():
+        m = _BATCH_ROW.match(line.strip())
+        if m:
+            out[int(m.group(3))] = (float(m.group(5)), float(m.group(4)))
+    return out
 # Variables the launcher would take over from the caller's environment: the tune sets each
 # value itself (flags or below), so a value exported in the user's shell can't skew it.
 CLEARED_ENV = ("CTX", "KV", "KV_K", "KV_V", "MODEL", "ALIAS", "CACHE_RAM")
@@ -103,6 +118,18 @@ class LlamaServerControl:
         if not isinstance(t, dict):
             return {}
         return {k: float(v) for k, v in t.items() if isinstance(v, (int, float)) and not isinstance(v, bool)}
+
+    def parallel(self, counts: Sequence[int], prompt: int, gen: int, kv: str) -> Dict[int, Tuple[float, float]]:
+        """llama-batched-bench on the model (the server must be stopped: it loads the model itself)."""
+        self.stop()
+        argv = ["llama-batched-bench", "-m", self.model_path, "-c", str(max(counts) * (prompt + gen) + 1024),
+                "-b", "2048", "-ub", "512", "-npp", str(prompt), "-ntg", str(gen),
+                "-npl", ",".join(str(n) for n in counts), "-fa", "on", "-ctk", kv, "-ctv", kv, "-ngl", "999"]
+        try:
+            r = subprocess.run(argv, capture_output=True, text=True, timeout=PARALLEL_TIMEOUT)
+        except (OSError, subprocess.TimeoutExpired):
+            return {}
+        return parse_batched(r.stdout)
 
     def count_tokens(self, text: str) -> Optional[int]:
         try:

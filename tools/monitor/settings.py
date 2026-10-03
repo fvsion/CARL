@@ -66,7 +66,7 @@ class Schema:
             SettingRow("model", "model", None, "llama:model", "auto"),      # choices: the model list
             SettingRow("kv", "KV cache", ["q4_0", "q8_0"], "m:kv", "q4_0"),
             SettingRow("ctx", "context/slot", [32768, 49152, 65536, 98304, 131072, 163840, 196608, 262144], "m:ctx", 98304),
-            SettingRow("slots", "slots", ["auto", "1", "2"], "m:slots", "auto"),
+            SettingRow("slots", "slots", ["auto", "1", "2", "3", "4"], "m:slots", "auto"),   # 3-4 only where they fit (rows)
             SettingRow("spec", "speculation", ["none", "ngram-mod", "draft-mtp", "draft-mtp,ngram-mod"], "m:spec",
                        "draft-mtp,ngram-mod"),
             SettingRow("specn", "draft tokens", ["1", "2", "3"], "m:spec_n", "1"),
@@ -117,7 +117,9 @@ SET_HELP = {
              "uses the best downloaded one until then) · downloaded = only the models on this Mac.",
     "kv": "q4_0: less memory, the tested default · q8_0: more exact long-range recall, about 2x the KV memory",
     "ctx": "tokens per slot; green = fast cold reads on this Mac, yellow = slow, red = very slow (see the context zones)",
-    "slots": "auto = 2 when two full windows fit (main session + coder subagent), else 1",
+    "slots": "auto = 2 when two full windows fit (main session + coder subagent), else 1 · 3-4: more subagents at "
+             "once, offered only when they fit this Mac with this model, window and KV cache; together they decode "
+             "faster, each one slower (Auto-tune's parallel step measures it)",
     "spec": "speculative decoding: n-gram copies repeated text, MTP drafts with the model's own head; Auto-tune measures which wins",
     "specn": "draft tokens per speculation step; more is not faster on Metal for dense models",
     "cache": "RAM prompt cache in MiB: keeps evicted prompts so a session comes back without a full re-read",
@@ -302,10 +304,34 @@ class SettingsService:
         self._fit_key: Optional[Tuple[Tuple[str, str], ...]] = None
         self._fit: FitResult = (False, "")
         self._max: Dict[str, Tuple[float, Optional[int]]] = {}     # model -> (list time, largest window)
+        self._slots: Dict[Tuple[str, str, str], int] = {}           # (model, ctx, kv) -> most slots that fit
 
     def rows(self, p: Pending) -> List[SettingRow]:
-        """The rows shown for p (the model row offers every model)."""
-        return rows(p, self.schema, self.models.choices)
+        """The rows shown for p (the model row offers every model; the slots row 3 and 4 only when
+        they fit this Mac with the pending model, window and KV cache)."""
+        out = rows(p, self.schema, self.models.choices)
+        most = self.max_slots(p)
+        return [r._replace(choices=[c for c in (r.choices or []) if not str(c).isdigit() or int(str(c)) <= max(most, 2)])
+                if r.key == "slots" else r for r in out]
+
+    def max_slots(self, p: Pending) -> int:
+        """The most slots (up to 4) whose windows fit the GPU limit with these settings (2 when unknown);
+        cached per model, window and KV type (it reads the GGUF header)."""
+        key = (self.resolved_model(p), str(p.get("ctx")), str(p.get("kv")))
+        if key not in self._slots:
+            self._slots[key] = self._max_slots(p)
+        return self._slots[key]
+
+    def _max_slots(self, p: Pending) -> int:
+        m = self.models.by_name(self.resolved_model(p))
+        try:
+            if not m or m["status"] != "downloaded":
+                return 2
+            shape, w = self.store.shape_of(m["path"]), self.store.file_size(m["path"])
+            ctx, kv, limit = int(str(p["ctx"])), str(p["kv"]), self.gpu_limit()
+            return max([n for n in (1, 2, 3, 4) if need_bytes(shape, w, ctx, n, kv) <= limit] or [1])
+        except Exception:           # an unreadable header, a value that is not a number: no extra slots offered
+            return 2
 
     @staticmethod
     def goal_scope(p: Pending) -> Tuple[str, str]:
