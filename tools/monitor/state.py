@@ -6,6 +6,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Protocol, Tuple, Union
 
+from .card_form import CardForm
 from .cards import LEVEL_NAMES
 from .model import ModelInfo
 from .settings import Pending
@@ -127,6 +128,7 @@ class UIState:
     slist: bool = False             # Server panel: the model list beside the settings has the keys
     srow: int = 0                   # Server panel: the cursor in that list
     mfilter: int = 0                # model lists: index into arrange.FILTERS
+    card: Optional[CardForm] = None # Models panel: a custom model's card being edited (e)
     picker: Optional[Picker] = None
     confirm2: Optional[Confirm] = None
     text: Optional[TextPrompt] = None

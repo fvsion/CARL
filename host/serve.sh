@@ -14,6 +14,7 @@
 #   ./host/serve.sh models|download|verify   models (host/models.sh -> tools/carl.py)
 #   ./host/serve.sh tune NAME             auto-tune a model for this Mac (tools/carl-tune.py)
 #   ./host/serve.sh config ...            the settings file (tools/carl.py config)
+#   ./host/serve.sh card NAME [set|unset]  a model's card (tools/carl.py card)
 #
 # Binds to the vmnet8 host address (192.168.42.1) or 127.0.0.1, never 0.0.0.0:
 # with the macOS firewall off, 0.0.0.0 would expose the model on the LAN.
@@ -59,9 +60,11 @@ $(row "" "Any .gguf you put in ~/models/gguf also shows up as a model. In the da
 $(row "" "Settings (5) → ] Models panel → Add from Hugging Face (h)")
 $(row "verify [NAME...]" "re-check downloaded models' size and SHA-256 (no names: all of them)")
 $(row "delete NAME" "delete a downloaded model file")
+$(row "card NAME" "a model's card: what it is good for, why use it, rank. Custom models: yours, editable")
+$(row "" "(card NAME set FIELD VALUE | unset FIELD; or e in the dashboard's Models panel)")
 $(row "tune NAME [--quick]" "auto-tune a model for this Mac: speculation, context window, slots (~5-10 min)")
 $(row "config [show|set K V]" "the settings file ~/.config/carl/config.json (show lists every key)")
-$(row "help [TOPIC]" "this page, or: llama monitor fit models download verify env tuning")
+$(row "help [TOPIC]" "this page, or: llama monitor fit models card download verify env tuning")
 
 NETWORK (llama, and $CMD without arguments)
 $(row "--vm" "listen on 192.168.42.1 (VMware Fusion); fails if Fusion's network is down")
@@ -159,7 +162,7 @@ help_monitor() { exec python3 "$HERE/../tools/llama-monitor.py" --help; }
 
 help_models() {
   cat <<EOF
-models | download | verify | delete -- the catalogue (host/catalog.json), files in ~/models/gguf
+models | download | verify | delete | card -- the catalogue (host/catalog.json), files in ~/models/gguf
 
 USAGE
   $CMD models                    list models, sizes, download status, free disk
@@ -172,6 +175,19 @@ USAGE
              $CMD download hf:OWNER/REPO lists the repo's files. Or drop a .gguf into ~/models/gguf.
   Built-in models: host/catalog.json. Custom models and Auto-tune results: ~/.config/carl/models.json.
   $CMD delete NAME               delete a downloaded model file
+
+MODEL CARDS (what a model is good for)
+  $CMD card NAME                 show its card: catalogue models (read-only) or your card for a custom model
+  $CMD card NAME set FIELD VALUE   custom models: set one field, checked like the catalogue's cards
+  $CMD card NAME unset FIELD     remove one field
+  Fields: label, role (at most 60 characters), good_for (comma-separated: agent coding, hard code,
+  chat & writing, uncensored), why_use, trade_offs, hardware, abliterated (yes/no), uncensored (text;
+  abliterated models only), arch (dense|moe), quant, rank (1 = best), thinking (on-off|effort),
+  auto_fit (yes/no: auto fit may pick it; needs rank, arch and a stock model), pick_instead (MODEL=WHEN,
+  repeated, or a JSON list). Stored in ~/.config/carl/models.json. In the dashboard: Settings (5) →
+  ] Models panel → select the model → Edit card (e).
+    $CMD card my-model set good_for "agent coding,hard code"
+    $CMD card my-model set pick_instead qwen3.8-27b="harder code, when speed matters less"
   Env: MODELS_DIR (default ~/models/gguf; config.json paths.models_dir).
 EOF
 }
@@ -219,7 +235,7 @@ show_help() {
     llama) help_llama ;;
     monitor) help_monitor ;;
     fit) exec python3 "$HERE/../tools/llama-fit.py" --help ;;
-    models|download|verify|delete) help_models ;;
+    models|download|verify|delete|card) help_models ;;
     env) help_env ;;
     tuning) help_tuning ;;
     *) echo "no help topic '$1'" >&2; help_main; exit 2 ;;
@@ -267,7 +283,7 @@ LLAMA_PORT=8080
 # help, nor for a command that doesn't exist).
 case "${1:-}" in
   help|-h|--help|--help-adv|grant|pocket) ;;
-  ""|dashboard|--no-start|install|monitor|fit|models|config|tune|download|verify|delete|llama|-*) migrate_conf_dir ;;
+  ""|dashboard|--no-start|install|monitor|fit|models|config|card|tune|download|verify|delete|llama|-*) migrate_conf_dir ;;
 esac
 if [[ $# -eq 0 ]]; then
   # No arguments: the dashboard. Attach to a server that runs already (one model
@@ -318,6 +334,7 @@ case "$1" in
   fit) shift; exec python3 "$HERE/../tools/llama-fit.py" "$@" ;;
   models) shift; exec "$HERE/models.sh" list "$@" ;;
   config) shift; exec python3 "$HERE/../tools/carl.py" config "$@" ;;
+  card) shift; exec python3 "$HERE/../tools/carl.py" card "$@" ;;
   tune) shift; exec python3 "$HERE/../tools/carl-tune.py" "$@" ;;
   download|verify|delete) exec "$HERE/models.sh" "$@" ;;
   llama) shift ;;

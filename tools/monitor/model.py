@@ -130,6 +130,9 @@ class ModelInfo(TypedDict, total=False):
     hardware: str
     uncensored: str
     rank: int
+    # a custom model's card from models.json (the user's), joined in by carl.py
+    thinking: str           # on-off | effort
+    auto_fit: bool          # auto fit may pick it
 
 
 @dataclass

@@ -10,6 +10,7 @@ from __future__ import annotations
 import os
 from typing import Dict, List, Optional, Set, Tuple, cast
 
+from .cards import apply_card
 from .errors import ConfigError
 from .gguf import ModelShape, ctx_train
 from .hf import is_extra_part, local_file_name, model_name
@@ -53,7 +54,8 @@ def expand_home(path: str, home: str) -> str:
 
 def build_models(catalog: Catalog, db: LocalDb, models_dir: str, files: ModelFolder, home: str) -> List[ModelInfo]:
     """Every model CARL knows: the catalogue, each custom download, then each other .gguf
-    in the models folder (split parts and vision projectors left out)."""
+    in the models folder (split parts and vision projectors left out). A custom model's
+    card from models.json is joined into its record."""
     out: List[ModelInfo] = []
     seen_files: Set[str] = set()
     for m in catalog.get("models", []):
@@ -76,6 +78,11 @@ def build_models(catalog: Catalog, db: LocalDb, models_dir: str, files: ModelFol
     for fn in sorted(f for f in files.gguf_names(models_dir) if not is_extra_part(f)):
         if fn not in seen_files:
             out.append(custom_entry(model_name(fn), os.path.join(models_dir, fn), {"source": "file"}, files))
+    names = {m.get("name", "") for m in out}
+    for m in out:
+        card = (m.get("local") or {}).get("card") if m.get("custom") else None
+        if card:
+            apply_card(m, card, names)
     return out
 
 

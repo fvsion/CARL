@@ -31,6 +31,8 @@ CLI (./carl.sh models | download | verify use it through host/models.sh)
                                        (default: auto fit's pick for this Mac, everyday goal)
   carl.py launch-env [--model NAME|PATH] [--no-config]   KEY=value lines for serve-llama.sh
   carl.py config [show|path|get KEY|set KEY VALUE|unset KEY]   KEY like llama.net or models.NAME.ctx
+  carl.py card NAME [set FIELD VALUE... | unset FIELD]   a model's card (custom models: yours, editable;
+                                       catalogue models: read-only). FIELD like role, good_for, rank
 
 This module is also the public API of the monitor (tools/llama-monitor.py): the functions
 below take and return plain dicts. The logic lives in tools/carl_core.
@@ -45,6 +47,7 @@ import json  # noqa: E402
 from typing import Dict, List, Mapping, Optional, Sequence, Tuple  # noqa: E402
 
 from carl_core.app import Carl  # noqa: E402
+from carl_core.domain import cards as _cards  # noqa: E402
 from carl_core.domain import models as _dm  # noqa: E402
 from carl_core.domain.autofit import AutoFit as AutoFit, as_goal, as_scope  # noqa: E402
 from carl_core.domain.errors import ConfigError as ConfigError  # noqa: E402  (re-exported)
@@ -55,8 +58,8 @@ from carl_core.domain.launch import shell_lines as shell_lines  # noqa: E402
 from carl_core.domain.settings import (LLAMA_KEYS as _LLAMA, MODEL_KEYS as _MODEL,  # noqa: E402
                                        PATH_KEYS as _PATHS, SCHEMA as SCHEMA, SECTIONS as _SECTIONS, Config, SettingSpec,
                                        get_path, key_path, set_path, unset_path, validate_config as _validate)
-from carl_core.domain.types import (Catalog, CustomInfo, HfFileList, JsonObject, JsonValue, LocalDb,  # noqa: E402
-                                    ModelInfo, SettingSource, SettingValue, Settings, Zone)
+from carl_core.domain.types import (Catalog, CustomCard, CustomInfo, HfFileList, JsonObject, JsonValue,  # noqa: E402
+                                    LocalDb, ModelInfo, SettingSource, SettingValue, Settings, Zone)
 from carl_core.wiring import REPO as REPO, CarlPaths, build_carl  # noqa: E402
 
 _PATHS_NOW = CarlPaths.from_env(os.environ)
@@ -192,6 +195,22 @@ def launch_env(name: Optional[str] = None, use_config: bool = True) -> Tuple[Dic
     return app().launch_env(name, use_config)
 
 
+# ---------------------------------------------------------------- model cards
+def save_card(name: str, card: Mapping[str, object]) -> CustomCard:
+    """Check and store the user's card of a custom model (models.json); the card as stored.
+    Raises ConfigError for a catalogue model or a bad field."""
+    return app().save_card(name, dict(card))
+
+
+def set_card_field(name: str, key: str, args: Sequence[str]) -> CustomCard:
+    """One field of a custom model's card from command-line text (see cmd_card)."""
+    return app().set_card_field(name, key, args)
+
+
+def unset_card_field(name: str, key: str) -> CustomCard:
+    return app().unset_card_field(name, key)
+
+
 # ---------------------------------------------------------------- downloads
 def hf_files(repo: str, revision: str = "main") -> HfFileList:
     """[(file, bytes, sha256)] of the GGUF files in a Hugging Face repo (first parts only)."""
@@ -239,12 +258,16 @@ def cmd_list(models: List[ModelInfo]) -> None:
     for m in models:
         tuned = " [auto-tuned]" if (m.get("local") or {}).get("tune") else ""
         mark = " [default]" if m.get("name") == default else ""
+        about = (f"{m.get('role')} (your card)" if m.get("custom") and m.get("role") else m.get("summary", ""))
         print(f"{m.get('name', ''):28} {human(m.get('bytes', 0)):>8}  {m.get('status', ''):11} "
-              f"{m.get('source', ''):8} {m.get('summary', '')}{mark}{tuned}")
+              f"{m.get('source', ''):8} {about}{mark}{tuned}")
     d = app().models_dir(cfg)
     free = app().files.free_bytes(d)
     print(f"\ndir: {d}   free: {human(free) if free is not None else '?'}")
     print("download any GGUF: ./carl.sh download hf:OWNER/REPO/FILE.gguf   (files: ./carl.sh download hf:OWNER/REPO)")
+    if any(m.get("custom") for m in models):
+        print("describe a custom model (role, good for, rank, ...): ./carl.sh card NAME, or e in the dashboard's "
+              "Models panel")
 
 
 def cmd_config(argv: Sequence[str]) -> None:
@@ -301,6 +324,23 @@ def cmd_download(names: List[str]) -> int:
             raise ConfigError(f"unknown model '{n}' (see: ./carl.sh models)")
         ok = download(m, models_dir()) and ok
     return 0 if ok else 1
+
+
+def cmd_card(argv: Sequence[str]) -> None:
+    usage = "card NAME [set FIELD VALUE... | unset FIELD]"
+    name = _arg(argv, 0, usage)
+    sub = argv[1] if len(argv) > 1 else "show"
+    if sub == "set":
+        if len(argv) < 4:
+            raise ConfigError(f"usage: carl.py {usage}")
+        set_card_field(name, argv[2], argv[3:])
+    elif sub == "unset":
+        if len(argv) != 3:
+            raise ConfigError(f"usage: carl.py {usage}")
+        unset_card_field(name, argv[2])
+    elif sub != "show" or len(argv) > 2:
+        raise ConfigError(f"usage: carl.py {usage}")
+    print("\n".join(_cards.describe(_known(name))))
 
 
 GET_FIELDS = ("repo", "rev", "file", "sha256", "bytes", "alias", "spec", "notes", "name")
@@ -361,6 +401,8 @@ def main(argv: List[str]) -> int:
         print(shell_lines(env))
     elif cmd == "config":
         cmd_config(a)
+    elif cmd == "card":
+        cmd_card(a)
     elif cmd in ("-h", "--help", "help"):
         print(__doc__)
     else:

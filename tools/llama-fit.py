@@ -9,7 +9,8 @@ it needs and the largest context window that fits, per KV cache type.
   ./carl.sh fit --goal hard-code --scope downloaded   # auto fit's reasons for that goal / scope
 
 Auto fit picks the best ranked stock model (rank 1 = best: parameters and density, then
-quantization; abliterated models are only picked by hand) for a goal: everyday = the MoE
+quantization; abliterated models are only picked by hand; a custom model only when its card
+says auto_fit: ./carl.sh card NAME) for a goal: everyday = the MoE
 builds first (fast, usually sufficient), hard-code = the dense builds first (better at
 code and hard tasks, slower). It wants two 96K windows (main session + a subagent), else
 one, else the largest window of at least 32K, within the GPU limit and RAM less a reserve
@@ -168,6 +169,7 @@ class Row:
     abliterated: bool
     shape: Optional[ModelShape]
     status: str                      # "downloaded", "not downloaded", or why the header is unavailable
+    note: str = ""                   # a custom model's rank: from the user's card (in auto fit or not)
 
 
 def model_rows(models: List[ModelInfo]) -> List[Row]:
@@ -182,8 +184,10 @@ def model_rows(models: List[ModelInfo]) -> List[Row]:
             status = "downloaded" if m.get("status") == "downloaded" else "not downloaded"
         except (OSError, ValueError) as e:
             shape, status = None, str(e)[:40]
+        note = (f" · your card's rank (auto fit: {'on' if m.get('auto_fit') else 'off'})"
+                if m.get("custom") and isinstance(rank, int) else "")
         rows.append(Row(m.get("name", ""), m.get("bytes", 0), rank if isinstance(rank, int) else None,
-                        bool(m.get("abliterated")), shape, status))
+                        bool(m.get("abliterated")), shape, status, note))
     rows.sort(key=lambda r: (r.rank is None, r.rank or 0, r.name))
     return rows
 
@@ -250,7 +254,7 @@ def cmd_table(args: argparse.Namespace, limit: int, how: str) -> None:
         if args.ctx:
             nd = need_bytes(row.shape, row.size, args.ctx, slots, "q4_0")
             line += f"  {(GRN if nd <= limit else RED)}{nd / GIB:9.1f}G{R}"
-        print(line + f"  {DIM}{row.status}{' · abliterated' if row.abliterated else ''}{R}")
+        print(line + f"  {DIM}{row.status}{' · abliterated' if row.abliterated else ''}{row.note}{R}")
     print(f"\n{DIM}★ = an auto-fit pick · Raise the limit (resets at reboot; leave >= 6 GB for macOS):  "
           f"sudo sysctl iogpu.wired_limit_mb=<MB>{R}")
 

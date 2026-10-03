@@ -13,6 +13,7 @@ from typing import List, Optional, Sequence
 
 from . import cli, fsio, system
 from .api import Endpoint
+from .card_view import draw_form
 from .cards import View, status_of
 from .collector import Collector
 from .controller import Controller, Region
@@ -174,6 +175,8 @@ class App:
         try:
             if ui.sp == 0:
                 body = self.view.server(ui, self.ensure_pending(d), d, cols, height - 2, self.endpoint.port)
+            elif ui.sp == 1 and ui.card:
+                body = draw_form(ui.card, cols, height - 2)
             elif ui.sp == 1:
                 mdir = self.store.models_dir()
                 body = self.view.models(ui, cols, height - 2, ModelsDir(mdir, disk_free(mdir)))

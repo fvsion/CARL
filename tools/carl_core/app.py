@@ -6,8 +6,9 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 
+from .domain import cards
 from .domain import models as dm
 from .domain.autofit import (AutoFit, Budget, Candidate, Goal, Plan, Scope, as_goal, as_scope, auto_fit,
                              best_downloaded, candidate)
@@ -19,10 +20,10 @@ from .domain.hf import (commit_sha, download_url, gguf_files, local_file_name, m
 from .domain.launch import launch_env as build_launch_env
 from .domain.ports import (Clock, Console, Downloader, GpuLimit, HostMemory, HubClient, JsonDocument, LegacyEnv,
                            ModelFolder, ShapeReader)
-from .domain.records import parse_catalog, parse_local_db
+from .domain.records import parse_catalog, parse_custom_card, parse_local_db
 from .domain.settings import SCHEMA, Config, migrate_env, models_dir_setting, validate_config
-from .domain.types import (Catalog, CustomInfo, HfFileList, HfRef, LocalDb, ModelInfo, SettingSource, SettingValue,
-                           Settings)
+from .domain.types import (Catalog, CustomCard, CustomInfo, HfFileList, HfRef, LocalDb, ModelInfo, SettingSource,
+                           SettingValue, Settings)
 
 DOWNLOAD_HEADROOM = 5e9                    # free disk space to keep beyond the file
 
@@ -120,6 +121,45 @@ class Carl:
             header = self.custom_defaults(m.get("path", ""))[0]
         return dm.effective_tune(m, cfg, header)
 
+    # ------------------------------------------------------------ model cards
+    def card_model(self, name: str) -> Tuple[ModelInfo, List[ModelInfo]]:
+        """(the model, every model) for a card: by name, file name or path."""
+        models = self.all_models(self.load_config())
+        m = self.find(name, models)
+        if m is None:
+            raise ConfigError(f"unknown model '{name}' (see: ./carl.sh models)")
+        return m, models
+
+    def save_card(self, name: str, card: object) -> CustomCard:
+        """Check and store the user's card of a custom model in models.json (an empty card
+        removes it). Catalogue models are read-only."""
+        m, models = self.card_model(name)
+        key = m.get("name", "")
+        if not m.get("custom"):
+            raise ConfigError(f"{key} is a catalogue model: its card is read-only (host/catalog.json). "
+                              f"Cards can be edited for custom models only (Hugging Face downloads, files in the "
+                              f"models folder)")
+        checked = parse_custom_card(card, {x.get("name", "") for x in models}, f"{key}: card", key)
+        db = self.load_local()
+        entry = db["models"].setdefault(key, {})
+        entry.setdefault("path", m.get("path", ""))         # a file in the models folder: keep it a custom model
+        entry.setdefault("source", m.get("source", "file"))
+        if checked:
+            entry["card"] = checked
+        else:
+            entry.pop("card", None)
+        self.save_local(db)
+        return checked
+
+    def set_card_field(self, name: str, key: str, args: Sequence[str]) -> CustomCard:
+        """One field of a custom model's card from command-line text, checked and stored."""
+        m, _ = self.card_model(name)
+        return self.save_card(name, cards.set_field(cards.editable_card(m), key, args))
+
+    def unset_card_field(self, name: str, key: str) -> CustomCard:
+        m, _ = self.card_model(name)
+        return self.save_card(name, cards.unset_field(cards.editable_card(m), key))
+
     # ------------------------------------------------------------ auto fit
     def budget(self, ram_gb: Optional[float] = None, reserve_gb: Optional[float] = None) -> Budget:
         """What a model may use: on this Mac (GPU limit, RAM, the reserve for macOS + apps,
@@ -164,7 +204,7 @@ class Carl:
         the whole catalogue. When the headers can't be read (offline) and so nothing could
         be sized, the catalogue default (default_small when its weights alone don't fit)."""
         b = budget or self.budget()
-        cands = self.candidates(models)
+        cands = self.candidates([m for m in models if not m.get("custom")])     # what can be downloaded
         fit = auto_fit(cands, b, goal, "catalogue")
         if fit.pick:
             return fit.pick.name

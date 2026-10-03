@@ -6,8 +6,9 @@ CARL prioritises speed, so the goal decides the family first:
   everyday   the MoE builds (35B-A3B: fast, usually sufficient); a dense build only when
              no MoE build fits (said so in the result)
   hard-code  the dense builds (27B: better at code and hard tasks, slower); MoE as the fallback
-Only ranked stock models are candidates: abliterated models are picked by hand, and a model
-without a rank (a custom download today) can't take part until it has one.
+Only ranked stock models are candidates: abliterated models are picked by hand. A custom
+model takes part only when the user's card opts it in (auto_fit: a rank, an arch, stock):
+its rank is the user's word, not measured, so it never joins by default.
 
 Within the goal's family the passes are, in order (the first pass any candidate meets wins,
 the best rank within it):
@@ -65,12 +66,13 @@ class Candidate:
     weights: int
     shape: Optional[ModelShape]
     kv: str = "q4_0"
+    opted_in: bool = True           # a custom model: its card's auto_fit (catalogue models: always)
 
     @property
     def eligible(self) -> bool:
-        """A ranked stock model. Abliterated models are only ever picked by hand; a model
-        without a rank (custom downloads) needs one before it can take part."""
-        return self.rank is not None and not self.abliterated
+        """A ranked stock model. Abliterated models are only ever picked by hand; a custom
+        model only when its card opts it in."""
+        return self.rank is not None and not self.abliterated and self.opted_in
 
 
 def candidate(m: ModelInfo, shape: Optional[ModelShape]) -> Candidate:
@@ -80,7 +82,8 @@ def candidate(m: ModelInfo, shape: Optional[ModelShape]) -> Candidate:
     return Candidate(name=m.get("name", ""), arch=str(m.get("arch") or "").lower(),
                      rank=rank if isinstance(rank, int) and not isinstance(rank, bool) else None,
                      abliterated=bool(m.get("abliterated")), downloaded=m.get("status") == "downloaded",
-                     weights=int(m.get("bytes", 0)), shape=shape, kv=kv if isinstance(kv, str) else "q4_0")
+                     weights=int(m.get("bytes", 0)), shape=shape, kv=kv if isinstance(kv, str) else "q4_0",
+                     opted_in=not m.get("custom") or m.get("auto_fit") is True)
 
 
 @dataclass(frozen=True)

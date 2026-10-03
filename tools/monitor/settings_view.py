@@ -11,6 +11,7 @@ from typing import List, Mapping, Optional, Tuple
 from .fmt import (B, CYN, DIM, GRN, R, RED, YEL, CardLine, Ln, Row, bar, button_rows, buttons, ctx_label, cwrap,
                   draw_card, dur, fit, heading, home_short, indent, lv, merge_columns, size, vlen, wwrap)
 from carl_core.domain.autofit import GOAL_TEXT, SCOPE_TEXT, AutoFit, as_goal, as_scope
+from carl_core.domain.cards import CHOICE_TEXT
 
 from .model import ModelInfo, ServerData, jdict
 from .settings import (ADV_WARN, LLAMA_ADV, MODEL_ROW_KEYS, NOT_RUNNING, SET_HELP, UNMARKED, Pending,
@@ -291,7 +292,8 @@ class SettingsView:
         rec, src = svc.recommended(name)
         tune = jdict(m.get("local")).get("tune")
         tags = [m["arch"].upper() if m.get("arch") else None, m.get("quant"),
-                f"{RED}abliterated{R}" if m.get("abliterated") else None, "custom" if m.get("custom") else None,
+                f"{RED}abliterated{R}" if m.get("abliterated") else None,
+                ("custom · your card" if jdict(m.get("local")).get("card") else "custom") if m.get("custom") else None,
                 f"{GRN}tuned here {tune['date']}{R}" if tune else f"{DIM}catalogue tune{R}" if not m.get("custom") else f"{YEL}not tuned{R}"]
         role = str(m.get("role") or m.get("summary") or "")
         title_info = (f"{B}{m.get('label', name)}{R}  {CYN}{role}{R}  " + f"{DIM} · {R}".join(t for t in tags if t))
@@ -308,7 +310,9 @@ class SettingsView:
             if text:
                 L += label_wrap(label, text, tw, colour)
         if m.get("hardware"):
-            L.append(f"{B}{'Hardware':<11}{R}{m['hardware']}")
+            L += label_wrap("Hardware", str(m["hardware"]), tw)
+        if m.get("thinking"):
+            L.append(f"{B}{'Thinking':<11}{R}{CHOICE_TEXT.get(str(m['thinking']), str(m['thinking']))}")
         L += cwrap(f"{B}{'Speed':<11}{R}{speed_line(m, tune)}", tw, " " * 11)
         if lvl == 2:
             if m.get("uncensored"):
@@ -317,7 +321,11 @@ class SettingsView:
             if alts:
                 L += ["", f"{B}Pick instead{R}"]
                 L += [x for a in alts for x in cwrap(f"  {CYN}{a.get('model')}{R} {DIM}when{R} {a.get('when')}", tw, "    ")]
-            if m.get("rank"):
+            if m.get("rank") and m.get("custom"):
+                L += cwrap(f"{B}{'Quality':<11}{R}rank {m['rank']} {DIM}(your card, not measured: 1 = best, the catalogue "
+                           f"ranks 1-5; auto fit {'may pick it' if m.get('auto_fit') else 'leaves it out'}){R}",
+                           tw, " " * 11)
+            elif m.get("rank"):
                 L += cwrap(f"{B}{'Quality':<11}{R}rank {m['rank']} {DIM}(1 = best: parameters and density first, then "
                            f"quantization; speed is the reverse){R}", tw, " " * 11)
             desc = wwrap(m.get("description", ""), tw)
@@ -325,6 +333,9 @@ class SettingsView:
                 L += ["", *[f"{DIM}{x}{R}" for x in desc]]
         elif not good and m.get("summary"):                 # custom models: no card text, the summary
             L += [f"{CYN}{x}{R}" for x in wwrap(m["summary"], tw)]
+        if m.get("custom") and not jdict(m.get("local")).get("card"):
+            L += cwrap(f"{DIM}No card yet: press ] for the Models panel, select it and press e to say what it is good "
+                       f"for (or ./carl.sh card {name}).{R}", tw)
         L += ["", *cwrap(f"{B}Recommended for this model{R} {DIM}(Auto-tune > catalogue; yellow = yours differs){R}", tw)]
         cells = []
         for pk, lab in (("kv", "KV cache"), ("ctx", "context"), ("slots", "slots"), ("spec", "speculation"),
@@ -537,6 +548,11 @@ class SettingsView:
                 L += cwrap(lv("source", f"huggingface.co/{hf['repo']} · {hf.get('file')}"
                               + (f" @ {hf['revision'][:8]}" if hf.get("revision") else ""), 8), w - 4, " " * 8)
             L += cwrap(lv("file", home_short(m["path"], self.home), 8), w - 4, " " * 8)
+            if m.get("custom"):
+                has = bool(jdict(jdict(m.get("local")).get("card")))
+                L += cwrap(lv("card", f"{GRN}your card{R}{DIM} · press e to edit it{R}" if has else
+                              f"{YEL}none yet{R}{DIM}: press e to say what it is good for (role, tags, rank, ...){R}",
+                              8), w - 4, " " * 8)
             tune = jdict(m.get("local")).get("tune")
             if tune:
                 s = tune["settings"]
@@ -552,11 +568,14 @@ class SettingsView:
             acts += [("Verify (v)", "mverify"), ("Auto-tune (u)", "mtune"), ("Delete (x)", "mdelete")]
         elif m and m["status"] == "partial":
             acts.append(("Delete (x)", "mdelete"))
+        if m and m.get("custom"):
+            acts.append(("Edit card (e)", "medit"))
         acts.append(("Add from Hugging Face (h)", "mhf"))
         L += button_rows("", acts, w - 4)
         L += cwrap(f"{DIM}Press ↑ ↓ to select a model; Enter uses it in the Server panel, d downloads it, v verifies "
-                   f"it, u auto-tunes it, x deletes it, h adds a model from Hugging Face, c cancels a download. Any .gguf "
-                   f"in {home_short(mdir.path, self.home)} shows up here · free disk {size(mdir.free)}{R}", w - 4)
+                   f"it, u auto-tunes it, x deletes it, e edits a custom model's card, h adds a model from Hugging "
+                   f"Face, c cancels a download. Any .gguf in {home_short(mdir.path, self.home)} shows up here · free "
+                   f"disk {size(mdir.free)}{R}", w - 4)
         if ui.text:
             L += ["", *cwrap(f"{B}{ui.text.prompt}{R} {CYN}{ui.text.value}▏{R}  "
                              f"{DIM}(press Enter to look it up, Esc to cancel){R}", w - 4)]

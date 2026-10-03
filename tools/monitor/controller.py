@@ -6,10 +6,14 @@ import json
 import os
 import signal
 import time
-from typing import Callable, Dict, List, NamedTuple, Optional
+from typing import Callable, Dict, List, NamedTuple, Optional, cast
 
 from . import fsio, system
 from .api import FETCH_ERRORS, Endpoint
+from carl_core.domain.cards import editable_card
+from carl_core.domain.types import ModelInfo as CoreModelInfo
+
+from .card_form import CardForm
 from .clients import LABELS, config_text, fill_template, masked, served
 from .collector import SHAPE_ERRORS
 from .fmt import R, RED, home_short, size
@@ -17,24 +21,26 @@ from .jobs import ServerJobs
 from .keys import (BACKSPACE, DOWN, END, END_ALT, ENTER, ESC, LEFT, LEFTKEY, PGDN, PGUP, RIGHT, UP, WHEEL_DOWN,
                    WHEEL_UP, Click, split_mouse, strip_escapes)
 from .logtail import LogTail
-from .model import ModelInfo, ServerData, clean
+from .model import JSONDict, ModelInfo, ServerData, clean
 from .settings import NUMERIC, Pending, SettingsService, parse_typed, step_choice
 from .arrange import FILTERS, SORTS
 from .settings_view import SettingsView
-from .state import SUBPANELS, TABS, Confirm, Picker, TextPrompt, UIState
+from .state import SUBPANELS, TABS, Confirm, PickItem, Picker, TextPrompt, UIState
 from .store import ModelList
 
 TEMPLATES = {"opencode": "opencode/opencode.json", "pi": "pi/models.json"}     # client config templates in client/
 SETTINGS_ACTIONS = ("msort", "mfilter", "msort-", "mfilter-", "msortpick", "mfilterpick",
-                    "museit", "mdl", "mverify", "mdelete", "mdelyes", "mhf", "mcancel", "mtune", "mautodl",
+                    "museit", "mdl", "mverify", "mdelete", "mdelyes", "mhf", "mcancel", "mtune", "mautodl", "medit",
                     "tprev", "tnext", "tpick", "tquick", "trun", "tyes", "tcancel", "tclear")
 MODEL_KEYS = {"\r": "museit", "\n": "museit", "d": "mdl", "v": "mverify", "x": "mdelete", "h": "mhf", "c": "mcancel",
-              "u": "mtune", "s": "msort", "f": "mfilter",
+              "u": "mtune", "e": "medit", "s": "msort", "f": "mfilter",
               "S": "msort-", "F": "mfilter-"}
 ARRANGE_KEYS = {"s": "msort", "S": "msort-", "f": "mfilter", "F": "mfilter-"}   # every model list
 TUNE_KEYS = {"\r": "trun", "\n": "trun", RIGHT: "tnext", LEFTKEY: "tprev", "c": "tcancel", " ": "tquick"}
 SCROLL_KEYS = {UP: 1, DOWN: -1, PGUP: 10, PGDN: -10}
 PANEL_PASSTHROUGH = ("q", "Q", "\x03", "\t")       # keys the Models / Auto-tune panels leave to the app
+READ_ONLY = ("catalogue models are read-only: only custom models (Hugging Face downloads and files in the models "
+             "folder) have a card you can edit")
 
 
 class Region(NamedTuple):
@@ -108,7 +114,7 @@ class Controller:
     def do(self, action: str) -> None:
         """Run an action: a clicked region's or button's, or one a key stands for."""
         ui, d = self.ui, self.data
-        if action.startswith(("set", "sp:", "pick", "mrow:", "smodel:", "msortset:", "mfilterset:", "c2no")) \
+        if action.startswith(("set", "sp:", "pick", "mrow:", "smodel:", "msortset:", "mfilterset:", "c2no", "card")) \
                 or action in SETTINGS_ACTIONS:
             self.settings_action(action)
         elif action.startswith("level:"):
@@ -164,6 +170,10 @@ class Controller:
             return
         if act.startswith("sp:"):
             ui.sp = int(act[3:])
+            return
+        if act.startswith("card"):                      # the card edit form's rows and buttons
+            if ui.card:
+                self.card_button(act, ui.card)
             return
         # ---- models panel
         if act.startswith("mrow:"):
@@ -232,6 +242,9 @@ class Controller:
             return
         if act == "mtune" and m:
             ui.tune_model, ui.sp = m["name"], 2
+            return
+        if act == "medit" and m:
+            self.open_card(m)
             return
         # ---- auto-tune panel
         if act in ("tprev", "tnext"):
@@ -389,6 +402,8 @@ class Controller:
             self.jobs.start_download(f"hf:{ui.hf.repo}/{val}")
         elif pk.on_pick == "picktune":
             ui.tune_model = val
+        elif pk.on_pick == "pickcard" and ui.card:
+            ui.card.add_pick(str(val))
         elif pk.on_pick in ("picksort", "pickfilter"):
             self.set_arrangement("sort" if pk.on_pick == "picksort" else "filter", int(str(val)))
             if pk.reopen:                               # back to the model drop-down it came from
@@ -453,6 +468,8 @@ class Controller:
                     ui.confirm2 = None
                     break
             return True
+        if ui.card and ui.sp == 1:
+            return self.card_keys(rest)
         if rest in ("[", "]"):
             ui.sp = (ui.sp + (1 if rest == "]" else -1)) % len(SUBPANELS)
             return True
@@ -478,6 +495,121 @@ class Controller:
             self.open_model_picker()
             return True
         return False
+
+    # ------------------------------------------------------------ card edit mode
+    def open_card(self, m: ModelInfo) -> None:
+        """e on a model: the edit form for a custom model's card; a catalogue model's is read-only.
+        A card without arch / quant starts with what the GGUF header says."""
+        ui = self.ui
+        if not m.get("custom"):
+            ui.toast(READ_ONLY, 8)
+            return
+        values: JSONDict = dict(editable_card(cast(CoreModelInfo, m)))     # the same record, carl.py's type
+        notes = {} if "label" in values else {"label": f"(the file name: {os.path.basename(m['path'])})"}
+        if m["status"] == "downloaded" and not ("arch" in values and "quant" in values):
+            try:
+                info = self.store.header_info(m["path"])
+            except Exception:           # an unreadable header: the user fills them in
+                info = {}
+            for key in ("arch", "quant"):
+                if key not in values and info.get(key) not in (None, "", "?"):
+                    values[key] = info[key]
+                    notes[key] = "(from the GGUF header)"
+        ui.card = CardForm(m["name"], values, notes)
+
+    def card_keys(self, rest: str) -> bool:
+        """Keys of the card edit form. While a text is typed every key is text (Enter keeps it, Esc
+        drops it); else ↑↓ select, Enter edits, ← → / space change, x clears, s saves, Esc cancels.
+        True when the input was used here."""
+        ui = self.ui
+        f = ui.card
+        if f is None:
+            return False
+        if f.typing is not None:
+            if rest == ESC:
+                f.cancel_typing()
+                return True
+            text = strip_escapes(rest)              # arrow keys, bracketed-paste markers
+            for i, ch in enumerate(text):
+                if ch in ENTER and i == len(text) - 1:
+                    f.commit()
+                elif ch in ENTER or ch == "\t":
+                    f.type_text(" ")                # a pasted line break
+                elif ch in BACKSPACE:
+                    f.backspace()
+                elif ch.isprintable():
+                    f.type_text(ch)
+            return True
+        if rest == ESC:
+            self.close_card(f)
+        elif UP in rest or DOWN in rest:
+            f.move(-1 if UP in rest else 1)
+        elif RIGHT in rest or LEFTKEY in rest or rest == " ":
+            f.cycle(-1 if LEFTKEY in rest else 1)
+        elif rest in ENTER:
+            if f.enter():
+                self.open_card_picker(f)
+        elif rest == "x":
+            f.clear()
+        elif rest == "s":
+            self.save_card(f)
+        elif rest in ("[", "]"):
+            ui.toast("press s to save the card or Esc to cancel it first", 5)
+        else:
+            return rest not in PANEL_PASSTHROUGH and not rest.isdigit()
+        return True
+
+    def card_button(self, act: str, f: CardForm) -> None:
+        """A click in the form: a row selects it; Save, Cancel, Edit field, Clear field."""
+        if act.startswith("cardrow:"):
+            f.select(int(act[8:]))
+        elif act == "cardsave":
+            self.save_card(f)
+        elif act == "cardcancel":
+            if f.typing is not None:
+                f.cancel_typing()
+            else:
+                self.close_card(f)
+        elif act == "cardenter":
+            if f.typing is not None:
+                f.commit()
+            elif f.enter():
+                self.open_card_picker(f)
+        elif act == "cardclear" and f.typing is None:
+            f.clear()
+
+    def close_card(self, f: CardForm) -> None:
+        """Esc / Cancel: leave the form; nothing is saved."""
+        self.ui.card = None
+        self.ui.toast("card edit cancelled: nothing saved" if f.changed else "card edit closed", 5)
+
+    def open_card_picker(self, f: CardForm) -> None:
+        """The model drop-down for a new pick-instead entry (every model but this one)."""
+        items: List[PickItem] = [(m["name"], m) for m in self.visible_all() if m["name"] != f.model]
+        self.ui.picker = Picker("PICK INSTEAD: WHICH MODEL?", items, "pickcard",
+                                foot="Press ↑ ↓ to select the alternative and Enter to choose it (then type when it "
+                                     "is the better pick), Esc to go back to the card.")
+
+    def visible_all(self) -> List[ModelInfo]:
+        """Every model, in the lists' sort order (no filter)."""
+        return self.view.visible(self.ui.msort, 0)
+
+    def save_card(self, f: CardForm) -> None:
+        """s / Save: keep a text being typed, check and store the card; errors stay in the form.
+        The lists, the MODEL card, sort and filters read it at once."""
+        ui = self.ui
+        if not f.commit():
+            return
+        try:
+            self.store.save_card(f.model, f.card())
+        except Exception as e:      # carl.ConfigError (a rule the card breaks), models.json unwritable
+            msg, head = str(e), f"{f.model}: card: "
+            f.error = msg[len(head):] if msg.startswith(head) else msg
+            return
+        ui.card = None
+        self.models.get(refresh=True)
+        ui.mrow = next((i for i, x in enumerate(self.visible()) if x["name"] == f.model), ui.mrow)
+        ui.toast(f"card saved for {f.model}: the lists and its MODEL card show it", 6)
 
     def selected_key(self) -> str:
         """The key of the selected Server-panel row."""

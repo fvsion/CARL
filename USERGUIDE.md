@@ -405,6 +405,7 @@ CAUTION: Do not mix KV types (`KV_K=q8_0 KV_V=q4_0`). If you mix them, the serve
 ./carl.sh download hf:OWNER/REPO    # list the GGUF files of that repo
 ./carl.sh verify [NAME...]          # re-check the size and SHA-256 (no names: every downloaded model)
 ./carl.sh delete NAME               # delete a model file (and its partial download)
+./carl.sh card NAME                 # a model's card; custom models: card NAME set FIELD VALUE (see below)
 ```
 
 - The files go to `~/models/gguf/`. To use a different folder, set `MODELS_DIR`, or `paths.models_dir` in the settings file ([section 8](#the-settings-file)).
@@ -429,6 +430,7 @@ The Settings tab shows the description and the reasons next to the settings. The
 - CARL records these models in `~/.config/carl/models.json`. This file also holds the Auto-tune results for each model on this Mac.
 - **A custom model gets its first settings from its GGUF header:** q4_0 KV, 96K for each slot (less only if the model was trained for less), and MTP + n-gram (1 draft) if the file has an MTP head. Without an MTP head: n-gram only (2 drafts). These settings are a guess. Run [Auto-tune](#auto-tune) to measure better values.
 - To start it: `./carl.sh llama --model NAME`. A path to a `.gguf` also works.
+- **Give it a card** (what it is good for): see [Cards for custom models](#cards-for-custom-models) below.
 - Before you use it from the clients, examine the chat template of the model. The thinking options are different between model families. The server answers with the loaded model for all model names, but the client sends the thinking options of the entry that you select.
 
 **To add a model to the catalogue** (for everyone who uses this folder):
@@ -440,6 +442,42 @@ The Settings tab shows the description and the reasons next to the settings. The
 6. Add the model to `client/opencode/opencode.json` and `client/pi/models.json`.
 7. Copy the bundle to the shared folder.
 8. Run `install.sh` again in the VM.
+
+### Cards for custom models
+
+CARL can't tell what a model is for from its file name, so a custom model starts without a card: the lists show only "Custom model …", it has no "good for" tags (the use-case filters hide it), no rank (sort by quality puts it last) and no dense / MoE mark. You write its card, with the same fields and the same rules as the catalogue's cards:
+
+| Field | Value |
+|---|---|
+| `label` | the name the lists and the MODEL card show (default: the file name) |
+| `role` | a headline, at most 60 characters |
+| `good_for` | tags: `agent coding`, `hard code`, `chat & writing`, `uncensored` (`uncensored` only with `abliterated`) |
+| `why_use`, `trade_offs`, `hardware` | text: why to choose it, when to pick something else, which Macs it is for |
+| `abliterated` | yes / no: refusals removed (the **stock** filter hides it; auto fit never picks it) |
+| `uncensored` | text: what uncensored means for this model (abliterated models only) |
+| `arch` | `dense` or `moe` (the dense / MoE filters and auto fit's goals use it) |
+| `quant` | the quantization label, for example `Q4_K_M` |
+| `rank` | quality order, 1 = best (the catalogue's models are ranked 1–5); sort by quality uses it |
+| `thinking` | `on-off` (thinking on or off only) or `effort` (effort levels) |
+| `auto_fit` | yes / no (default no): auto fit may pick this model. It needs `rank` and `arch`, and a stock model. Your rank is not measured, so a custom model never takes part in auto fit unless you switch this on |
+| `pick_instead` | other models and when they are the better pick |
+
+- **In the dashboard:** Settings (5) → `]` Models panel → select the model → `e` (or **[ Edit card (e) ]**). The form has one row per field: ↑ ↓ select a field, Enter edits it (type the text; Enter keeps it, Esc drops it; paste works), ← → or space change a choice or tick a tag, `x` clears the field, and **+ add a model** under *pick instead* opens a list of models (then type when it is the better pick). `s` (or **[ Save ]**) checks the card and saves it; an error shows in the form, and nothing is saved until the card is valid. Esc cancels. When the card has no `arch` or `quant` yet, the form fills them in from the GGUF header.
+- **On the command line:**
+
+  ```bash
+  ./carl.sh card NAME                                   # show a model's card (catalogue or yours)
+  ./carl.sh card NAME set role "Fast local coder"
+  ./carl.sh card NAME set good_for "agent coding,hard code"
+  ./carl.sh card NAME set rank 4
+  ./carl.sh card NAME set pick_instead qwen3.8-27b="harder code" qwen3.6-35b-a3b="long chats"
+  ./carl.sh card NAME unset rank
+  ```
+
+  `set` checks the whole card; a bad value prints `error: …` and exits with 1. Yes / no fields take `yes`, `no`, `true`, `false`, `on`, `off`. `pick_instead` also takes a JSON list (`'[{"model": "qwen3.8-27b", "when": "harder code"}]'`).
+- The card is saved in `~/.config/carl/models.json`, under the model (`card`). Deleting the model removes its card. A `pick_instead` entry whose model is gone later is left out.
+- **Catalogue models are read-only:** `e` and `card NAME set` say so. Their cards come from `host/catalog.json`.
+- After you save, the MODEL card, the role and tags in every model list, sort by quality and the filters use the card at once.
 
 ### Auto-tune
 
@@ -554,7 +592,7 @@ Auto fit picks the best **stock** model that fits this Mac, for a goal:
 - **Quality** is the catalogue `rank` (1 = best): parameters and density first, then the quantization.
 - **The rule:** among the goal's family, the best rank that holds **two 96K windows** (the main session and a coder subagent); if none does, one 96K window; if none does, the largest window of at least 32K. If no build of the family fits, the best of the other family (it says so).
 - **Memory:** the smaller of the GPU limit and the RAM minus a reserve for macOS and apps (6 GiB; 10 GiB while VMware's network is up; `RESERVE_GB` / `--reserve-gb`).
-- **Stock only:** auto fit and every automatic default never pick an abliterated model. You pick those by hand. Models that you added (Hugging Face, the models folder) have no rank yet, so they are not candidates.
+- **Stock only:** auto fit and every automatic default never pick an abliterated model. You pick those by hand. Models that you added (Hugging Face, the models folder) are candidates only when their [card](#cards-for-custom-models) switches `auto_fit` on (with a rank and an arch, and not abliterated): your rank is not measured. `./carl.sh download default` and the download offer only name catalogue models.
 - **Candidates (`llama.auto_fit`):** `catalogue` (default) = every catalogue model: it offers the download of the pick, and until then a start with `model auto` uses the best downloaded model that fits; `downloaded` = only the models on this Mac.
 - **Where it is used:** `llama.model = auto`, `./carl.sh download default`, the download offer of `./carl.sh` on a new Mac, the `auto` row and the **Auto fit** key (`A`) in the Settings tab.
 - `./carl.sh fit` shows the pick for each goal and why each better-ranked model was passed over; `./carl.sh fit --ram 24` (or 16, 36, 64, ...) shows another Mac. The picks: 16 GB nothing fits; 24 GB `qwen3.6-35b-a3b-iq3` / `qwen3.8-27b-iq3` (everyday / hard code); 32 GB and up: `qwen3.6-35b-a3b` / `qwen3.8-27b` (on 32 GB only while VMware's network is down: with it up, CARL keeps 10 GiB for macOS and the VM and the everyday pick becomes the IQ3). All with 2 × 96K. Previews (`--ram`) estimate the GPU limit at 2/3 of RAM below 32 GB and 3/4 from 32 GB up; a real Mac reports its own limit.
@@ -619,6 +657,7 @@ The Settings tab (tab 5) has three panels: **Server**, **Models** and **Auto-tun
 - **`d`:** download. A progress bar shows the speed and the ETA, then the checksum check. `c` cancels; the partial file stays, and Download continues it.
 - **`v`:** verify the SHA-256 (about 1 min). **`x`:** delete the file (not the model that is loaded). **`u`:** open the Auto-tune panel for this model.
 - **`h`:** add from Hugging Face. Type `OWNER/REPO` (or a URL to a `.gguf`). A list of the GGUF files of the repo opens. Select one and push Enter to download it.
+- **`e`:** edit the card of a custom model (role, good-for tags, rank, ...; see [Cards for custom models](#cards-for-custom-models)). On a catalogue model, `e` says that its card is read-only.
 
 **Auto-tune panel:**
 - Select a model with ← → (or click its name for a list). Only downloaded models are in the list. Click the **quick** box for the quick mode.
@@ -836,7 +875,7 @@ python3 -m unittest discover -s tests/monitor -t tests/monitor   # the dashboard
 | `./carl.sh --no-start` (or `dashboard`) | the dashboard only: attach to a server, or open it offline (no model loads) |
 | `./install.sh --host ADDR --key-file FILE` | connect the clients to that address, with the key from a file (`--key KEY` also works) |
 | `./carl.sh llama --slots 1` / `--slots 2` | one conversation / main session and a subagent (default: auto = 2 when they fit) |
-| `./carl.sh help [COMMAND]` | help for one command: llama, monitor, fit, models, download, verify, env, tuning |
+| `./carl.sh help [COMMAND]` | help for one command: llama, monitor, fit, models, card, download, verify, env, tuning |
 | `./carl.sh --model NAME\|PATH` | a different model (catalogue, models folder or Hugging Face download) or a `.gguf` path |
 | `./carl.sh --kv q8` / `--q8` / `--q4` | KV cache type |
 | `./carl.sh --ctx 192k` | context window |
@@ -849,6 +888,7 @@ python3 -m unittest discover -s tests/monitor -t tests/monitor   # the dashboard
 | `./carl.sh delete NAME` | delete a downloaded model file |
 | `./carl.sh tune NAME [--quick]` | Auto-tune a model for this Mac: speculation, context window, slots (~5–10 min; stop the server first) |
 | `./carl.sh config [show\|path\|get KEY\|set KEY VALUE\|unset KEY]` | the settings file `~/.config/carl/config.json`; KEY like `llama.net` or `models.NAME.ctx` |
+| `./carl.sh card NAME [set FIELD VALUE\|unset FIELD]` | a model's card; custom models: set or remove one field of your card ([Cards for custom models](#cards-for-custom-models)) |
 | `./host/models.sh list\|download\|verify\|delete NAME\|path NAME\|get NAME FIELD\|default\|downloaded` | the models tool (a wrapper around `tools/carl.py`; `./carl.sh models\|download\|verify\|delete` use it): list, download, verify, delete, the local path, one field, the default model for this Mac, the downloaded models |
 | `./carl.sh -h` | print the help: overview of all commands; `<command> -h` for one command |
 | `./carl.sh --help-adv` | all `llama-server` flags |

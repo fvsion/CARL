@@ -41,6 +41,7 @@ class ModelStore(Protocol):
     def parse_hf(self, spec: str) -> Tuple[str, Optional[str], Optional[str]]: ...
     def hf_files(self, repo: str) -> List[HFFile]: ...
     def delete(self, m: ModelInfo) -> None: ...
+    def save_card(self, name: str, card: JSONDict) -> None: ...
 
 
 class CarlStore:
@@ -135,6 +136,10 @@ class CarlStore:
 
     def delete(self, m: ModelInfo) -> None:
         self._carl.delete(m)
+
+    def save_card(self, name: str, card: JSONDict) -> None:
+        """Check and store a custom model's card (carl.ConfigError says what is wrong)."""
+        self._carl.save_card(name, card)
 
 
 class ModelList:

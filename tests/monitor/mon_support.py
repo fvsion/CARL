@@ -11,6 +11,9 @@ sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "tools"))
 
 from carl_core.domain.autofit import AutoFit, Budget, Candidate, Plan  # noqa: E402
+from carl_core.domain.cards import apply_card  # noqa: E402
+from carl_core.domain.errors import ConfigError  # noqa: E402
+from carl_core.domain.records import parse_custom_card  # noqa: E402
 from monitor.model import JSONDict, ModelInfo, Shape  # noqa: E402
 from monitor.store import HFFile, ModelList  # noqa: E402
 
@@ -35,6 +38,13 @@ def model(name: str, status: str = "downloaded", quant: str = "Q4_K_M", mtp: boo
             "hf": {"repo": "o/r", "file": f"{name}.gguf"}}
 
 
+def custom(name: str, size: int = 5 * GIB) -> ModelInfo:
+    """A model from the models folder (no card, no catalogue fields)."""
+    return {"name": name, "label": f"{name}.gguf", "source": "file", "path": f"/m/{name}.gguf", "bytes": size,
+            "status": "downloaded", "summary": "Custom model (found in the models folder)", "description": "",
+            "tune": {}, "local": {"source": "file"}, "why": {}, "hf": {}, "custom": True}
+
+
 class FakeStore:
     """ModelStore in memory. config holds config.json; saved collects every save. broken:
     the catalogue / models.json can't be read (every model call raises it, like carl.py does)."""
@@ -45,6 +55,7 @@ class FakeStore:
                                                         model("nomtp", mtp=False), model("remote", status="missing")]
         self.config: JSONDict = config if config is not None else {"schema": 1}
         self.saved: List[JSONDict] = []
+        self.cards: Dict[str, JSONDict] = {}            # save_card: the user's cards, joined in by all_models
         self.deleted: List[str] = []
         self.limit = limit
         self.config_file = "/home/u/.config/carl/config.json"
@@ -60,7 +71,23 @@ class FakeStore:
 
     def all_models(self) -> List[ModelInfo]:
         self._check()
-        return list(self.models)
+        out: List[ModelInfo] = []
+        names = {m["name"] for m in self.models}
+        for m in self.models:
+            if m["name"] in self.cards:
+                m = copy.deepcopy(m)
+                m["local"] = dict(m.get("local") or {}, card=self.cards[m["name"]])
+                apply_card(m, self.cards[m["name"]], names)
+            out.append(m)
+        return out
+
+    def save_card(self, name: str, card: JSONDict) -> None:
+        """Like carl.save_card: catalogue models are refused, the card is checked by the domain."""
+        m = next(x for x in self.models if x["name"] == name)
+        if not m.get("custom"):
+            raise ConfigError(f"{name} is a catalogue model: its card is read-only (host/catalog.json)")
+        self.cards[name] = dict(parse_custom_card(copy.deepcopy(card), {x["name"] for x in self.models},
+                                                  f"{name}: card", name))
 
     def find(self, name: str, models: List[ModelInfo]) -> Optional[ModelInfo]:
         return next((m for m in models if m["name"] == name or os.path.basename(m["path"]) == name), None)
@@ -84,6 +111,8 @@ class FakeStore:
 
     def header_info(self, path: str) -> JSONDict:
         m = next(x for x in self.models if x["path"] == path)
+        if m.get("custom"):
+            return {"arch": "moe", "mtp": False, "quant": "Q4_K_M"}
         return {"mtp": m.get("mtp"), "quant": m.get("quant")}
 
     def shape_of(self, path: str) -> Shape:

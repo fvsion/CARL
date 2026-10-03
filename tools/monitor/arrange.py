@@ -18,7 +18,7 @@ SORTS: Tuple[str, ...] = ("downloaded first", "quality", "speed", "size", "name"
 FILTERS: Tuple[str, ...] = ("all", "agent coding", "hard code", "chat & writing", "uncensored", "stock",
                             "dense", "MoE", "downloaded", "fits this Mac")
 USE_CASES = ("agent coding", "hard code", "chat & writing", "uncensored")
-UNRANKED = 99                     # custom models and Hugging Face downloads have no catalogue rank
+UNRANKED = 99                     # no rank: a custom model whose card (yet) has none
 MIN_FIT = 32768                   # "fits this Mac": at least a 32K window with 1 slot
 
 

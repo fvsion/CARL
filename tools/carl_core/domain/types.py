@@ -73,6 +73,7 @@ class LocalEntry(TypedDict, total=False):
     tune: TuneRecord
     verified: str
     added: str
+    card: "CustomCard"
 
 
 class LocalDb(TypedDict):
@@ -84,6 +85,27 @@ class PickInstead(TypedDict):
     """A nearby alternative on a model card: which model, and when it is the better pick."""
     model: str
     when: str
+
+
+class CustomCard(TypedDict, total=False):
+    """The user's card for a custom model (models.json models.NAME.card): the catalogue's card
+    fields plus what CARL can't know about a file it did not ship. thinking: "on-off" (thinking
+    on or off only) or "effort" (effort levels); auto_fit: the user lets auto fit pick it (it
+    needs a rank, an arch and a stock model)."""
+    label: str
+    role: str
+    good_for: List[str]
+    why_use: str
+    trade_offs: str
+    hardware: str
+    uncensored: str
+    abliterated: bool
+    arch: str
+    quant: str
+    rank: int
+    pick_instead: List[PickInstead]
+    thinking: str
+    auto_fit: bool
 
 
 class CatalogEntry(TypedDict, total=False):
@@ -133,6 +155,8 @@ class ModelInfo(CatalogEntry, total=False):
     status: Status
     local: LocalEntry
     custom: bool
+    thinking: str           # custom models: from the user's card
+    auto_fit: bool
 
 
 class CustomInfo(TypedDict, total=False):
