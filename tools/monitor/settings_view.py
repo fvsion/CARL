@@ -17,11 +17,11 @@ from carl_core.domain.tuning import DEPTH_TEXT, DEPTHS, as_depth
 from .model import ModelInfo, RouterModel, ServerData, flag, jdict
 from .settings import (ADV_WARN, LLAMA_ADV, MODEL_ROW_KEYS, NOT_RUNNING, SET_HELP, UNMARKED, Pending,
                        SettingsService, fmt_val, row_instruction, shown_value)
-from .arrange import FILTERS, MIN_FIT, SORTS, arrange, label as arrange_label
+from .arrange import FILTERS, MIN_FIT, SORTS, arrange, label as arrange_label, speed_of
 from .state import SP_FIT, SUBPANELS, Confirm, Download, PickItem, Picker, TuneRun, UIState
 
 LIST_W = 40                                            # the Server panel's model list
-MODEL_HEADER = f"{DIM}{'':2}{'model':<26} {'size':>8}  {'status':<10} {'fits':>5} {'':6} role and good for{R}"
+MODEL_HEADER = f"{DIM}{'':2}{'model':<26} {'size':>8}  {'status':<10} {'fits':>5} {'speed':>7} role and good for{R}"
 PICKER_FOOT = ("Press ↑ ↓ to select a model and Enter to choose it, Esc to cancel. ★ = auto fit's pick · fits = the "
                "largest window per slot that fits this Mac (q4_0, 1 slot; red = too big). To download or add any GGUF "
                "from Hugging Face: press ] for the Models panel, then h.")
@@ -442,14 +442,15 @@ class SettingsView:
         """One model in a list: name (★ = auto fit's pick, red = too big for this Mac), size,
         status, the largest window that fits, tuned, summary."""
         st = {"downloaded": f"{GRN}downloaded{R}", "partial": f"{YEL}partial{R}", "missing": f"{DIM}not here{R}"}[m["status"]]
-        tuned = f"{GRN}✓tuned{R}" if jdict(m.get("local")).get("tune") else "      "
+        sp = speed_of(m)
+        speed = (f"{GRN if sp[1] else DIM}{sp[0]:>3.0f} t/s{R}" if sp else f"{DIM}{'?':>7}{R}")
         mx = self.svc.max_ctx(m)
         fitc = (f"{(GRN if mx >= 65536 else YEL if mx >= 32768 else RED)}{ctx_label(mx) if mx else 'no fit':>5}{R}"
                 if mx is not None else f"{DIM}{'?':>5}{R}")
         star = f" {CYN}★{R}" if m["name"] == pick else ""
         name = f"{RED if self.too_big(m) else ''}{m['name']}{R}{star}"
         name += " " * max(0, 26 - vlen(name))
-        head = f"{name} {size(m['bytes']):>8}  {st:<10}{' ' * max(0, 10 - vlen(st))} {fitc} {tuned} "
+        head = f"{name} {size(m['bytes']):>8}  {st:<10}{' ' * max(0, 10 - vlen(st))} {fitc} {speed} "
         tags = " ".join(good_for_chip(str(t)) for t in (m.get("good_for") or []))
         return head + f"{CYN}{m.get('role') or ''}{R} {tags} " + ("" if m.get("role") else f"{DIM}{m.get('summary', '')}{R}")
 
@@ -529,7 +530,9 @@ class SettingsView:
         pick = af.name if af else None
         L: List[CardLine] = [*arrange_chips(ui.msort, ui.mfilter, w - 4),
                              *cwrap(f"{DIM}{len(ms)} of {len(self.svc.models.get())} models · press s / S for the next / "
-                                    f"previous sort, f / F for the next / previous filter, or click an option{R}", w - 4),
+                                    f"previous sort, f / F for the next / previous filter, or click an option · speed: "
+                                    f"{R}{GRN}measured here{R}{DIM} (Auto-tune) or from another Mac (the catalogue), ? = "
+                                    f"not measured{R}", w - 4),
                              MODEL_HEADER]
         if not ms:
             L.append(f"{DIM}  no model matches \"{fi}\": pick another filter above{R}")
@@ -670,8 +673,8 @@ class SettingsView:
         here, and what auto fit made of it."""
         passed = {r.name: r.reason for r in af.rejected}
         ms = sorted(self.svc.models.get(), key=lambda m: (m.get("rank") or 99, m["name"]))
-        L: List[CardLine] = [f"{DIM}  {'model':<24} {'rank':>4} {'arch':<6}{'weights':>8} {'max ctx':>8}  "
-                             f"{'here':<5} auto fit{R}"]
+        L: List[CardLine] = [f"{DIM}  {'model':<24} {'rank':>4} {'arch':<6}{'weights':>8} {'max ctx':>8} "
+                             f"{'speed':>7}  {'here':<5} auto fit{R}"]
         for m in ms:
             name = m["name"]
             mx = self.svc.max_ctx(m)
@@ -692,11 +695,14 @@ class SettingsView:
             here = f"{GRN}yes{R}  " if m["status"] == "downloaded" else f"{DIM}no{R}   "
             rank = m.get("rank") if isinstance(m.get("rank"), int) else "–"
             arch = str(m.get("arch") or "?").replace("moe", "MoE")
+            sp = speed_of(m)
+            speed = f"{GRN if sp[1] else DIM}{sp[0]:>3.0f} t/s{R}" if sp else f"{DIM}{'?':>7}{R}"
             head = (f"{CYN if af.pick and name == af.pick.name else ''}{name:<24}{R} {rank!s:>4} {arch:<6}"
-                    f"{size(int(m.get('bytes', 0))):>8} {ctx}  {here} ")
-            L += cwrap(head + verdict, w, " " * 62)
-        L += cwrap(f"{DIM}max ctx = the largest window per slot that fits this Mac (1 slot, q4_0 KV) · ./carl.sh fit "
-                   f"prints the same table{R}", w)
+                    f"{size(int(m.get('bytes', 0))):>8} {ctx} {speed}  {here} ")
+            L += cwrap(head + verdict, w, " " * 70)
+        L += cwrap(f"{DIM}max ctx = the largest window per slot that fits this Mac (1 slot, q4_0 KV) · speed = "
+                   f"Auto-tune's score, {R}{GRN}measured here{R}{DIM} or on another Mac (the catalogue) · ./carl.sh "
+                   f"fit prints the ranking too{R}", w)
         return L
 
     # ------------------------------------------------------------ panel 4: auto-tune

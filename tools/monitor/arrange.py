@@ -8,11 +8,14 @@ from __future__ import annotations
 
 from typing import Callable, List, Optional, Sequence, Tuple
 
-from .model import ModelInfo
+from carl_core.domain.tuning import weighted_score
+
+from .model import ModelInfo, jdict
 
 # (label shown in the header, sort key). Quality = the catalogue rank (1 = best: parameters and
-# density first, then quantization); speed is roughly the reverse: MoE before dense, then the
-# smaller file (fewer bytes read per token).
+# density first, then quantization). Speed = measured decode speed (speed_of: this Mac's
+# Auto-tune, else the catalogue's figure from another Mac), fastest first; models never
+# measured come after, MoE before dense, then the smaller file (fewer bytes read per token).
 SORTS: Tuple[str, ...] = ("downloaded first", "quality", "speed", "size", "name")
 # (label, test). Use-case filters are the catalogue's "good for" tags.
 FILTERS: Tuple[str, ...] = ("all", "agent coding", "hard code", "chat & writing", "uncensored", "stock",
@@ -31,10 +34,29 @@ def _is_moe(m: ModelInfo) -> bool:
     return str(m.get("arch", "")).lower() == "moe"
 
 
+def speed_of(m: ModelInfo) -> Optional[Tuple[float, bool]]:
+    """(tok/s, measured on this Mac) of a model: Auto-tune's score for its chosen mode here,
+    else the catalogue's figure (another Mac); None when neither exists. The score is
+    Auto-tune's weighted mean of prose, code and re-emit speeds (what it chooses a mode by)."""
+    tune = jdict(jdict(m.get("local")).get("tune"))
+    st = jdict(tune.get("settings"))
+    best = jdict(jdict(jdict(tune.get("results")).get("speculation")).get(f"{st.get('spec')}:{st.get('spec_n')}"))
+    if best.get("score") is not None:
+        return float(best["score"]), True
+    sp = jdict(m.get("speed"))
+    try:
+        return weighted_score({k: float(sp[k]) for k in ("prose", "code", "edit")}), False
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
 def sort_key(sort: str) -> Callable[[ModelInfo], Tuple[object, ...]]:
     """The key function for one of SORTS (the name breaks ties, so the order is stable)."""
     if sort == "speed":
-        return lambda m: (not _is_moe(m), m.get("bytes", 0), m["name"])
+        def speed(m: ModelInfo) -> Tuple[object, ...]:
+            s = speed_of(m)
+            return (s is None, -(s[0] if s else 0.0), not _is_moe(m), m.get("bytes", 0), m["name"])
+        return speed
     if sort == "size":
         return lambda m: (m.get("bytes", 0), m["name"])
     if sort == "name":

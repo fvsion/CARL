@@ -113,6 +113,16 @@ class CustomCard(TypedDict, total=False):
     auto_fit: bool
 
 
+class SpeedRecord(TypedDict, total=False):
+    """A catalogue model's measured decode speed (tok/s) on a named Mac, in its tuned mode."""
+    prose: float
+    code: float
+    edit: float
+    machine: str
+    date: str
+    mode: str
+
+
 class CatalogEntry(TypedDict, total=False):
     """One host/catalog.json model. The card fields (role, good_for, why_use, trade_offs,
     pick_instead, hardware, uncensored, rank) tell the user what the model is for."""
@@ -120,6 +130,7 @@ class CatalogEntry(TypedDict, total=False):
     label: str
     family: str
     thinking: str
+    speed: SpeedRecord
     summary: str
     description: str
     arch: str

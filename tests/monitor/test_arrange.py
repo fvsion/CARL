@@ -5,7 +5,7 @@ import unittest
 from typing import Dict, List, Optional, cast
 
 import mon_support  # noqa: F401  (puts tools/ on sys.path)
-from monitor.arrange import FILTERS, SORTS, arrange, keep, label
+from monitor.arrange import FILTERS, SORTS, arrange, keep, label, speed_of
 from monitor.model import ModelInfo
 
 
@@ -36,8 +36,25 @@ class SortTest(unittest.TestCase):
     def test_quality_is_rank_order_unranked_last(self) -> None:
         self.assertEqual(names("quality"), ["27b-q4", "a3b-q4", "orca-iq3", "a3b-iq3", "custom"])
 
-    def test_speed_puts_moe_first_then_smaller_files(self) -> None:
+    def test_speed_without_measurements_puts_moe_first_then_smaller_files(self) -> None:
         self.assertEqual(names("speed"), ["a3b-iq3", "a3b-q4", "custom", "orca-iq3", "27b-q4"])
+
+    def test_speed_measured_here_or_from_the_catalogue_first(self) -> None:
+        tuned = {"tune": {"settings": {"spec": "ngram-mod", "spec_n": 2},
+                          "results": {"speculation": {"ngram-mod:2": {"score": 34.08}}}}}
+        ms = [dict(m) for m in MODELS]
+        by = {m["name"]: m for m in ms}
+        by["custom"]["local"] = tuned                                            # measured here: 34
+        by["27b-q4"]["speed"] = {"prose": 10.75, "code": 10.75, "edit": 27, "machine": "M3 Pro 36 GB"}
+        by["a3b-q4"]["speed"] = {"prose": 43.5, "code": 43.5, "edit": 117, "machine": "M3 Pro 36 GB"}
+        order = [m["name"] for m in arrange(cast(List[ModelInfo], ms), SORTS.index("speed"), 0, lambda m: None)]
+        self.assertEqual(order, ["a3b-q4", "custom", "27b-q4", "a3b-iq3", "orca-iq3"])   # unmeasured: MoE, size
+        self.assertEqual(speed_of(cast(ModelInfo, by["custom"])), (34.08, True))
+        s = speed_of(cast(ModelInfo, by["27b-q4"]))
+        assert s is not None
+        self.assertFalse(s[1])                                                   # another Mac
+        self.assertAlmostEqual(s[0], 13.0, delta=0.5)                           # the weighted mean
+        self.assertIsNone(speed_of(cast(ModelInfo, by["orca-iq3"])))
 
     def test_downloaded_first_then_quality(self) -> None:
         self.assertEqual(names("downloaded first"), ["orca-iq3", "a3b-iq3", "custom", "27b-q4", "a3b-q4"])

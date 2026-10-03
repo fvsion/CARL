@@ -52,6 +52,18 @@ def _zones(raw: object, where: str) -> None:
         raise ConfigError(f"{where}: needs good, slow and very_slow token counts")
 
 
+def _speed(raw: object, where: str) -> None:
+    """A catalogue entry's measured speed: prose / code / re-emit tok/s on a named Mac."""
+    if raw is None:
+        return
+    if not isinstance(raw, dict):
+        raise ConfigError(f"{where}: needs prose, code and edit tok/s and the machine")
+    nums = [raw.get(k) for k in ("prose", "code", "edit")]
+    ok = all(isinstance(v, (int, float)) and not isinstance(v, bool) and v >= 0 for v in nums)
+    if not ok or not isinstance(raw.get("machine"), str):
+        raise ConfigError(f"{where}: needs prose, code and edit tok/s and the machine")
+
+
 def _object(raw: object, where: str) -> Dict[str, JsonValue]:
     if not isinstance(raw, dict):
         raise ConfigError(f"{where}: must be an object")
@@ -150,6 +162,7 @@ def parse_catalog(raw: object, where: str) -> Catalog:
         local_file_name(ref["file"])
         _settings(entry.get("tune", {}), f"{at}: tune")
         _zones(entry.get("ctx_zones"), f"{at}: ctx_zones")
+        _speed(entry.get("speed"), f"{at}: speed")
     names = {m.get("name") for m in models if isinstance(m, dict) and isinstance(m.get("name"), str)}
     for m in models:
         entry = _object(m, where)

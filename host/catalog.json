@@ -42,6 +42,7 @@
         "slow": 131072,
         "very_slow": 163840
       },
+      "speed": {"prose": 43.5, "code": 43.5, "edit": 117.0, "machine": "M3 Pro 36 GB", "date": "2026-10-01", "mode": "draft-mtp,ngram-mod n=2"},
       "measured": [
         {
           "machine": "M3 Pro 36 GB",
@@ -115,6 +116,7 @@
         "slow": 131072,
         "very_slow": 163840
       },
+      "speed": {"prose": 10.75, "code": 10.75, "edit": 27.0, "machine": "M3 Pro 36 GB", "date": "2026-09-25", "mode": "draft-mtp,ngram-mod n=1"},
       "measured": [
         {
           "machine": "M3 Pro 36 GB",
@@ -189,6 +191,7 @@
         "slow": 131072,
         "very_slow": 163840
       },
+      "speed": {"prose": 10.75, "code": 10.75, "edit": 27.0, "machine": "M3 Pro 36 GB", "date": "2026-09-25", "mode": "draft-mtp,ngram-mod n=1"},
       "measured": [
         {
           "machine": "M3 Pro 36 GB",
@@ -401,6 +404,7 @@
         "slow": 131072,
         "very_slow": 163840
       },
+      "speed": {"prose": 49.0, "code": 50.0, "edit": 93.0, "machine": "M2 Max 32 GB", "date": "2026-10-03", "mode": "draft-mtp,ngram-mod n=1"},
       "measured": [
         {
           "machine": "M2 Max 32 GB",
@@ -474,6 +478,7 @@
         "slow": 131072,
         "very_slow": 163840
       },
+      "speed": {"prose": 10.0, "code": 9.8, "edit": 31.1, "machine": "M2 Max 32 GB", "date": "2026-10-03", "mode": "draft-mtp,ngram-mod n=1"},
       "measured": [
         {
           "machine": "M2 Max 32 GB",
@@ -555,6 +560,7 @@
         "slow": 131072,
         "very_slow": 163840
       },
+      "speed": {"prose": 8.8, "code": 8.6, "edit": 19.8, "machine": "M2 Max 32 GB", "date": "2026-10-03", "mode": "ngram-mod n=2"},
       "measured": [
         {
           "machine": "M2 Max 32 GB",
@@ -709,6 +715,7 @@
         "slow": 131072,
         "very_slow": 163840
       },
+      "speed": {"prose": 51.5, "code": 48.5, "edit": 96.1, "machine": "M2 Max 32 GB", "date": "2026-10-03", "mode": "ngram-mod n=1"},
       "measured": [
         {
           "machine": "M2 Max 32 GB",

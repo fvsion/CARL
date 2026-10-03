@@ -59,6 +59,11 @@ class InventoryTest(unittest.TestCase):
             parse_catalog(None, "cat")
         with self.assertRaisesRegex(ConfigError, "tune.kv"):
             parse_catalog(catalog(cast(CatalogEntry, dict(BIG, tune={"kv": "q5"}))), "cat")
+        with self.assertRaisesRegex(ConfigError, "speed: needs prose"):
+            parse_catalog(catalog(cast(CatalogEntry, dict(BIG, speed={"prose": "fast", "code": 1, "edit": 1,
+                                                                       "machine": "M2"}))), "cat")
+        ok = cast(CatalogEntry, dict(BIG, speed={"prose": 43.5, "code": 43.5, "edit": 117, "machine": "M3 Pro 36 GB"}))
+        self.assertEqual(parse_catalog(catalog(ok), "cat")["models"][0]["speed"]["edit"], 117)
 
 
 class EffectiveTuneTest(unittest.TestCase):

@@ -129,6 +129,7 @@ class ModelInfo(TypedDict, total=False):
     tune: JSONDict
     why: JSONDict
     measured: List[JSONDict]
+    speed: JSONDict         # the catalogue's tok/s (prose, code, edit) on another Mac
     # the model card (host/catalog.json): what the model is for and why
     role: str
     good_for: List[str]
