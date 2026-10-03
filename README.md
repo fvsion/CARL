@@ -85,6 +85,8 @@ The variants are CARL's thinking levels:
 
 More: USERGUIDE.md, "Thinking on, off and effort".
 
+**Tools:** OpenCode gets web search, LSP, a browser (a `browser` subagent that drives Chrome), background subagents and parallel tool calls on top of its own tools, within a ~9.9K-token prompt; Pi gets grep / find / ls, web search and the browser. Web search sends the queries to Exa: `WEB_SEARCH=off ./carl.sh install` turns it off (USERGUIDE.md, "Tools in OpenCode and Pi").
+
 ## OpenCode plugins
 
 ![OpenCode with the CARL plugins](assets/opencode-plugins.png)

@@ -175,7 +175,7 @@ class ServerJobs:
                 "Requests in progress stop."], "tyes")
             return
         restart = bool(pid and system.pid_alive(pid))
-        quick = ui.tune_quick
+        depth = ui.tune_depth
 
         def work() -> None:
             if restart:
@@ -185,7 +185,8 @@ class ServerJobs:
                 ui.restart = None
             log = os.path.join(self.paths.logs, ".tune.out")
             os.makedirs(self.paths.logs, exist_ok=True)
-            proc = start_tool([os.path.join(self.paths.repo, "tools", "carl-tune.py"), model] + (["--quick"] if quick else []), log)
+            flag = {"quick": ["--quick"], "long": ["--long"]}.get(depth, [])
+            proc = start_tool([os.path.join(self.paths.repo, "tools", "carl-tune.py"), model] + flag, log)
             ui.tune = TuneRun(model=model, proc=proc, log=log, restart=restart)
         threading.Thread(target=work, daemon=True).start()
 

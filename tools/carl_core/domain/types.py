@@ -45,9 +45,13 @@ class ModeResult(TypedDict):
     score: float
 
 
-class TuneResults(TypedDict):
+class _TuneResultsBase(TypedDict):
     speculation: Dict[str, ModeResult]
     prompt_read: List[List[float]]
+
+
+class TuneResults(_TuneResultsBase, total=False):
+    decode_at_depth: List[List[float]]      # long mode: (tokens read, decode tok/s after them)
 
 
 class TuneRecord(TypedDict, total=False):
@@ -59,6 +63,7 @@ class TuneRecord(TypedDict, total=False):
     ctx_zones: CtxZones
     results: TuneResults
     max_ctx: Dict[str, int]
+    depth: str                  # quick | default | long
 
 
 class LocalEntry(TypedDict, total=False):

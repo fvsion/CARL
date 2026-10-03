@@ -109,7 +109,10 @@ def opencode_model(m: ClientModel, ctx: int) -> Dict[str, Any]:
         "reasoning": True, "tool_call": True, "temperature": True,
         "limit": {"context": ctx, "output": min(32000, ctx // 2)},
         "modalities": {"input": ["text"], "output": ["text"]},
-        "options": {"reasoningEffort": DEFAULT_EFFORT[m.thinking]},
+        # parallel_tool_calls: llama.cpp lets the model call several tools in one turn only when the
+        # request asks (measured 2026-10-03: 2 reads in one turn with it, 1 without); OpenCode
+        # sends a model's options as they are
+        "options": {"reasoningEffort": DEFAULT_EFFORT[m.thinking], "parallel_tool_calls": True},
         "variants": variants,
     }
 

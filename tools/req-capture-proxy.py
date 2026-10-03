@@ -9,7 +9,10 @@ message count, and the reasoning/content chars the upstream returned. Headers
 (the API key) are forwarded but never logged. LOG is created 0600.
 
   HOST=127.0.0.1 PORT=8081 ./host/serve.sh llama &  # server behind the proxy
-  python3 tools/req-capture-proxy.py [LISTEN] [UPSTREAM] [LOG]
+  python3 tools/req-capture-proxy.py [LISTEN] [UPSTREAM] [LOG] [--bodies DIR]
+
+--bodies DIR also saves each chat request's full body (system prompt, tools, messages) as
+DIR/chat-NNN.json (0600): tools/prompt-size.py counts its tokens.
 """
 from __future__ import annotations
 
@@ -93,10 +96,22 @@ def append_log(path: str, rec: JsonObj) -> None:
         f.write(json.dumps(rec) + "\n")
 
 
+def save_body(folder: str, n: int, body: bytes) -> str:
+    """A request body as folder/chat-NNN.json (0600: it holds the conversation)."""
+    os.makedirs(folder, mode=0o700, exist_ok=True)
+    path = os.path.join(folder, f"chat-{n:03d}.json")
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "wb") as f:
+        f.write(body)
+    return path
+
+
 class Proxy(http.server.BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     upstream: ClassVar[Endpoint]
     log_path: ClassVar[str]
+    bodies: ClassVar[str | None] = None
+    count: ClassVar[int] = 0
 
     def log_message(self, format: str, *args: Any) -> None:
         return                                       # one JSON line per request instead
@@ -105,6 +120,9 @@ class Proxy(http.server.BaseHTTPRequestHandler):
         n = int(self.headers.get("content-length") or 0)
         body = self.rfile.read(n) if n else None
         rec = request_record(self.command, self.path, body)
+        if self.bodies and body and self.path.endswith("/chat/completions"):
+            Proxy.count += 1
+            rec["body_file"] = save_body(self.bodies, Proxy.count, body)
         c = http.client.HTTPConnection(self.upstream.host, self.upstream.port, timeout=7200)
         hdrs = {k: v for k, v in self.headers.items() if k.lower() not in HOP_BY_HOP_REQ}
         c.request(self.command, self.path, body=body, headers=hdrs)
@@ -150,7 +168,9 @@ def main(argv: list[str]) -> int:
     ap.add_argument("upstream", nargs="?", default="127.0.0.1:8081", type=Endpoint.parse,
                     help="HOST:PORT of the real server (default 127.0.0.1:8081)")
     ap.add_argument("log", nargs="?", default="/tmp/req-capture.jsonl", help="JSON-lines log (default /tmp/req-capture.jsonl)")
+    ap.add_argument("--bodies", metavar="DIR", help="also save each chat request's full body in DIR (0600)")
     a = ap.parse_args(argv)
+    Proxy.bodies = a.bodies
     listen: Endpoint = a.listen
     if listen.host in WILDCARDS:
         raise SystemExit(f"error: refusing to listen on {listen.host or 'all addresses'} (would expose the server to the LAN)")

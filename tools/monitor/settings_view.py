@@ -12,6 +12,7 @@ from .fmt import (B, CYN, DIM, GRN, R, RED, YEL, CardLine, Ln, Row, bar, button_
                   draw_card, dur, fit, heading, home_short, indent, lv, merge_columns, size, vlen, wwrap)
 from carl_core.domain.autofit import GOAL_TEXT, GOALS, SCOPE_TEXT, SCOPES, AutoFit, as_goal, as_scope, gib
 from carl_core.domain.cards import CHOICE_TEXT
+from carl_core.domain.tuning import DEPTH_TEXT, DEPTHS, as_depth
 
 from .model import ModelInfo, RouterModel, ServerData, flag, jdict
 from .settings import (ADV_WARN, LLAMA_ADV, MODEL_ROW_KEYS, NOT_RUNNING, SET_HELP, UNMARKED, Pending,
@@ -725,8 +726,15 @@ class SettingsView:
         L.append(Ln(f"model     {sel}", spans=[(10, 13, "tprev"), (14, 44, "tpick"), (45, 48, "tnext")]))
         if m.get("summary"):
             L += [f"{' ' * 10}{x}" for x in cwrap(f"{DIM}{m['summary']}{R}", tw - 10)]
-        L.append(Ln(f"mode      {CYN}[{'x' if ui.tune_quick else ' '}]{R} quick", spans=[(10, 13, "tquick")]))
-        L += [f"{' ' * 10}{x}" for x in cwrap(f"{DIM}skips the MTP modes at n=2 and the 64K read: ~4 min; press space to switch{R}", tw - 10)]
+        depth = as_depth(ui.tune_depth)
+        text, spans, col = "mode      ", [], 10
+        for d in DEPTHS:
+            chip = f" {d} "
+            text += (f"\x1b[7m{chip}{R}" if d == depth else f"{DIM}{chip}{R}") + " "
+            spans.append((col, col + len(chip), f"tdepth:{d}"))
+            col += len(chip) + 1
+        L.append(Ln(text, spans=spans))
+        L += [f"{' ' * 10}{x}" for x in cwrap(f"{DIM}{DEPTH_TEXT[depth]}; press space for the next mode{R}", tw - 10)]
         L += cwrap(f"{DIM}Press ← → (or click the name) to choose the model, Enter to run, c to cancel a run.{R}", tw)
         L.append("")
         if tn and (not tn.done or tn.model == m["name"]):
@@ -737,7 +745,8 @@ class SettingsView:
         L.append("")
         if t:
             s = t["settings"]
-            L += cwrap(f"{B}Last result{R} {DIM}{t['date']} · {t.get('machine', '?')} · {t.get('llama_cpp', '')}{R}", tw)
+            L += cwrap(f"{B}Last result{R} {DIM}{t['date']} · {t.get('machine', '?')} · {t.get('llama_cpp', '')}"
+                       f"{' · ' + str(t['depth']) + ' mode' if t.get('depth') else ''}{R}", tw)
             L += cwrap(f"  {GRN}kv {s['kv']} · speculation {s['spec']} n={s['spec_n']} · context {ctx_label(s['ctx'])} "
                        f"per slot · {s['slots']} slot(s){R}", tw, "  ")
             res = jdict(jdict(t.get("results")).get("speculation"))
@@ -749,6 +758,10 @@ class SettingsView:
             pr = jdict(t.get("results")).get("prompt_read") or []
             if pr:
                 L += cwrap("  prompt reading: " + " · ".join(f"{int(n) // 1024}K at {tps:.0f} tok/s" for n, tps in pr),
+                           tw, "  ")
+            dd = jdict(t.get("results")).get("decode_at_depth") or []
+            if dd:
+                L += cwrap("  decoding after a read of: " + " · ".join(f"{int(n) // 1024}K {tps:.1f} tok/s" for n, tps in dd),
                            tw, "  ")
             z = t.get("ctx_zones")
             if z:

@@ -220,7 +220,7 @@ class AppTest(unittest.TestCase):
         self.keys("\x1b[C")
         self.assertNotEqual(self.ui.tune_model, first)
         self.keys(" ")
-        self.assertTrue(self.ui.tune_quick)
+        self.assertEqual(self.ui.tune_depth, "long")              # default -> long (space cycles)
         self.store.config["models"] = {self.ui.tune_model: {"ctx": 1}}
         self.ctl.do("tclear")
         self.assertEqual(self.store.saved[-1]["models"], {})

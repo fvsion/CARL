@@ -36,7 +36,7 @@ class ScoringTest(unittest.TestCase):
         self.assertEqual(t.speculation_modes(False, False), [("none", 1), ("ngram-mod", 2)])
         self.assertEqual(len(t.speculation_modes(True, True)), 4)
         self.assertEqual(t.speculation_modes(True, False)[-1], ("draft-mtp,ngram-mod", 2))
-        self.assertEqual(t.read_depths(True), [8192, 32768])
+        self.assertEqual(t.read_depths("quick"), [8192, 32768])
 
 
 class ZonesTest(unittest.TestCase):
@@ -95,9 +95,13 @@ class FakeServer:
 
     def timings(self, body: JsonObject, timeout: float) -> Dict[str, float]:
         prompt = self.content(body)
-        if body.get("max_tokens") == 1:                     # a cold prompt read
+        if body.get("max_tokens") == 1 or "Summarise these records" in prompt:     # a cold prompt read
             n = len(prompt) // 4
-            return {"prompt_n": float(n), "prompt_per_second": 600.0 - n / 200}
+            out = {"prompt_n": float(n), "prompt_per_second": 600.0 - n / 400}
+            gen = body.get("max_tokens")
+            if isinstance(gen, int) and gen > 1:            # long mode: the decode speed at that depth
+                out.update(predicted_n=float(gen), predicted_per_second=50.0 - n / 10000)
+            return out
         boost = 3.0 if "ngram" in self.mode and "Return the following file" in prompt else 1.0
         return {"predicted_per_second": self.speeds[self.mode] * boost}
 
@@ -116,14 +120,15 @@ class Steps:
         self.lines.append("  " + text)
 
 
-def plan(limit: int, quick: bool = True, base_ctx: int = 98304, nextn: int = 1) -> t.TunePlan:
+def plan(limit: int, depth: t.Depth = "quick", base_ctx: int = 98304, nextn: int = 1) -> t.TunePlan:
     return t.TunePlan(shape=shape(experts=256, nextn=nextn, kv_elems=10240), weights=14 * GIB, limit=limit,
-                      base_ctx=base_ctx, quick=quick, date="2026-10-03", machine="Apple M2 Max 32 GB",
+                      base_ctx=base_ctx, depth=depth, date="2026-10-03", machine="Apple M2 Max 32 GB",
                       llama_cpp="version: test", edit_source="def call(): pass\n")
 
 
 class AutoTunerTest(unittest.TestCase):
-    SPEEDS = {"none:1": 44.0, "ngram-mod:2": 46.0, "draft-mtp:1": 54.0, "draft-mtp,ngram-mod:1": 55.0}
+    SPEEDS = {"none:1": 44.0, "ngram-mod:2": 46.0, "draft-mtp:1": 54.0, "draft-mtp,ngram-mod:1": 55.0,
+              "draft-mtp:2": 50.0, "draft-mtp,ngram-mod:2": 51.0}
 
     def test_full_run(self) -> None:
         server, steps = FakeServer(self.SPEEDS), Steps()
@@ -140,7 +145,8 @@ class AutoTunerTest(unittest.TestCase):
             self.assertAlmostEqual(got, want, delta=16)
         self.assertEqual(server.started[-1], ("draft-mtp,ngram-mod", 1, 36864))
         self.assertGreaterEqual(server.stops, 1)
-        self.assertEqual(set(rec), {"date", "machine", "llama_cpp", "settings", "ctx_zones", "results", "max_ctx"})
+        self.assertEqual(set(rec), {"date", "machine", "llama_cpp", "settings", "ctx_zones", "results", "max_ctx", "depth"})
+        self.assertNotIn("decode_at_depth", rec["results"])
 
     def test_picks_less_than_96k_when_it_does_not_fit(self) -> None:
         rec = t.AutoTuner(FakeServer(self.SPEEDS), Steps()).run(plan(limit=int(15.45 * GIB)))
@@ -156,6 +162,42 @@ class AutoTunerTest(unittest.TestCase):
         server = FakeServer(self.SPEEDS)
         rec = t.AutoTuner(server, Steps()).run(plan(limit=21 * GIB, nextn=0))
         self.assertEqual(list(rec["results"]["speculation"]), ["none:1", "ngram-mod:2"])
+
+
+class LongTest(unittest.TestCase):
+    SPEEDS = AutoTunerTest.SPEEDS
+
+    def test_long_reads_to_192k_with_decode_at_each_depth(self) -> None:
+        server, steps = FakeServer(self.SPEEDS), Steps()
+        rec = t.AutoTuner(server, steps).run(plan(limit=24 * GIB, depth="long"))
+        reads = rec["results"]["prompt_read"]
+        self.assertEqual(len(reads), 5)
+        for (got, _), want in zip(reads, (8192, 32768, 65536, 131072, 196608)):
+            self.assertAlmostEqual(got, want, delta=64)
+        self.assertEqual(len(rec["results"]["decode_at_depth"]), 5)
+        self.assertEqual(server.started[-1][2], t.LONG_READ_CTX)            # the reading server holds 192K + room
+        self.assertTrue(any("the deep reads (128K, 192K) take about" in x for x in steps.lines))
+        self.assertEqual((rec["depth"], len(rec["results"]["speculation"])), ("long", 6))   # the default modes too
+
+    def test_long_stops_at_the_largest_window_that_fits(self) -> None:
+        steps = Steps()
+        rec = t.AutoTuner(FakeServer(self.SPEEDS), steps).run(plan(limit=int(15.9 * GIB), depth="long"))
+        m1 = rec["max_ctx"]["1"]
+        self.assertLess(m1, 196608)
+        self.assertTrue(all(g + t.READ_ROOM <= m1 for g, _ in rec["results"]["prompt_read"]))
+        self.assertTrue(any("skipped (the largest window that fits" in x for x in steps.lines))
+
+    def test_depths_and_the_fit(self) -> None:
+        self.assertEqual(t.read_depths("quick"), [8192, 32768])
+        self.assertEqual(t.read_depths("default"), [8192, 32768, 65536])
+        self.assertEqual(t.read_ctx("long", 120000), 120000)
+        self.assertEqual((t.as_depth("long"), t.as_depth("x")), ("long", "default"))
+        two = [(8192, 500.0), (65536, 250.0)]                               # two reads: the line through them
+        self.assertEqual(t.zones_from_reads(two), t.zones_from_reads([(8192, 500.0), (65536, 250.0)]))
+        a, b = t._fit(two)
+        self.assertAlmostEqual(a + b * 8192, 1 / 500.0)
+        self.assertAlmostEqual(a + b * 65536, 1 / 250.0)
+        self.assertAlmostEqual(t.read_seconds(two, 8192), a * 8192 + b * 8192 ** 2 / 2)
 
 
 class GuardTest(unittest.TestCase):

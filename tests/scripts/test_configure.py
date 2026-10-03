@@ -90,7 +90,8 @@ class ConfigureTests(unittest.TestCase):
         self.assertEqual(moe["name"], "Qwen3.6 35B-A3B · Q4 — llama.cpp, 96K")
         self.assertEqual(dense["name"], "Qwen3.8 27B · Q4 — llama.cpp, 64K")             # the running server's window
         self.assertEqual(dense["limit"], {"context": 65536, "output": 32000})
-        self.assertEqual((moe["options"], dense["options"]), ({"reasoningEffort": "high"}, {"reasoningEffort": "low"}))
+        self.assertEqual((moe["options"], dense["options"]), ({"reasoningEffort": "high", "parallel_tool_calls": True},
+                                                              {"reasoningEffort": "low", "parallel_tool_calls": True}))
         self.assertEqual({k for k, v in moe["variants"].items() if "disabled" not in v}, {"none", "high"})
         self.assertEqual({k for k, v in dense["variants"].items() if "disabled" not in v}, {"none", "low", "medium", "xhigh"})
         pi = self.read_json(".pi/agent/models.json")["providers"]["llamacpp"]["models"]
@@ -129,6 +130,66 @@ class ConfigureTests(unittest.TestCase):
         self.assertEqual(self.read_json(".config/opencode/opencode.json")["plugin"], ["/home/u/mine.js"])
         self.assertFalse(os.path.exists(self.path(".config/opencode/plugins/carl-model-check")))
         self.assertIn("removed   OpenCode plugin carl-model-check", p.stdout)
+
+    def test_tools_on_by_default(self) -> None:
+        p = self.run_configure()
+        self.assertEqual(p.returncode, 0, p.stderr)
+        with open(self.path(".config/carl/opencode.env"), encoding="utf-8") as f:
+            env = f.read()
+        for line in ("export OPENCODE_ENABLE_EXA=1", "export OPENCODE_WEBSEARCH_PROVIDER=exa",
+                     "export OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=1", "export OPENCODE_EXPERIMENTAL_LSP_TOOL=1"):
+            self.assertIn(line, env)
+        self.assertIs(self.read_json(".config/opencode/opencode.json")["lsp"], True)
+        self.assertFalse(os.path.exists(self.path(".zshrc")))                 # never created
+        self.assertIn("add this line to your shell profile", p.stdout)
+        sett = self.read_json(".pi/agent/settings.json")
+        self.assertEqual(sett["defaultTools"], ["+grep", "+find", "+ls"])
+        mcp = self.read_json(".pi/agent/mcp.json")["mcpServers"]["carl-web-search"]
+        self.assertEqual(mcp["url"], "https://mcp.exa.ai/mcp")
+
+    def test_tools_off_and_yours_kept(self) -> None:
+        with open(self.path(".bashrc"), "w", encoding="utf-8") as f:
+            f.write("export MINE=1\n")
+        self.write_json(".pi/agent/settings.json", {"defaultTools": ["read"]})
+        self.write_json(".pi/agent/mcp.json", {"mcpServers": {"mine": {"url": "https://x/mcp"}}})
+        self.assertEqual(self.run_configure().returncode, 0)
+        with open(self.path(".bashrc"), encoding="utf-8") as f:
+            self.assertIn("# >>> CARL: OpenCode tool switches >>>", f.read())
+        self.assertEqual(self.read_json(".pi/agent/settings.json")["defaultTools"], ["read"])     # yours stays
+        p = self.run_configure("--web-search", "off", "--lsp", "0", "--background", "0", "--browser", "0")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertFalse(os.path.exists(self.path(".config/carl/opencode.env")))
+        with open(self.path(".bashrc"), encoding="utf-8") as f:
+            self.assertEqual(f.read(), "export MINE=1\n")                    # the block is gone, yours stays
+        self.assertNotIn("lsp", self.read_json(".config/opencode/opencode.json"))
+        self.assertEqual(self.read_json(".pi/agent/mcp.json")["mcpServers"], {"mine": {"url": "https://x/mcp"}})
+
+    def test_browser_agent_has_the_browser_tools_the_main_agents_do_not(self) -> None:
+        self.assertEqual(self.run_configure().returncode, 0)
+        oc = self.read_json(".config/opencode/opencode.json")
+        server = oc["mcp"]["carl-browser"]
+        self.assertEqual(server["command"][:4], ["npx", "-y", "@playwright/mcp@0.0.83", "--isolated"])
+        self.assertIn("--headless", server["command"])
+        self.assertIs(oc["tools"]["carl-browser_*"], False)                  # the main agents: off
+        b = oc["agent"]["browser"]
+        self.assertEqual((b["mode"], b["tools"]["carl-browser_*"], b["tools"]["bash"]), ("subagent", True, False))
+        self.assertTrue(os.path.isfile(self.path(".config/opencode/carl/browser.md")))
+        pi = self.read_json(".pi/agent/mcp.json")["mcpServers"]["carl-browser"]
+        self.assertEqual((pi["command"], pi["exposure"]), ("npx", "deferred"))
+        p = self.run_configure("--browser", "0")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        oc = self.read_json(".config/opencode/opencode.json")
+        self.assertNotIn("browser", oc.get("agent", {}))
+        self.assertNotIn("mcp", oc)
+        self.assertNotIn("carl-browser", self.read_json(".pi/agent/mcp.json")["mcpServers"])
+
+    def test_a_users_own_browser_agent_stays(self) -> None:
+        mine = {"description": "my browser", "mode": "subagent", "prompt": "mine"}
+        self.write_json(".config/opencode/opencode.json", {"agent": {"browser": mine}})
+        self.assertEqual(self.run_configure().returncode, 0)
+        agents = self.read_json(".config/opencode/opencode.json")["agent"]
+        self.assertEqual(agents["browser"], mine)
+        self.assertIn("carl-browser", agents)                                  # ours, next to it
 
     def test_a_bad_model_list_is_refused(self) -> None:
         for bad in ({"schema": 2, "models": []}, {"schema": 1, "models": [{"id": "a b", "ctx": 4096, "thinking": "on-off"}]},
@@ -304,7 +365,7 @@ class ConfigureTests(unittest.TestCase):
                                                                      "llm-deploy-coder": {"prompt": self.CARL_PROMPT}}})
         self.write_text(".pi/agent/agents/coder.md", "my own agent\n")
         self.write_text(".pi/agent/agents/llm-deploy-coder.md", self.PI_OURS.replace("coder", "llm-deploy-coder"))
-        p = self.run_configure("--coder", "1")
+        p = self.run_configure("--browser", "0", "--coder", "1")
         self.assertEqual(p.returncode, 0, p.stderr)
         agents = self.read_json(".config/opencode/opencode.json")["agent"]
         self.assertEqual(set(agents), {"coder", "carl-coder"})
@@ -318,7 +379,7 @@ class ConfigureTests(unittest.TestCase):
         del oc["agent"]["coder"]
         self.write_json(".config/opencode/opencode.json", oc)
         os.remove(self.path(".pi/agent/agents/coder.md"))
-        p = self.run_configure("--coder", "1")
+        p = self.run_configure("--browser", "0", "--coder", "1")
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertEqual(set(self.read_json(".config/opencode/opencode.json")["agent"]), {"coder"})
         self.assertFalse(os.path.exists(self.path(".pi/agent/agents/carl-coder.md")))
@@ -327,7 +388,7 @@ class ConfigureTests(unittest.TestCase):
     def test_users_own_carl_coder_too_skips_ours(self) -> None:
         theirs = {"coder": {"prompt": "mine"}, "carl-coder": {"prompt": "also mine"}}
         self.write_json(".config/opencode/opencode.json", {"agent": dict(theirs)})
-        p = self.run_configure("--coder", "1")
+        p = self.run_configure("--browser", "0", "--coder", "1")
         self.assertEqual(p.returncode, 0, p.stderr)
         oc = self.read_json(".config/opencode/opencode.json")
         self.assertEqual(oc["agent"], theirs)
@@ -340,7 +401,7 @@ class ConfigureTests(unittest.TestCase):
                                                                      "llm-deploy-coder": {"prompt": self.CARL_PROMPT}}})
         self.write_text(".pi/agent/agents/coder.md", "my own agent\n")
         self.write_text(".pi/agent/agents/carl-coder.md", self.PI_OURS)
-        p = self.run_configure("--coder", "0")
+        p = self.run_configure("--browser", "0", "--coder", "0")
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertEqual(self.read_json(".config/opencode/opencode.json")["agent"], {"coder": mine})
         self.assertTrue(os.path.exists(self.path(".pi/agent/agents/coder.md")))
@@ -391,7 +452,7 @@ class ConfigureTests(unittest.TestCase):
 
     def test_llm_deploy_install_gets_carl_names(self) -> None:
         self.llm_deploy_install()
-        p = self.run_configure("--coder", "1")
+        p = self.run_configure("--browser", "0", "--coder", "1")
         self.assertEqual(p.returncode, 0, p.stderr)
         oc_dir = self.path(".config/opencode")
         oc = self.read_json(".config/opencode/opencode.json")
@@ -422,7 +483,7 @@ class ConfigureTests(unittest.TestCase):
         for rel in (".config/opencode/opencode.json", ".pi/agent/models.json", ".pi/agent/APPEND_SYSTEM.md"):
             self.assertTrue(os.path.exists(self.path(rel + ".before-carl")), rel)          # the usual backups
         self.assertIn("removed   ~/.config/opencode/llm-deploy (CARL's prompts are in carl/ now)", p.stdout)
-        again = self.run_configure("--coder", "1")                                         # moved once
+        again = self.run_configure("--browser", "0", "--coder", "1")                                         # moved once
         self.assertEqual(again.returncode, 0, again.stderr)
         for kind in ("added", "updated", "removed"):
             self.assertNotIn(kind, again.stdout)

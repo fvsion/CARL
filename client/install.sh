@@ -226,6 +226,22 @@ json.dump({"schema": 1, "default": ml.default, "models": [m.__dict__ for m in ml
 fi
 echo "models for the clients: $(python3 -c 'import json,sys; print(", ".join(m["id"] for m in json.load(open(sys.argv[1]))["models"]) or "none yet")' "$models_arg")"
 
+# --- Tools: web search on by default (WEB_SEARCH=exa|parallel|off) -------------------
+web_search="${WEB_SEARCH:-exa}"
+case "$web_search" in exa|parallel|off) ;; *) echo "error: WEB_SEARCH takes exa, parallel or off, got '$web_search'" >&2; exit 2 ;; esac
+if [[ "$web_search" != off ]]; then
+  echo "web search: on ($web_search). OpenCode and Pi send their search queries to $web_search, outside this"
+  echo "            computer (the rest stays local). Off: WEB_SEARCH=off ./install.sh"
+fi
+if [[ "${NO_BROWSER:-0}" != 1 ]]; then
+  if [[ "$OS" == Darwin && -d "/Applications/Google Chrome.app" ]]; then
+    echo "browser: OpenCode's browser agent and Pi drive Google Chrome (a temporary profile). Off: NO_BROWSER=1"
+  else
+    echo "browser: OpenCode's browser agent and Pi use Playwright's Chromium: once, run npx playwright install chromium"
+    echo "         (about 150 MB). Off: NO_BROWSER=1"
+  fi
+fi
+
 # --- OpenCode + Pi configs (client/configure.py) --------------------------------
 # Merges our providers, defaults, coder agent, sidebar and extensions into the
 # existing configs without overwriting anything the user owns: a provider of
@@ -235,7 +251,10 @@ echo "models for the clients: $(python3 -c 'import json,sys; print(", ".join(m["
 python3 "$HERE/configure.py" --bundle "$HERE" --home "$HOME" --host "$HOST" \
   --llama-port "$LLAMA_PORT" --ctx "$ctx" --models "$models_arg" ${running:+--running "$running"} --coder "$CODER" --sidebar "$([[ "${NO_SIDEBAR:-0}" == 1 ]] && echo 0 || echo 1)" \
   --switcher "$([[ "${NO_SWITCHER:-0}" == 1 ]] && echo 0 || echo 1)" \
-  --model-check "$([[ "${NO_MODEL_CHECK:-0}" == 1 ]] && echo 0 || echo 1)"
+  --model-check "$([[ "${NO_MODEL_CHECK:-0}" == 1 ]] && echo 0 || echo 1)" \
+  --web-search "$web_search" --lsp "$([[ "${NO_LSP:-0}" == 1 || "${LSP:-1}" == 0 ]] && echo 0 || echo 1)" \
+  --background "$([[ "${NO_BACKGROUND_SUBAGENTS:-0}" == 1 ]] && echo 0 || echo 1)" \
+  --browser "$([[ "${NO_BROWSER:-0}" == 1 ]] && echo 0 || echo 1)" --browser-headed "$([[ "${BROWSER_HEADED:-0}" == 1 ]] && echo 1 || echo 0)"
 
 # --- Smoke test ----------------------------------------------------------------
 echo

@@ -149,7 +149,7 @@ class UIState:
     dl: Optional[Download] = None
     tune: Optional[TuneRun] = None
     tune_model: Optional[str] = None
-    tune_quick: bool = False
+    tune_depth: str = "default"     # Auto-tune: quick | default | long
     # Connect
     install_ask: Optional[str] = None               # "all" | "config": Install asked "run it?"
     install: Optional[InstallRun] = None

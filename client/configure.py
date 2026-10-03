@@ -31,6 +31,19 @@ Rules
   ours under the other names is taken out); a user's own "carl-coder" too: ours
   is skipped with a note.
 - Lists (plugin, instructions): ours are appended / removed, others kept.
+- Tools (Phase 8, measured: OpenCode's system prompt + tools stay under 11K tokens):
+  OpenCode's web search (Exa, or Parallel; the queries leave the Mac) and background
+  subagents are switched on by environment variables in ~/.config/carl/opencode.env, which
+  one marked block in the shell profile (~/.zshrc, ~/.bashrc) sources; the LSP tool with
+  "lsp": true (OpenCode then downloads and runs language servers; --lsp 0 leaves both out).
+  Each model entry asks for parallel tool calls (carl_models.py). Pi: grep, find
+  and ls on (settings.json defaultTools) and the same web search as an MCP server
+  (mcp.json "carl-web-search"). Ours only: a user's own defaultTools, MCP server or "lsp"
+  stays.
+- Browser (Playwright MCP, pinned, an isolated Chrome profile): in OpenCode its tools are off
+  for the main agents and on for a "browser" subagent ("carl-browser" next to a user's own
+  "browser"), so the main prompt stays under 10.5K tokens (measured: the 26 browser tools
+  are ~4.8K); in Pi a deferred MCP server (tool_search loads its tools when needed).
 - OpenCode plugin carl-model-check (opencode.json "plugin", with our provider id as its
   option): warns when the model picked isn't the one the server runs, isn't installed, or
   is being loaded (router mode). NO_MODEL_CHECK=1 leaves it out.
@@ -87,6 +100,17 @@ OLD_OC_PLUGIN = "plugins/mtplx-session-headers"
 OLD_OC_PLUGIN_SIG = "MTPLXSessionHeaders"
 OLD_PI_EXT = "extensions/mtplx-request-policy.ts"
 OLD_PI_EXT_SIG = "Pi <-> MTPLX request bridge"
+WEB_SEARCH = ("exa", "parallel", "off")
+SEARCH_MCP = {"exa": "https://mcp.exa.ai/mcp", "parallel": "https://search.parallel.ai/mcp"}
+SEARCH_NAME = "carl-web-search"                         # Pi's MCP server entry
+PI_TOOLS = ["+grep", "+find", "+ls"]                    # Pi's built-in tools that are off by default
+ENV_FILE = "opencode.env"                               # in ~/.config/carl: OpenCode's tool switches
+PROFILE_BEGIN, PROFILE_END = "# >>> CARL: OpenCode tool switches >>>", "# <<< CARL <<<"
+BROWSER_MCP = "carl-browser"                            # the MCP server (OpenCode tools: carl-browser_*)
+BROWSER_PKG = "@playwright/mcp@0.0.83"                  # pinned: measured 2026-10-03 (26 tools, ~4.8K tokens)
+BROWSER_AGENT, BROWSER_AGENT_ALT = "browser", "carl-browser"
+BROWSER_OFF = ("bash", "edit", "write", "lsp", "task", "todowrite", "question", "skill")   # not for the browser agent
+CHROME_APP = "/Applications/Google Chrome.app"
 MODEL_CHECK = "carl-model-check"                        # the OpenCode plugin that warns about the model
 CODER = "coder"                                         # the coder subagent's name in both clients
 CODER_ALT = "carl-coder"                                # ... when the user has their own "coder"
@@ -118,6 +142,11 @@ class Options:
     sidebar: bool
     switcher: bool
     model_check: bool
+    web_search: str = "exa"   # exa | parallel | off
+    lsp: bool = True
+    background: bool = True
+    browser: bool = True
+    browser_headed: bool = False
 
     @property
     def oc_dir(self) -> str:
@@ -173,6 +202,11 @@ def parse_args(argv: list[str]) -> Options:
     ap.add_argument("--sidebar", type=switch_arg, default=True)
     ap.add_argument("--switcher", type=switch_arg, default=True)
     ap.add_argument("--model-check", type=switch_arg, default=True)
+    ap.add_argument("--web-search", choices=WEB_SEARCH, default="exa")
+    ap.add_argument("--lsp", type=switch_arg, default=True)
+    ap.add_argument("--background", type=switch_arg, default=True)
+    ap.add_argument("--browser", type=switch_arg, default=True)
+    ap.add_argument("--browser-headed", type=switch_arg, default=False)
     a = ap.parse_args(argv)
     try:
         models = carl_models.load_list(a.models)
@@ -180,7 +214,8 @@ def parse_args(argv: list[str]) -> Options:
         ap.error(f"--models: {e}")
     return Options(bundle=a.bundle, home=a.home, host=a.host, llama_port=a.llama_port, ctx=a.ctx, models=models,
                    running=a.running, coder=a.coder, sidebar=a.sidebar, switcher=a.switcher,
-                   model_check=a.model_check)
+                   model_check=a.model_check, web_search=a.web_search, lsp=a.lsp, background=a.background,
+                   browser=a.browser, browser_headed=a.browser_headed)
 
 
 # ------------------------------------------------------------------ pure helpers
@@ -355,6 +390,7 @@ class Installer:
         self.o = opts
         self.stamp = stamp
         self.report = Report()
+        self.written: set[str] = set()             # files written this run (backed up once)
 
     # -- file helpers bound to this run (home for display, stamp for backups)
     def short(self, path: str) -> str:
@@ -371,13 +407,14 @@ class Installer:
         if os.path.exists(path):
             if read_text(path) == text:
                 return
-            if backup:
+            if backup and path not in self.written:     # one backup per file per run
                 if not os.path.exists(path + ORIGINAL):
                     shutil.copy2(path, path + ORIGINAL)
                     self.report.add("backed up", f"{self.short(path)} -> {os.path.basename(path)}{ORIGINAL} (your original)")
                 shutil.copy2(path, f"{path}.bak.{self.stamp}")
         write_text(path, text)
         os.chmod(path, mode)
+        self.written.add(path)
 
     def remove_file(self, path: str) -> None:
         """Remove a file CARL installed, keeping a copy (FILE.bak.<time>, which the clients don't load)."""
@@ -468,6 +505,8 @@ class Installer:
         self._oc_model_check(cfg, new_id)
 
         self._oc_coder(cfg, st, agent)
+        self._oc_tools(cfg, st)
+        self._oc_browser(cfg, st, agent)
         for k in ("instructions", "agent", "plugin"):
             if not cfg.get(k):
                 cfg.pop(k, None)
@@ -494,6 +533,129 @@ class Installer:
                 self.report.add("removed", f"{self.short(plug)} (MTPLX support was removed)")
             else:
                 self.report.add("kept", f"{self.short(plug)} (not ours)")
+
+    def _oc_tools(self, cfg: JsonObj, st: JsonObj) -> None:
+        """OpenCode's tool switches: the env file and its profile block, and "lsp" with --lsp 1."""
+        rep = self.report
+        env = os.path.join(self.o.home, ".config/carl", ENV_FILE)
+        lines = []
+        if self.o.web_search != "off":
+            flag = "OPENCODE_ENABLE_EXA" if self.o.web_search == "exa" else "OPENCODE_ENABLE_PARALLEL"
+            lines += [f"export {flag}=1                 # web search: the queries go to {self.o.web_search} "
+                      f"({SEARCH_MCP[self.o.web_search]})",
+                      f"export OPENCODE_WEBSEARCH_PROVIDER={self.o.web_search}"]
+        if self.o.background:
+            lines.append("export OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=1   # the task tool can run a subagent "
+                         "in the background")
+        if self.o.lsp:
+            lines.append("export OPENCODE_EXPERIMENTAL_LSP_TOOL=1             # the lsp tool (with \"lsp\": true)")
+        if lines:
+            text = ("# CARL: OpenCode's tool switches, written by client/install.sh (WEB_SEARCH=exa|parallel|off,\n"
+                    "# NO_LSP=1, NO_BACKGROUND_SUBAGENTS=1 change them). Your shell profile sources this file.\n"
+                    + "\n".join(lines) + "\n")
+            if read_or_none(env) != text:
+                rep.add("updated" if os.path.exists(env) else "added",
+                        f"OpenCode tools ({self.short(env)}): web search {self.o.web_search}, background subagents "
+                        f"{'on' if self.o.background else 'off'}, lsp {'on' if self.o.lsp else 'off'}")
+            self.save_text(env, text, mode=0o644, backup=False)
+        elif os.path.exists(env):
+            os.remove(env)
+            rep.add("removed", f"OpenCode tools ({self.short(env)}): all off")
+        self._profiles(bool(lines))
+        if self.o.lsp and "lsp" not in cfg:
+            cfg["lsp"] = True
+            st["lsp"] = True
+            rep.add("added", 'OpenCode "lsp": true (OpenCode downloads and runs language servers)')
+        elif not self.o.lsp and st.pop("lsp", None) and cfg.get("lsp") is True:
+            cfg.pop("lsp")
+            rep.add("removed", 'OpenCode "lsp": true (without NO_LSP=1 it comes back)')
+
+    def browser_command(self) -> list[str]:
+        """The browser MCP server: npx runs the pinned Playwright MCP with a temporary profile;
+        on a Mac with Google Chrome it drives that Chrome (no browser download), elsewhere
+        Playwright's own Chromium (npx playwright install chromium)."""
+        cmd = ["npx", "-y", BROWSER_PKG, "--isolated"]
+        if sys.platform == "darwin" and os.path.isdir(CHROME_APP):
+            cmd += ["--browser", "chrome"]
+        if not self.o.browser_headed:
+            cmd.append("--headless")
+        return cmd
+
+    def _oc_browser(self, cfg: JsonObj, st: JsonObj, agent: JsonObj) -> None:
+        """The browser MCP server (its tools off globally), and the subagent that has them."""
+        rep = self.report
+        mcp = cfg.setdefault("mcp", {})
+        tools = cfg.setdefault("tools", {})
+        pattern = f"{BROWSER_MCP}_*"
+        old_name = st.get("browser_agent")
+        if not self.o.browser:
+            if BROWSER_MCP in mcp and mcp[BROWSER_MCP] == st.get("browser_mcp"):
+                mcp.pop(BROWSER_MCP)
+                tools.pop(pattern, None)
+                rep.add("removed", "OpenCode browser (MCP server carl-browser)")
+            if old_name and ours_agent(agent.get(old_name)):
+                agent.pop(old_name)
+                rep.add("removed", f"OpenCode agent '{old_name}'")
+            for k in ("browser_mcp", "browser_agent"):
+                st.pop(k, None)
+            for k in ("mcp", "tools"):
+                if not cfg.get(k):
+                    cfg.pop(k, None)
+            return
+        want = {"type": "local", "command": self.browser_command(), "enabled": True}
+        cur = mcp.get(BROWSER_MCP)
+        if cur is not None and cur != st.get("browser_mcp"):
+            rep.add("kept", f"OpenCode MCP server '{BROWSER_MCP}' (yours): CARL's browser is not installed")
+            return
+        if cur != want:
+            rep.add("updated" if cur else "added", f"OpenCode browser ({BROWSER_PKG}, its tools for the browser agent only)")
+        mcp[BROWSER_MCP] = want
+        tools[pattern] = False
+        st["browser_mcp"] = want
+        name = BROWSER_AGENT if BROWSER_AGENT not in agent or ours_agent(agent[BROWSER_AGENT]) else BROWSER_AGENT_ALT
+        if name in agent and not ours_agent(agent[name]):
+            rep.add("kept", f"OpenCode agent '{name}' (yours): CARL's browser agent is not installed")
+            return
+        if old_name and old_name != name and ours_agent(agent.get(old_name)):
+            agent.pop(old_name)
+        body, desc = split_agent(read_text(self.bundle_path("agents/browser.md")))
+        ddir = os.path.join(self.o.oc_dir, NAMES.prompt_dir)
+        os.makedirs(ddir, exist_ok=True)
+        prompt_path = os.path.join(ddir, "browser.md")
+        write_text(prompt_path, body if name == BROWSER_AGENT else body.replace("You are **browser**", f"You are **{name}**"))
+        new = {"description": desc, "mode": "subagent", "prompt": "{file:" + prompt_path + "}",
+               "tools": {pattern: True, **{t: False for t in BROWSER_OFF}}, "permission": {"task": "deny"},
+               "color": "info"}
+        if agent.get(name) != new:
+            rep.add("updated" if name in agent else "added", f"OpenCode agent '{name}' (the browser tools)")
+        agent[name] = new
+        st["browser_agent"] = name
+
+    def _profiles(self, want: bool) -> None:
+        """A pointer to the env file: a marked 3-line block appended to ~/.zshrc and ~/.bashrc when
+        they exist (never created, nothing else in them changes, a backup first), and taken out
+        again when nothing is switched on. OpenCode reads these switches only from the environment.
+        With neither file, the report says which line to add."""
+        block = (f"{PROFILE_BEGIN}\n[ -f \"$HOME/.config/carl/{ENV_FILE}\" ] && . \"$HOME/.config/carl/{ENV_FILE}\"\n"
+                 f"{PROFILE_END}\n")
+        found = False
+        for name in (".zshrc", ".bashrc"):
+            path = os.path.join(self.o.home, name)
+            cur = read_or_none(path)
+            if cur is None:
+                continue
+            found = True
+            body = strip_block(cur or "", (PROFILE_BEGIN, PROFILE_END)).rstrip("\n")
+            new = (body + "\n\n" + block if body else block) if want else (body + "\n" if body else "")
+            if new != (cur or ""):
+                self.save_text(path, new, mode=0o644)
+                self.report.add("updated" if want else "removed",
+                                f"~/{name}: {'sources' if want else 'no longer sources'} ~/.config/carl/{ENV_FILE} "
+                                f"(open a new terminal)")
+        if want and not found:
+            self.report.add("kept", f"no ~/.zshrc or ~/.bashrc: add this line to your shell profile for OpenCode's "
+                                    f'tool switches: [ -f "$HOME/.config/carl/{ENV_FILE}" ] && . '
+                                    f'"$HOME/.config/carl/{ENV_FILE}"')
 
     def _oc_model_check(self, cfg: JsonObj, provider_id: str) -> None:
         """The model-check plugin: copied into plugins/, one entry in the plugin list with our
@@ -676,6 +838,7 @@ class Installer:
         self.save(path, cfg)
 
         self._pi_settings(st, ids, first_install, had_ours_before, renamed)
+        self._pi_tools(st)
         self._pi_extensions_and_coder(st)
 
         st.update({"providers": ids, "base_url": self.o.base_url, "updated": self.stamp})
@@ -706,6 +869,74 @@ class Installer:
             mine = f"{sett.get('defaultProvider')}/{sett.get('defaultModel')}"
             rep.add("kept", f"Pi defaults (yours: {mine}{gone_note(mine, renamed)})")
             st.pop("settings", None)
+
+    def _pi_tools(self, st: JsonObj) -> None:
+        """Pi's tools: grep, find and ls on (defaultTools, unless yours), and web search as an MCP
+        server (ours; your own server named carl-web-search stays)."""
+        pi, rep = self.o.pi_dir, self.report
+        sp = os.path.join(pi, "settings.json")
+        sett = load(sp, {})
+        cur = sett.get("defaultTools")
+        if cur is None or cur == st.get("default_tools"):
+            if cur != PI_TOOLS:
+                sett["defaultTools"] = list(PI_TOOLS)
+                self.save(sp, sett)
+                rep.add("updated" if cur else "added", "Pi tools grep, find, ls (settings.json defaultTools)")
+            st["default_tools"] = list(PI_TOOLS)
+        else:
+            rep.add("kept", "Pi defaultTools (yours)")
+            st.pop("default_tools", None)
+        mp = os.path.join(pi, "mcp.json")
+        mcp = load(mp, {})
+        servers = mcp.setdefault("mcpServers", {})
+        mine = servers.get(SEARCH_NAME)
+        ours = mine is None or mine == st.get("web_search")
+        want = None if self.o.web_search == "off" else {
+            "url": SEARCH_MCP[self.o.web_search], "exposure": "direct",
+            "description": f"Web search ({self.o.web_search}): the search queries leave this computer"}
+        if not ours:
+            rep.add("kept", f"Pi MCP server {SEARCH_NAME} (yours)")
+            st.pop("web_search", None)
+        elif want and mine != want:
+            servers[SEARCH_NAME] = want
+            self.save(mp, mcp)
+            rep.add("updated" if mine else "added", f"Pi web search ({self.o.web_search}, mcp.json {SEARCH_NAME})")
+            st["web_search"] = want
+        elif not want and mine is not None:
+            servers.pop(SEARCH_NAME)
+            self.save(mp, mcp)
+            rep.add("removed", f"Pi web search (mcp.json {SEARCH_NAME})")
+            st.pop("web_search", None)
+        elif want:
+            st["web_search"] = want
+        self._pi_browser(mp, st)
+
+    def _pi_browser(self, mp: str, st: JsonObj) -> None:
+        """The browser MCP server for Pi, deferred: tool_search loads its tools when a task needs them."""
+        rep = self.report
+        mcp = load(mp, {})
+        servers = mcp.setdefault("mcpServers", {})
+        cur = servers.get(BROWSER_MCP)
+        cmd = self.browser_command()
+        want = {"command": cmd[0], "args": cmd[1:], "exposure": "deferred",
+                "description": "A real Chrome (Playwright): open pages, click, type, fill forms, screenshots, "
+                               "console and network"} if self.o.browser else None
+        if cur is not None and cur != st.get("browser_mcp"):
+            rep.add("kept", f"Pi MCP server {BROWSER_MCP} (yours)")
+            st.pop("browser_mcp", None)
+            return
+        if want and cur != want:
+            servers[BROWSER_MCP] = want
+            self.save(mp, mcp)
+            rep.add("updated" if cur else "added", f"Pi browser (mcp.json {BROWSER_MCP}, loaded on demand)")
+        elif not want and cur is not None:
+            servers.pop(BROWSER_MCP)
+            self.save(mp, mcp)
+            rep.add("removed", f"Pi browser (mcp.json {BROWSER_MCP})")
+        if want:
+            st["browser_mcp"] = want
+        else:
+            st.pop("browser_mcp", None)
 
     def _pi_extensions_and_coder(self, st: JsonObj) -> None:
         """The subagent extension, the coder agent and the delegation rule in

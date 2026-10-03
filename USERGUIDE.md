@@ -348,6 +348,27 @@ OpenCode 1.18.34 does not show the open sessions as tabs. Thus, `install.sh` add
 
 NOTE: The list contains the top-level sessions of this project that changed in the last 72 hours (maximum 9). It does not contain subagent sessions. For older sessions, use `/sessions`. The switcher does not show when there is only one session. The plugin is `client/opencode/plugins/session-switcher/`. `install.sh` registers it in `~/.config/opencode/tui.json`. `NO_SWITCHER=1 ./install.sh` installs without it.
 
+### Tools in OpenCode and Pi
+
+`./carl.sh install` gives OpenCode and Pi as many tools as fit a lean prompt. OpenCode's system prompt and tool definitions measure **9,870 tokens** as installed (Qwen3.6 35B-A3B, OpenCode 1.18.34; the target is under 10.5K, because every new session reads them first).
+
+| Tool | OpenCode | Pi | Switch |
+|---|---|---|---|
+| read, edit, write, bash, grep, glob / find / ls, task, todowrite, question, skill, webfetch | built in | read, edit, write, bash, **grep, find, ls** (Pi leaves the last three off; CARL turns them on) | |
+| **web search** | `websearch` (Exa) | `web_search_exa`, `web_fetch_exa` (MCP) | `WEB_SEARCH=exa\|parallel\|off` |
+| **LSP** (go to definition, references, diagnostics) | `lsp`, with `"lsp": true` (OpenCode downloads and runs the language servers it needs) | | `NO_LSP=1` |
+| **browser** (a real Chrome: open pages, click, type, fill forms, screenshots, console and network) | the **browser** subagent | the `carl-browser` MCP server, loaded on demand | `NO_BROWSER=1`, `BROWSER_HEADED=1` (show the window) |
+| **background subagents** | the task tool can run a subagent in the background | | `NO_BACKGROUND_SUBAGENTS=1` |
+| **parallel tool calls** | several tool calls in one turn (llama.cpp needs the request to ask: CARL's model entries do) | | |
+
+Put a switch in front of the installer: `WEB_SEARCH=off ./carl.sh install --config-only`.
+
+- CAUTION: **Web search leaves this computer.** The search queries go to Exa (`mcp.exa.ai`, no account needed; `EXA_API_KEY` for higher limits) or Parallel. Everything else stays local. `WEB_SEARCH=off` turns it off.
+- **The browser runs in a temporary profile** (`--isolated`): nothing is logged in, and nothing stays after it closes. On a Mac with Google Chrome it drives that Chrome; elsewhere Playwright's Chromium (once: `npx playwright install chromium`, about 150 MB). It is headless unless `BROWSER_HEADED=1`. The package is pinned (`@playwright/mcp@0.0.83`); npx fetches it the first time.
+- **Why a browser subagent:** the 26 browser tools are ~4.8K tokens. In the main agents they would make every first request read 14.5K tokens. In a subagent they cost the main prompt one short description, and the main agent sends the subagent browser work on its own when a task needs a live page (checking a web app it changed, a page webfetch can't read), or when you write `@browser ...`. In Pi, `tool_search` loads them when needed.
+- **How OpenCode gets the switches:** OpenCode reads them only from environment variables (its config file has no keys for them), so they are in `~/.config/carl/opencode.env`, and a marked 3-line pointer appended to your existing `~/.zshrc` / `~/.bashrc` loads it (a backup first; nothing else in the file changes; the installer never creates a profile file: without one it prints the line to add). Open a new terminal after the installer. OpenCode started some other way (not from a shell) doesn't see them.
+- **Background subagents** and **LSP** are OpenCode experimental features (`OPENCODE_EXPERIMENTAL_*`).
+
 ### The coder subagent (OpenCode and Pi)
 
 `install.sh` adds a specialist **coder** subagent. It also adds a rule that tells the main agent when to use the coder. It does this **only when the server has 2+ slots**. With one slot (for example, a 24 GB Mac with a 27B), each delegation removes the main session from its slot and forces a full read again. Thus, `install.sh` does not install the coder, or removes it.
@@ -503,12 +524,13 @@ Auto-tune measures the best settings for one model on this Mac. It takes about 5
 ```bash
 ./carl.sh tune qwen3.8-27b-iq3            # all modes
 ./carl.sh tune qwen3.8-27b-iq3 --quick    # no MTP modes with 2 drafts, no 64K read (about 4 min)
+./carl.sh tune qwen3.8-27b-iq3 --long     # also reads 128K and 192K, and the decode speed at each depth (+10-40 min)
 ```
 
 It does these steps. The model loads one time for each speculation mode.
 1. **Memory:** the largest context window that fits, with 1 slot and with 2 slots.
 2. **Speculation:** none, n-gram, and, if the file has an MTP head, MTP and MTP + n-gram with 1 and 2 drafts (`--quick`: the MTP modes with 1 draft only). N-gram alone always uses 2 drafts. Each mode writes prose, new code and a code re-emit, two times. The score is a weighted geometric mean (prose 0.4, code 0.4, re-emit 0.2). A mode with drafting must be 3% better than a simpler mode to win.
-3. **Prompt reading:** a cold read at 8K, 32K and 64K tokens (`--quick`: no 64K). From these, it calculates the time to read a full window. This gives the context zones of this Mac: a cold read of the full window in 3 min or less = fast (green), in 10 min or less = slow (yellow), more = very slow (red). The fast zone always includes 96K: CARL never shows 96K or less as slow.
+3. **Prompt reading:** a cold read at 8K, 32K and 64K tokens (`--quick`: no 64K; `--long`: also 128K and 192K, as far as the model's window fits this Mac, with the decode speed after each read, and an estimate of the time before the deep reads start). From these, it calculates the time to read a full window. This gives the context zones of this Mac: a cold read of the full window in 3 min or less = fast (green), in 10 min or less = slow (yellow), more = very slow (red). The fast zone always includes 96K: CARL never shows 96K or less as slow.
 4. **Result:** q4_0 KV, the best speculation, the context window and the slots (2 if two windows fit).
    - **The context is never less than 96K if 96K fits one slot.** Users need that much context to work.
    - Above 96K, Auto-tune keeps the catalogue window if a cold read of it is not worse than slow on this Mac and it fits. Otherwise, it selects the largest standard window in the fast zone (minimum 96K).
@@ -685,7 +707,7 @@ The Settings tab (tab 5) has five panels: **Server**, **Models**, **Auto fit**, 
 - **The other goal's** pick, in one line, and the **ranking**: every model by rank with its arch, weights, the largest window that fits this Mac (1 slot, q4_0), whether it is here, and what auto fit made of it (the pick, passed over and why, abliterated, a custom model not opted in). ↑ ↓, PgUp / PgDn or the wheel scroll the panel.
 
 **Auto-tune panel:**
-- Select a model with ← → (or click its name for a list). Only downloaded models are in the list. Click the **quick** box for the quick mode.
+- Select a model with ← → (or click its name for a list). Only downloaded models are in the list. Choose the mode: **quick**, **default** or **long** (click one, or push space for the next).
 - Push Enter to run Auto-tune ([section 7](#auto-tune)). The panel shows each step and the last lines of its output. `c` cancels.
 - CAUTION: Auto-tune needs the GPU for itself. If a server runs, the panel asks first. Then it stops the server, runs the tune, and starts the server again with the saved settings (and the new tune).
 - **Last result:** the date, the Mac, the selected settings, the speed of each speculation mode (prose, code, re-emit), the prompt read speeds and the context zones.
@@ -859,7 +881,7 @@ tools/llama-wait-idle.sh 1200 && tools/llama-ab.sh all
 
 | Tool | Purpose |
 |---|---|
-| `./carl.sh tune NAME [--quick]` (`tools/carl-tune.py`) | Auto-tune: memory, speculation modes, prompt reading at 8K/32K/64K. It saves the result for this Mac in `~/.config/carl/models.json`. |
+| `./carl.sh tune NAME [--quick\|--long]` (`tools/carl-tune.py`) | Auto-tune: memory, speculation modes, prompt reading at 8K/32K/64K. It saves the result for this Mac in `~/.config/carl/models.json`. |
 | `tools/llama-spec-sweep.sh CFG...` + `tools/llama-spec-bench.py` | A speculative-decoding sweep. The sweep restarts the server for each config. The bench measures prose, code and edit decode speed. NOTE: the edit workload re-emits the source of `llama-spec-bench.py`, which was rewritten in 1.1.0. Thus, new edit numbers are not directly comparable with older measurements. |
 | `tools/llama-ab.sh [kv\|ub\|all]` | An A/B test of the KV type and `-ub`. It uses `tools/llama-kv-longctx.py` and `tools/llama-ab-measure.py`. It restarts the server. |
 | `tools/llama-kv-longctx.py` | A ~64K haystack with 8 needles: cold prefill, decode, append, recall. |
@@ -918,7 +940,7 @@ python3 -m unittest discover -s tests/monitor -t tests/monitor   # the dashboard
 | `./carl.sh download hf:OWNER/REPO/FILE.gguf` | download any GGUF from Hugging Face (verified); `hf:OWNER/REPO` lists its GGUF files |
 | `./carl.sh verify [NAME...]` | verify downloaded models (size and SHA-256); no names: every downloaded model |
 | `./carl.sh delete NAME` | delete a downloaded model file |
-| `./carl.sh tune NAME [--quick]` | Auto-tune a model for this Mac: speculation, context window, slots (~5–10 min; stop the server first) |
+| `./carl.sh tune NAME [--quick\|--long]` | Auto-tune a model for this Mac: speculation, context window, slots (~5–10 min; quick ~4 min; long +10–40 min, up to 192K; stop the server first) |
 | `./carl.sh config [show\|path\|get KEY\|set KEY VALUE\|unset KEY]` | the settings file `~/.config/carl/config.json`; KEY like `llama.net` or `models.NAME.ctx` |
 | `./carl.sh card NAME [set FIELD VALUE\|unset FIELD]` | a model's card; custom models: set or remove one field of your card ([Cards for custom models](#cards-for-custom-models)) |
 | `./host/models.sh list\|download\|verify\|delete NAME\|path NAME\|get NAME FIELD\|default\|downloaded` | the models tool (a wrapper around `tools/carl.py`; `./carl.sh models\|download\|verify\|delete` use it): list, download, verify, delete, the local path, one field, the default model for this Mac, the downloaded models |

@@ -11,6 +11,7 @@ from typing import Callable, Dict, List, NamedTuple, Optional, cast
 from . import fsio, system
 from .api import FETCH_ERRORS, Endpoint
 from carl_core.domain.cards import editable_card
+from carl_core.domain.tuning import DEPTHS, as_depth
 from carl_core.domain.types import ModelInfo as CoreModelInfo
 
 from .card_form import CardForm
@@ -145,7 +146,7 @@ class Controller:
         """Run an action: a clicked region's or button's, or one a key stands for."""
         ui, d = self.ui, self.data
         if action.startswith(("set", "sp:", "pick", "mrow:", "smodel:", "msortset:", "mfilterset:", "c2no", "card",
-                              "fgoal:", "fscope:", "rmode", "rload:", "runload:")) \
+                              "fgoal:", "fscope:", "rmode", "rload:", "runload:", "tdepth:")) \
                 or action in SETTINGS_ACTIONS:
             self.settings_action(action)
         elif action.startswith("level:"):
@@ -311,8 +312,11 @@ class Controller:
         if act == "tpick":
             ui.picker = Picker("AUTO-TUNE WHICH MODEL?", [(x["name"], x) for x in self.models.downloaded()], "picktune")
             return
-        if act == "tquick":
-            ui.tune_quick = not ui.tune_quick
+        if act == "tquick":                             # quick -> default -> long -> quick
+            ui.tune_depth = DEPTHS[(DEPTHS.index(as_depth(ui.tune_depth)) + 1) % len(DEPTHS)]
+            return
+        if act.startswith("tdepth:"):
+            ui.tune_depth = as_depth(act[7:])
             return
         if act == "trun":
             self.jobs.run_tune(d)

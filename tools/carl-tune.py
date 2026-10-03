@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Auto-tune one model for this Mac: speculative decoding and context window.
 
-  ./carl.sh tune NAME [--quick] [--port 8093]
+  ./carl.sh tune NAME [--quick | --long] [--port 8093]
 
 Steps (the model loads once per speculation mode, ~5-10 min in all):
   1. memory: the largest window that fits with 1 and 2 slots (tools/llama-fit.py's model)
@@ -9,7 +9,8 @@ Steps (the model loads once per speculation mode, ~5-10 min in all):
      at n = 1 and 2. Each runs prose, fresh code and a code re-emit, twice. Score =
      weighted geometric mean (prose 0.4, code 0.4, re-emit 0.2); a mode with drafting
      must beat a simpler one by 3% to win.
-  3. prompt reading: a cold read at 8K and 32K tokens (64K too without --quick). The
+  3. prompt reading: a cold read at 8K, 32K and 64K tokens (--quick: 8K and 32K; --long: also
+     128K and 192K, and the decode speed at each depth). The
      read time for a full window gives this Mac's context zones: a cold re-read of the
      whole window within 3 min = fast, 10 min = slow, beyond = very slow.
   4. result: kv q4_0, the best speculation, the context (96K when it fits; above that the
@@ -52,7 +53,10 @@ def parse_args(argv: List[str]) -> argparse.Namespace:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("model")
     ap.add_argument("--port", type=int, default=8093)
-    ap.add_argument("--quick", action="store_true", help="skip the MTP modes at n=2 and the 64K read")
+    depth = ap.add_mutually_exclusive_group()
+    depth.add_argument("--quick", action="store_true", help="skip the MTP modes at n=2 and the 64K read (~4 min)")
+    depth.add_argument("--long", action="store_true", help="also read 128K and 192K cold and measure the decode speed "
+                                                            "at each depth (+10-40 min)")
     ap.add_argument("--dry-run", action="store_true", help="measure and print the result, don't save it")
     return ap.parse_args(argv)
 
@@ -112,7 +116,7 @@ def run(args: argparse.Namespace, server: llama_server.LlamaServerControl, m: Mo
     if not isinstance(base_ctx, int):
         raise ConfigError(f"{m.get('name')}: the tuned ctx is not a token count")
     plan = TunePlan(shape=shape, weights=os.path.getsize(path), limit=app.gpu.limit()[0], base_ctx=base_ctx,
-                    quick=args.quick,
+                    depth="quick" if args.quick else "long" if args.long else "default",
                     date=app.clock.today(), machine=f"{machine} {ram_gb} GB", llama_cpp=llama_server_version(),
                     edit_source=edit_source)
     progress = StepPrinter()
