@@ -62,7 +62,10 @@ class ValuesTest(unittest.TestCase):
         self.assertIn("192.168.1.5", next(r for r in llama if r.key == "net").choices or [])
         shown = rows({"adv": "shown"}, SCHEMA, lambda: [])
         self.assertEqual(shown[-len(LLAMA_ADV):], LLAMA_ADV)
-        self.assertEqual(set(SCHEMA.defaults()), {r.key for r in SCHEMA.llama + LLAMA_ADV})
+        self.assertEqual(set(SCHEMA.defaults()), {r.key for r in SCHEMA.llama + LLAMA_ADV} | {"goal", "scope"})
+        self.assertNotIn("goal", [r.key for r in llama])                # the Auto fit panel has them
+        self.assertEqual(next(r for r in llama if r.key == "net").default, "local")
+        self.assertEqual(net_choices(["10.0.0.2"]), ("local", "vm", "10.0.0.2"))       # no "auto" since 1.3.0
 
     def test_model_row_keys(self) -> None:
         self.assertEqual(MODEL_ROW_KEYS["specn"], "spec_n")
@@ -159,7 +162,7 @@ class ServiceTest(unittest.TestCase):
                          ("big", 2560, 98304, "2", "local"))
         self.assertEqual(p["temp"], "1.0")         # what runs wins over the profile's 0.6
         p2 = self.svc.pending_init(ServerData(), self.store.load_config())
-        self.assertEqual((p2["model"], p2["temp"], p2["net"]), ("auto", "0.6", "auto"))
+        self.assertEqual((p2["model"], p2["temp"], p2["net"]), ("auto", "0.6", "local"))
 
     def test_defaults_for_keeps_model_and_advanced(self) -> None:
         q = self.svc.defaults_for(dict(SCHEMA.defaults(), model="big", adv="shown", kv="q8_0", cache=8192))
@@ -210,20 +213,29 @@ class ServiceTest(unittest.TestCase):
 
 
 class AutoFitTest(unittest.TestCase):
-    """Auto fit in the Settings tab: goal / scope rows, the one-step Auto fit, the start model."""
+    """Auto fit in the Settings tab: goal and scope (the Auto fit panel), the one-step Use this, the start model."""
 
     def setUp(self) -> None:
         self.store = FakeStore()
         self.svc = service(self.store)
 
-    def test_goal_and_scope_rows_are_saved_to_llama(self) -> None:
-        keys = [r.key for r in SCHEMA.llama]
-        self.assertEqual(keys[:3], ["model", "goal", "scope"])
+    def test_goal_and_scope_are_saved_to_llama(self) -> None:
         p = dict(SCHEMA.defaults(), adv="hidden", goal="hard-code", scope="downloaded")
         cfg = settings_to_config(p, {"schema": 1}, SCHEMA, None, None)
         self.assertEqual((cfg["llama"]["auto_goal"], cfg["llama"]["auto_fit"]), ("hard-code", "downloaded"))
         cfg = settings_to_config(dict(SCHEMA.defaults(), adv="hidden"), cfg, SCHEMA, None, None)
         self.assertNotIn("auto_goal", cfg["llama"])                     # defaults are not saved
+
+    def test_panel_choice_is_saved_at_once(self) -> None:
+        self.store.config = {"schema": 1, "llama": {"model": "iq"}}
+        p: dict = {"goal": "everyday", "scope": "catalogue"}
+        self.svc.save_auto_choice(p, "goal", "hard-code")
+        self.assertEqual(p["goal"], "hard-code")
+        self.assertEqual(self.store.saved[-1]["llama"], {"model": "iq", "auto_goal": "hard-code"})
+        self.svc.save_auto_choice(p, "goal", "everyday")                # the default is left out
+        self.assertEqual(self.store.saved[-1]["llama"], {"model": "iq"})
+        with self.assertRaises(ValueError):
+            self.svc.save_auto_choice(p, "scope", "everything")
 
     def test_auto_resolves_with_the_rows_goal_and_scope(self) -> None:
         seen = []

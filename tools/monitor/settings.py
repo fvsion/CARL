@@ -46,10 +46,17 @@ LLAMA_ADV = [
 ]
 
 
+# Auto fit's goal and scope: chosen in the Auto fit panel (saved at once), not Server-panel rows.
+AUTO_ROWS = [
+    SettingRow("goal", "auto goal", ["everyday", "hard-code"], "llama:auto_goal", "everyday"),
+    SettingRow("scope", "auto from", ["catalogue", "downloaded"], "llama:auto_fit", "catalogue"),
+]
+
+
 @dataclass(frozen=True)
 class Schema:
-    """The Server panel's rows. The network row offers auto, local, vm and this Mac's
-    own addresses (an address = llama.host in config.json)."""
+    """The Server panel's rows. The network row offers local, vm and this Mac's own
+    addresses (an address = llama.host in config.json)."""
     net_choices: Tuple[str, ...]
 
     @property
@@ -57,8 +64,6 @@ class Schema:
         """The llama.cpp rows (without the advanced ones)."""
         return [
             SettingRow("model", "model", None, "llama:model", "auto"),      # choices: the model list
-            SettingRow("goal", "auto goal", ["everyday", "hard-code"], "llama:auto_goal", "everyday"),
-            SettingRow("scope", "auto from", ["catalogue", "downloaded"], "llama:auto_fit", "catalogue"),
             SettingRow("kv", "KV cache", ["q4_0", "q8_0"], "m:kv", "q4_0"),
             SettingRow("ctx", "context/slot", [32768, 49152, 65536, 98304, 131072, 163840, 196608, 262144], "m:ctx", 98304),
             SettingRow("slots", "slots", ["auto", "1", "2"], "m:slots", "auto"),
@@ -66,14 +71,14 @@ class Schema:
                        "draft-mtp,ngram-mod"),
             SettingRow("specn", "draft tokens", ["1", "2", "3"], "m:spec_n", "1"),
             SettingRow("cache", "RAM cache", ["auto", 1024, 2560, 4096, 6144, 8192], "llama:cache_ram", "auto"),
-            SettingRow("net", "network", list(self.net_choices), "llama:net", "auto"),
+            SettingRow("net", "network", list(self.net_choices), "llama:net", "local"),
             SettingRow("temp", "temperature", ["1.0", "0.6"], "m:temp", "1.0"),
             SettingRow("presence", "presence", ["0", "1.5"], "m:presence", "0"),
         ]
 
     def saved_rows(self) -> List[SettingRow]:
-        """The rows saved to config.json (the advanced ones included)."""
-        return self.llama + LLAMA_ADV
+        """The rows saved to config.json (the advanced ones and the Auto fit panel's included)."""
+        return self.llama + LLAMA_ADV + AUTO_ROWS
 
     def defaults(self) -> Pending:
         """Every row at its default."""
@@ -81,8 +86,8 @@ class Schema:
 
 
 def net_choices(addrs: Sequence[str]) -> Tuple[str, ...]:
-    """The network row's choices: auto, local, vm, then this Mac's addresses."""
-    return ("auto", "local", "vm", *addrs)
+    """The network row's choices: local, vm, then this Mac's addresses."""
+    return ("local", "vm", *addrs)
 
 
 # row key -> key of the model's profile (config.json models.<name>, Auto-tune, catalogue)
@@ -98,12 +103,14 @@ REINSTALL = {"ctx", "slots"}         # clients need install.sh again when these 
 
 ADV_WARN = "Caution: these values are tuned and measured (REFERENCE.md). A change can make the model slower, " \
            "or its answers worse. Press x to set them back to the tuned values."
-_NET_HELP = ("auto = the VM address if VMware's network is up, else this Mac only · an address = that interface "
+_NET_HELP = ("local = this Mac only (the default) · vm = also a VMware Fusion VM client (192.168.42.1) · "
+             "an address = that interface "
              "(LAN: other computers can reach it)")
 SET_HELP = {
     "model": "Every model: the catalogue, the models folder and Hugging Face downloads. auto = auto fit's pick for this "
-             "Mac (★). Press A for Auto fit: it sets the model, context, slots and KV cache in one step. Another "
-             "model: press ] for the Models panel, then h to add one from Hugging Face.",
+             "Mac (★). Press A for the Auto fit panel: why it picks that model, the goal (everyday / hard code), and "
+             "Use this, which sets the model, context, slots and KV cache in one step. Another model: press ] for "
+             "the Models panel, then h to add one from Hugging Face.",
     "goal": "What auto fit optimises for: everyday = the MoE builds first (fast, usually sufficient) · hard-code = "
             "the dense builds first (better at code and hard tasks, slower). Stock models only.",
     "scope": "Which models auto fit picks from: catalogue = every catalogue model (it offers the download; a start "
@@ -314,6 +321,22 @@ class SettingsService:
     def auto_fit(self, p: Pending) -> Optional[AutoFit]:
         """Auto fit for this Mac with the goal and scope in p (None: unavailable, models.fit_error says why)."""
         return self.models.auto_fit(*self.goal_scope(p))
+
+    def save_auto_choice(self, p: Pending, key: str, value: str) -> None:
+        """The Auto fit panel's goal or scope: into p and config.json at once (llama.auto_goal /
+        llama.auto_fit; the default is left out). ValueError for a value that isn't a choice."""
+        row = next(r for r in AUTO_ROWS if r.key == key)
+        if value not in (row.choices or []) or row.loc is None:
+            raise ValueError(f"{row.label}: {value!r} is not a choice")
+        p[key] = value
+        cfg = self.store.load_config()
+        sec = cfg.setdefault("llama", {})
+        ck = row.loc.split(":")[1]
+        if value == row.default:
+            sec.pop(ck, None)
+        else:
+            sec[ck] = value
+        self.store.save_config(cfg)
 
     def apply_auto_fit(self, p: Pending) -> Optional[AutoFit]:
         """Auto fit in one step: p gets the pick, its profile, and auto fit's context, slots and KV."""

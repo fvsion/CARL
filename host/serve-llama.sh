@@ -17,8 +17,8 @@
 #                      k = 1024). Default 96k. Clients take it from /props when
 #                      install.sh runs; 128k-160k work but read and decode slower.
 #
-# Network (host/common.sh): --vm = VMware's 192.168.42.1, --local = 127.0.0.1,
-# default auto (VM address if Fusion's network is up, else local). Never 0.0.0.0.
+# Network (host/common.sh): --vm = VMware's 192.168.42.1, --local = 127.0.0.1
+# (the default). Never 0.0.0.0.
 # The API key file (~/.config/carl/api-key) is created on first use if missing
 # (ensure_api_key in host/common.sh; it copies a key from an earlier place once).
 # Interactive starts show the live monitor in this terminal; quitting it asks

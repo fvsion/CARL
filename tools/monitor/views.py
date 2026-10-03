@@ -6,9 +6,10 @@ import dataclasses
 from typing import List, Optional, Tuple
 
 from .cards import REQ_HEAD, View, card_connect, card_requests, column, log_view, req_row
-from .fmt import B, DIM, GRN, R, Card, CardLine, Row, buttons, draw_card, home_short, indent, knum, side_by_side
-from .model import ServerData
-from .state import UIState
+from .fmt import (B, CYN, DIM, GRN, R, RED, YEL, Card, CardLine, Row, buttons, cwrap, draw_card, fit, home_short, indent,
+                  knum, side_by_side)
+from .model import ServerData, clean
+from .state import InstallRun, UIState
 
 PREVIEW_TITLES = {"opencode": "OPENCODE CONFIG", "pi": "PI CONFIG", "curl": "CURL TEST"}
 PREVIEW_WHERE = {
@@ -41,29 +42,77 @@ def body_overview(v: View, ui: UIState, d: ServerData, cols: int, height: int, l
 
 def body_connect(v: View, ui: UIState, d: ServerData, cols: int, height: int,
                  here: List[Tuple[str, str]], preview: str) -> List[Row]:
-    """The connection in full, how to set up clients, and the selected config (preview text)."""
+    """The connection in full, how to set up clients (Install runs ./carl.sh install), and the
+    installer's output or the selected config (preview text)."""
     w = cols - 1
+    tw = w - 4
     full = dataclasses.replace(v, level_override={"connect": 2})
     rows = _card(full, "connect", card_connect(full, d)._replace(title="CONNECTION"), w, 2)
-    guide: List[CardLine] = []
-    if here:
-        guide.append(f"{GRN}✓ This Mac:{R} already configured by install.sh for this server ("
-                     + ", ".join(f"{c}: provider {p}" for c, p in here) + "). Nothing to paste here.")
-    guide += [f"{B}Clients in the VM:{R}   copy the bundle in, then ./install-clients.sh && ./install.sh",
-              f"{B}Clients on this Mac:{R} ./client/install-clients.sh && ./client/install.sh --local",
-              f"{DIM}The installer merges without overwriting your providers, default model or agents, and adds the "
-              f"coder, sidebar and session switcher.{R}",
-              f"{B}By hand:{R}             a provider block only (id carl), copied to the clipboard; it adds, never replaces",
-              buttons("", [("OpenCode config", "opencode"), ("Pi config", "pi"), ("curl test", "curl")])]
-    rows += draw_card("guide", "CLIENT SETUP", "", guide, w, v.level("guide"))
+    rows += draw_card("guide", "SET UP OPENCODE AND PI", "", setup_lines(v, ui, here, tw), w, v.level("guide"))
+    room = max(height - len(rows) - 3, 3)
+    if ui.install and ui.install_shown:
+        rows += draw_card("install", "INSTALLER", install_summary(ui.install), install_lines(ui, room, tw), w, 2)
+        return indent(rows)[:height]
     kind = ui.preview
     note = f"{GRN}copied to the clipboard ✓{R}" if ui.copied == kind else f"{DIM}click its button (or o/p/t) to copy{R}"
     plines = preview.splitlines()
-    room = max(height - len(rows) - 3, 3)
     ui.prev_scroll = min(ui.prev_scroll, max(len(plines) - room, 0))
     shown: List[CardLine] = [f"{DIM}{PREVIEW_WHERE[kind]}{R}", *plines[ui.prev_scroll:ui.prev_scroll + room - 1]]
     rows += draw_card("preview", PREVIEW_TITLES[kind], note, shown, w, v.level("preview"))
     return indent(rows)[:height]
+
+
+def setup_lines(v: View, ui: UIState, here: List[Tuple[str, str]], tw: int) -> List[CardLine]:
+    """This Mac: one command (or the Install button); a VM: start the server with --vm, then the
+    installer there; by hand: the copy buttons."""
+    L: List[CardLine] = []
+    if here:
+        L += cwrap(f"{GRN}✓ This Mac is set up{R} for this server (" + ", ".join(f"{c}: provider {p}" for c, p in here)
+                   + f"). {DIM}Run the installer again after a new model or a context / slots change.{R}", tw)
+    L += cwrap(f"{B}On this Mac:{R} one command, {CYN}./carl.sh install{R} {DIM}— it installs OpenCode and Pi when "
+               f"they are missing (into ~/.local, no sudo) and points them at this server. Your own providers, "
+               f"default model and agents are kept, and a backup is written first.{R}", tw)
+    if ui.install_ask:
+        what = ("install OpenCode and Pi when missing (downloads from npm), then write their configs"
+                if ui.install_ask == "all" else "write the OpenCode and Pi configs for this server")
+        L += cwrap(f"{YEL}Run ./carl.sh install{' --config-only' if ui.install_ask == 'config' else ''} now? It will "
+                   f"{what}.{R}", tw)
+        L.append(buttons("  ", [("Yes, run it (y)", "insyes"), ("Cancel (n)", "insno")]))
+    elif ui.install and not ui.install.done:
+        L.append(buttons("  ", [("Show the installer (i)", "insshow"), ("Stop it", "inscancel")]))
+    else:
+        L.append(buttons("  ", [("Install on this Mac (i)", "insall"), ("Update configs only (u)", "insconfig")]))
+    vm_ready = v.host not in ("127.0.0.1", "::1", "localhost")
+    L += cwrap(f"{B}In a VM:{R} {DIM}start the server for the VM with{R} {CYN}./carl.sh --vm{R} "
+               + (f"{GRN}(it is: {v.host}){R}" if vm_ready else f"{YEL}(now it listens on this Mac only){R}")
+               + f"{DIM}, copy the client folder into the VM, then run{R} {CYN}./install-clients.sh && ./install.sh{R} "
+               f"{DIM}there.{R}", tw)
+    L += cwrap(f"{B}By hand:{R} {DIM}a provider block only (id carl), copied to the clipboard; it adds, never "
+               f"replaces.{R}", tw)
+    L.append(buttons("  ", [("OpenCode config (o)", "opencode"), ("Pi config (p)", "pi"), ("curl test (t)", "curl")]))
+    return L
+
+
+def install_summary(ins: InstallRun) -> str:
+    """The installer card's title info: what runs and how it ended."""
+    if not ins.done:
+        return f"{YEL}running: {ins.what}…{R}"
+    ok = ins.proc.returncode == 0
+    return f"{GRN}done: {ins.what}{R}" if ok else f"{RED}failed (exit {ins.proc.returncode}){R}"
+
+
+def install_lines(ui: UIState, room: int, tw: int) -> List[CardLine]:
+    """The installer's last output lines (control characters removed), and its buttons."""
+    ins = ui.install
+    if ins is None:
+        return []
+    out: List[CardLine] = [f"{DIM}{fit(clean(x), tw)}{R}" for x in ins.lines if x.strip()]
+    out = out[-max(room - 2, 1):]
+    if not ins.lines:
+        out.append(f"{DIM}starting…{R}")
+    out.append(buttons("", [("Stop it", "inscancel")] if not ins.done else
+                       [("Close (x)", "insclose"), ("Run again (i)", "insall")]))
+    return out
 
 
 def body_requests(v: View, ui: UIState, cols: int, height: int) -> List[Row]:

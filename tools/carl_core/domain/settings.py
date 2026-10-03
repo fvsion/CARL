@@ -71,7 +71,12 @@ def _str(default: str = "", env: Optional[str] = None) -> SettingSpec:
     return SettingSpec("str", default, env)
 
 
-NET_CHOICES = ("auto", "local", "vm")
+NET_CHOICES = ("local", "vm")
+# Before 1.3.0 the default network mode was "auto": the VM address whenever VMware's network
+# was up, which exposed the server to the VM network without being asked. A saved "auto" is
+# converted to the default (local) once, with this note (migrate_config).
+NET_AUTO_NOTE = ("llama.net: 'auto' was removed in CARL 1.3.0; the server now listens on this Mac only "
+                 "(127.0.0.1). For a VM client: ./carl.sh --vm, or ./carl.sh config set llama.net vm")
 
 # Per-model settings (config.json "models.<name>", Auto-tune, catalogue "tune").
 MODEL_KEYS: Dict[str, SettingSpec] = {
@@ -93,7 +98,7 @@ LLAMA_KEYS: Dict[str, SettingSpec] = {
     "model": _str("auto"),                                  # auto = auto fit's pick for this Mac
     "auto_goal": _choice("everyday", ("everyday", "hard-code")),        # auto fit: MoE first, or dense first
     "auto_fit": _choice("catalogue", ("catalogue", "downloaded")),      # auto fit picks from these models
-    "net": _choice("auto", NET_CHOICES, "NET"),
+    "net": _choice("local", NET_CHOICES, "NET"),
     "host": _str("", "HOST"),                               # one address of this Mac (wins over net)
     "cache_ram": SettingSpec("intauto", "auto", "CACHE_RAM", min=0, max=65536),
     "ub": _int(512, 64, 8192, "UB"),
@@ -237,6 +242,17 @@ def validate_config(raw: object) -> Tuple[Config, List[str]]:
     return cfg, warn
 
 
+def migrate_config(raw: object) -> Tuple[object, List[str]]:
+    """(raw config.json with retired values converted, [notes]): the caller saves it when there are
+    notes, so each note shows once. Today: llama.net "auto" -> unset (= local)."""
+    if not isinstance(raw, dict):
+        return raw, []
+    llama = raw.get("llama")
+    if isinstance(llama, dict) and llama.get("net") == "auto":
+        return {**raw, "llama": {k: v for k, v in llama.items() if k != "net"}}, [NET_AUTO_NOTE]
+    return raw, []
+
+
 def _env_to_key(keys: Mapping[str, SettingSpec]) -> Dict[str, str]:
     return {s.env: k for k, s in keys.items() if s.env}
 
@@ -261,7 +277,7 @@ def migrate_env(llama_env: Mapping[str, str]) -> Optional[Config]:
     if profile:
         doc["models"] = {model: profile}
     try:
-        return validate_config(doc)[0]
+        return validate_config(migrate_config(doc)[0])[0]
     except ConfigError:
         return None
 

@@ -93,6 +93,7 @@ class Budget:
     gpu_limit: float
     ram: float
     reserve: float
+    vm_up: bool = False             # VMware's network is up (the reserve is larger)
 
     @property
     def allowed(self) -> float:

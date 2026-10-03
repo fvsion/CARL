@@ -25,17 +25,20 @@ from .model import JSONDict, ModelInfo, ServerData, clean
 from .settings import NUMERIC, Pending, SettingsService, parse_typed, step_choice
 from .arrange import FILTERS, SORTS
 from .settings_view import SettingsView
-from .state import SUBPANELS, TABS, Confirm, PickItem, Picker, TextPrompt, UIState
+from .state import (SP_FIT, SP_MODELS, SP_SERVER, SP_TUNE, SUBPANELS, TABS, Confirm, PickItem, Picker, TextPrompt,
+                    UIState)
 from .store import ModelList
 
 TEMPLATES = {"opencode": "opencode/opencode.json", "pi": "pi/models.json"}     # client config templates in client/
 SETTINGS_ACTIONS = ("msort", "mfilter", "msort-", "mfilter-", "msortpick", "mfilterpick",
                     "museit", "mdl", "mverify", "mdelete", "mdelyes", "mhf", "mcancel", "mtune", "mautodl", "medit",
-                    "tprev", "tnext", "tpick", "tquick", "trun", "tyes", "tcancel", "tclear")
+                    "tprev", "tnext", "tpick", "tquick", "trun", "tyes", "tcancel", "tclear", "fuse", "fdl", "fgoal",
+                    "fscope")
 MODEL_KEYS = {"\r": "museit", "\n": "museit", "d": "mdl", "v": "mverify", "x": "mdelete", "h": "mhf", "c": "mcancel",
               "u": "mtune", "e": "medit", "s": "msort", "f": "mfilter",
               "S": "msort-", "F": "mfilter-"}
 ARRANGE_KEYS = {"s": "msort", "S": "msort-", "f": "mfilter", "F": "mfilter-"}   # every model list
+FIT_KEYS = {"\r": "fuse", "\n": "fuse", "d": "fdl", "g": "fgoal", "f": "fscope"}
 TUNE_KEYS = {"\r": "trun", "\n": "trun", RIGHT: "tnext", LEFTKEY: "tprev", "c": "tcancel", " ": "tquick"}
 SCROLL_KEYS = {UP: 1, DOWN: -1, PGUP: 10, PGDN: -10}
 PANEL_PASSTHROUGH = ("q", "Q", "\x03", "\t")       # keys the Models / Auto-tune panels leave to the app
@@ -103,6 +106,7 @@ class Controller:
         """Show a config on the Connect tab and copy it to the clipboard."""
         ui = self.ui
         ui.preview, ui.prev_scroll, ui.tab = kind, 0, 1
+        ui.install_shown = False                # the preview takes the installer's place
         if not self.data.up:
             ui.toast("server not reachable yet: nothing copied")
             return
@@ -110,11 +114,37 @@ class Controller:
         ui.copied = kind if ok else None
         ui.toast(LABELS[kind] + (" copied to the clipboard" if ok else ": clipboard unavailable, select it on screen"))
 
+    def install_action(self, act: str) -> None:
+        """The Connect tab's installer: insall / insconfig ask first, insyes runs it, insno cancels
+        the question, insshow / insclose show / hide its output, inscancel stops it."""
+        ui = self.ui
+        ui.tab = 1
+        running = bool(ui.install and not ui.install.done)
+        if act in ("insall", "insconfig"):
+            if running:
+                ui.install_shown = True
+                ui.toast("the installer is already running: its output is below", 5)
+            else:
+                ui.install_ask = "all" if act == "insall" else "config"
+        elif act == "insyes" and ui.install_ask:
+            config_only, ui.install_ask = ui.install_ask == "config", None
+            self.jobs.start_install(config_only)
+        elif act == "insno":
+            ui.install_ask = None
+        elif act == "insshow":
+            ui.install_shown = bool(ui.install)
+        elif act == "insclose":
+            ui.install_shown = False
+        elif act == "inscancel" and running:
+            self.jobs.cancel_install()
+            ui.toast("installer stopped: running it again is safe (backups stay)", 8)
+
     # ------------------------------------------------------------ actions
     def do(self, action: str) -> None:
         """Run an action: a clicked region's or button's, or one a key stands for."""
         ui, d = self.ui, self.data
-        if action.startswith(("set", "sp:", "pick", "mrow:", "smodel:", "msortset:", "mfilterset:", "c2no", "card")) \
+        if action.startswith(("set", "sp:", "pick", "mrow:", "smodel:", "msortset:", "mfilterset:", "c2no", "card",
+                              "fgoal:", "fscope:")) \
                 or action in SETTINGS_ACTIONS:
             self.settings_action(action)
         elif action.startswith("level:"):
@@ -131,6 +161,8 @@ class Controller:
             ui.key_shown = not ui.key_shown
         elif action in LABELS:
             self.show_config(action)
+        elif action.startswith("ins"):
+            self.install_action(action)
         elif action == "wrap":
             ui.wrap = not ui.wrap
         elif action == "errors":
@@ -200,7 +232,7 @@ class Controller:
             ui.pending = chosen
             chosen["model"] = m["name"]
             svc.load_profile(chosen, m["name"])
-            ui.sp, ui.set_row = 0, 0                    # the model row
+            ui.sp, ui.set_row = SP_SERVER, 0            # the model row
             ui.toast(f"{m['name']} selected: press a to start it" + ("" if m["status"] == "downloaded" else " once it is downloaded"), 6)
             return
         if act == "mdl" and m:
@@ -210,7 +242,7 @@ class Controller:
             c, ui.confirm2 = ui.confirm2, None
             if c and c.model:
                 self.jobs.start_download(c.model)
-                ui.sp = 1
+                ui.sp = SP_MODELS
                 ui.mrow = next((i for i, x in enumerate(self.visible()) if x["name"] == c.model), ui.mrow)
             return
         if act == "mverify" and m:
@@ -241,10 +273,28 @@ class Controller:
             self.jobs.cancel_download()
             return
         if act == "mtune" and m:
-            ui.tune_model, ui.sp = m["name"], 2
+            ui.tune_model, ui.sp = m["name"], SP_TUNE
             return
         if act == "medit" and m:
             self.open_card(m)
+            return
+        # ---- auto fit panel
+        if act.startswith(("fgoal", "fscope")):
+            self.auto_choice(act)
+            return
+        if act == "fuse":
+            if ui.pending is None:
+                ui.pending = self.pending_init(d)
+            self.auto_fit(ui.pending)
+            if ui.confirm2 is None:                     # downloaded: the Server panel shows the plan
+                ui.sp = SP_SERVER
+            return
+        if act == "fdl":
+            fit = svc.auto_fit(ui.pending or {})
+            if fit and fit.pick and not fit.pick.downloaded:
+                self.jobs.start_download(fit.pick.name)
+            else:
+                ui.toast("auto fit's pick is already downloaded", 5)
             return
         # ---- auto-tune panel
         if act in ("tprev", "tnext"):
@@ -303,7 +353,7 @@ class Controller:
         elif act == "setdefaults":
             ui.pending = svc.defaults_for(p)
         elif act == "setautofit":
-            self.auto_fit(p)
+            ui.sp = SP_FIT
         elif act == "setnofit":
             ui.toast("this setup does not fit or is not downloaded: see Status (fit)", 6)
         elif act == "setapply" and not ui.restart:
@@ -319,6 +369,25 @@ class Controller:
         elif act == "setyes":
             ui.confirm = False
             self.jobs.restart(p, d)
+
+    def auto_choice(self, act: str) -> None:
+        """The Auto fit panel's goal / scope: fgoal / fscope switch to the other one, fgoal:X /
+        fscope:X choose X. Saved to config.json at once."""
+        ui = self.ui
+        if ui.pending is None:
+            ui.pending = self.pending_init(self.data)
+        p = ui.pending
+        key = "goal" if act.startswith("fgoal") else "scope"
+        opts = ("everyday", "hard-code") if key == "goal" else ("catalogue", "downloaded")
+        value = act.split(":", 1)[1] if ":" in act else opts[1 - opts.index(str(p.get(key, opts[0])))]
+        try:
+            self.svc.save_auto_choice(p, key, value)
+        except Exception as e:      # config.json unreadable or not writable, a bad value: say so
+            ui.toast(f"{RED}auto fit: {e}{R}", 10)
+            return
+        fit = self.svc.auto_fit(p)
+        ui.toast(f"auto fit {'goal' if key == 'goal' else 'from'}: {value} (saved) → "
+                 + (fit.summary() if fit else "unavailable"), 8)
 
     def auto_fit(self, p: Pending) -> None:
         """Auto fit (A): the pick for this Mac with the goal and scope rows, its context, slots and
@@ -468,12 +537,12 @@ class Controller:
                     ui.confirm2 = None
                     break
             return True
-        if ui.card and ui.sp == 1:
+        if ui.card and ui.sp == SP_MODELS:
             return self.card_keys(rest)
         if rest in ("[", "]"):
             ui.sp = (ui.sp + (1 if rest == "]" else -1)) % len(SUBPANELS)
             return True
-        if ui.sp == 1:
+        if ui.sp == SP_MODELS:
             if UP in rest:
                 ui.mrow = max(ui.mrow - 1, 0)
                 return True
@@ -484,14 +553,23 @@ class Controller:
                 self.settings_action(MODEL_KEYS[rest])
                 return True
             return rest not in PANEL_PASSTHROUGH and not rest.isdigit()
-        if ui.sp == 2:
+        if ui.sp == SP_FIT:
+            for seq, step in SCROLL_KEYS.items():
+                if seq in rest:
+                    self.scroll(step * (1 if abs(step) > 1 else 3))
+                    return True
+            if rest in FIT_KEYS:
+                self.settings_action(FIT_KEYS[rest])
+                return True
+            return rest not in PANEL_PASSTHROUGH and not rest.isdigit() and rest != "A"
+        if ui.sp == SP_TUNE:
             if rest in TUNE_KEYS:
                 self.settings_action(TUNE_KEYS[rest])
                 return True
             return rest not in PANEL_PASSTHROUGH and not rest.isdigit()
-        if ui.sp == 0 and ui.pending is not None and (ui.slist or rest == "m" or rest in ARRANGE_KEYS):
+        if ui.sp == SP_SERVER and ui.pending is not None and (ui.slist or rest == "m" or rest in ARRANGE_KEYS):
             return self.server_list_keys(rest)
-        if ui.sp == 0 and ui.pending is not None and rest in ENTER and self.selected_key() == "model":
+        if ui.sp == SP_SERVER and ui.pending is not None and rest in ENTER and self.selected_key() == "model":
             self.open_model_picker()
             return True
         return False
@@ -619,7 +697,9 @@ class Controller:
     def scroll(self, step: int) -> None:
         """Up / down (step > 0 = up): moves the Settings row by one, else scrolls the tab's list."""
         ui = self.ui
-        if ui.tab == 4:
+        if ui.tab == 4 and ui.sp == SP_FIT:
+            ui.fit_scroll = max(0, ui.fit_scroll - step)
+        elif ui.tab == 4:
             if abs(step) != 1:                      # wheel / PgUp PgDn: scroll the Server panel (cards below the rows)
                 ui.set_scroll = max(0, ui.set_scroll - step)
                 return
@@ -669,7 +749,7 @@ class Controller:
             return False
         if ui.tab == 4 and not ui.quit and rest and ui.edit is None and self.settings_keys(rest):
             return False
-        if ui.tab == 4 and ui.pending is not None and not ui.quit and ui.sp == 0:
+        if ui.tab == 4 and ui.pending is not None and not ui.quit and ui.sp == SP_SERVER:
             key = self.selected_key()
             if ui.edit is not None:               # typing a value: digits . k, Backspace, Enter, Esc
                 for ch in rest:
@@ -701,13 +781,16 @@ class Controller:
         for seq, step in SCROLL_KEYS.items():
             if seq in rest:
                 self.scroll(step)
-        if ui.tab == 4 and ui.pending is not None and ui.sp == 0:
+        if ui.tab == 4 and ui.pending is not None and ui.sp == SP_SERVER:
             if RIGHT in rest:
                 self.do(f"setinc:{ui.set_row}")
             if LEFTKEY in rest:
                 self.do(f"setdec:{ui.set_row}")
         if END in rest or END_ALT in rest:
             ui.log_scroll = 0
+        if ui.tab == 1 and ui.install_ask and rest == ESC:
+            self.do("insno")
+            return False
         return self.keys(strip_escapes(rest))
 
     def keys(self, rest: str) -> bool:
@@ -722,7 +805,11 @@ class Controller:
                 self.do("quit")
             elif ch in "12345":
                 ui.tab = int(ch) - 1
-            elif ui.tab == 4 and ui.sp == 0 and ch in "arxA":
+            elif ui.tab == 1 and ui.install_ask and ch in "yYnN":
+                self.do("insyes" if ch in "yY" else "insno")
+            elif ui.tab == 1 and ch in "iux":
+                self.do({"i": "insall", "u": "insconfig", "x": "insclose"}[ch])
+            elif ui.tab == 4 and ui.sp == SP_SERVER and ch in "arxA":
                 self.do({"a": "setapply", "r": "setrevert", "x": "setdefaults", "A": "setautofit"}[ch])
             elif ch == "\t":
                 ui.tab = (ui.tab + 1) % len(TABS)

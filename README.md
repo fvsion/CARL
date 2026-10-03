@@ -29,7 +29,7 @@ If you skip the `brew install`, `./carl.sh` finds the missing tools and asks to 
 - A second run with the same settings changes nothing.
 - CARL was formerly called LLM-Deploy: `./carl.sh` and the installer move files with the old name (`~/.config/llm-deploy`, `llm-deploy.json`) to the new one once.
 
-**Clients in a VM or on another computer:** copy the `client/` folder there, and run `./install-clients.sh && ./install.sh`. VMware Fusion works without options. For Parallels or a computer on your network, start the server with `--host ADDR` and use the same address for the clients (USERGUIDE.md, "Clients on another computer or another VM app").
+**The server serves this Mac only** (127.0.0.1) unless you ask for more. **Clients in a VM or on another computer:** start the server with `./carl.sh --vm` (VMware Fusion), copy the `client/` folder there, and run `./install-clients.sh && ./install.sh`. The dashboard's Connect tab shows the same steps, and installs the clients on this Mac with one key (`i`). For Parallels or a computer on your network, start the server with `--host ADDR` and use the same address for the clients (USERGUIDE.md, "Clients on another computer or another VM app").
 
 ## Use
 
@@ -51,9 +51,10 @@ The live state of the server: what it does now, the speed, the context, the memo
 
 ![The CARL dashboard](assets/dashboard.gif)
 
-**Settings (tab 5):** three panels. Push `[` or `]` to change the panel.
-- **Server:** change the model, the KV cache, the context and more. Then push `a` to restart with them. Push `A` for **Auto fit**: the best model and settings for this Mac in one step. Colours show tuned values (green), changed values (yellow) and very slow values (red). A start that needs more GPU memory than the Mac has is refused (`FIT_CHECK=0` overrides).
+**Settings (tab 5):** four panels. Push `[` or `]` to change the panel.
+- **Server:** change the model, the KV cache, the context and more. Then push `a` to restart with them. Colours show tuned values (green), changed values (yellow) and very slow values (red). A start that needs more GPU memory than the Mac has is refused (`FIT_CHECK=0` overrides).
 - **Models:** download, verify and delete models, or add one from Hugging Face.
+- **Auto fit** (`A` on the Server panel): the best stock model and settings for this Mac, why, and every model ranked. **Use this** sets them in one step.
 - **Auto-tune:** measure the best settings for a model on this Mac.
 
 ![The Settings tab](assets/settings.png)

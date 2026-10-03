@@ -52,7 +52,7 @@ def parse_args(argv: List[str]) -> argparse.Namespace:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("model")
     ap.add_argument("--port", type=int, default=8093)
-    ap.add_argument("--quick", action="store_true", help="fewer modes (n=1 only) and no 64K read")
+    ap.add_argument("--quick", action="store_true", help="skip the MTP modes at n=2 and the 64K read")
     ap.add_argument("--dry-run", action="store_true", help="measure and print the result, don't save it")
     return ap.parse_args(argv)
 

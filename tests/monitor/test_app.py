@@ -17,7 +17,7 @@ from monitor.jobs import Paths, ServerJobs
 from monitor.keys import InputBuffer
 from monitor.settings import Schema, SettingsService, net_choices
 from monitor.settings_view import SettingsView
-from monitor.state import UIState
+from monitor.state import SP_FIT, SP_MODELS, SP_SERVER, SP_TUNE, UIState
 from monitor.store import ModelList
 
 DOWN, UP, ESC = "\x1b[B", "\x1b[A", "\x1b"
@@ -110,7 +110,7 @@ class AppTest(unittest.TestCase):
         self.keys(DOWN, DOWN, "\r")                     # auto -> big -> iq
         self.assertIsNone(self.ui.picker)
         self.assertEqual(p["model"], "iq")
-        self.keys(DOWN, DOWN, DOWN, DOWN, "\r")         # model, auto goal, auto from, KV cache, context: type a value
+        self.keys(DOWN, DOWN, "\r")                     # model, KV cache, context: type a value
         self.assertEqual(self.ui.edit, "")
         self.keys("6", "4", "k", "\r")
         self.assertEqual(p["ctx"], 65536)
@@ -168,15 +168,18 @@ class AppTest(unittest.TestCase):
         self.assertIn("models.x.rank: not a number", text)
         self.keys(DOWN, "\x1b[C", UP, "\r", ESC, "x", "r")       # rows, a choice, the picker, defaults, revert
         self.keys("]")
-        self.assertEqual(self.ui.sp, 1)
+        self.assertEqual(self.ui.sp, SP_MODELS)
+        self.screen()
+        self.keys("]", DOWN)                            # Auto fit panel
+        self.assertEqual(self.ui.sp, SP_FIT)
         self.screen()
         self.keys("]", DOWN)                            # Auto-tune panel (Enter would start a tune)
-        self.assertEqual(self.ui.sp, 2)
+        self.assertEqual(self.ui.sp, SP_TUNE)
         self.screen()
         self.store.broken = None                       # fixed: the list comes back on the next read
         self.app.svc.models.get(refresh=True)
         self.assertIsNone(self.app.svc.models.error)
-        self.keys("[", "[")
+        self.keys("[", "[", "[")
         self.assertNotIn("model list unavailable", self.screen())
 
     def test_settings_panel_error_is_shown_not_raised(self) -> None:
@@ -199,7 +202,7 @@ class AppTest(unittest.TestCase):
 
     def test_models_panel_delete_and_text_prompt(self) -> None:
         self.keys("5", "]")
-        self.assertEqual(self.ui.sp, 1)
+        self.assertEqual(self.ui.sp, SP_MODELS)
         self.keys("x", "n")                             # big: asked, then cancelled
         self.assertIsNone(self.ui.confirm2)
         self.keys("x", "y")
@@ -210,8 +213,8 @@ class AppTest(unittest.TestCase):
         self.assertEqual(self.ui.text and self.ui.text.value, "ab")
 
     def test_auto_tune_panel_choice_and_clear(self) -> None:
-        self.keys("5", "[")
-        self.assertEqual(self.ui.sp, 2)
+        self.keys("5", "[")                             # from the first panel back to the last
+        self.assertEqual(self.ui.sp, SP_TUNE)
         first = self.ui.tune_model
         self.keys("\x1b[C")
         self.assertNotEqual(self.ui.tune_model, first)
@@ -227,17 +230,23 @@ class AppTest(unittest.TestCase):
         rows = self.app.view.server(self.ui, p, self.ctl.data, cols, 400, 8095)
         return [ANSI.sub("", t) for t, _ in rows]
 
-    def test_auto_fit_key_sets_the_pick_or_offers_the_download(self) -> None:
+    def test_auto_fit_panel_use_this_sets_the_pick_or_offers_the_download(self) -> None:
         self.keys("5")
         p = self.ui.pending
         assert p is not None
         p["model"], p["ctx"] = "iq", 32768
-        self.keys("A")                                          # the pick (big) is here: chosen, then Apply
+        self.keys("A")                                          # the Server panel's A opens the Auto fit panel
+        self.assertEqual(self.ui.sp, SP_FIT)
+        text = self.screen()
+        for part in ("AUTO FIT", "This Mac", "The pick", "Use this (Enter)", "Ranking"):
+            self.assertIn(part, text)
+        self.keys("\r")                                         # Use this: the pick (big) is here, back to Server
         self.assertEqual((p["model"], p["ctx"], p["slots"]), ("big", 98304, "auto"))
+        self.assertEqual(self.ui.sp, SP_SERVER)
         self.assertIn("press a to start it", self.ui.toast_msg[0])
         self.store.pick = ("remote", False)                    # not downloaded: asked first
         self.app.svc.models._fit.clear()
-        self.keys("A")
+        self.keys("A", "\r")
         c = self.ui.confirm2
         assert c is not None
         self.assertEqual((c.title, c.yes, c.model), ("DOWNLOAD?", "mautodl", "remote"))
@@ -245,6 +254,81 @@ class AppTest(unittest.TestCase):
         self.assertIsNone(self.ui.confirm2)
         self.assertEqual(p["model"], "remote")
         self.assertTrue(any("Auto fit" in x and "picked remote" in x for x in self.server_text(160)))
+
+    def fake_serve(self, body: str) -> None:
+        """A host/serve.sh in the test repo that the Connect tab's installer runs instead."""
+        d = os.path.join(self.tmp.name, "host")
+        os.makedirs(d, exist_ok=True)
+        path = os.path.join(d, "serve.sh")
+        with open(path, "w") as f:
+            f.write("#!/bin/sh\n" + body)
+        os.chmod(path, 0o755)
+
+    def finish_install(self) -> None:
+        ins = self.ui.install
+        assert ins is not None
+        ins.proc.wait(10)                               # type: ignore[attr-defined]
+        self.ctl.jobs.poll()
+        self.assertTrue(ins.done)
+
+    def test_connect_tab_says_how_to_install(self) -> None:
+        self.keys("2")
+        text = " ".join(self.screen().split())
+        for part in ("SET UP OPENCODE AND PI", "./carl.sh install", "[ Install on this Mac (i) ]",
+                     "[ Update configs only (u) ]", "./carl.sh --vm", "(now it listens on this Mac only)"):
+            self.assertIn(part, text)
+
+    def test_connect_install_asks_first_then_runs_and_shows_its_output(self) -> None:
+        self.fake_serve('echo "args: $*"; echo "CARL_CMD=$CARL_CMD"\n')
+        self.keys("2", "i")
+        self.assertEqual(self.ui.install_ask, "all")
+        self.assertIn("Yes, run it (y)", self.screen())
+        self.keys("n")                                  # cancelled: nothing runs
+        self.assertIsNone(self.ui.install_ask)
+        self.assertIsNone(self.ui.install)
+        self.keys("u", ESC)
+        self.assertIsNone(self.ui.install_ask)
+        self.keys("u", "y")
+        self.finish_install()
+        assert self.ui.install is not None
+        self.assertEqual(self.ui.install.lines, ["args: install --local --port 8095 --config-only", "CARL_CMD=./carl.sh"])
+        text = self.screen()
+        self.assertIn("INSTALLER", text)
+        self.assertIn("done: configs", text)
+        self.assertIn("open a new terminal", self.ui.toast_msg[0])
+        self.keys("x")                                  # close: the config preview is back
+        self.assertFalse(self.ui.install_shown)
+        self.assertIn("OPENCODE CONFIG", self.screen())
+
+    def test_connect_install_failure_is_shown(self) -> None:
+        self.fake_serve('echo "npm: network down"; exit 3\n')
+        self.ctl.do("insall")
+        self.ctl.do("insyes")
+        self.finish_install()
+        text = self.screen()
+        self.assertIn("failed (exit 3)", text)
+        self.assertIn("npm: network down", text)
+        self.assertIn("installer failed", self.ui.toast_msg[0])
+
+    def test_auto_fit_panel_goal_and_scope_are_saved_at_once(self) -> None:
+        self.keys("5", "A")
+        p = self.ui.pending
+        assert p is not None
+        self.keys("g")
+        self.assertEqual(p["goal"], "hard-code")
+        self.assertEqual(self.store.saved[-1]["llama"].get("auto_goal"), "hard-code")
+        self.keys("f")
+        self.assertEqual(p["scope"], "downloaded")
+        self.assertEqual(self.store.saved[-1]["llama"].get("auto_fit"), "downloaded")
+        click = next(r for r in self.ctl.regions if r.action == "fgoal:everyday")
+        self.keys(f"\x1b[<0;{click.x0};{click.y}M\x1b[<0;{click.x0};{click.y}m")
+        self.assertEqual(p["goal"], "everyday")
+        self.assertNotIn("auto_goal", self.store.saved[-1]["llama"])  # the default is left out
+        rows = self.app.view.autofit(self.ui, p, 100, 12)             # a short screen scrolls
+        self.ui.fit_scroll = 10**6
+        self.assertEqual(len(self.app.view.autofit(self.ui, p, 100, 12)), 12)
+        self.assertGreater(self.ui.fit_scroll, 0)
+        self.assertEqual(len(rows), 12)
 
     def test_server_card_sections_at_80_and_160_columns(self) -> None:
         """About this setting, Status, the buttons and Keys are separate, and nothing is cut."""

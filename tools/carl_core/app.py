@@ -21,7 +21,7 @@ from .domain.launch import launch_env as build_launch_env
 from .domain.ports import (Clock, Console, Downloader, GpuLimit, HostMemory, HubClient, JsonDocument, LegacyEnv,
                            ModelFolder, ShapeReader)
 from .domain.records import parse_catalog, parse_custom_card, parse_local_db
-from .domain.settings import SCHEMA, Config, migrate_env, models_dir_setting, validate_config
+from .domain.settings import SCHEMA, Config, migrate_config, migrate_env, models_dir_setting, validate_config
 from .domain.types import (Catalog, CustomCard, CustomInfo, HfFileList, HfRef, LocalDb, ModelInfo, SettingSource,
                            SettingValue, Settings)
 
@@ -59,10 +59,17 @@ class Carl:
 
     # ------------------------------------------------------------ config.json
     def load_config(self) -> Config:
-        """config.json, validated; migrated once from llama.env when missing."""
+        """config.json, validated; migrated once from llama.env when missing, and once when it
+        holds a retired value (a note on stderr says what changed)."""
         raw = self.stores.config.load()
         if raw is not None:
-            return validate_config(raw)[0]
+            fixed, notes = migrate_config(raw)
+            cfg = validate_config(fixed)[0]
+            if notes:
+                self.save_config(cfg)
+                for n in notes:
+                    self.console.error(f"note: {n}")
+            return cfg
         migrated = migrate_env(self.stores.legacy.read())
         if migrated is None:
             return Config()
@@ -166,7 +173,8 @@ class Carl:
         more with the VM up), or estimated for a Mac with ram_gb of RAM (VM not counted)."""
         if ram_gb:
             return Budget(estimated_limit(ram_gb * GIB)[0], ram_gb * GIB, reserve_bytes(reserve_gb, False))
-        return Budget(self.gpu.limit()[0], self.host.ram_bytes(), reserve_bytes(reserve_gb, self.host.vm_network_up()))
+        vm = self.host.vm_network_up()
+        return Budget(self.gpu.limit()[0], self.host.ram_bytes(), reserve_bytes(reserve_gb, vm), vm)
 
     def shape_of(self, m: ModelInfo) -> Optional[ModelShape]:
         """A model's header shape: the local file's, or (a catalogue model not downloaded)

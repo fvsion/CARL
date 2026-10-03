@@ -195,6 +195,23 @@ class CommonTests(unittest.TestCase):
         self.assertEqual(p.stdout.strip(), "127.0.0.1")
 
 
+    def test_resolve_host_default_is_local(self) -> None:
+        p = bash('unset HOST NET; resolve_host; echo "$HOST|$NET_NOTE"')
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertTrue(p.stdout.startswith("127.0.0.1|local (127.0.0.1): this Mac only"), p.stdout)
+
+    def test_resolve_host_net_auto_is_local_with_a_note(self) -> None:
+        p = bash('unset HOST; NET=auto; resolve_host; echo "$HOST|$NET_NOTE"')
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertTrue(p.stdout.startswith("127.0.0.1|"), p.stdout)
+        self.assertIn("NET=auto was removed", p.stdout)
+
+    def test_resolve_host_unknown_mode(self) -> None:
+        p = bash('unset HOST; resolve_host moon')
+        self.assertEqual(p.returncode, 2)
+        self.assertIn("(vm | local)", p.stderr)
+
+
 class ServeDispatch(unittest.TestCase):
     """host/serve.sh commands that answer without starting anything."""
 

@@ -23,7 +23,7 @@ from .keys import InputBuffer
 from .model import ServerData
 from .settings import Pending, Schema, SettingsService, net_choices
 from .settings_view import ModelsDir, SettingsView, subpanel_bar
-from .state import TABS, UIState
+from .state import SP_FIT, SP_MODELS, SP_SERVER, TABS, UIState
 from .store import CarlStore, ModelList
 from .terminal import LOGO_COLS, Terminal, logo_escape, logo_mode, place_lines
 from .views import body_connect, body_log, body_overview, body_requests, quit_dialog
@@ -173,11 +173,13 @@ class App:
         if ui.confirm2:
             return out + self.view.confirm(ui.confirm2, cols)
         try:
-            if ui.sp == 0:
+            if ui.sp == SP_SERVER:
                 body = self.view.server(ui, self.ensure_pending(d), d, cols, height - 2, self.endpoint.port)
-            elif ui.sp == 1 and ui.card:
+            elif ui.sp == SP_MODELS and ui.card:
                 body = draw_form(ui.card, cols, height - 2)
-            elif ui.sp == 1:
+            elif ui.sp == SP_FIT:
+                body = self.view.autofit(ui, self.ensure_pending(d), cols, height - 2)
+            elif ui.sp == SP_MODELS:
                 mdir = self.store.models_dir()
                 body = self.view.models(ui, cols, height - 2, ModelsDir(mdir, disk_free(mdir)))
             else:

@@ -5,10 +5,12 @@
 #   --vm     VM_HOST (default 192.168.42.1, VMware Fusion's vmnet8 address on
 #            this Mac). Fails if that interface doesn't exist (Fusion not running).
 #   --local  127.0.0.1: clients on this Mac only (OpenCode/Pi installed locally).
-#   (none)   auto: VM_HOST if the interface exists, otherwise 127.0.0.1.
+#   (none)   local: the default since 1.3.0. The VM network is used only when asked
+#            for (--vm, NET=vm, or llama.net = vm in config.json).
 #   --host ADDR / HOST=ADDR: one address of this Mac (its LAN address, or another
 #            VM network such as Parallels 10.211.55.2); wins over the modes.
-#            NET=vm|local|auto is the env form of the modes; VM_HOST changes the vm address.
+#            NET=vm|local is the env form of the modes; VM_HOST changes the vm address.
+#            NET=auto (before 1.3.0: the VM address whenever it existed) now means local.
 # Never 0.0.0.0: these scripts assume the macOS firewall may be off, so a
 # wildcard bind would publish the model and its key-protected API to the LAN.
 
@@ -61,8 +63,11 @@ apply_settings() {
 # resolve_host MODE -> sets HOST (and NET_NOTE for the start-up banner)
 # shellcheck disable=SC2034  # NET_NOTE is read by the scripts that source this file
 resolve_host() {
-  local mode="${1:-${NET:-auto}}"
+  local mode="${1:-${NET:-local}}" retired=""
   NET_NOTE=""
+  if [[ "$mode" == auto ]]; then
+    mode=local; retired=" (NET=auto was removed in 1.3.0: --vm for the VM)"
+  fi
   if [[ -n "${HOST:-}" ]]; then
     case "$HOST" in
       127.0.0.1|localhost|::1) NET_NOTE="$HOST (explicit): this Mac only" ;;
@@ -78,14 +83,11 @@ resolve_host() {
           exit 1; }
         HOST="$VM_HOST"; NET_NOTE="VM network ($VM_HOST): reachable from the Fusion VM and this Mac" ;;
       local)
-        HOST=127.0.0.1; NET_NOTE="local (127.0.0.1): this Mac only" ;;
-      auto)
-        if has_addr "$VM_HOST"; then
-          HOST="$VM_HOST"; NET_NOTE="VM network ($VM_HOST): reachable from the Fusion VM and this Mac"
-        else
-          HOST=127.0.0.1; NET_NOTE="local (127.0.0.1): no VMware network found, this Mac only (--vm to require it)"
+        HOST=127.0.0.1; NET_NOTE="local (127.0.0.1): this Mac only$retired"
+        if [[ -z "$retired" ]] && has_addr "$VM_HOST"; then
+          NET_NOTE+=" (VMware's network is up: --vm serves a VM client)"
         fi ;;
-      *) echo "error: unknown network mode '$mode' (vm | local | auto)" >&2; exit 2 ;;
+      *) echo "error: unknown network mode '$mode' (vm | local)" >&2; exit 2 ;;
     esac
   fi
   case "$HOST" in

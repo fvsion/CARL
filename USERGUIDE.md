@@ -55,12 +55,12 @@ Commands with the label **Mac** run in the CARL folder on the Mac (`~/CARL`). Co
    `default` is auto fit's pick from the whole catalogue for the everyday goal (see [Auto fit](#auto-fit-the-best-model-for-this-mac) below).
    - If you forget this step, `./carl.sh` tells you that no model is downloaded. It shows auto fit's pick for this Mac and its size, and asks to download it. If you answer no, the dashboard opens without a server.
    - If auto fit's pick is not downloaded, but a different model is, the server starts with the best downloaded stock model that fits. The start-up output tells you this, and how to download the pick.
-4. **For VM clients, start VMware Fusion first.** Then the server listens on the Fusion NAT address `192.168.42.1`. This address exists only while the Fusion network is up. If you do not start Fusion, the server serves only this Mac (127.0.0.1).
+4. **The server serves this Mac only (127.0.0.1) by default.** For clients in a VMware Fusion VM, start Fusion first, then start the server with `--vm`: it listens on the Fusion NAT address `192.168.42.1`, which exists only while the Fusion network is up. To make the VM the default, set **network** to `vm` in Settings (or `./carl.sh config set llama.net vm`).
+   - Before 1.3.0 the default was "auto": the VM address whenever the Fusion network was up. That exposed the server to the VM network without being asked, so it was removed. A saved `llama.net = auto` is converted to local once, with a note at start; `NET=auto` means local.
 5. **Start the server:**
    ```bash
-   ./carl.sh llama            # auto: VM address if Fusion is up, else this Mac only
-   ./carl.sh llama --local    # force this Mac only (127.0.0.1)
-   ./carl.sh llama --vm       # require the VM address (fails if Fusion's network is down)
+   ./carl.sh llama            # this Mac only (127.0.0.1): the default
+   ./carl.sh llama --vm       # for a VMware Fusion VM client (fails if Fusion's network is down)
    ```
    - The server starts in the background. Then the **live monitor uses this terminal** ([section 8](#8-logs-and-monitoring)). SERVER shows "loading model…" for 10–60 s, then "idle".
    - The start-up banner shows the network mode and the values that the server selected, for example `slots: 2 (auto) x 98304 tokens, KV q4_0/q4_0, RAM prompt cache … MiB`.
@@ -93,14 +93,14 @@ The VM needs Python 3 and curl. The staging folder for the client bundle is `~/D
 
 Use this procedure for a Mac without a VM, for example the Mac of a friend. The server and OpenCode/Pi both run on the Mac. All the necessary files are in the CARL folder.
 
-**The short way:** run `./carl.sh install`. It installs OpenCode and Pi, and then it connects them to the server on this Mac. It does the two steps below.
+**The short way:** run `./carl.sh install`. It installs OpenCode and Pi, and then it connects them to the server on this Mac. It does the two steps below. In the dashboard, the Connect tab (tab 2) does the same: push `i` (**[ Install on this Mac ]**), or `u` (**[ Update configs only ]**) to write only the configs, then `y` to confirm. The installer's output shows in the tab.
 - `./carl.sh install opencode` (or `pi`) installs only one client.
 - `./carl.sh install --config-only` only writes the configs. `--clients-only` only installs the clients.
 - `./carl.sh install --vm` or `--host ADDR` connects the clients to another address.
 
 1. **Server:** do steps 1–3 above. Then run:
    ```bash
-   ./carl.sh llama --local
+   ./carl.sh llama
    ```
 2. **Clients** (in a second terminal, from the CARL folder):
    ```bash
@@ -122,7 +122,7 @@ Use this procedure when the clients are not in the VMware Fusion VM and not on t
 **1. Give the server an address that the client can reach.**
 - Start the server on that address: `./carl.sh llama --host ADDR`. Or, in the dashboard, open Settings (tab 5), and select the address in the **network** row. The row shows each address of this Mac.
 - To find the LAN address of the Mac, run `ipconfig getifaddr en0`.
-- Parallels: use the address of the Mac on the Parallels network (often `10.211.55.2`; `ifconfig` shows it). To use it for `--vm` and auto mode, set `VM_HOST=10.211.55.2`.
+- Parallels: use the address of the Mac on the Parallels network (often `10.211.55.2`; `ifconfig` shows it). To use it for `--vm`, set `VM_HOST=10.211.55.2`.
 - The address must exist on this Mac. The launcher always refuses `0.0.0.0`.
 - CAUTION: **With the LAN address, every computer on your network can connect to the server.** Only the API key protects it. Do not use the LAN address on a public or shared network.
 
@@ -148,7 +148,7 @@ Use this procedure when the clients are not in the VMware Fusion VM and not on t
    - `brew install llama.cpp aria2 ansifilter`
    - `./carl.sh fit`
    - `./carl.sh download default` (on 24 GB this is `qwen3.6-35b-a3b-iq3`)
-   - `./carl.sh llama --local`
+   - `./carl.sh llama`
    - `./carl.sh install`
 
    The first server start on their Mac makes a key on that Mac.
@@ -485,12 +485,12 @@ Auto-tune measures the best settings for one model on this Mac. It takes about 5
 
 ```bash
 ./carl.sh tune qwen3.8-27b-iq3            # all modes
-./carl.sh tune qwen3.8-27b-iq3 --quick    # MTP with 1 draft only, no 64K read (about 4 min)
+./carl.sh tune qwen3.8-27b-iq3 --quick    # no MTP modes with 2 drafts, no 64K read (about 4 min)
 ```
 
 It does these steps. The model loads one time for each speculation mode.
 1. **Memory:** the largest context window that fits, with 1 slot and with 2 slots.
-2. **Speculation:** none, n-gram, and, if the file has an MTP head, MTP and MTP + n-gram with 1 and 2 drafts (`--quick`: 1 draft only). Each mode writes prose, new code and a code re-emit, two times. The score is a weighted geometric mean (prose 0.4, code 0.4, re-emit 0.2). A mode with drafting must be 3% better than a simpler mode to win.
+2. **Speculation:** none, n-gram, and, if the file has an MTP head, MTP and MTP + n-gram with 1 and 2 drafts (`--quick`: the MTP modes with 1 draft only). N-gram alone always uses 2 drafts. Each mode writes prose, new code and a code re-emit, two times. The score is a weighted geometric mean (prose 0.4, code 0.4, re-emit 0.2). A mode with drafting must be 3% better than a simpler mode to win.
 3. **Prompt reading:** a cold read at 8K, 32K and 64K tokens (`--quick`: no 64K). From these, it calculates the time to read a full window. This gives the context zones of this Mac: a cold read of the full window in 3 min or less = fast (green), in 10 min or less = slow (yellow), more = very slow (red). The fast zone always includes 96K: CARL never shows 96K or less as slow.
 4. **Result:** q4_0 KV, the best speculation, the context window and the slots (2 if two windows fit).
    - **The context is never less than 96K if 96K fits one slot.** Users need that much context to work.
@@ -536,10 +536,10 @@ The dashboard (the monitor) is `tools/llama-monitor.py`.
 | Tab | Shows |
 |---|---|
 | **1 Overview** | Cards in two columns: CONNECT, CONTEXT, MEMORY on the left; ACTIVITY, MODEL, HEALTH, SYSTEM on the right. Below the cards: the last 3 requests and the last 6 log lines. |
-| **2 Connect** | Endpoint, model, API key, who can reach the server, connected clients, key file; setup steps for VM and Mac clients; buttons **[ OpenCode config ]**, **[ Pi config ]**, **[ curl test ]**. A button copies its snippet to the clipboard and shows it below. The screen masks the key unless you reveal it. The copy has the real key. CAUTION: Protect a copied config as you protect the key. |
+| **2 Connect** | Endpoint, model, API key, who can reach the server, connected clients, key file; setup steps for Mac and VM clients; **[ Install on this Mac ]** (`i`: runs `./carl.sh install` and shows its output) and **[ Update configs only ]** (`u`), both asked first; buttons **[ OpenCode config ]**, **[ Pi config ]**, **[ curl test ]**. A button copies its snippet to the clipboard and shows it below. The screen masks the key unless you reveal it. The copy has the real key. CAUTION: Protect a copied config as you protect the key. |
 | **3 Requests** | All finished requests in the log, newest first: start time, context size, new tokens, read speed, output tokens, generation speed, duration, draft acceptance, prompt tokens from the cache. The title shows the averages. |
 | **4 Log** | The full server log, which you can scroll. Buttons and keys: wrap (`w`), errors and warnings only (`f`), follow (End). |
-| **5 Settings** | Three panels; `[` and `]` change the panel. **Server:** the model and the server setup, with an explanation of the model and of each tuned value. **Models:** the catalogue and the models folder: download, verify, delete, add from Hugging Face. **Auto-tune:** measure a model on this Mac. See "The Settings tab" below. |
+| **5 Settings** | Four panels; `[` and `]` change the panel. **Server:** the model and the server setup, with an explanation of the model and of each tuned value. **Models:** the catalogue and the models folder: download, verify, delete, add from Hugging Face. **Auto fit:** the best stock model for this Mac, why, and the ranking. **Auto-tune:** measure a model on this Mac. See "The Settings tab" below. |
 
 **The Overview cards:** click the title of a card to see more detail. Click again to see full detail. Click once more to collapse the card. The dots after the title show the level: `○○` collapsed, `●○` normal, `●●` full detail.
 
@@ -547,7 +547,7 @@ Each card keeps the same height while the server works. If a value is not availa
 
 | Card | Normal | Detailed |
 |---|---|---|
-| CONNECT | endpoint, model, API key (masked), reachable from, clients, copy buttons | key file, install commands |
+| CONNECT | endpoint, model, API key (masked), reachable from, clients, copy buttons | key file, install commands (this Mac: `./carl.sh install`) |
 | CONTEXT | fill bar, **KV quantization** (K, V), **KV cache RAM** (allocated / in use), recurrent state + checkpoints, total now / max | per-token maths, MTP-head estimate, cache caps, served vs trained window |
 | MEMORY | weights, context (KV + state), other buffers | GPU limit, GPU memory now |
 | ACTIVITY | what it does now; when it reads a prompt: progress and **ETA**; when it generates: speed; averages, last request, draft acceptance | acceptance by draft position, totals, queue, peak context |
@@ -561,6 +561,7 @@ Each card keeps the same height while the server works. If a value is not availa
 |---|---|
 | `1`–`5`, Tab | change the tab |
 | `o` / `p` / `t` | copy the OpenCode / Pi config / curl test (opens the Connect tab) |
+| `i` / `u`, then `y` | Connect tab: install OpenCode and Pi and their configs / update the configs only (`n` or Esc: no); `x` closes the installer's output |
 | `k` | show / hide the API key |
 | `e` / `c` | expand / collapse all cards |
 | `w` / `f` | log: wrap / errors only |
@@ -569,9 +570,10 @@ Each card keeps the same height while the server works. If a value is not availa
 | space | refresh now |
 | `?` | show all keys in the footer |
 | `q`, Ctrl-C | quit (asks stop / leave running / cancel) |
-| `[` / `]` | Settings tab: the previous / next panel (Server, Models, Auto-tune) |
-| ↑ ↓, ← →, Enter, `a`, `A`, `r`, `x` | Settings tab, Server panel: select a row, change the value, open the model list (on the model row) or type a value, apply, Auto fit, revert, tuned values |
+| `[` / `]` | Settings tab: the previous / next panel (Server, Models, Auto fit, Auto-tune) |
+| ↑ ↓, ← →, Enter, `a`, `A`, `r`, `x` | Settings tab, Server panel: select a row, change the value, open the model list (on the model row) or type a value, apply, open the Auto fit panel, revert, tuned values |
 | ↑ ↓, Enter, `d`, `v`, `u`, `x`, `h`, `c` | Settings tab, Models panel: select a model, use it, download, verify, Auto-tune, delete, add from Hugging Face, cancel the download |
+| `g`, `f`, Enter, `d`, ↑ ↓ | Settings tab, Auto fit panel: the other goal, the other model set, use the pick, download it, scroll |
 | ← →, Enter, `c` | Settings tab, Auto-tune panel: select a model, run, cancel |
 
 Mouse: left-click only (titles, tabs, buttons). The wheel scrolls.
@@ -594,22 +596,21 @@ Auto fit picks the best **stock** model that fits this Mac, for a goal:
 - **Memory:** the smaller of the GPU limit and the RAM minus a reserve for macOS and apps (6 GiB; 10 GiB while VMware's network is up; `RESERVE_GB` / `--reserve-gb`).
 - **Stock only:** auto fit and every automatic default never pick an abliterated model. You pick those by hand. Models that you added (Hugging Face, the models folder) are candidates only when their [card](#cards-for-custom-models) switches `auto_fit` on (with a rank and an arch, and not abliterated): your rank is not measured. `./carl.sh download default` and the download offer only name catalogue models.
 - **Candidates (`llama.auto_fit`):** `catalogue` (default) = every catalogue model: it offers the download of the pick, and until then a start with `model auto` uses the best downloaded model that fits; `downloaded` = only the models on this Mac.
-- **Where it is used:** `llama.model = auto`, `./carl.sh download default`, the download offer of `./carl.sh` on a new Mac, the `auto` row and the **Auto fit** key (`A`) in the Settings tab.
+- **Where it is used:** `llama.model = auto`, `./carl.sh download default`, the download offer of `./carl.sh` on a new Mac, the `auto` entry of the model list and the **Auto fit** panel in the Settings tab.
 - `./carl.sh fit` shows the pick for each goal and why each better-ranked model was passed over; `./carl.sh fit --ram 24` (or 16, 36, 64, ...) shows another Mac. The picks: 16 GB nothing fits; 24 GB `qwen3.6-35b-a3b-iq3` / `qwen3.8-27b-iq3` (everyday / hard code); 32 GB and up: `qwen3.6-35b-a3b` / `qwen3.8-27b` (on 32 GB only while VMware's network is down: with it up, CARL keeps 10 GiB for macOS and the VM and the everyday pick becomes the IQ3). All with 2 × 96K. Previews (`--ram`) estimate the GPU limit at 2/3 of RAM below 32 GB and 3/4 from 32 GB up; a real Mac reports its own limit.
 
 **A start over the GPU limit is refused.** `serve-llama.sh` (and so `./carl.sh llama` and the dashboard) checks the setup before the model loads. If it needs more than the GPU limit, it stops with what it needs against the limit, the largest window that fits, and auto fit's alternative. Expert override: `FIT_CHECK=0 ./carl.sh llama ...` (it may fail to load, or swap the Mac to a crawl).
 
 ### The Settings tab
 
-The Settings tab (tab 5) has three panels: **Server**, **Models** and **Auto-tune**. Push `[` or `]`, or click the name of a panel, to change the panel.
+The Settings tab (tab 5) has four panels: **Server**, **Models**, **Auto fit** and **Auto-tune**. Push `[` or `]`, or click the name of a panel, to change the panel.
 
 **Server panel: change the server settings:**
 1. Press `5`, or click **5 Settings**.
-2. Use ↑ ↓ to select a row. The rows are the llama.cpp settings: model, auto goal, auto from, KV cache, context/slot, slots, speculation, draft tokens, RAM cache, network, temperature, presence.
+2. Use ↑ ↓ to select a row. The rows are the llama.cpp settings: model, KV cache, context/slot, slots, speculation, draft tokens, RAM cache, network, temperature, presence.
    - On the **model** row, push Enter (or click the model name) to open a list of all models: the catalogue, the models folder and your Hugging Face downloads. `auto` is auto fit's pick for this Mac (`★`). When you select a model, the rows change to the settings of that model (your profile, else its Auto-tune result, else its catalogue values).
-   - **auto goal** (`everyday` / `hard-code`) and **auto from** (`catalogue` / `downloaded`) set what auto fit optimises for and which models it picks from (`llama.auto_goal` / `llama.auto_fit`).
-   - **Auto fit:** push `A` (or click **[ Auto fit (A) ]**) to set the model, the context, the slots and the KV cache for this Mac in one step. If the pick is not downloaded, the dashboard asks whether to download it (the Models panel shows the progress).
-   - The **network** row offers auto, local, vm and each address of this Mac (for example the LAN address). An address is saved as `llama.host`.
+   - **Auto fit:** push `A` (or click the **auto fit** line under Status) for the Auto fit panel (below). Its **Use this** sets the model, the context, the slots and the KV cache for this Mac in one step.
+   - The **network** row offers local (the default: this Mac only), vm (a VMware Fusion VM client too) and each address of this Mac (for example the LAN address). An address is saved as `llama.host`.
 
    Use ← → (or click `[<]` `[>]`) to change the value. A `*` shows a value that is different from the server that runs now.
 3. Look at the colour of the values:
@@ -623,7 +624,7 @@ The Settings tab (tab 5) has three panels: **Server**, **Models** and **Auto-tun
    - **Normal:** the role, the **good for** tags (`agent coding`, `hard code`, `chat & writing`, `uncensored`), **why use it**, the **trade-offs**, the hardware it is meant for, the speed (measured on this Mac after Auto-tune, else the catalogue figure and the Mac it came from), the recommended values next to yours, the context zones, and **why** the selected value is tuned that way.
    - **Full:** also what *uncensored* means (abliterated models), the models to **pick instead** and when, the quality **rank**, the description, the reason for every tuned value, the Auto-tune table, and the source and file.
    - The model list (Enter on the model row) shows the role and the tags of each model, and *why use it* and the trade-offs of the selected one.
-6. Below the rows, the card has four parts: **About this setting** (how to change the selected row and what it does), **Status** (the **fit** line, auto fit's pick, the settings file), the buttons, and **Keys**. The fit line shows whether the model is downloaded and whether it fits in the GPU memory with these settings. If it does not fit, you cannot apply the settings (the launcher would refuse the start too). Every text wraps to the width of the terminal.
+6. Below the rows, the card has four parts: **About this setting** (how to change the selected row and what it does), **Status** (the **fit** line, auto fit's pick in one line, the settings file), the buttons, and **Keys**. The fit line shows whether the model is downloaded and whether it fits in the GPU memory with these settings. If it does not fit, you cannot apply the settings (the launcher would refuse the start too). Every text wraps to the width of the terminal.
 7. Press `a` (or click **[ Apply and restart ]**; with no server: **[ Start server ]**). Then press `y` to confirm.
 8. Wait while the model loads (about 30 s to 2 min). The footer shows the progress.
 
@@ -659,6 +660,13 @@ The Settings tab (tab 5) has three panels: **Server**, **Models** and **Auto-tun
 - **`h`:** add from Hugging Face. Type `OWNER/REPO` (or a URL to a `.gguf`). A list of the GGUF files of the repo opens. Select one and push Enter to download it.
 - **`e`:** edit the card of a custom model (role, good-for tags, rank, ...; see [Cards for custom models](#cards-for-custom-models)). On a catalogue model, `e` says that its card is read-only.
 
+**Auto fit panel:** the [auto fit](#auto-fit-the-best-model-for-this-mac) answer for this Mac, in full.
+- **Goal** (`everyday` / `hard code`) and **From** (all catalogue models / downloaded models only): click one, or push `g` / `f` for the other one. They are saved at once (`llama.auto_goal` / `llama.auto_fit`), and `model auto` starts the new pick.
+- **This Mac:** the GPU limit, the RAM less the reserve for macOS and apps (10 GiB while VMware's network is up, else 6), and what that leaves for a model.
+- **The pick:** the model, its plan (slots × window, KV cache), the memory it needs, whether it is downloaded, why it was picked, what `model auto` starts until it is downloaded, and every better-ranked model it passed over with the reason.
+- **[ Use this ]** (Enter): the Server panel gets the pick with its context, slots and KV cache; push `a` there to start it. If the pick is not downloaded, the dashboard asks whether to download it. **[ Download it ]** (`d`) downloads it here, with the progress in the panel.
+- **The other goal's** pick, in one line, and the **ranking**: every model by rank with its arch, weights, the largest window that fits this Mac (1 slot, q4_0), whether it is here, and what auto fit made of it (the pick, passed over and why, abliterated, a custom model not opted in). ↑ ↓, PgUp / PgDn or the wheel scroll the panel.
+
 **Auto-tune panel:**
 - Select a model with ← → (or click its name for a list). Only downloaded models are in the list. Click the **quick** box for the quick mode.
 - Push Enter to run Auto-tune ([section 7](#auto-tune)). The panel shows each step and the last lines of its output. `c` cancels.
@@ -672,7 +680,7 @@ The dashboard and the launchers keep your settings in `~/.config/carl/config.jso
 
 | Section | What it holds |
 |---|---|
-| `llama` | Server-wide llama.cpp settings: `model` (`auto` = auto fit's pick for this Mac), `auto_goal` (`everyday` \| `hard-code`), `auto_fit` (`catalogue` \| `downloaded`), `net`, `host`, `cache_ram`, `ub`, `batch`, `ckpt`, `ckpt_step`, `think_toggle`, `extra_args` (more `llama-server` flags, as a list) |
+| `llama` | Server-wide llama.cpp settings: `model` (`auto` = auto fit's pick for this Mac), `auto_goal` (`everyday` \| `hard-code`), `auto_fit` (`catalogue` \| `downloaded`), `net` (`local` \| `vm`; default local), `host`, `cache_ram`, `ub`, `batch`, `ckpt`, `ckpt_step`, `think_toggle`, `extra_args` (more `llama-server` flags, as a list) |
 | `models.<name>` | The profile of one model: `kv`, `ctx`, `slots`, `spec`, `spec_n`, `temp`, `top_p`, `top_k`, `min_p`, `presence`, `repeat`, `alias` |
 | `paths` | `models_dir` (default `~/models/gguf`) |
 
@@ -760,7 +768,7 @@ Then **fully restart OpenCode or Pi**.
 - **If you run it again with the same input, it changes nothing.**
 - **Formerly LLM-Deploy:** before 1.2.0, CARL's files had the name `llm-deploy`: the folder `~/.config/llm-deploy`, the records `llm-deploy.json`, the prompt folder `~/.config/opencode/llm-deploy/`, the provider `llm-deploy` and the coder `llm-deploy-coder`. The first `./carl.sh` command (or this installer) moves the folder to `~/.config/carl` and leaves a link with the old name, so the old configs keep working. The installer then changes CARL's own items to the new names (`carl.json`, `~/.config/opencode/carl/`, `carl`, `carl-coder`), with the usual backups. Your own items with these names stay.
 
-On the Mac (no VM), run `./client/install.sh --local` again from the CARL folder.
+On the Mac (no VM), run `./carl.sh install --config-only` again from the CARL folder (or push `u` in the dashboard's Connect tab).
 
 The options of the installer:
 ```bash
@@ -782,7 +790,8 @@ The options of the installer:
 | No monitor shows; plain server output shows instead | You did not start the server from a terminal (script, `nohup`), or `MONITOR=0` is set | This is the expected result. To attach, run `./carl.sh monitor`. |
 | The monitor shows **EXITED** immediately after start | The server did not start (bad flag, file not found, out of memory) | Read the log lines on the screen. The full output is in `~/models/logs/.console-8080.out`. |
 | You closed the terminal, and you do not know if the server still runs | The server continues to run, because it runs under `nohup` | To attach again, run `./carl.sh monitor`. Then press `q` → `s` to stop it. |
-| Clients on the Mac cannot connect to 127.0.0.1 | The server started for the VM (192.168.42.1) | Run `./client/install.sh --local` again (it uses the address that the server listens on). Or, start the server with `--local`. |
+| Clients on the Mac cannot connect to 127.0.0.1 | The server started for the VM (192.168.42.1) | Run `./carl.sh install --config-only` again (it uses the address that the server listens on). Or, start the server without `--vm`. |
+| The VM cannot reach 192.168.42.1:8080 | Since 1.3.0 the server serves this Mac only unless asked | Start it with `./carl.sh --vm`, or set **network** to `vm` in Settings (`llama.net = vm`). The Connect tab says which one runs. |
 | `error: --vm: no interface has 192.168.42.1` | The Fusion network is not up | Start VMware Fusion, or use `--local`. |
 | The monitor HEALTH card shows **BROKEN** | GPU out-of-memory or compute errors in the log | Restart the server. Make sure that no other large program runs. |
 | `error: port 8080 is already in use by: llama-server ...` | A server already runs (one model at a time) | Stop it first: `./carl.sh monitor`, then `q` and `s`. Or use the `kill` command of [section 2](#2-daily-use). Or, only monitor it with `./carl.sh monitor`. |
@@ -870,7 +879,7 @@ python3 -m unittest discover -s tests/monitor -t tests/monitor   # the dashboard
 | `./carl.sh` | open the dashboard: attach to a server on 8080, else start llama.cpp with the saved settings. It first checks for `llama-server`, `aria2c` and `ansifilter` (offers `brew install`), and offers to download a model if none is downloaded |
 | `./carl.sh llama` | llama.cpp, default model (`qwen3.6-35b-a3b`; the IQ3 build on 24 GB), q4 KV, 2 slots |
 | `./carl.sh monitor` | attach the live dashboard (a server start shows it automatically in the same terminal) |
-| `./carl.sh llama --local` / `--vm` | serve only this Mac / require the VM address (default: auto) |
+| `./carl.sh llama --local` / `--vm` | serve only this Mac (the default) / the VM address too |
 | `./carl.sh llama --host ADDR` | serve on one address of this Mac (LAN, Parallels, …); never 0.0.0.0 |
 | `./carl.sh --no-start` (or `dashboard`) | the dashboard only: attach to a server, or open it offline (no model loads) |
 | `./install.sh --host ADDR --key-file FILE` | connect the clients to that address, with the key from a file (`--key KEY` also works) |
@@ -912,7 +921,7 @@ python3 -m unittest discover -s tests/monitor -t tests/monitor   # the dashboard
 | `NO_CODER=1 ./install.sh` | install without the coder subagent and its delegation rule |
 | `MONITOR=0` | no monitor: the server runs in the foreground |
 | `ALLOW_SECOND_MODEL=1` | start even when a process larger than 8 GB (`BIG_GB`) is in memory. CAUTION: a second model can stop the Mac. |
-| `NET=local\|vm\|auto`, `VM_HOST` | network mode / the VM address (default 192.168.42.1) |
+| `NET=local\|vm`, `VM_HOST` | network mode (default local; `auto` before 1.3.0 now means local) / the VM address (default 192.168.42.1) |
 | `SETTINGS_FILE=none` | ignore the saved settings in `~/.config/carl/config.json` |
 | `MODELS_DIR` | the models folder (default `~/models/gguf`; also `paths.models_dir` in config.json) |
 | `SKIP_DEPS=1` | do not check for the Homebrew tools (`llama-server`, `aria2c`, `ansifilter`) |

@@ -41,6 +41,18 @@ class ConfigTest(unittest.TestCase):
                          {"schema", "_comment", "llama"})
         self.assertEqual(w.carl.config_warnings(), [])
 
+    def test_net_auto_from_before_1_3_becomes_local_once(self) -> None:
+        """"auto" bound to the VM network whenever it was up; now a saved auto is converted to
+        the default (local), saved, and said once."""
+        w = World(catalog(BIG, SMALL), config={"schema": 1, "llama": {"net": "auto", "model": "small"}})
+        cfg = w.carl.load_config()
+        self.assertEqual(cfg.llama, {"model": "small"})                 # unset = local
+        self.assertEqual(len(w.config.saved), 1)
+        self.assertEqual(len(w.console.errors), 1)
+        self.assertIn("'auto' was removed", w.console.errors[0])
+        self.assertEqual(w.carl.load_config(), cfg)
+        self.assertEqual((len(w.config.saved), len(w.console.errors)), (1, 1))     # converted and said once
+
     def test_no_config_at_all(self) -> None:
         w = World(catalog(BIG, SMALL))
         self.assertEqual(w.carl.load_config(), Config())

@@ -13,7 +13,8 @@ from .settings import Pending
 from .store import HFFile
 
 TABS = ["Overview", "Connect", "Requests", "Log", "Settings"]
-SUBPANELS = ["Server", "Models", "Auto-tune"]
+SUBPANELS = ["Server", "Models", "Auto fit", "Auto-tune"]
+SP_SERVER, SP_MODELS, SP_FIT, SP_TUNE = range(len(SUBPANELS))
 
 
 class Process(Protocol):
@@ -95,6 +96,17 @@ class TuneRun:
 
 
 @dataclass
+class InstallRun:
+    """./carl.sh install from the Connect tab (host/serve.sh install): clients and configs, or
+    the configs only."""
+    what: str                       # "clients and configs" | "configs"
+    proc: Process
+    log: str
+    lines: List[str] = field(default_factory=list)                  # its output so far
+    done: bool = False
+
+
+@dataclass
 class UIState:
     """Everything the screen shows besides the snapshot: tab, scroll, dialogs, Settings, jobs."""
     tab: int = 0
@@ -115,7 +127,7 @@ class UIState:
     copied: Optional[str] = None
     levels: Dict[str, int] = field(default_factory=lambda: {x: 1 for x in LEVEL_NAMES})
     # Settings
-    sp: int = 0                     # panel: Server, Models, Auto-tune
+    sp: int = SP_SERVER             # panel: Server, Models, Auto fit, Auto-tune
     pending: Optional[Pending] = None               # Server panel: the values being chosen
     set_run: Pending = field(default_factory=dict)  # what ran when they were first shown
     set_row: int = 0
@@ -128,6 +140,7 @@ class UIState:
     slist: bool = False             # Server panel: the model list beside the settings has the keys
     srow: int = 0                   # Server panel: the cursor in that list
     mfilter: int = 0                # model lists: index into arrange.FILTERS
+    fit_scroll: int = 0             # Auto fit panel: lines scrolled off the top
     card: Optional[CardForm] = None # Models panel: a custom model's card being edited (e)
     picker: Optional[Picker] = None
     confirm2: Optional[Confirm] = None
@@ -137,6 +150,10 @@ class UIState:
     tune: Optional[TuneRun] = None
     tune_model: Optional[str] = None
     tune_quick: bool = False
+    # Connect
+    install_ask: Optional[str] = None               # "all" | "config": Install asked "run it?"
+    install: Optional[InstallRun] = None
+    install_shown: bool = False     # its output replaces the config preview until a copy button
 
     def toast(self, msg: str, secs: float = 4) -> None:
         """Show msg in the footer for secs seconds."""

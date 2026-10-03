@@ -19,7 +19,7 @@ from .collector import Collector
 from .fmt import DIM, R, RED, size
 from .model import ServerData, clean
 from .settings import REINSTALL, Pending, SettingsService, env_from_cmd
-from .state import Confirm, Download, HFLookup, Picker, TuneRun, UIState
+from .state import Confirm, Download, HFLookup, InstallRun, Picker, TuneRun, UIState
 from .store import ModelList
 
 # Settings the launchers read from the environment: removed, so config.json (or the
@@ -272,15 +272,41 @@ class ServerJobs:
         except Exception as e:      # bad name, no network, rate limit, unexpected answer: show it
             ui.hf = HFLookup(repo, f"Hugging Face lookup failed: {e}")
 
+    # ------------------------------------------------------------ Connect: the client installer
+    def start_install(self, config_only: bool) -> None:
+        """./carl.sh install for this Mac (OpenCode and Pi into ~/.local when missing, then their
+        configs pointed at this server), or only the configs; output in the Connect tab."""
+        ui = self.ui
+        if ui.install and not ui.install.done:
+            ui.toast("the installer is already running: its output is in the Connect tab", 6)
+            return
+        port = self.collector.endpoint.port
+        log = os.path.join(self.paths.logs, ".install.out")
+        os.makedirs(self.paths.logs, exist_ok=True)
+        argv = [os.path.join(self.paths.repo, "host", "serve.sh"), "install", "--local", "--port", str(port)]
+        argv += ["--config-only"] if config_only else []
+        with open(log, "w") as out:
+            proc = subprocess.Popen(argv, env=dict(os.environ, CARL_CMD="./carl.sh"), stdin=subprocess.DEVNULL,
+                                    stdout=out, stderr=subprocess.STDOUT, start_new_session=True)
+        ui.install = InstallRun("configs" if config_only else "clients and configs", proc, log)
+        ui.install_shown = True
+
+    def cancel_install(self) -> None:
+        """Stop the installer (its backups stay; re-running it is safe)."""
+        if self.ui.install and not self.ui.install.done:
+            system.kill_group(self.ui.install.proc.pid, signal.SIGTERM)
+
     # ------------------------------------------------------------ progress (every refresh)
     def poll(self) -> None:
         """Progress of the download and Auto-tune; their end is announced, and after a tune
         that stopped the server, the server is started again."""
-        dl, tn = self.ui.dl, self.ui.tune
+        dl, tn, ins = self.ui.dl, self.ui.tune, self.ui.install
         if dl and not dl.done:
             self._poll_download(dl)
         if tn and not tn.done:
             self._poll_tune(tn)
+        if ins and not ins.done:
+            self._poll_install(ins)
 
     def _poll_download(self, dl: Download) -> None:
         now = time.time()
@@ -312,3 +338,13 @@ class ServerJobs:
         if tn.restart:
             self._restart_after_tune()
 
+    def _poll_install(self, ins: InstallRun) -> None:
+        finished = ins.proc.poll() is not None
+        ins.lines = fsio.read_lines(ins.log)
+        if not finished:
+            return
+        ins.done = True
+        if ins.proc.returncode == 0:
+            self.ui.toast("OpenCode and Pi point at this server: open a new terminal, then run opencode or pi", 15)
+        else:
+            self.ui.toast(f"{RED}the installer failed{R}: see its output in the Connect tab", 15)

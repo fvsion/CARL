@@ -119,7 +119,7 @@ def card_connect(v: View, d: ServerData) -> Card:
         L.append(buttons(f"{DIM}{'copy':<10}{R}", [("OpenCode", "opencode"), ("Pi", "pi"), ("curl", "curl")]))
     if lvl >= 2:
         L.append(lv("key file", home_short(v.key_file, v.home)))
-        L.append(lv("install", "VM: ./install.sh   Mac: ./client/install.sh --local"))
+        L.append(lv("install", "this Mac: ./carl.sh install · a VM: ./carl.sh --vm, then ./install.sh there"))
     return Card("CONNECT", f"{DIM}{v.host}:{v.port}{R}", L)
 
 

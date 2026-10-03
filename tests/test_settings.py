@@ -6,7 +6,7 @@ import unittest
 import support  # noqa: F401  (import path)
 from carl_core.domain.errors import ConfigError
 from carl_core.domain.settings import (CONFIG_COMMENT, LLAMA_KEYS, MODEL_KEYS, Config, coerce, get_path, key_path,
-                                       migrate_env, models_dir_setting, set_path, unset_path, validate_config)
+                                       migrate_config, migrate_env, models_dir_setting, set_path, unset_path, validate_config)
 from carl_core.domain.types import JsonObject
 
 
@@ -46,6 +46,17 @@ class ValidateConfigTest(unittest.TestCase):
         self.assertEqual(cfg.to_json(), {"schema": 1,
                                          "llama": {"model": "m", "net": "local", "ub": 1024},
                                          "models": {"m.v2": {"ctx": 131072, "spec": "ngram-mod"}}})
+
+    def test_net_auto_is_retired(self) -> None:
+        self.assertEqual(LLAMA_KEYS["net"].default, "local")
+        with self.assertRaisesRegex(ConfigError, "llama.net"):
+            validate_config({"llama": {"net": "auto"}})
+        raw, notes = migrate_config({"schema": 1, "llama": {"net": "auto", "ub": 512}})
+        self.assertEqual(raw, {"schema": 1, "llama": {"ub": 512}})
+        self.assertEqual(len(notes), 1)
+        self.assertIn("./carl.sh --vm", notes[0])
+        self.assertEqual(migrate_config({"llama": {"net": "vm"}}), ({"llama": {"net": "vm"}}, []))
+        self.assertEqual(migrate_config([1]), ([1], []))
 
     def test_unknown_keys_warn(self) -> None:
         _, warn = validate_config({"llama": {"nope": 1}, "extra": {}, "models": {"m": {"x": 1}}})
@@ -90,6 +101,11 @@ class MigrationTest(unittest.TestCase):
         assert cfg is not None
         self.assertEqual(cfg.models, {})
         self.assertEqual(cfg.llama, {"net": "local"})
+
+    def test_net_auto_becomes_local(self) -> None:
+        cfg = migrate_env({"MODEL_NAME": "qwen", "NET": "auto"})
+        assert cfg is not None
+        self.assertEqual(cfg.llama, {"model": "qwen"})
 
     def test_nothing_or_invalid(self) -> None:
         self.assertIsNone(migrate_env({}))

@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # shellcheck disable=SC2088  # help texts show paths as ~/...: printed, not expanded
-# Entry point for the local llama.cpp server that OpenCode / Pi in the VMware
-# Fusion guest use over the NAT network (vmnet8). One server at a time: two
-# models don't fit in 36 GB together.
+# Entry point for the local llama.cpp server that OpenCode / Pi use, on this Mac
+# (the default, 127.0.0.1) or in a VMware Fusion guest over the NAT network
+# (vmnet8, with --vm). One server at a time: two models don't fit together.
 #
 #   ./host/serve.sh                       the dashboard: attaches to a running server on :8080, else
 #                                         starts llama.cpp with its saved settings (config.json)
@@ -16,7 +16,7 @@
 #   ./host/serve.sh config ...            the settings file (tools/carl.py config)
 #   ./host/serve.sh card NAME [set|unset]  a model's card (tools/carl.py card)
 #
-# Binds to the vmnet8 host address (192.168.42.1) or 127.0.0.1, never 0.0.0.0:
+# Binds to 127.0.0.1 or the vmnet8 host address (192.168.42.1), never 0.0.0.0:
 # with the macOS firewall off, 0.0.0.0 would expose the model on the LAN.
 set -euo pipefail
 
@@ -67,11 +67,11 @@ $(row "config [show|set K V]" "the settings file ~/.config/carl/config.json (sho
 $(row "help [TOPIC]" "this page, or: llama monitor fit models card download verify env tuning")
 
 NETWORK (llama, and $CMD without arguments)
-$(row "--vm" "listen on 192.168.42.1 (VMware Fusion); fails if Fusion's network is down")
-$(row "--local" "listen on 127.0.0.1: OpenCode/Pi on this Mac only")
+$(row "--local" "listen on 127.0.0.1: OpenCode/Pi on this Mac only (the default)")
+$(row "--vm" "listen on 192.168.42.1 for a VMware Fusion VM client; fails if Fusion's network is down")
 $(row "--host ADDR" "listen on one address of this Mac, e.g. its LAN address (other computers) or a")
 $(row "" "Parallels / other VM network (10.211.55.2). It must exist on an interface; never 0.0.0.0")
-$(row "(neither)" "auto: the VM address if Fusion's network is up, otherwise local")
+$(row "(neither)" "local, unless config.json says llama.net vm (Settings → network)")
 
 DEFAULTS YOU GET (no flags needed)
   Model qwen3.6-35b-a3b (the IQ3 build on 24 GB Macs), q4_0 KV cache, 2 slots (auto):
@@ -83,7 +83,7 @@ DEFAULTS YOU GET (no flags needed)
 
 QUICK START
   $CMD llama                          # default model; monitor opens in this terminal
-  $CMD llama --local                  # this Mac only (no VM)
+  $CMD --vm                           # serve a VM client too (VMware Fusion, 192.168.42.1)
   $CMD llama --model qwen3.8-27b      # the dense 27B (slower; orcarouter-27b = abliterated)
   $CMD download hf:Qwen/Qwen3-0.6B-GGUF                     # list a Hugging Face repo's GGUF files
   $CMD download hf:Qwen/Qwen3-0.6B-GGUF/Qwen3-0.6B-Q8_0.gguf  # download one (then: $CMD llama --model qwen3-0.6b-q8_0)
@@ -96,7 +96,7 @@ OpenCode / Pi configs. Its Settings tab (5) changes the model, KV cache, context
 slots, RAM cache, network and sampling, saves them to ~/.config/carl/config.json
 and restarts the server; $CMD llama then starts with them (flags still
 win; delete the file for the defaults). Quit (q, Ctrl-C or [ Quit ]) asks: stop
-the server, or leave it running. Client setup: client/install.sh (in the VM) or client/install.sh --local.
+the server, or leave it running. Client setup on this Mac: $CMD install (in a VM: see the Connect tab).
 
 No arguments opens the dashboard (see USAGE); -h prints this page. A first argument starting with "-" means "llama".
 Docs: README.md (overview), USERGUIDE.md (how-to), REFERENCE.md (details).
@@ -115,7 +115,7 @@ OPTIONS
 $(row "--model NAME|PATH" "a model name (see: models, fit) or a .gguf path. Default: config llama.model, else auto fit's pick (fit)")
 $(row "--kv q4|q8" "KV cache quantization for K and V (default q4 = q4_0). --q4 / --q8 shorthands")
 $(row "--ctx N|Nk" "window per slot, 4k..256k (default 96k; 128k-160k for long sessions, slower: see REFERENCE.md). Re-run client/install.sh after changing it")
-$(row "--local | --vm" "listen on 127.0.0.1 / on 192.168.42.1 (default: auto, see 'help env')")
+$(row "--local | --vm" "listen on 127.0.0.1 (default) / on 192.168.42.1 for a VM client (see 'help env')")
 $(row "--slots N|auto" "parallel conversations (default auto = 2 if they fit, else 1). 2 = main session + a subagent, each with its own cache and the full --ctx window; KV memory x N")
 $(row "--help-adv" "every llama-server flag (anything else you pass goes to llama-server)")
 $(row "-h, --help" "this page")
@@ -196,8 +196,8 @@ help_env() {
   cat <<EOF
 Server settings from the environment (VAR=value $CMD llama; flags win)
 
-$(row "NET=auto" "auto | vm | local (same as --vm / --local). auto = VM address if present, else 127.0.0.1")
-$(row "VM_HOST=192.168.42.1" "the VMware Fusion vmnet8 address used by --vm / auto")
+$(row "NET=local" "local | vm (same as --local / --vm). Before 1.3.0 the default was auto (the VM address when up)")
+$(row "VM_HOST=192.168.42.1" "the VMware Fusion vmnet8 address used by --vm")
 $(row "HOST" "explicit bind address (wins over NET). 0.0.0.0 is refused: the LAN could reach it")
 $(row "PORT" "8080")
 $(row "API_KEY_FILE" "~/.config/carl/api-key, the server's Bearer key (created if missing)")
@@ -242,7 +242,7 @@ show_help() {
   esac
 }
 
-# install [both|opencode|pi] [--local|--vm [HOST]|--host ADDR] [--clients-only|--config-only]:
+# install [both|opencode|pi] [--local|--vm [HOST]|--host ADDR] [--port N] [--clients-only|--config-only]:
 # the clients (client/install-clients.sh) and their configs (client/install.sh)
 # in one step. Network options and env switches (CODER, NO_SWITCHER, LLAMA_CTX…)
 # go to install.sh unchanged.
@@ -257,9 +257,10 @@ client_install() {
       --vm) net+=(--vm); if [[ "${2:-}" =~ ^[0-9.]+$ ]]; then net+=("$2"); shift; fi ;;
       --host) net+=(--host "${2:?--host needs an address}"); shift ;;
       --local) net+=(--local) ;;
+      --port) net+=(--port "${2:?--port needs a port}"); shift ;;
       --key-file) net+=(--key-file "${2:?--key-file needs a file}"); shift ;;
       --key) net+=(--key "${2:?--key needs the key}"); shift ;;
-      *) echo "error: install takes [both|opencode|pi] [--local|--vm [HOST]|--host ADDR] [--key-file FILE|--key KEY] [--clients-only|--config-only], got '$a'" >&2; return 2 ;;
+      *) echo "error: install takes [both|opencode|pi] [--local|--vm [HOST]|--host ADDR] [--port N] [--key-file FILE|--key KEY] [--clients-only|--config-only], got '$a'" >&2; return 2 ;;
     esac
     shift
   done

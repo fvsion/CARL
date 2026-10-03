@@ -6,18 +6,18 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import List, Mapping, Optional, Tuple
+from typing import List, Mapping, Optional, Sequence, Tuple
 
 from .fmt import (B, CYN, DIM, GRN, R, RED, YEL, CardLine, Ln, Row, bar, button_rows, buttons, ctx_label, cwrap,
                   draw_card, dur, fit, heading, home_short, indent, lv, merge_columns, size, vlen, wwrap)
-from carl_core.domain.autofit import GOAL_TEXT, SCOPE_TEXT, AutoFit, as_goal, as_scope
+from carl_core.domain.autofit import GOAL_TEXT, GOALS, SCOPE_TEXT, SCOPES, AutoFit, as_goal, as_scope, gib
 from carl_core.domain.cards import CHOICE_TEXT
 
 from .model import ModelInfo, ServerData, jdict
 from .settings import (ADV_WARN, LLAMA_ADV, MODEL_ROW_KEYS, NOT_RUNNING, SET_HELP, UNMARKED, Pending,
                        SettingsService, fmt_val, row_instruction, shown_value)
 from .arrange import FILTERS, MIN_FIT, SORTS, arrange, label as arrange_label
-from .state import SUBPANELS, Confirm, Download, PickItem, Picker, TuneRun, UIState
+from .state import SP_FIT, SUBPANELS, Confirm, Download, PickItem, Picker, TuneRun, UIState
 
 LIST_W = 40                                            # the Server panel's model list
 MODEL_HEADER = f"{DIM}{'':2}{'model':<26} {'size':>8}  {'status':<10} {'fits':>5} {'':6} role and good for{R}"
@@ -146,8 +146,7 @@ class SettingsView:
         else:
             ok = svc.fit_cached(p)[0]
             L += button_rows("", [("Apply and restart (a)" if run else "Start server (a)", "setapply" if ok else "setnofit"),
-                                  ("Auto fit (A)", "setautofit"), ("Revert (r)", "setrevert"),
-                                  ("Tuned values (x)", "setdefaults")], tw)
+                                  ("Revert (r)", "setrevert"), ("Tuned values (x)", "setdefaults")], tw)
         L += ["", *self.keys_lines(bool(run), tw)]
         srv = "llama.cpp" if run else "no server"
         if side:                                           # the model list: the right column of the same card
@@ -179,13 +178,11 @@ class SettingsView:
         L += cwrap(lv("fit", svc.fit_cached(p)[1]), w, pad)
         af = svc.auto_fit(p)
         if af and af.pick and af.plan:
-            where = "on this Mac" if af.pick.downloaded else f"{YEL}not downloaded{R}"
-            text = (f"{CYN}{af.pick.name}{R}, {af.plan.label()} ({p.get('goal', 'everyday')}, "
-                    f"from {'the catalogue' if p.get('scope', 'catalogue') == 'catalogue' else 'downloaded models'}) · "
-                    f"{where} · press A to use it")
+            where = "" if af.pick.downloaded else f" · {YEL}not downloaded{R}"
+            text = f"{CYN}{af.pick.name}{R}, {af.plan.label()}{where} · {DIM}why and Use this: the Auto fit panel (A){R}"
         else:
-            text = f"{RED}{af.because() if af else svc.models.fit_error or 'unavailable'}{R}"
-        L += cwrap(lv("auto fit", text), w, pad)
+            text = f"{RED}{af.because() if af else svc.models.fit_error or 'unavailable'}{R} {DIM}(Auto fit panel: A){R}"
+        L += [Ln(x, act=f"sp:{SP_FIT}") for x in cwrap(lv("auto fit", text), w, pad)]
         L += cwrap(lv("file", home_short(self.config_file, self.home) + f"{DIM} · ./carl.sh config show lists every key{R}"),
                    w, pad)
         return L
@@ -197,7 +194,8 @@ class SettingsView:
         L: List[CardLine] = [heading("Keys", w)]
         for text in ("Press ↑ ↓ to select a setting and ← → to change it; * marks a value that differs from the "
                      "running server.",
-                     f"Press a to {start}, A for Auto fit, r to revert your changes, x for the tuned values. "
+                     f"Press a to {start}, r to revert your changes, x for the tuned values, A for the Auto fit "
+                     f"panel (the best model for this Mac). "
                      f"Scroll with the mouse wheel or PgUp / PgDn.",
                      f"Colours: {GRN}green{R}{DIM} = tuned / fast · {YEL}yellow{R}{DIM} = changed / slower · "
                      f"{RED}red{R}{DIM} = very slow / no MTP head.",
@@ -386,13 +384,14 @@ class SettingsView:
                 else f"nothing fits: {af.because()}")
         L = label_wrap("Auto fit", head, tw, CYN if af.pick else RED)
         L += [f"{pad}{x}" for x in cwrap(f"{DIM}goal: {GOAL_TEXT[as_goal(p.get('goal'))]} · from: "
-                                          f"{SCOPE_TEXT[as_scope(p.get('scope'))]} (the rows above) · stock models only{R}",
-                                          tw - 11)]
+                                          f"{SCOPE_TEXT[as_scope(p.get('scope'))]} (change them in the Auto fit panel: "
+                                          f"A) · stock models only{R}", tw - 11)]
         if af.pick and not af.pick.downloaded:
             meanwhile = (f"model auto starts {start} (the best downloaded model that fits) until then"
                          if p.get("model") == "auto" else "it must be downloaded before a start")
-            L += [f"{pad}{YEL}{x}{R}" for x in wwrap(f"{af.pick.name} is not downloaded: {meanwhile}. Press A to "
-                                                      f"download it (or ] for the Models panel, then d).", tw - 11)]
+            L += [f"{pad}{YEL}{x}{R}" for x in wwrap(f"{af.pick.name} is not downloaded: {meanwhile}. The Auto fit "
+                                                      f"panel (A) downloads it (or ] for the Models panel, then d).",
+                                                      tw - 11)]
         shown = af.rejected if lvl == 2 else af.rejected[:4]
         for i, r in enumerate(shown):
             lines = wwrap(r.line(), tw - 14)
@@ -583,7 +582,123 @@ class SettingsView:
             L += ["", *cwrap(f"{YEL}{ui.hf.status}{R}", w - 4)]
         return indent(draw_card("models", "MODELS", f"{DIM}catalogue + models folder + Hugging Face downloads{R}", L, w, 2))
 
-    # ------------------------------------------------------------ panel 3: auto-tune
+    # ------------------------------------------------------------ panel 3: auto fit
+    def autofit(self, ui: UIState, p: Pending, cols: int, height: int) -> List[Row]:
+        """Auto fit: the goal and the models it picks from, this Mac's budget, the pick with its
+        plan and reasons, Use this / Download, the other goal's pick, and the ranking. Scrolls
+        (↑↓, PgUp PgDn, the wheel)."""
+        svc = self.svc
+        w = cols - 2
+        tw = w - 4
+        goal, scope = as_goal(p.get("goal")), as_scope(p.get("scope"))
+        af = svc.auto_fit(p)
+        L: List[CardLine] = [*cwrap(f"{DIM}Auto fit picks the best stock model that fits this Mac. Quality: parameters and "
+                                  f"density first, then quantization (rank 1 = best). Speed comes first, so the goal "
+                                  f"picks the family. Abliterated models are only picked by hand; a custom model "
+                                  f"takes part only when its card opts in.{R}", tw)]
+        L.append("")
+        for label, key, opts, cur in (("Goal", "goal", [(g, GOAL_TEXT[g], f"fgoal:{g}") for g in GOALS], goal),
+                                      ("From", "scope", [(x, SCOPE_TEXT[x], f"fscope:{x}") for x in SCOPES], scope)):
+            L += self._choice_line(label, opts, cur, tw)
+            L += [f"{' ' * 11}{x}" for x in cwrap(f"{DIM}{SET_HELP[key]}{R}", tw - 11)]
+        L += [f"{' ' * 11}{x}" for x in cwrap(f"{CYN}Press g for the other goal, f for the other model set (or click "
+                                               f"one). Saved at once: model auto starts the new pick.{R}", tw - 11)]
+        if af is None:
+            L += ["", *cwrap(f"{RED}auto fit unavailable: {svc.models.fit_error or 'no model list'}{R}", tw)]
+            return indent(draw_card("autofit", "AUTO FIT", f"{DIM}the best stock model for this Mac{R}", L, w, 2))
+        b = af.budget
+        L += ["", heading("This Mac", tw)]
+        mem = (f"GPU limit {gib(b.gpu_limit)}" + (f" · RAM {gib(b.ram)} less {gib(b.reserve)} kept for macOS and apps"
+                                                   if b.ram > 0 else ""))
+        vm = (f"{YEL}(more kept while VMware's network is up){R}" if b.vm_up
+              else f"{DIM}(VMware's network is down; with it up, 10 GiB are kept){R}")
+        L += cwrap(f"{lv('memory', mem)} → {B}{gib(b.allowed)} for a model{R} {vm}", tw, " " * 10)
+        L += ["", heading("The pick", tw)]
+        if af.pick and af.plan:
+            where = f"{GRN}downloaded{R}" if af.pick.downloaded else f"{YEL}not downloaded{R}"
+            L += cwrap(f"{B}{CYN}★ {af.pick.name}{R}  {af.plan.label()} · needs {gib(af.plan.need)} · {where}", tw, "    ")
+            L += label_wrap("Why", af.because(), tw)
+            if not af.pick.downloaded:
+                start = svc.resolved_model(dict(p, model="auto"))
+                L += label_wrap("Meanwhile", f"model auto starts {start} (the best downloaded model that fits) until "
+                                             f"{af.pick.name} is downloaded.", tw, YEL)
+            for i, r in enumerate(af.rejected):
+                lines = wwrap(r.line(), tw - 14)
+                L.append(f"{B}{'Passed over' if i == 0 else '':<11}{R} {DIM}· {lines[0]}{R}")
+                L += [f"{' ' * 14}{DIM}{x}{R}" for x in lines[1:]]
+            acts = [("Use this (Enter)", "fuse")]
+            if not af.pick.downloaded:
+                acts.append(("Download it (d)", "fdl"))
+            L += ["", *button_rows("", acts, tw)]
+            L += cwrap(f"{DIM}Use this sets the Server panel's model, context, slots and KV cache to this plan; press a "
+                       f"there to start it.{R}", tw)
+            if ui.dl:
+                L += download_status(ui.dl)
+        else:
+            L += cwrap(f"{RED}nothing fits: {af.because()}{R}", tw)
+        other = as_goal("everyday" if goal == "hard-code" else "hard-code")
+        oaf = svc.models.auto_fit(other, scope)
+        if oaf:
+            L += ["", *cwrap(f"{DIM}The other goal, {GOAL_TEXT[other]}: {R}"
+                             + (f"{oaf.pick.name}, {oaf.plan.label()}" if oaf.pick and oaf.plan else "nothing fits")
+                             + f"{DIM} (press g){R}", tw)]
+        L += ["", heading("Ranking", tw), *self.fit_ranking(af, tw)]
+        rows = indent(draw_card("autofit", "AUTO FIT", f"{DIM}{af.summary()}{R}", L, w, 2))
+        ui.fit_scroll = max(0, min(ui.fit_scroll, len(rows) - height))
+        return rows[ui.fit_scroll:ui.fit_scroll + height]
+
+    @staticmethod
+    def _choice_line(label: str, opts: Sequence[Tuple[str, str, str]], cur: str, w: int) -> List[CardLine]:
+        """A label and clickable options (value, text, action), the current one highlighted; options
+        that don't fit go on the next line."""
+        out: List[CardLine] = []
+        text, col = f"{B}{label:<11}{R}", 11
+        spans: List[Tuple[int, int, str]] = []
+        for value, shown, act in opts:
+            chip = f" {shown} "
+            if col > 11 and col + len(chip) > w:
+                out.append(Ln(text, spans=spans))
+                text, spans, col = " " * 11, [], 11
+            text += (f"\x1b[7m{chip}{R}" if value == cur else f"{DIM}{chip}{R}") + " "
+            spans.append((col, col + len(chip), act))
+            col += len(chip) + 1
+        return out + [Ln(fit(text, w), spans=spans)]
+
+    def fit_ranking(self, af: AutoFit, w: int) -> List[CardLine]:
+        """Every model by rank: arch, weights, the largest window (1 slot, q4_0), whether it is
+        here, and what auto fit made of it."""
+        passed = {r.name: r.reason for r in af.rejected}
+        ms = sorted(self.svc.models.get(), key=lambda m: (m.get("rank") or 99, m["name"]))
+        L: List[CardLine] = [f"{DIM}  {'model':<24} {'rank':>4} {'arch':<6}{'weights':>8} {'max ctx':>8}  "
+                             f"{'here':<5} auto fit{R}"]
+        for m in ms:
+            name = m["name"]
+            mx = self.svc.max_ctx(m)
+            ctx = (f"{(GRN if mx >= 65536 else YEL if mx >= MIN_FIT else RED)}{ctx_label(mx) if mx else 'none':>8}{R}"
+                   if mx is not None else f"{DIM}{'?':>8}{R}")
+            if af.pick and name == af.pick.name:
+                verdict = f"{CYN}★ the pick{R}"
+            elif m.get("abliterated"):
+                verdict = f"{DIM}abliterated: picked by hand only{R}"
+            elif m.get("custom") and m.get("auto_fit") is not True:
+                verdict = f"{DIM}custom: not in auto fit (its card can opt in){R}"
+            elif not isinstance(m.get("rank"), int):
+                verdict = f"{DIM}no rank{R}"
+            elif name in passed:
+                verdict = f"{YEL}{passed[name]}{R}"
+            else:
+                verdict = f"{DIM}ranked below the pick{R}"
+            here = f"{GRN}yes{R}  " if m["status"] == "downloaded" else f"{DIM}no{R}   "
+            rank = m.get("rank") if isinstance(m.get("rank"), int) else "–"
+            arch = str(m.get("arch") or "?").replace("moe", "MoE")
+            head = (f"{CYN if af.pick and name == af.pick.name else ''}{name:<24}{R} {rank!s:>4} {arch:<6}"
+                    f"{size(int(m.get('bytes', 0))):>8} {ctx}  {here} ")
+            L += cwrap(head + verdict, w, " " * 62)
+        L += cwrap(f"{DIM}max ctx = the largest window per slot that fits this Mac (1 slot, q4_0 KV) · ./carl.sh fit "
+                   f"prints the same table{R}", w)
+        return L
+
+    # ------------------------------------------------------------ panel 4: auto-tune
     def tune(self, ui: UIState, cols: int, server_up: bool) -> List[Row]:
         """The model to tune, the run in progress, and the last result."""
         ms = self.svc.models.downloaded()
@@ -611,7 +726,7 @@ class SettingsView:
         if m.get("summary"):
             L += [f"{' ' * 10}{x}" for x in cwrap(f"{DIM}{m['summary']}{R}", tw - 10)]
         L.append(Ln(f"mode      {CYN}[{'x' if ui.tune_quick else ' '}]{R} quick", spans=[(10, 13, "tquick")]))
-        L += [f"{' ' * 10}{x}" for x in cwrap(f"{DIM}n=1 modes only, no 64K read: ~4 min; press space to switch{R}", tw - 10)]
+        L += [f"{' ' * 10}{x}" for x in cwrap(f"{DIM}skips the MTP modes at n=2 and the 64K read: ~4 min; press space to switch{R}", tw - 10)]
         L += cwrap(f"{DIM}Press ← → (or click the name) to choose the model, Enter to run, c to cancel a run.{R}", tw)
         L.append("")
         if tn and (not tn.done or tn.model == m["name"]):
