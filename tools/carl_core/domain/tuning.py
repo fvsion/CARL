@@ -2,7 +2,8 @@
 
 Steps (the model loads once per speculation mode):
   1. memory: the largest window that fits with 1 and 2 slots
-  2. speculation: none, n-gram, and (with an MTP head) MTP and MTP + n-gram at n = 1 and 2.
+  2. speculation: none, n-gram (n = 2; without an MTP head also n = 1), and (with an MTP head)
+     MTP and MTP + n-gram at n = 1 and 2.
      Each runs prose, fresh code and a code re-emit, twice. Score = weighted geometric mean
      (prose 0.4, code 0.4, re-emit 0.2); a mode with drafting must beat a simpler one by 3%.
   3. prompt reading: cold reads at 8K, 32K and 64K tokens (quick: 8K and 32K; long: also
@@ -66,6 +67,10 @@ def as_depth(v: object) -> Depth:
 def speculation_modes(has_mtp: bool, quick: bool) -> List[Mode]:
     """The modes to measure, simplest first (best_mode prefers earlier ones)."""
     modes: List[Mode] = [("none", 1), ("ngram-mod", 2)]
+    if not has_mtp:
+        # n-gram is the only speculation here: 1 draft too (it won on the Heretic IQ3, which has no
+        # MTP head: 51.5 / 48.5 / 96.1 tok/s prose / code / re-emit on an M2 Max)
+        modes.append(("ngram-mod", 1))
     if has_mtp:
         modes += [("draft-mtp", 1), ("draft-mtp,ngram-mod", 1)]
         if not quick:

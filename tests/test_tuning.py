@@ -33,7 +33,8 @@ class ScoringTest(unittest.TestCase):
             t.best_mode({})
 
     def test_modes_and_depths(self) -> None:
-        self.assertEqual(t.speculation_modes(False, False), [("none", 1), ("ngram-mod", 2)])
+        self.assertEqual(t.speculation_modes(False, False), [("none", 1), ("ngram-mod", 2), ("ngram-mod", 1)])
+        self.assertEqual(t.speculation_modes(False, True), [("none", 1), ("ngram-mod", 2), ("ngram-mod", 1)])
         self.assertEqual(len(t.speculation_modes(True, True)), 4)
         self.assertEqual(t.speculation_modes(True, False)[-1], ("draft-mtp,ngram-mod", 2))
         self.assertEqual(t.read_depths("quick"), [8192, 32768])
@@ -158,10 +159,11 @@ class AutoTunerTest(unittest.TestCase):
         with self.assertRaisesRegex(ConfigError, "16K window"):
             t.AutoTuner(FakeServer(self.SPEEDS), Steps()).run(plan(limit=15 * GIB))
 
-    def test_no_mtp_head_measures_two_modes(self) -> None:
-        server = FakeServer(self.SPEEDS)
+    def test_no_mtp_head_measures_ngram_with_1_and_2_drafts(self) -> None:
+        server = FakeServer(dict(self.SPEEDS, **{"ngram-mod:1": 48.0}))
         rec = t.AutoTuner(server, Steps()).run(plan(limit=21 * GIB, nextn=0))
-        self.assertEqual(list(rec["results"]["speculation"]), ["none:1", "ngram-mod:2"])
+        self.assertEqual(list(rec["results"]["speculation"]), ["none:1", "ngram-mod:2", "ngram-mod:1"])
+        self.assertEqual((rec["settings"]["spec"], rec["settings"]["spec_n"]), ("ngram-mod", 1))   # it won here
 
 
 class LongTest(unittest.TestCase):
