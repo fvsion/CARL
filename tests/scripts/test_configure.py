@@ -191,6 +191,22 @@ class ConfigureTests(unittest.TestCase):
         self.assertEqual(agents["browser"], mine)
         self.assertIn("carl-browser", agents)                                  # ours, next to it
 
+    def test_a_symlinked_profile_stays_a_link(self) -> None:
+        os.makedirs(self.path("dotfiles"))
+        with open(self.path("dotfiles/zshrc"), "w", encoding="utf-8") as f:
+            f.write("export MINE=1\n")
+        os.chmod(self.path("dotfiles/zshrc"), 0o600)
+        os.symlink(self.path("dotfiles/zshrc"), self.path(".zshrc"))
+        p = self.run_configure()
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertTrue(os.path.islink(self.path(".zshrc")))
+        with open(self.path("dotfiles/zshrc"), encoding="utf-8") as f:
+            text = f.read()
+        self.assertTrue(text.startswith("export MINE=1\n"))
+        self.assertIn("# >>> CARL: OpenCode tool switches >>>", text)
+        self.assertEqual(stat.S_IMODE(os.stat(self.path("dotfiles/zshrc")).st_mode), 0o600)     # its mode stays
+        self.assertIn("its link target", p.stdout)
+
     def test_a_bad_model_list_is_refused(self) -> None:
         for bad in ({"schema": 2, "models": []}, {"schema": 1, "models": [{"id": "a b", "ctx": 4096, "thinking": "on-off"}]},
                     {"schema": 1, "models": [{"id": "a", "ctx": 4096, "thinking": "maybe"}]},

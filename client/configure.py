@@ -412,8 +412,10 @@ class Installer:
                     shutil.copy2(path, path + ORIGINAL)
                     self.report.add("backed up", f"{self.short(path)} -> {os.path.basename(path)}{ORIGINAL} (your original)")
                 shutil.copy2(path, f"{path}.bak.{self.stamp}")
-        write_text(path, text)
-        os.chmod(path, mode)
+        link = os.path.islink(path)
+        write_text(path, text)                     # through a symlink: the link stays, its target changes
+        if not link:
+            os.chmod(path, mode)
         self.written.add(path)
 
     def remove_file(self, path: str) -> None:
@@ -649,9 +651,10 @@ class Installer:
             new = (body + "\n\n" + block if body else block) if want else (body + "\n" if body else "")
             if new != (cur or ""):
                 self.save_text(path, new, mode=0o644)
+                where = f" (in {self.short(os.path.realpath(path))}, its link target)" if os.path.islink(path) else ""
                 self.report.add("updated" if want else "removed",
-                                f"~/{name}: {'sources' if want else 'no longer sources'} ~/.config/carl/{ENV_FILE} "
-                                f"(open a new terminal)")
+                                f"~/{name}{where}: {'sources' if want else 'no longer sources'} "
+                                f"~/.config/carl/{ENV_FILE} (open a new terminal)")
         if want and not found:
             self.report.add("kept", f"no ~/.zshrc or ~/.bashrc: add this line to your shell profile for OpenCode's "
                                     f'tool switches: [ -f "$HOME/.config/carl/{ENV_FILE}" ] && . '
