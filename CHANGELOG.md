@@ -3,6 +3,43 @@
 All notable changes to CARL. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Dates are local dates on the development Mac (M3 Pro, 36 GB).
 
+## 1.1.0 - 2026-10-03
+
+### Added
+- **Model catalogue: `host/catalog.json`** (replaces `host/models.conf`). For each model: the Hugging Face source (pinned revision, SHA-256, size), a summary and a description, the tuned settings (`tune`: KV, context, slots, speculation, draft tokens, sampling), the reason for each tuned value (`why`), context zones (`ctx_zones`) and measurements (`measured`). `default` and `default_small` select the default models.
+- **`tools/carl.py`**: one place for the catalogue, the models on this Mac and the settings. `host/models.sh` is now a thin wrapper around it.
+- **Custom models.**
+  - Each `.gguf` in `~/models/gguf` is listed as a model, also if it is not in the catalogue. It gets its first settings from its GGUF header (MTP + n-gram n=1 with an MTP head, else n-gram n=2).
+  - `./carl.sh download hf:OWNER/REPO/FILE.gguf` downloads any GGUF from Hugging Face. It gets the revision, the size and the SHA-256 from the Hugging Face API, and verifies the file. `./carl.sh download hf:OWNER/REPO` lists the GGUF files of a repo.
+  - Custom models and the Auto-tune results are in `~/.config/llm-deploy/models.json`.
+- **Settings file: `~/.config/llm-deploy/config.json`** (replaces `llama.env` and `mtplx.env`; CARL copies their values into it one time).
+  - Sections: `backend`, `llama` (model, net, host, cache_ram, ub, batch, ckpt, ckpt_step, think_toggle, extra_args), `models.<name>` (a profile for each model: kv, ctx, slots, spec, spec_n, temp, top_p, top_k, min_p, presence, repeat, alias), `mtplx`, `paths` (models_dir).
+  - CARL validates each value. `./carl.sh config show|get|set|unset|path`.
+  - Order of priority: flags > environment > config.json > Auto-tune (this Mac) > catalogue > built-in defaults. `SETTINGS_FILE=none` / `SETTINGS_FILE_MTPLX=none` ignore the file.
+- **Auto-tune: `./carl.sh tune NAME [--quick]`** (`tools/carl-tune.py`). It measures the memory fit, the speculation modes (prose, code, re-emit) and the prompt reading at 8K/32K/64K (gives the context zones of this Mac). It saves the result in `models.json`, and each later start of the model uses it. It needs the GPU for itself: it refuses to run while a server or another large process is in memory (`ALLOW_SECOND_MODEL=1` skips the memory check).
+- **Dashboard: the Settings tab has three panels** (`[` and `]` change the panel).
+  - **Server:** a model list (Enter) with every model. The values have colours: green = tuned / fast, yellow = changed / slower, red = very slow / no MTP head / MTP with n>1 on an IQ quant. The right side explains the model and why each value is tuned.
+  - **Models:** the catalogue and the models folder. Download (with progress), verify, delete, add from Hugging Face.
+  - **Auto-tune:** run it, and see the last results. It stops the running server, and starts it again after the tune.
+- **New catalogue model: `qwen3.8-27b-iq3`** (unsloth UD-IQ3_XXS, 10.9 GB), the smallest 27B. On a 24 GB Mac, 2 × 64K slots fit.
+- **IQ3 speculation measured** (M2 Max 32 GB, llama.cpp 0.5.0, both IQ3 builds): MTP alone helps little on IQ3 (about nothing on the 35B, ~5–10% on the 27B), and n=2 costs ~15% on new text. MTP + n-gram with n=1 is the best on both models (about +5% over n-gram alone on the 35B, +9% on the 27B). Both IQ3 builds now use `draft-mtp,ngram-mod`, n=1; before, the 35B IQ3 used n=2 (copied from the Q4). The Q4 35B keeps n=2 (REFERENCE.md, "IQ3 speculation").
+- **`./carl.sh delete NAME`** deletes a model file. `./carl.sh verify` with no names verifies every downloaded model.
+- **Dependency check.** `./carl.sh` looks for `llama-server`, `aria2` and `ansifilter`, and offers to `brew install` the missing tools. `SKIP_DEPS=1` skips the check.
+- **No model downloaded:** `./carl.sh` offers to download the default for this Mac, or opens the dashboard without a server.
+
+### Changed
+- **OpenCode subagents panel:** the finished subagents are below the running ones (✓/✗ and the duration). It shows the 5 newest for 5 minutes, then a `+N more` line. It resets when you go to a different parent session. Run `client/install.sh` again to install it.
+- **A default model that is not downloaded** falls back to the first downloaded model.
+- The REFERENCE.md IQ section: the IQ3 builds are now in the catalogue (for Macs where nothing larger fits). IQ quants are still not used on 36 GB.
+
+### Removed
+- `host/models.conf` (replaced by `host/catalog.json`).
+
+### Fixed
+- **The monitor and `./carl.sh` froze, and Ctrl-C did not stop them.** `lsof` hangs (and cannot be stopped) on a stale network share, for example a disconnected Time Machine SMB volume. CARL no longer uses `lsof`: port and PID lookups use `netstat -anv`.
+- The shell and Python scripts are executable in the repository (a fresh clone could not run `./carl.sh`).
+- Monitor: a mouse report or key sequence split across two reads no longer shows up as key presses. Mouse reporting is always turned off on exit.
+
 ## 1.0.0 - 2026-10-02
 
 The first release under the name CARL (Can't Afford Remote LLMs). Before this release, the project was called LLM-Deploy (and Qwen-Llama-Deploy before that).

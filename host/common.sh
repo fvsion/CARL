@@ -13,6 +13,17 @@
 
 VM_HOST="${VM_HOST:-192.168.42.1}"
 
+# port_pid PORT: pid of the process listening on TCP PORT (empty if none).
+# port_host PORT: the address it listens on. netstat, not lsof: lsof stats every
+# mounted filesystem and hangs, unkillable, on a stale network share (a dead
+# Time Machine SMB volume froze ./carl.sh and the monitor).
+_listen() { /usr/sbin/netstat -anv -p tcp 2>/dev/null | awk -v p="$1" '
+  $6 == "LISTEN" && $4 ~ ("[.]" p "$") { a = $4; sub("[.]" p "$", "", a)
+    pid = ""; if (match($0, /:[0-9]+ +[0-9][0-9][0-9][0-9][0-9] /)) { pid = substr($0, RSTART + 1, RLENGTH); sub(/ .*/, "", pid) }
+    print a, pid; exit }'; }
+port_pid() { _listen "$1" | awk '{print $2}'; }
+port_host() { _listen "$1" | awk '{print ($1 == "*" ? "127.0.0.1" : $1)}'; }
+
 has_addr() { ifconfig 2>/dev/null | grep -q "inet ${1//./\\.} "; }
 
 # resolve_host MODE -> sets HOST (and NET_NOTE for the start-up banner)

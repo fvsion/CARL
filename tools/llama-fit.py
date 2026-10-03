@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""What fits on this Mac: for each registry model (host/models.conf), the GPU
+"""What fits on this Mac: for each model (host/catalog.json + the models folder), the GPU
 memory it needs and the largest context window that fits, per KV cache type.
 
   ./carl.sh fit                  # this Mac
@@ -97,24 +97,21 @@ if args.check:
               + " It may still load and then fail or swap.")
     sys.exit(0)
 
-rows, small_default = [], None
-for line in open(os.path.join(REPO, "host", "models.conf")):
-    m_ = __import__("re").match(r"#\s*default-small:\s*(\S+)", line.strip())
-    if m_:
-        small_default = m_.group(1)
-    if not line.strip() or line.lstrip().startswith("#"):
-        continue
-    if args.pick_default and rows and line.split("|")[0] != small_default:
+import carl
+cat = carl.load_catalog()
+small_default = cat.get("default_small")
+rows = []
+for m in carl.all_models():
+    if args.pick_default and m["name"] not in (cat["default"], small_default):
         continue                               # only the default and the small default matter
-    name, repo, rev, file, sha, size, alias, spec, notes = line.rstrip("\n").split("|")[:9]
-    path = os.path.join(MODELS_DIR, file)
     try:
-        meta = local_meta(path) if os.path.exists(path) else remote_meta(repo, rev, file)
+        meta = local_meta(m["path"]) if m["status"] == "downloaded" else remote_meta(m["hf"]["repo"], m["hf"]["revision"], m["hf"]["file"])
     except Exception as e:
-        rows.append((name, int(size), None, str(e)[:40])); continue
-    rows.append((name, int(size), model_shape(meta), "downloaded" if os.path.exists(path) else "not downloaded"))
+        rows.append((m["name"], int(m["bytes"]), None, str(e)[:40])); continue
+    rows.append((m["name"], int(m["bytes"]), model_shape(meta), "downloaded" if m["status"] == "downloaded" else "not downloaded"))
+rows.sort(key=lambda r: r[0] != cat["default"])   # the main default first
 
-# The default model for this Mac: the first registry entry, or the
+# The default model for this Mac: the catalogue default, or the
 # "default-small" entry when the first one can't hold one window of --ctx.
 ctx_d = args.ctx or 98304
 first = rows[0] if rows else None

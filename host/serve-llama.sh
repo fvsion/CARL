@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Serve a registry GGUF (default qwen3.6-35b-a3b; the IQ3 build on 24 GB) with
+# Serve a GGUF model (default qwen3.6-35b-a3b; the IQ3 build on 24 GB) with
 # llama.cpp (llama-server) to this Mac and the VMware Fusion guest, with a real
 # quantized KV cache (MTPLX 2.11.3 cannot hold long sessions on this Mac -- see
 # REFERENCE.md section 3).
 #
 #   ./host/serve-llama.sh [--model NAME|PATH] [--kv q4|q8 | --q4 | --q8] [--ctx N|Nk] [--local|--vm] [extra llama-server flags...]
 #
-#   --model NAME       a model from host/models.conf (see ./host/serve.sh models;
+#   --model NAME       a model from the catalogue or the models folder (./carl.sh models;
 #                      fetch with ./host/serve.sh download NAME). Default: first entry.
 #   --model PATH.gguf  any local GGUF
 #
@@ -56,7 +56,7 @@ while [[ $# -gt 0 ]]; do
     --model|--model=*)
       v="${1#--model}"; v="${v#=}"
       if [[ -z "$v" ]]; then shift; v="${1:-}"; fi
-      [[ -n "$v" ]] || { echo "error: --model needs a registry name or a .gguf path" >&2; exit 2; }
+      [[ -n "$v" ]] || { echo "error: --model needs a model name or a .gguf path" >&2; exit 2; }
       MODEL_FLAG="$v" ;;
     --slots|--slots=*)
       v="${1#--slots}"; v="${v#=}"
@@ -79,56 +79,31 @@ while [[ $# -gt 0 ]]; do
 done
 set -- ${pass[@]+"${pass[@]}"}
 
-# Saved settings, written by the monitor's Settings tab (tab 5). Order of
-# precedence: flags > environment > this file > built-in defaults.
-# SETTINGS_FILE=none ignores the file; delete it to go back to the defaults.
-SETTINGS_FILE="${SETTINGS_FILE:-$HOME/.config/llm-deploy/llama.env}"
-SETTINGS_USED=()
-if [[ "$SETTINGS_FILE" != none && -f "$SETTINGS_FILE" ]]; then
-  while IFS='=' read -r k v || [[ -n "$k" ]]; do
-    [[ "$k" =~ ^(MODEL_NAME|KV|KV_K|KV_V|CTX|SLOTS|NET|HOST|TEMP|TOP_P|TOP_K|MIN_P|PRESENCE|REPEAT|SPEC|SPEC_N|CACHE_RAM|UB|BATCH|CKPT|CKPT_STEP)$ ]] || continue
-    [[ "$v" =~ ^[A-Za-z0-9_.,:/-]+$ && -z "${!k:-}" ]] || continue
-    printf -v "$k" '%s' "$v"; SETTINGS_USED+=("$k=$v")
-  done < "$SETTINGS_FILE"
-fi
-
 source "$(dirname "$0")/common.sh"
 ensure_deps                      # llama-server, aria2, ansifilter (asks to brew install them)
 
-# Model: --model flag > MODEL env (path) > saved MODEL_NAME > registry default (first line of models.conf).
-MODELS="$(dirname "$0")/models.sh"
-REG_NAME=""
-if [[ -n "$MODEL_FLAG" && ( "$MODEL_FLAG" == */* || "$MODEL_FLAG" == *.gguf ) ]]; then
-  MODEL="$MODEL_FLAG"
-elif [[ -n "$MODEL_FLAG" ]]; then
-  REG_NAME="$MODEL_FLAG"
-elif [[ -z "${MODEL:-}" && -n "${MODEL_NAME:-}" ]]; then
-  REG_NAME="$MODEL_NAME"
-elif [[ -z "${MODEL:-}" ]]; then
-  # Default model for this Mac: the registry's first entry, or its "default-small"
-  # entry when the first can't fit one window in GPU memory (tools/llama-fit.py).
-  REG_NAME="$(python3 "$(dirname "$0")/../tools/llama-fit.py" --pick-default --ctx "${CTX_FLAG:-${CTX:-98304}}" 2>/dev/null)"
-  [[ -n "$REG_NAME" ]] || REG_NAME="$("$MODELS" default)"
-  # Not downloaded: use a registry model that is (the first one in models.conf order).
-  if ! "$MODELS" path "$REG_NAME" >/dev/null 2>&1; then
-    have="$("$MODELS" downloaded | head -n1)"
-    if [[ -n "$have" ]]; then
-      echo "default model $REG_NAME is not downloaded; using $have (downloaded)"
-      REG_NAME="$have"
-    else
-      echo "error: no model is downloaded. Download this Mac's default: ./carl.sh download default" >&2
-      echo "       (or one of: ./carl.sh models)" >&2
-      exit 1
-    fi
-  fi
-fi
-if [[ -n "$REG_NAME" ]]; then
-  MODEL="$("$MODELS" path "$REG_NAME")" || exit 1
-  REG_ALIAS="$("$MODELS" get "$REG_NAME" alias)"
-  REG_SPEC="$("$MODELS" get "$REG_NAME" spec)"
-fi
+# Model and settings from tools/carl.py: config.json (monitor Settings tab, or
+# ./carl.sh config), this Mac's Auto-tune result, the catalogue (host/catalog.json).
+# Precedence: flags > environment > config.json > Auto-tune > catalogue > defaults.
+# Model: --model flag > MODEL env (a path) > config llama.model > this Mac's default
+# (the first downloaded model when the default isn't downloaded).
+# SETTINGS_FILE=none ignores config.json (catalogue and Auto-tune only).
+model_arg="${MODEL_FLAG:-${MODEL:-}}"
+carl_args=(launch-env); [[ -n "$model_arg" ]] && carl_args+=(--model "$model_arg")
+[[ "${SETTINGS_FILE:-}" == none ]] && carl_args+=(--no-config)
+CARL_ENV="$(python3 "$(dirname "$0")/../tools/carl.py" "${carl_args[@]}")" || exit 1
+CARL_SOURCES=""
+while IFS='=' read -r k v; do
+  [[ "$k" =~ ^[A-Z_]+$ ]] || continue
+  case "$k" in
+    MODEL|MODEL_NAME|CARL_SOURCES) printf -v "$k" '%s' "$v" ;;   # carl.py resolved them (flag/env included)
+    *) [[ -z "${!k:-}" ]] && printf -v "$k" '%s' "$v" ;;          # environment wins
+  esac
+done <<< "$CARL_ENV"
 [[ -f "$MODEL" ]] || { echo "error: model file not found: $MODEL" >&2; exit 1; }
-ALIAS="${ALIAS:-${REG_ALIAS:-$(basename "$MODEL" .gguf)}}"
+ALIAS="${ALIAS:-$(basename "$MODEL" .gguf)}"
+# config.json llama.extra_args: more llama-server flags (command-line extras still come last)
+[[ -n "${EXTRA_ARGS:-}" ]] && set -- $EXTRA_ARGS "$@"
 resolve_host "$NET_FLAG"
 PORT="${PORT:-8080}"
 API_KEY_FILE="${API_KEY_FILE:-$HOME/.mtplx/api-key}"
@@ -158,7 +133,7 @@ UB="${UB:-512}"                 # -ub physical batch; 512 measured best (90.5 vs
 #   ngram-mod 6.9/6.9/17.1 | draft-mtp,ngram-mod n2 9.1/10.3/17.4 | n1 10.5/10.9/27.3
 # 35B-A3B (same sweep, 2026-09-25): none 33 | mtp n1 42/41/44 | ngram-mod 33/33/67
 #   draft-mtp,ngram-mod n1 44/44/70 | n2 42/45/117  -> n=2 for that model
-SPEC="${SPEC:-${REG_SPEC:-draft-mtp,ngram-mod}}"   # registry default per model, "spec[:n]"
+SPEC="${SPEC:-draft-mtp,ngram-mod}"   # per model: catalogue / Auto-tune / config.json, "spec[:n]" accepted
 if [[ "$SPEC" == *:* ]]; then SPEC_N="${SPEC_N:-${SPEC##*:}}"; SPEC="${SPEC%%:*}"; fi
 SPEC_N="${SPEC_N:-1}"           # --spec-draft-n-max; 27B dense: MTP n>1 loses on Metal
 # Sampling: Qwen's thinking-mode recommendation (Qwen3.8 and Qwen3.6 model cards):
@@ -179,7 +154,7 @@ LOG_FILE="${LOG_FILE:-$LOG_DIR/llama-server-$(date +%Y%m%d-%H%M%S).log}"
 
 # One server per port, and in practice one model at a time (two don't fit in
 # 36 GB). Fail before touching the log symlink or loading anything.
-if pid=$(lsof -tiTCP:"$PORT" -sTCP:LISTEN 2>/dev/null) && [[ -n "$pid" ]]; then
+if pid=$(port_pid "$PORT") && [[ -n "$pid" ]]; then
   echo "error: port $PORT is already in use by: $(ps -o command= -p ${pid%%$'\n'*} | cut -c1-100)" >&2
   echo "       Stop it first (Ctrl-C in its terminal, or kill $pid). Watch it: ./carl.sh monitor" >&2
   exit 1
@@ -237,7 +212,7 @@ echo "network: $NET_NOTE"
 slot_args=()
 (( SLOTS > 1 )) && slot_args=(--kv-unified --kv-unified-per-slot "$CTX" --no-cache-idle-slots -sps 0.5)
 echo "slots: $SLOTS ($SLOTS_NOTE) x ${CTX} tokens, KV $KV_K/$KV_V, RAM prompt cache ${CACHE_RAM} MiB"
-(( ${#SETTINGS_USED[@]} )) && echo "saved settings: ${SETTINGS_USED[*]} (${SETTINGS_FILE/#$HOME/~})"
+echo "settings from: $CARL_SOURCES (./carl.sh config show)"
 echo "model=$(basename "$MODEL") alias=$ALIAS ctx=$CTX slots=$SLOTS kv=$KV_K/$KV_V ub=$UB spec=$SPEC n=$SPEC_N log=$LOG_FILE"
 # Starts the server and the live monitor in this terminal (host/common.sh);
 # also keeps the Mac awake while it runs: a sleeping Mac freezes requests

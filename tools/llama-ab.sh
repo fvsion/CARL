@@ -24,6 +24,7 @@
 # Results are also written to $LOGDIR/ab-<timestamp>.txt.
 set -uo pipefail
 cd "$(dirname "$0")/.."
+source host/common.sh   # port_pid (netstat-based)
 MODE="${1:-all}"
 PORT=8080
 LOGDIR="${LOGDIR:-$HOME/models/logs}"; mkdir -p "$LOGDIR"
@@ -34,13 +35,13 @@ UB_KV="${UB_KV:-q4_0}"
 RESULTS="$LOGDIR/ab-$(date +%Y%m%d-%H%M%S).txt"
 exec > >(tee -a "$RESULTS") 2>&1
 
-stop() { local p; p=$(lsof -tiTCP:$PORT -sTCP:LISTEN 2>/dev/null); [[ -n "$p" ]] && kill -TERM $p
-         while lsof -nP -iTCP:$PORT -sTCP:LISTEN >/dev/null 2>&1; do sleep 1; done; }
+stop() { local p; p=$(port_pid "$PORT"); [[ -n "$p" ]] && kill -TERM $p
+         while [[ -n "$(port_pid "$PORT")" ]]; do sleep 1; done; }
 start() { local name=$1; shift
           env LOG_FILE="$LOGDIR/ab-$name.log" "$@" nohup ./host/serve-llama.sh > "$LOGDIR/ab-$name.out" 2>&1 &
           for _ in $(seq 1 150); do grep -q -E "listening on|error|failed to" "$LOGDIR/ab-$name.out" && break; sleep 2; done
           grep -q "listening on" "$LOGDIR/ab-$name.out"; }
-idle_rss() { ps -o rss= -p "$(lsof -tiTCP:$PORT -sTCP:LISTEN)" | awk '{printf "%.2fG", $1/1048576}'; }
+idle_rss() { ps -o rss= -p "$(port_pid "$PORT")" | awk '{printf "%.2fG", $1/1048576}'; }
 
 echo "== llama-ab $MODE $(date '+%F %T')  kv=[$KV_CONFIGS] ub=[$UB_CONFIGS] long=$LONG_TOKENS"
 

@@ -30,10 +30,10 @@ Commands with the label **Mac** run in the CARL folder on the Mac (`~/LLM-Deploy
 ### Mac
 
 **Requirements:**
-- An **Apple Silicon** Mac. 36 GB runs all registry models. A 24 GB Mac runs the IQ3 35B (its default) and the Q3 27B entries (see [Sharing with a friend](#sharing-with-a-friend)).
-- [Homebrew](https://brew.sh), for `llama.cpp` (tested with 0.4.1), `aria2` and `ansifilter`.
+- An **Apple Silicon** Mac. 36 GB runs all catalogue models. A 24 GB Mac runs the IQ3 35B (its default), the IQ3 27B and the Q3 27B entries (see [Sharing with a friend](#sharing-with-a-friend)).
+- [Homebrew](https://brew.sh), for `llama.cpp` (tested with 0.4.1 and 0.5.0), `aria2` and `ansifilter`.
 - `python3`. The first time that you use it, macOS offers to install it with the command-line developer tools. For the exact GPU limit, the `fit` command also uses `swift`. Both come with `xcode-select --install`.
-- 14–24 GB of free disk space for each model.
+- 11–23 GB of free disk space for each model.
 - Optional: VMware Fusion with NAT (vmnet8) for VM clients. MTPLX 2.11.3 for the `grant` / `pocket` presets.
 
 1. **Install the tools:**
@@ -43,6 +43,7 @@ Commands with the label **Mac** run in the CARL folder on the Mac (`~/LLM-Deploy
    - `llama.cpp` gives `llama-server`.
    - `aria2` makes downloads faster.
    - `ansifilter` makes the logs easy to read.
+   - If you forget this step, `./carl.sh` finds the missing tools and asks to install them with Homebrew. `SKIP_DEPS=1` skips this check. Homebrew itself is not installed automatically.
 
    Optional: for the MTPLX presets, install MTPLX:
    ```bash
@@ -55,7 +56,9 @@ Commands with the label **Mac** run in the CARL folder on the Mac (`~/LLM-Deploy
    ./carl.sh fit
    ./carl.sh download default          # this Mac's default (qwen3.6-35b-a3b on 36 GB, the IQ3 35B on 24 GB)
    ```
-   `default` selects a model for each Mac. It selects the first entry of `host/models.conf` (`qwen3.6-35b-a3b`) if that model fits. If not, it selects `qwen3.6-35b-a3b-iq3`, which is the 24 GB default (see [section 3](#3-choosing-a-model)).
+   `default` selects a model for each Mac. It selects the catalogue default (`qwen3.6-35b-a3b`, the `default` field in `host/catalog.json`) if that model fits. If not, it selects `qwen3.6-35b-a3b-iq3` (`default_small`), which is the 24 GB default (see [section 3](#3-choosing-a-model)).
+   - If you forget this step, `./carl.sh` tells you that no model is downloaded. It shows the default for this Mac and its size, and asks to download it. If you answer no, the dashboard opens without a server.
+   - If the default model is not downloaded, but a different model is, the server starts with the first downloaded model. The start-up output tells you this.
 4. **For VM clients, start VMware Fusion first.** Then the server listens on the Fusion NAT address `192.168.42.1`. This address exists only while the Fusion network is up. If you do not start Fusion, the server serves only this Mac (127.0.0.1).
 5. **Start the server:**
    ```bash
@@ -158,6 +161,7 @@ Use this procedure when the clients are not in the VMware Fusion VM and not on t
    | Model | Largest context window (q4 KV) |
    |---|---|
    | **`qwen3.6-35b-a3b-iq3`** (default on 24 GB: stock fast MoE, 14.1 GB) | 2 × 96K slots (the default) fit in ~15.3 GiB, thus subagents work. 1 slot can go to 256K. |
+   | `qwen3.8-27b-iq3` (stock, the smallest 27B, 10.9 GB) | 2 × 64K slots (its default) fit, thus subagents work. 2 slots can go to ~128K each. 1 slot can go to 256K. |
    | `qwen3.8-27b-q3` (stock, 13.1 GB) | ~148K, 1 slot |
    | `orcarouter-27b-q3` (abliterated, 14.6 GB) | ~68K, 1 slot |
    | `qwen3.8-27b`, `orcarouter-27b` (Q4) | do not fit under the default limit |
@@ -185,7 +189,10 @@ Use this procedure when the clients are not in the VMware Fusion VM and not on t
    - `d`: quit the monitor and let the server continue to run. The server continues to run after you close the terminal. To attach the monitor again, run `./carl.sh monitor`.
    - Esc: cancel.
 
-   To stop the server without the monitor, run `kill $(lsof -tiTCP:8080 -sTCP:LISTEN)`.
+   To stop the server without the monitor, run `./carl.sh monitor`, then push `q` and `s`. Or run this command (it finds the process that listens on port 8080):
+   ```bash
+   kill $(netstat -anv -p tcp | awk '$6=="LISTEN" && $4 ~ /[.]8080$/ {n=split($(NF-8),a,":"); print a[n]; exit}')
+   ```
 
 **What to expect:**
 - **The first message of a session is slow.** The system prompt and the tools of OpenCode are about 9K tokens. They take about 2 min on the 27B and 20 s on the 35B.
@@ -204,6 +211,7 @@ Use this procedure when the clients are not in the VMware Fusion VM and not on t
 | Uncensored (abliterated) 27B, with the best measured quality in long sessions | `./carl.sh llama --model orcarouter-27b` | `qwen3.8-27b-abliterated-llama` |
 | A 24 GB Mac (the default on that Mac) | `./carl.sh llama`, which selects `qwen3.6-35b-a3b-iq3` | `qwen3.6-35b-a3b` (the IQ3 uses the same name) |
 | A 24 GB Mac, stock | `./carl.sh llama --model qwen3.8-27b-q3` | `qwen3.8-27b` (the Q3 uses the same name) |
+| A 24 GB Mac, stock, the smallest 27B (10.9 GB) | `./carl.sh llama --model qwen3.8-27b-iq3` | `qwen3.8-27b` (the IQ3 uses the same name) |
 | A 24 GB Mac, uncensored | `./carl.sh llama --model orcarouter-27b-q3 --ctx 64k` | `qwen3.8-27b-abliterated-llama` |
 | Short session, faster than llama.cpp 27B, max 48K (MTPLX) | `./carl.sh grant` | `qwen3.8-27b-abliterated-grant` |
 
@@ -212,6 +220,8 @@ Use this procedure when the clients are not in the VMware Fusion VM and not on t
 - **The client does not change the server model.** llama-server answers with the model that is loaded, for all model names that the client sends. If the client selection and the server do not match, you get the loaded model with the wrong label and the wrong thinking options.
 - **Stock vs abliterated:** the stock models (`qwen3.8-27b`, the 35B) keep their refusals. The orcarouter builds do not have refusals. Only `orcarouter-27b` has full measurements in CARL. The stock 27B has the same architecture and speed profile.
 - **Q3 vs Q4:** Q3 is 2.5–3.5 GB smaller, but its quality is lower (more slips in long agent sessions). Use Q3 if Q4 does not fit.
+- **IQ3:** the IQ3 builds are smaller again, and their quality is lower again. The IQ formats unpack more slowly on Metal. MTP helps them less, and 2 drafts make them slower. Thus, their tuned speculation is MTP + n-gram with 1 draft (REFERENCE.md, "IQ3 speculation"). Use IQ3 only if nothing larger fits.
+- **Other models:** each `.gguf` in `~/models/gguf` is a model too. See [section 7](#7-downloading-and-adding-models).
 
 ---
 
@@ -296,9 +306,11 @@ Then restart OpenCode or Pi.
 - **The title agent of OpenCode stays on.** Earlier versions disabled it. With 2 slots, it runs at the same time as the main session. It does not wait in a queue behind the main session.
 - **The monitor** shows one context bar for each slot. When both slots work, the header shows **BUSY ×2**.
 - **In OpenCode, the sidebar shows a Subagents panel** (`install.sh` installs it):
-  - a spinner while each subagent runs, ✓ when it is complete, ✗ on error;
-  - its agent and task, the elapsed time, the current or last tool, and the context size;
+  - the running subagents at the top, oldest first: a spinner, the agent and task, the elapsed time, the current tool, and the context size;
+  - the finished subagents below them, newest first, one line each: ✓ (complete) or ✗ (error), the agent, the task and the duration. The panel shows the 5 newest, for 5 minutes after they finish. A `+N more` line holds the others: click it to see all of them;
+  - when you go to a different parent session, the panel shows the subagents of that session;
   - click a subagent to see its model. Click it again to open its conversation. Click the panel header to collapse the panel.
+  - To get a new version of the panel, run `install.sh` again. Then restart OpenCode.
   - The plugin is `client/opencode/plugins/subagents-sidebar/`. `install.sh` registers it in `~/.config/opencode/tui.json`. `NO_SIDEBAR=1 ./install.sh` installs without it.
 - **More than two conversations at the same time** (for example, two subagents and the main session): the server parks the extra conversation in the RAM prompt cache. The size of that cache comes from the free memory. Thus, the conversation possibly does not fit in the cache. If it does not fit, the server reads it again.
 
@@ -381,32 +393,68 @@ CAUTION: Do not mix KV types (`KV_K=q8_0 KV_V=q4_0`). If you mix them, the serve
 ## 7. Downloading and adding models
 
 ```bash
-./carl.sh models                    # registry + download status + free space
+./carl.sh models                    # the catalogue + the models folder + your downloads, with status and free space
 ./carl.sh fit                       # what fits this Mac (fit --ram 24 / --ctx 64k)
-./carl.sh download qwen3.8-27b      # one model (aria2c, 16 connections, resumable)
-./carl.sh download all              # everything
-./host/models.sh verify                   # re-check sizes and SHA-256 of downloaded files
+./carl.sh download qwen3.8-27b      # one catalogue model (aria2c, 16 connections, resumable)
+./carl.sh download default          # the default model for this Mac
+./carl.sh download all              # every catalogue model
+./carl.sh download hf:OWNER/REPO/FILE.gguf   # any GGUF from Hugging Face (verified too)
+./carl.sh download hf:OWNER/REPO    # list the GGUF files of that repo
+./carl.sh verify [NAME...]          # re-check the size and SHA-256 (no names: every downloaded model)
+./carl.sh delete NAME               # delete a model file (and its partial download)
 ```
 
-- The files go to `~/models/gguf/`. To use a different folder, set `MODELS_DIR`.
+- The files go to `~/models/gguf/`. To use a different folder, set `MODELS_DIR`, or `paths.models_dir` in the settings file ([section 9](#the-settings-file)).
 - If a download stops, run the command again. The download continues from where it stopped.
 - If a file fails its checksum, its name changes to `*.bad`.
+- The dashboard can do the same: Settings tab, **Models** panel ([section 9](#9-logs-and-monitoring)).
 
-**To serve a GGUF that is not in the registry:**
+**The catalogue** is [host/catalog.json](host/catalog.json). It holds the built-in models. For each model, it has:
+- `hf`: the download source: the Hugging Face repo, a pinned revision, the file, its SHA-256 and its size;
+- `summary` and `description`: what the model is and when to use it;
+- `tune`: the recommended server settings (KV cache, context, slots, speculation, draft tokens, sampling);
+- `why`: the reason for each tuned value;
+- `ctx_zones`: the context windows that read fast, slow and very slow;
+- `measured`: the reference measurements.
+
+The Settings tab shows the description and the reasons next to the settings. The fields `default` and `default_small` at the top of the file select the default models.
+
+**Custom models (not in the catalogue):**
+- **Each `.gguf` in the models folder is a model.** `./carl.sh models` lists it with the source `file`. Its name is the file name in lower case, without `.gguf`. Vision projectors (`mmproj…`) and the second and later parts of a split GGUF are not listed.
+- **`./carl.sh download hf:OWNER/REPO/FILE.gguf` downloads any GGUF from Hugging Face.** It gets the revision, the size and the SHA-256 from the Hugging Face API. Then it downloads the file and verifies it. A `huggingface.co` URL to the file also works. `hf:OWNER/REPO` (no file) lists the GGUF files of the repo.
+- CARL records these models in `~/.config/llm-deploy/models.json`. This file also holds the Auto-tune results for each model on this Mac.
+- **A custom model gets its first settings from its GGUF header:** q4_0 KV, 96K for each slot (MoE) or 64K (dense), and MTP + n-gram (1 draft) if the file has an MTP head. Without an MTP head: n-gram only (2 drafts). These settings are a guess. Run [Auto-tune](#auto-tune) to measure better values.
+- To start it: `./carl.sh llama --model NAME`. A path to a `.gguf` also works.
+- Before you use it from the clients, examine the chat template of the model. The thinking options are different between model families. The server answers with the loaded model for all model names, but the client sends the thinking options of the entry that you select.
+
+**To add a model to the catalogue** (for everyone who uses this folder):
+1. Copy an entry in `models` in `host/catalog.json`. Change `name`, `label`, `summary`, `description` and `alias` (the served name that the clients use).
+2. Fill in `hf`: `repo`, `revision` (the commit SHA), `file`, `sha256` and `bytes`. The easy way: run `./carl.sh download hf:OWNER/REPO/FILE.gguf` first, and copy the `hf` block that it writes to `~/.config/llm-deploy/models.json`.
+3. Set `tune` and `why`. For `spec`, use `draft-mtp,ngram-mod` if the GGUF has an MTP head. Use `spec_n` 1, except for a MoE K-quant, where 2 can be better (the Q4 35B). Do not use 2 on an IQ quant. For a file without an MTP head, use `ngram-mod`. Run `./carl.sh tune NAME` to measure.
+4. Set `arch`, `mtp`, `min_ram_gb` and `ctx_zones`.
+5. Before you add the model to the clients, examine the chat template of the model. The thinking options are different between model families.
+6. Add the model to `client/opencode/opencode.json` and `client/pi/models.json`.
+7. Copy the bundle to the shared folder.
+8. Run `install.sh` again in the VM.
+
+### Auto-tune
+
+Auto-tune measures the best settings for one model on this Mac. It takes about 5–10 min.
+
 ```bash
-./carl.sh --model ~/models/gguf/SomeModel-Q4_K_M.gguf
+./carl.sh tune qwen3.8-27b-iq3            # all modes
+./carl.sh tune qwen3.8-27b-iq3 --quick    # MTP with 1 draft only, no 64K read (about 4 min)
 ```
 
-**To add a model to the registry:** add a line at the end of [host/models.conf](host/models.conf):
-```
-name|hf-repo|revision-sha|file.gguf|sha256|bytes|served-alias|spec[:n]|notes
-```
-1. Get `revision`, `sha256` (the `lfs.sha256` of the file) and `bytes` from `https://huggingface.co/api/models/<repo>/tree/main`.
-2. For `spec`, use `draft-mtp,ngram-mod` if the GGUF has an MTP head. If not, use `ngram-mod`. Use `tools/llama-spec-sweep.sh` to benchmark the draft count.
-3. Before you add the model to the clients, examine the chat template of the model. The thinking options are different between model families.
-4. Add the model to `client/opencode/opencode.json` and `client/pi/models.json`.
-5. Copy the bundle to the shared folder.
-6. Run `install.sh` again in the VM.
+It does these steps. The model loads one time for each speculation mode.
+1. **Memory:** the largest context window that fits, with 1 slot and with 2 slots.
+2. **Speculation:** none, n-gram, and, if the file has an MTP head, MTP and MTP + n-gram with 1 and 2 drafts (`--quick`: 1 draft only). Each mode writes prose, new code and a code re-emit, two times. The score is a weighted geometric mean (prose 0.4, code 0.4, re-emit 0.2). A mode with drafting must be 3% better than a simpler mode to win.
+3. **Prompt reading:** a cold read at 8K, 32K and 64K tokens (`--quick`: no 64K). From these, it calculates the time to read a full window. This gives the context zones of this Mac: a cold read of the full window in 3 min or less = fast (green), in 10 min or less = slow (yellow), more = very slow (red).
+4. **Result:** q4_0 KV, the best speculation, the largest standard window in the fast zone that fits, and 2 slots if two windows fit.
+
+- CARL saves the result in `~/.config/llm-deploy/models.json`. Each later start of the model uses it. A value that you set in the settings file has priority ([section 9](#the-settings-file)).
+- CAUTION: **Auto-tune needs the GPU for itself.** It does not start if a server runs on port 8080 or 8000, or if another large process (more than 8 GB, `BIG_GB`) or a known model server is in memory. `ALLOW_SECOND_MODEL=1` skips that check. Stop the server first. The **Auto-tune** panel of the dashboard stops the server for you, and starts it again after the tune.
+- Auto-tune uses its own server on port 8093 (`--port` changes it). `--dry-run` shows the result, but does not save it.
 
 ---
 
@@ -417,13 +465,13 @@ name|hf-repo|revision-sha|file.gguf|sha256|bytes|served-alias|spec[:n]|notes
 ./carl.sh pocket       # PocketAiHub variant, :8000
 ```
 
-- **To change the MTPLX settings,** use the Settings tab of the dashboard ([section 9](#9-logs-and-monitoring)). The settings are in `~/.config/llm-deploy/mtplx.env`.
+- **To change the MTPLX settings,** use the Settings tab of the dashboard ([section 9](#9-logs-and-monitoring)). The settings are in the `mtplx` section of `~/.config/llm-deploy/config.json` ([The settings file](#the-settings-file)).
 - **The coder subagent works with MTPLX.** MTPLX runs one request at a time. The other requests wait. Each session comes back from the session bank of MTPLX.
 
 - **Use them only for short sessions under 48K.** After about 56K, MTPLX fails with HTTP 507 on this Mac.
 - **Keep the KV cache at bf16 (`KV_QUANT=off`).** The q8 option of MTPLX uses more memory, not less.
 - **You cannot turn off thinking** from the OpenCode effort menu with MTPLX.
-- **To stop, press Ctrl-C** or run `kill $(lsof -tiTCP:8000 -sTCP:LISTEN)`. `mtplx stop` cannot find a server that is bound to the VM address.
+- **To stop, push `q` and then `s` in the monitor**, or use the `kill` command of [section 2](#2-daily-use) with `8000` in place of `8080`. `mtplx stop` cannot find a server that is bound to the VM address.
 
 For details, see REFERENCE.md, "MTPLX details, and why it is capped at 48K".
 
@@ -464,7 +512,7 @@ The dashboard (the monitor) is `tools/llama-monitor.py`. It works with llama.cpp
 | **2 Connect** | Endpoint, model, API key, who can reach the server, connected clients, key file; setup steps for VM and Mac clients; buttons **[ OpenCode config ]**, **[ Pi config ]**, **[ curl test ]**. A button copies its snippet to the clipboard and shows it below. The screen masks the key unless you reveal it. The copy has the real key. CAUTION: Protect a copied config as you protect the key. |
 | **3 Requests** | All finished requests in the log, newest first: start time, context size, new tokens, read speed, output tokens, generation speed, duration, draft acceptance, prompt tokens from the cache. The title shows the averages. |
 | **4 Log** | The full server log, which you can scroll. Buttons and keys: wrap (`w`), errors and warnings only (`f`), follow (End). |
-| **5 Settings** | The backend (llama.cpp or MTPLX) and its server setup. llama.cpp: model, KV cache, context for each slot, slots, RAM prompt cache, network, temperature, presence penalty, speculation. MTPLX: preset, context, profile, MTP depth, KV cache, network. Each row shows the new value and the value that the server uses now. See "Change the server settings" below. |
+| **5 Settings** | Three panels; `[` and `]` change the panel. **Server:** the backend (llama.cpp or MTPLX) and its server setup, with an explanation of the model and of each tuned value. **Models:** the catalogue and the models folder: download, verify, delete, add from Hugging Face. **Auto-tune:** measure a model on this Mac. See "The Settings tab" below. |
 
 **The Overview cards:** click the title of a card to see more detail. Click again to see full detail. Click once more to collapse the card. The dots after the title show the level: `○○` collapsed, `●○` normal, `●●` full detail.
 
@@ -494,7 +542,10 @@ Each card keeps the same height while the server works. If a value is not availa
 | space | refresh now |
 | `?` | show all keys in the footer |
 | `q`, Ctrl-C | quit (asks stop / leave running / cancel) |
-| ↑ ↓, ← →, `a`, `r`, `x` | Settings tab: select a row, change the value, apply, revert, defaults |
+| `[` / `]` | Settings tab: the previous / next panel (Server, Models, Auto-tune) |
+| ↑ ↓, ← →, Enter, `a`, `r`, `x` | Settings tab, Server panel: select a row, change the value, open the model list (on the model row) or type a value, apply, revert, tuned values |
+| ↑ ↓, Enter, `d`, `v`, `u`, `x`, `h`, `c` | Settings tab, Models panel: select a model, use it, download, verify, Auto-tune, delete, add from Hugging Face, cancel the download |
+| ← →, Enter, `c` | Settings tab, Auto-tune panel: select a model, run, cancel |
 
 Mouse: left-click only (titles, tabs, buttons). The wheel scrolls.
 
@@ -508,22 +559,34 @@ Mouse: left-click only (titles, tabs, buttons). The wheel scrolls.
   - the draft acceptance by depth, and the finished requests.
 - NOTE: MTPLX has no log file. The LOG card shows the console output of MTPLX only if the dashboard started the server.
 
-**Change the server settings (tab 5):**
+### The Settings tab
+
+The Settings tab (tab 5) has three panels: **Server**, **Models** and **Auto-tune**. Push `[` or `]`, or click the name of a panel, to change the panel.
+
+**Server panel: change the server settings:**
 1. Press `5`, or click **5 Settings**.
 2. Use ↑ ↓ to select a row. The first row is **backend** (llama.cpp or MTPLX). The rows below it are the settings of that backend:
-   - llama.cpp: model, KV cache, context/slot, slots, RAM cache, network, temperature, presence, speculation.
-   - The **network** row offers auto, local, vm and each address of this Mac (for example the LAN address). An address is saved as `HOST=ADDR`.
+   - llama.cpp: model, KV cache, context/slot, slots, speculation, draft tokens, RAM cache, network, temperature, presence.
+   - On the **model** row, push Enter (or click the model name) to open a list of all models: the catalogue, the models folder and your Hugging Face downloads. `auto` is the default of this Mac. When you select a model, the rows change to the settings of that model (your profile, else its Auto-tune result, else its catalogue values).
+   - The **network** row offers auto, local, vm and each address of this Mac (for example the LAN address). An address is saved as `llama.host`.
    - MTPLX: preset (`grant` / `pocket`), context (32K / 48K / 56K), profile (`sustained` / `turbo` / `stable`), MTP depth (1–3), KV cache (`off` / `q8` / `q4`), network.
 
    Use ← → (or click `[<]` `[>]`) to change the value. A `*` shows a value that is different from the server that runs now.
-3. Read the **fit** line. It shows whether the model is downloaded and whether it fits in the GPU memory with these settings. If it does not fit, you cannot apply the settings.
-4. Press `a` (or click **[ Apply and restart ]**). Then press `y` to confirm.
-5. Wait while the model loads (about 30 s to 2 min). The footer shows the progress.
+3. Look at the colour of the values (llama.cpp):
+   - **green:** the tuned value for this model, or a fast setting;
+   - **yellow:** changed from the tuned value, or slower;
+   - **red:** very slow, or does not work on this model. For example, a context in the very slow zone, MTP speculation on a file without an MTP head, or MTP with more than 1 draft on an IQ quant.
+4. Read the right side (below the rows in a narrow terminal). It tells you what the model is, its recommended values (from Auto-tune or the catalogue), its context zones, and **why** the selected value is tuned that way.
+5. Read the **fit** line. It shows whether the model is downloaded and whether it fits in the GPU memory with these settings. If it does not fit, you cannot apply the settings.
+6. Press `a` (or click **[ Apply and restart ]**; with no server: **[ Start server ]**). Then press `y` to confirm.
+7. Wait while the model loads (about 30 s to 2 min). The footer shows the progress.
 
 - CAUTION: **Apply stops the server.** Requests in progress stop. Make sure that no client waits for an answer.
 - **If the new server does not start,** the monitor starts the old server again with its old values. A message shows the last lines of the error.
-- **The monitor saves the llama.cpp settings in `~/.config/llm-deploy/llama.env`.** `./carl.sh llama` uses this file the next time. Flags and environment variables have priority over the file. To go back to the built-in defaults, press `x` and apply, or delete the file.
-- **The monitor saves the MTPLX settings in `~/.config/llm-deploy/mtplx.env`.** `./carl.sh grant` and `./carl.sh pocket` read this file. The order of priority is: environment variables, then the file, then the preset defaults. `SETTINGS_FILE_MTPLX=none` ignores the file.
+- **The monitor saves the settings in `~/.config/llm-deploy/config.json`** ([The settings file](#the-settings-file)). `./carl.sh llama`, `grant` and `pocket` use this file the next time. Flags and environment variables have priority over the file.
+  - Server-wide values go to the `llama` or `mtplx` section. The monitor writes only values that are different from the defaults.
+  - Model values (KV cache, context, slots, speculation, sampling) go to the profile of the model (`models.<name>`). The monitor writes only the values that are different from the tuned values of that model.
+- **`x` (Tuned values)** sets the defaults, and the tuned values of the selected model. Then apply.
 - **A change of the backend stops the current server.** The monitor then starts the other backend on its own port (8080 for llama.cpp, 8000 for MTPLX). The dashboard follows the new server.
 - **After a change of the backend, the context or the slots,** run `install.sh` again on each client. The clients then get the new context limit, and the coder subagent is added or removed.
 - **`r`** discards your changes and shows the values of the server that runs now.
@@ -536,14 +599,53 @@ Mouse: left-click only (titles, tabs, buttons). The wheel scrolls.
 | Backend | Advanced rows (default) | Launcher variable |
 |---|---|---|
 | llama.cpp | top_k (20), top_p (0.95), min_p (0), repeat penalty (1.0) | `TOP_K`, `TOP_P`, `MIN_P`, `REPEAT` |
-| llama.cpp | draft tokens (the model's value: 27B 1, 35B 2) | `SPEC_N` |
 | llama.cpp | -ub batch (512), checkpoints (8), checkpoint step (4096) | `UB`, `CKPT`, `CKPT_STEP` (and `BATCH` for `-b`, default 2048) |
 | MTPLX | scheduler, batching preset, prefill chunk (default: the value of MTPLX) | `SCHEDULER`, `BATCHING`, `PREFILL_CHUNK` |
 | MTPLX | SSD sessions (on) | `SSD_CACHE` |
 
-- CAUTION: **The default values are tuned and measured** (REFERENCE.md). A change can make the model slower, or its answers worse. To go back, push `x` (Defaults) and apply.
+- CAUTION: **The default values are tuned and measured** (REFERENCE.md). A change can make the model slower, or its answers worse. To go back, push `x` (Tuned values) and apply.
 - **MTPLX has no server sampling values.** The client sends temperature, top_p and top_k with each request.
-- The monitor saves the advanced values in the same settings files. You can also set them as environment variables, for example `TOP_K=40 ./carl.sh llama`.
+- The monitor saves the advanced values in the same settings file. You can also set them as environment variables, for example `TOP_K=40 ./carl.sh llama`.
+
+**Models panel:**
+- It lists the catalogue models and each `.gguf` in the models folder, with the size, the status (downloaded, partial, missing), whether it fits this Mac, and a summary. Below the list: the description, the source and the file of the selected model, and its Auto-tune result.
+- **Enter:** use this model (the Server panel opens with it; push `a` to start it).
+- **`d`:** download. A progress bar shows the speed and the ETA, then the checksum check. `c` cancels; the partial file stays, and Download continues it.
+- **`v`:** verify the SHA-256 (about 1 min). **`x`:** delete the file (not the model that is loaded). **`u`:** open the Auto-tune panel for this model.
+- **`h`:** add from Hugging Face. Type `OWNER/REPO` (or a URL to a `.gguf`). A list of the GGUF files of the repo opens. Select one and push Enter to download it.
+
+**Auto-tune panel:**
+- Select a model with ← → (or click its name for a list). Only downloaded models are in the list. Click the **quick** box for the quick mode.
+- Push Enter to run Auto-tune ([section 7](#auto-tune)). The panel shows each step and the last lines of its output. `c` cancels.
+- CAUTION: Auto-tune needs the GPU for itself. If a server runs, the panel asks first. Then it stops the server, runs the tune, and starts the server again with the saved settings (and the new tune).
+- **Last result:** the date, the Mac, the selected settings, the speed of each speculation mode (prose, code, re-emit), the prompt read speeds and the context zones.
+- **[ Use these values ]** removes your own values for this model from config.json. Then the tuned values apply.
+
+### The settings file
+
+The dashboard and the launchers keep your settings in `~/.config/llm-deploy/config.json`.
+
+| Section | What it holds |
+|---|---|
+| `backend` | `llama` or `mtplx`: the backend that the Settings tab selected last. (`./carl.sh` with no arguments uses `~/.config/llm-deploy/last-backend`.) |
+| `llama` | Server-wide llama.cpp settings: `model` (`auto` = the default of this Mac), `net`, `host`, `cache_ram`, `ub`, `batch`, `ckpt`, `ckpt_step`, `think_toggle`, `extra_args` (more `llama-server` flags, as a list) |
+| `models.<name>` | The profile of one model: `kv`, `ctx`, `slots`, `spec`, `spec_n`, `temp`, `top_p`, `top_k`, `min_p`, `presence`, `repeat`, `alias` |
+| `mtplx` | `preset`, `context`, `profile`, `depth`, `kv_quant`, `net`, `host`, `scheduler`, `batching`, `prefill_chunk`, `ssd_cache` |
+| `paths` | `models_dir` (default `~/models/gguf`) |
+
+- **Order of priority** for a llama.cpp start: command-line flags, then environment variables, then `config.json`, then the Auto-tune result of this Mac, then the catalogue (`host/catalog.json`), then the built-in defaults.
+- **CARL validates the file.** Each value must have the correct type, range or choice. A bad value stops the start with an error that names the key. CARL ignores an unknown key.
+- **Earlier versions used `llama.env` and `mtplx.env`** in the same folder. If `config.json` does not exist, CARL copies their values into it one time. After that, CARL does not read the old files.
+- `SETTINGS_FILE=none ./carl.sh llama` ignores `config.json` (the Auto-tune result and the catalogue still apply). `SETTINGS_FILE_MTPLX=none` ignores the `mtplx` section for `grant` and `pocket`.
+- To go back to the defaults, delete the file, or remove a value with `config unset`.
+
+```bash
+./carl.sh config show                                 # the file, then every key with its type and default
+./carl.sh config get llama.net
+./carl.sh config set models.qwen3.6-35b-a3b.ctx 128k  # sizes as N or Nk
+./carl.sh config unset models.qwen3.6-35b-a3b.ctx
+./carl.sh config path                                 # where the file is
+```
 
 ### Log files
 
@@ -566,8 +668,11 @@ ls ~/models/logs/                         # one log per server start; llama-serv
 K=$(cat ~/.mtplx/api-key)
 curl -s -H "Authorization: Bearer $K" http://192.168.42.1:8080/v1/models          # which model is loaded
 curl -s -H "Authorization: Bearer $K" http://192.168.42.1:8080/props | python3 -c 'import json,sys; print(json.load(sys.stdin)["default_generation_settings"]["n_ctx"])'   # context window
-ps -o rss=,command= -p $(lsof -tiTCP:8080 -sTCP:LISTEN)                           # memory + exact flags
+PID=$(netstat -anv -p tcp | awk '$6=="LISTEN" && $4 ~ /[.]8080$/ {n=split($(NF-8),a,":"); print a[n]; exit}')   # the server process
+ps -o rss=,command= -p $PID                                                        # memory + exact flags
 ```
+
+NOTE: CARL does not use `lsof`. On a Mac with a stale network share (for example a Time Machine SMB volume that is disconnected), `lsof` can hang, and Ctrl-C cannot stop it. `netstat -anv` shows the process ID in its `process:pid` column.
 
 ---
 
@@ -631,7 +736,7 @@ The options of the installer:
 | Clients on the Mac cannot connect to 127.0.0.1 | The server started for the VM (192.168.42.1) | Run `./client/install.sh --local` again (it uses the address that the server listens on). Or, start the server with `--local`. |
 | `error: --vm: no interface has 192.168.42.1` | The Fusion network is not up | Start VMware Fusion, or use `--local`. |
 | The monitor HEALTH card shows **BROKEN** | GPU out-of-memory or compute errors in the log | Restart the server. Make sure that no other large program runs. |
-| `error: port 8080 is already in use by: llama-server ...` | A server already runs (one model at a time) | Stop it first (Ctrl-C in its terminal, or the `kill` command above). Or, only monitor it with `./carl.sh monitor`. |
+| `error: port 8080 is already in use by: llama-server ...` | A server already runs (one model at a time) | Stop it first: `./carl.sh monitor`, then `q` and `s`. Or use the `kill` command of [section 2](#2-daily-use). Or, only monitor it with `./carl.sh monitor`. |
 | `error: another large process (probably a model) is in memory` | A model server runs already: llama.cpp, MTPLX, or a server that was started in a different way. Two models do not fit in the GPU memory. | Stop the other server first. The message shows its process ID and its size. If the large process is not a model, start with `ALLOW_SECOND_MODEL=1`. |
 | Prompt progress stops for many minutes, then continues | The Mac went to sleep (lid closed on battery power, or `KEEP_AWAKE=0`) | Connect the power supply and keep the lid open. To check, run `pmset -g log \| grep -E "Sleep\|Wake"`. |
 | All requests fail with `Compute error`, but `/health` says ok | A GPU out-of-memory event. Usually, a second model started at the same time | Restart the server. CAUTION: Do not run two models at the same time. |
@@ -645,6 +750,13 @@ The options of the installer:
 | Smoke test: `--: llama.cpp not running` | The server is not up, or the VM cannot reach the Mac | Start the server. From the VM, run `curl -s http://192.168.42.1:8080/health`. |
 | MTPLX: HTTP 507 | The session is larger than ~56K | Use the llama.cpp preset for long sessions. |
 | The download stops or fails its checksum | Network interruption, or a corrupted file (`*.bad`) | First, delete the `.bad` file. Then run `download` again (it continues from where it stopped). |
+| The monitor or `./carl.sh` freezes, and Ctrl-C does not stop it (versions before 2026-10-03) | Old versions used `lsof` to find the server. `lsof` checks each mounted volume. On a stale network share (for example a disconnected Time Machine SMB volume), it hangs, and you cannot stop it. | Update CARL: it now uses `netstat`. To release the hang now, eject the stale volume in Finder (or `diskutil unmount force /Volumes/NAME`), then close the terminal. |
+| `CARL needs: llama.cpp aria2 ansifilter (not installed)` | Homebrew tools are missing | Answer `Y`, and CARL runs `brew install`. Or install them yourself. `SKIP_DEPS=1` skips the check. If Homebrew is missing, install it first (https://brew.sh). |
+| `No model is downloaded yet.` | A new installation | Answer `Y` to download the default for this Mac. Or answer `n`: the dashboard opens without a server, and you can download a model in its **Models** panel. |
+| `default model X is not downloaded; using Y (downloaded)` | The default model for this Mac is not downloaded, but another model is | This is the expected result. To use the default, run `./carl.sh download default`. To always use Y, select it in the Settings tab, or run `./carl.sh config set llama.model Y`. |
+| `error: models.NAME.ctx: ... is out of range` (or a different key) | A bad value in `~/.config/llm-deploy/config.json` | Correct the value, or remove it with `./carl.sh config unset KEY`. `./carl.sh config show` lists the valid keys. |
+| `error: a server is running on port 8080: stop it first` from `./carl.sh tune` | Auto-tune needs the GPU for itself | Stop the server first, or run Auto-tune from the dashboard (Settings, **Auto-tune** panel): it stops and starts the server for you. |
+| `error: another large process (probably a model) is in memory` from `./carl.sh tune` | A different model server, or another process larger than 8 GB (`BIG_GB`), runs | Stop it first. If the process is not a model, run with `ALLOW_SECOND_MODEL=1`. |
 
 **To see exactly what a client sends** (thinking settings, tool counts): see REFERENCE.md, "Verifying behaviour".
 
@@ -653,6 +765,8 @@ The options of the installer:
 ## 12. Benchmarking and testing
 
 CAUTION: Some of these commands restart the server. Run them only when no session is active and **no other server runs**. The scripts that restart the server (`llama-spec-sweep.sh`, `llama-ab.sh`) use port 8080 on the default address.
+
+The easy way to find the best speculation and context for a model on this Mac is Auto-tune: `./carl.sh tune NAME` ([section 7](#auto-tune)). Stop the server first: Auto-tune does not start while a server runs on port 8080 or 8000, or while another model is in memory.
 
 ```bash
 # Speculation configs (model via MODEL=path; draft count via spec:n)
@@ -665,6 +779,7 @@ tools/llama-wait-idle.sh 1200 && tools/llama-ab.sh all
 
 | Tool | Purpose |
 |---|---|
+| `./carl.sh tune NAME [--quick]` (`tools/carl-tune.py`) | Auto-tune: memory, speculation modes, prompt reading at 8K/32K/64K. It saves the result for this Mac in `~/.config/llm-deploy/models.json`. |
 | `tools/llama-spec-sweep.sh CFG...` + `tools/llama-spec-bench.py` | A speculative-decoding sweep. The sweep restarts the server for each config. The bench measures prose, code and edit decode speed. |
 | `tools/llama-ab.sh [kv\|ub\|all]` | An A/B test of the KV type and `-ub`. It uses `tools/llama-kv-longctx.py` and `tools/llama-ab-measure.py`. It restarts the server. |
 | `tools/llama-kv-longctx.py` | A ~64K haystack with 8 needles: cold prefill, decode, append, recall. |
@@ -695,7 +810,7 @@ The file headers give more details.
 
 | Command | Does |
 |---|---|
-| `./carl.sh` | open the dashboard: attach to a server on 8080 / 8000, else start the last used backend (`~/.config/llm-deploy/last-backend`) with its saved settings; the first time, llama.cpp with the defaults |
+| `./carl.sh` | open the dashboard: attach to a server on 8080 / 8000, else start the last used backend (`~/.config/llm-deploy/last-backend`) with its saved settings; the first time, llama.cpp with the defaults. It first checks for `llama-server`, `aria2c` and `ansifilter` (offers `brew install`), and offers to download a model if none is downloaded |
 | `./carl.sh llama` | llama.cpp, default model (`qwen3.6-35b-a3b`; the IQ3 build on 24 GB), q4 KV, 2 slots |
 | `./carl.sh monitor` | attach the live dashboard (a server start shows it automatically in the same terminal) |
 | `./carl.sh llama --local` / `--vm` | serve only this Mac / require the VM address (default: auto) |
@@ -703,17 +818,21 @@ The file headers give more details.
 | `./carl.sh --no-start` (or `dashboard`) | the dashboard only: attach to a server, or open it offline (no model loads) |
 | `./install.sh --host ADDR --key-file FILE` | connect the clients to that address, with the key from a file (`--key KEY` also works) |
 | `./carl.sh llama --slots 1` / `--slots 2` | one conversation / main session and a subagent (default: auto = 2 when they fit) |
-| `./carl.sh help [COMMAND]` | help for one command: llama, grant, pocket, monitor, models, env, tuning |
-| `./carl.sh --model NAME\|PATH` | a different registry model or a `.gguf` |
+| `./carl.sh help [COMMAND]` | help for one command: llama, grant, pocket, monitor, fit, models, download, verify, env, tuning |
+| `./carl.sh --model NAME\|PATH` | a different model (catalogue, models folder or Hugging Face download) or a `.gguf` path |
 | `./carl.sh --kv q8` / `--q8` / `--q4` | KV cache type |
 | `./carl.sh --ctx 192k` | context window |
 | `./carl.sh grant` / `pocket` | MTPLX presets (48K) |
-| `./carl.sh models` | registry and download status |
+| `./carl.sh models` | the catalogue, the models folder and your downloads, with the download status |
 | `./carl.sh fit [--ram GB] [--ctx N]` | which models fit this Mac, and the largest context window for each model |
 | `tools/make-share-zip.sh [OUT]` | make a clean zip of the folder to share |
-| `./carl.sh download NAME\|all` | download models |
-| `./carl.sh verify` | verify the downloaded models |
-| `./host/models.sh list\|download NAME\|all\|verify\|path NAME\|get NAME FIELD\|default` | the registry tool: list, download (aria2c, resumable, verified), verify, the local path, one registry field, the default model for this Mac |
+| `./carl.sh download NAME\|default\|all` | download catalogue models |
+| `./carl.sh download hf:OWNER/REPO/FILE.gguf` | download any GGUF from Hugging Face (verified); `hf:OWNER/REPO` lists its GGUF files |
+| `./carl.sh verify [NAME...]` | verify downloaded models (size and SHA-256); no names: every downloaded model |
+| `./carl.sh delete NAME` | delete a downloaded model file |
+| `./carl.sh tune NAME [--quick]` | Auto-tune a model for this Mac: speculation, context window, slots (~5–10 min; stop the server first) |
+| `./carl.sh config [show\|path\|get KEY\|set KEY VALUE\|unset KEY]` | the settings file `~/.config/llm-deploy/config.json`; KEY like `llama.net` or `models.NAME.ctx` |
+| `./host/models.sh list\|download\|verify\|delete NAME\|path NAME\|get NAME FIELD\|default\|downloaded` | the models tool (a wrapper around `tools/carl.py`; `./carl.sh models\|download\|verify\|delete` use it): list, download, verify, delete, the local path, one field, the default model for this Mac, the downloaded models |
 | `./carl.sh -h` | print the help: overview of all commands; `<command> -h` for one command |
 | `./carl.sh [preset] --help-adv` | all `llama-server` / `mtplx serve` flags |
 | `tools/llama-log.sh [-f] [FILE]` | server log as plain text (no ANSI codes); `-f` follows the log |
@@ -723,7 +842,7 @@ The file headers give more details.
 | Variable | Does |
 |---|---|
 | `CTX`, `KV`, `KV_K`, `KV_V`, `UB` | context, cache types, batch size |
-| `SPEC`, `SPEC_N` | speculation type and draft count (default for each model) |
+| `SPEC`, `SPEC_N` | speculation type and draft count (default: the tune of each model) |
 | `MODEL`, `ALIAS` | model path and served name |
 | `HOST`, `PORT`, `API_KEY_FILE` | bind address, port, key |
 | `LOG_FILE` | the path of the log file; `none` turns off the log file |
@@ -737,7 +856,9 @@ The file headers give more details.
 | `MONITOR=0` | no monitor: the server runs in the foreground |
 | `ALLOW_SECOND_MODEL=1` | start even when a process larger than 8 GB (`BIG_GB`) is in memory. CAUTION: a second model can stop the Mac. |
 | `NET=local\|vm\|auto`, `VM_HOST` | network mode / the VM address (default 192.168.42.1) |
-| `SETTINGS_FILE=none` / `SETTINGS_FILE_MTPLX=none` | ignore the saved dashboard settings (`llama.env` / `mtplx.env` in `~/.config/llm-deploy/`) |
+| `SETTINGS_FILE=none` / `SETTINGS_FILE_MTPLX=none` | ignore the saved settings in `~/.config/llm-deploy/config.json` (llama.cpp / the `mtplx` section) |
+| `MODELS_DIR` | the models folder (default `~/models/gguf`; also `paths.models_dir` in config.json) |
+| `SKIP_DEPS=1` | do not check for the Homebrew tools (`llama-server`, `aria2c`, `ansifilter`) |
 
 The script sends all other arguments after the flags directly to `llama-server`.
 

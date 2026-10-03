@@ -13,9 +13,16 @@ Tabs (click, or keys 1-5 / Tab):
               shown and copied to the clipboard
   3 Requests  every finished request with its speeds
   4 Log       full server log: scroll, wrap, errors only
-  5 Settings  model, KV cache, context, slots, RAM cache, network, sampling:
-              saved to ~/.config/llm-deploy/llama.env, applied by a restart
-              (the old server starts again if the new one fails)
+  5 Settings  three panels ([ and ] switch):
+              Server: model (Enter: a drop-down of every model), KV cache, context,
+                slots, speculation, RAM cache, network, sampling; the right side
+                explains the model and why each value is tuned that way; values
+                are coloured (green tuned / fast, yellow changed / slower, red very
+                slow). Saved to ~/.config/llm-deploy/config.json, applied by a
+                restart (the old server starts again if the new one fails)
+              Models: catalogue + every .gguf in the models folder; download,
+                verify, delete, add any GGUF from Hugging Face
+              Auto-tune: measure a model on this Mac (tools/carl-tune.py)
 
 Mouse: click a card title for more detail (once more to collapse it); click
 buttons; the wheel scrolls. Keys: q or Ctrl-C quit (asks) | k show/hide key |
@@ -94,15 +101,31 @@ def read_key():
     except OSError:
         return ""
 
-def listen_host(port):
-    """Address the server on PORT listens on (lsof), or None."""
-    out = subprocess.run(["lsof", "-nP", "-iTCP:%d" % port, "-sTCP:LISTEN"], capture_output=True, text=True).stdout
-    m = re.search(r"TCP (\S+):%d \(LISTEN\)" % port, out)
-    return m.group(1).strip("[]") if m else None
+def netstat_tcp():
+    """[(local addr, local port, remote addr, state, pid)] from netstat -anv.
+    Not lsof: lsof stats every mounted filesystem and hangs, unkillable, on a
+    stale network share (a Time Machine SMB volume froze the monitor)."""
+    rows = []
+    for line in sh(["/usr/sbin/netstat", "-anv", "-p", "tcp"]).splitlines():
+        f = line.split()
+        if len(f) < 6 or not f[0].startswith("tcp"):
+            continue
+        m = re.search(r":(\d+)\s+\d{5}\s", line)            # "process:pid  00100": names may hold spaces
+        la, _, lp = f[3].rpartition(".")
+        if lp.isdigit():
+            rows.append((la, int(lp), f[4], f[5], int(m.group(1)) if m else None))
+    return rows
 
-HOST = args.host or listen_host(args.port) or os.environ.get("HOST") or "127.0.0.1"
-BASE = f"http://{HOST}:{args.port}"
-KEY = read_key()
+def listen_host(port):
+    """Address the server on PORT listens on, or None."""
+    for la, lp, _, st, _ in netstat_tcp():
+        if lp == port and st == "LISTEN":
+            return {"*": "127.0.0.1"}.get(la, la)
+    return None
+
+def listen_pid(port):
+    return next((pid for _, lp, _, st, pid in netstat_tcp() if lp == port and st == "LISTEN" and pid), None)
+
 
 # ===================================================================== styling
 ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
@@ -157,10 +180,22 @@ def dur(s):
     return f"{s // 3600}h{s % 3600 // 60:02d}m" if s >= 3600 else f"{s // 60}m{s % 60:02d}s" if s >= 60 else f"{s}s"
 
 def sh(cmd, timeout=3):
+    """stdout of cmd, "" on error or timeout. Does not wait for a child that
+    ignores the kill (stuck in the kernel): subprocess.run would block forever."""
     try:
-        return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout).stdout
-    except Exception:
+        p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL, text=True)
+    except OSError:
         return ""
+    try:
+        return p.communicate(timeout=timeout)[0]
+    except subprocess.TimeoutExpired:
+        p.kill()
+        threading.Thread(target=p.wait, daemon=True).start()
+        return ""
+
+HOST = args.host or listen_host(args.port) or os.environ.get("HOST") or "127.0.0.1"
+BASE = f"http://{HOST}:{args.port}"
+KEY = read_key()
 
 def http(path, timeout=2):
     req = urllib.request.Request(BASE + path, headers={"Authorization": f"Bearer {KEY}"} if KEY else {})
@@ -279,8 +314,7 @@ def find_pid():
     now = time.time()
     pid = S["pid"]
     if not pid_alive(pid) or now - S["pid_t"] > 20:
-        out = sh(["lsof", "-tiTCP:%d" % args.port, "-sTCP:LISTEN"]).split()
-        S["pid"], S["pid_t"] = (int(out[0]) if out else None), now
+        S["pid"], S["pid_t"] = listen_pid(args.port), now
     return S["pid"]
 
 def slow_loop():
@@ -335,9 +369,8 @@ def collect():
         if m:
             d["rss"], d["cpu"], d["etime"], cmd = int(m.group(1)) * 1024, float(m.group(2)), m.group(3), m.group(4).strip()
         d["awake"] = f"on behalf of Process ID {pid}" in sh(["pmset", "-g", "assertions"])
-        d["conns"] = [(mm.group(1), mm.group(2)) for line in
-                      sh(["lsof", "-nP", "-a", "-p", str(pid), "-iTCP", "-sTCP:ESTABLISHED"]).splitlines()[1:]
-                      for mm in [re.search(r"->(\S+):(\d+)", line)] if mm]
+        d["conns"] = [tuple(ra.rsplit(".", 1)) for _, lp, ra, st, cp in netstat_tcp()
+                      if cp == pid and lp == args.port and st == "ESTABLISHED"]
     d["cmd"] = cmd
     if args.server_pid and not pid_alive(args.server_pid):
         d["exited"] = True
@@ -553,7 +586,7 @@ if args.expand:
 ui = {"tab": 0, "scroll": 0, "log_scroll": 0, "req_scroll": 0, "prev_scroll": 0, "wrap": False, "errors_only": False,
       "lines": args.lines, "key_shown": False, "quit": False, "stopping": None, "exit_msg": "", "help": False,
       "toast": ("", 0), "preview": "opencode", "copied": None,
-      "set": None, "set_run": {}, "set_row": 0, "confirm": False, "restart": None}
+      "set": None, "set_run": {}, "set_row": 0, "confirm": False, "restart": None, "sp": 0, "mrow": 0}
 regions = []      # (row, x0, x1, action): clickable screen areas, 1-based columns, x1 exclusive
 
 def toast(msg, secs=4):
@@ -1084,13 +1117,14 @@ def body_log(d, cols, height):
 
 # ===================================================================== settings (tab 5)
 # The Settings tab chooses the backend (llama.cpp or MTPLX) and its settings,
-# saves them (~/.config/llm-deploy/llama.env or mtplx.env; the launchers read
-# them: flags > environment > file > built-in) and restarts the server. If the
-# new server does not come up, the old one is started again.
-CONF_DIR = os.path.expanduser("~/.config/llm-deploy")
-SETTINGS_FILE = os.path.expanduser(os.environ.get("SETTINGS_FILE", f"{CONF_DIR}/llama.env"))
-SETTINGS_FILE_MTPLX = os.path.expanduser(os.environ.get("SETTINGS_FILE_MTPLX", f"{CONF_DIR}/mtplx.env"))
-MODELS_DIR = os.environ.get("MODELS_DIR", os.path.expanduser("~/models/gguf"))
+# saves them to ~/.config/llm-deploy/config.json (tools/carl.py; the launchers
+# read it: flags > environment > config.json > Auto-tune > catalogue) and
+# restarts the server. If the new server does not come up, the old one is
+# started again. Its Models panel downloads models, its Auto-tune panel runs
+# tools/carl-tune.py.
+import carl                                       # models, catalogue, config.json (tools/carl.py)
+CONF_DIR = carl.CONF_DIR
+CONFIG_FILE = carl.CONFIG_FILE
 VM_ADDR = os.environ.get("VM_HOST", "192.168.42.1")
 PORTS = {"llama": int(os.environ.get("LLAMA_PORT", 8080)), "mtplx": int(os.environ.get("MTPLX_PORT", 8000))}
 def local_addrs():
@@ -1103,85 +1137,92 @@ def local_addrs():
     return out
 
 ADDRS = local_addrs()
-NET_CHOICES = ["auto", "local", "vm"] + ADDRS          # an address = HOST=that address in the settings file
+NET_CHOICES = ["auto", "local", "vm"] + ADDRS          # an address = llama.host / mtplx.host in config.json
 MX_WEIGHTS = {"grant": 16.9e9, "pocket": 17.5e9}     # MTPLX 27B builds (bytes, from their memory plans)
 MX_KV_TOK = {"off": 65536, "q8": 34816, "q4": 18432}  # KV bytes per token of the 27B (bf16 / q8 / q4)
 
-def registry():
-    rows = []
-    try:
-        for line in open(os.path.join(REPO, "host", "models.conf")):
-            f = line.rstrip("\n").split("|")[:9]
-            if line.strip() and not line.startswith("#") and len(f) == 9:
-                rows.append({"name": f[0], "file": f[3], "alias": f[6], "spec": f[7]})
-    except OSError:
-        pass
-    return rows
+MODELS = {"list": [], "t": 0.0}
+def models(refresh=False):
+    """Every model CARL knows (catalogue + models folder + custom), refreshed every 10 s."""
+    if refresh or time.time() - MODELS["t"] > 10:
+        try:
+            MODELS["list"] = carl.all_models()
+        except Exception as e:
+            toast(f"{RED}models: {e}{R}", 10)
+        MODELS["t"] = time.time()
+    return MODELS["list"]
 
-REG = registry()
-# key, label, choices, env name in the settings file, built-in default (written as "no key")
+def model_by(name):
+    return carl.find(name, models()) if name else None
+
+def model_choices():
+    ms = models()
+    return ["auto"] + [m["name"] for m in ms if m["status"] == "downloaded"] + [m["name"] for m in ms if m["status"] != "downloaded"]
+
+# key, label, choices, config.json location (section:key; "m:" = the model's profile), default
 BACKEND_ROW = ("backend", "backend", ["llama", "mtplx"], None, "llama")
 LLAMA_ROWS = [
-    ("model", "model", ["default"] + [r["name"] for r in REG], "MODEL_NAME", "default"),
-    ("kv", "KV cache", ["q4_0", "q8_0"], "KV", "q4_0"),
-    ("ctx", "context/slot", [32768, 49152, 65536, 98304, 131072, 163840], "CTX", 98304),
-    ("slots", "slots", ["auto", "1", "2"], "SLOTS", "auto"),
-    ("cache", "RAM cache", ["auto", 1024, 2560, 4096, 6144, 8192], "CACHE_RAM", "auto"),
-    ("net", "network", NET_CHOICES, "NET", "auto"),
-    ("temp", "temperature", ["1.0", "0.6"], "TEMP", "1.0"),
-    ("presence", "presence", ["0", "1.5"], "PRESENCE", "0"),
-    ("spec", "speculation", ["model", "none"], "SPEC", "model"),
+    ("model", "model", None, "llama:model", "auto"),                       # choices: model_choices()
+    ("kv", "KV cache", ["q4_0", "q8_0"], "m:kv", "q4_0"),
+    ("ctx", "context/slot", [32768, 49152, 65536, 98304, 131072, 163840, 196608, 262144], "m:ctx", 98304),
+    ("slots", "slots", ["auto", "1", "2"], "m:slots", "auto"),
+    ("spec", "speculation", ["none", "ngram-mod", "draft-mtp", "draft-mtp,ngram-mod"], "m:spec", "draft-mtp,ngram-mod"),
+    ("specn", "draft tokens", ["1", "2", "3"], "m:spec_n", "1"),
+    ("cache", "RAM cache", ["auto", 1024, 2560, 4096, 6144, 8192], "llama:cache_ram", "auto"),
+    ("net", "network", NET_CHOICES, "llama:net", "auto"),
+    ("temp", "temperature", ["1.0", "0.6"], "m:temp", "1.0"),
+    ("presence", "presence", ["0", "1.5"], "m:presence", "0"),
 ]
 MTPLX_ROWS = [
-    ("preset", "preset", ["grant", "pocket"], None, "grant"),
-    ("mctx", "context", [32768, 49152, 57344], "CONTEXT", 49152),
-    ("profile", "profile", ["sustained", "turbo", "stable"], "PROFILE", "sustained"),
-    ("depth", "MTP depth", ["1", "2", "3"], "DEPTH", "2"),
-    ("mkv", "KV cache", ["off", "q8", "q4"], "KV_QUANT", "off"),
-    ("mnet", "network", NET_CHOICES, "NET", "auto"),
+    ("preset", "preset", ["grant", "pocket"], "mtplx:preset", "grant"),
+    ("mctx", "context", [32768, 49152, 57344], "mtplx:context", 49152),
+    ("profile", "profile", ["sustained", "turbo", "stable"], "mtplx:profile", "sustained"),
+    ("depth", "MTP depth", ["1", "2", "3"], "mtplx:depth", "2"),
+    ("mkv", "KV cache", ["off", "q8", "q4"], "mtplx:kv_quant", "off"),
+    ("mnet", "network", NET_CHOICES, "mtplx:net", "auto"),
 ]
 ADV_ROW = ("adv", "advanced", ["hidden", "shown"], None, "hidden")
 LLAMA_ADV = [
-    ("top_k", "top_k", ["20", "40", "0"], "TOP_K", "20"),
-    ("top_p", "top_p", ["0.95", "0.9", "0.8", "1.0"], "TOP_P", "0.95"),
-    ("min_p", "min_p", ["0", "0.05", "0.1"], "MIN_P", "0"),
-    ("repeat", "repeat penalty", ["1.0", "1.05", "1.1"], "REPEAT", "1.0"),
-    ("specn", "draft tokens", ["model", "1", "2", "3"], "SPEC_N", "model"),
-    ("ub", "-ub batch", ["512", "1024", "2048"], "UB", "512"),
-    ("ckpt", "checkpoints", ["8", "4", "16"], "CKPT", "8"),
-    ("ckstep", "ckpt step", ["4096", "1024", "2048", "8192"], "CKPT_STEP", "4096"),
+    ("top_k", "top_k", ["20", "40", "0"], "m:top_k", "20"),
+    ("top_p", "top_p", ["0.95", "0.9", "0.8", "1.0"], "m:top_p", "0.95"),
+    ("min_p", "min_p", ["0", "0.05", "0.1"], "m:min_p", "0"),
+    ("repeat", "repeat penalty", ["1.0", "1.05", "1.1"], "m:repeat", "1.0"),
+    ("ub", "-ub batch", ["512", "1024", "2048"], "llama:ub", "512"),
+    ("ckpt", "checkpoints", ["8", "4", "16"], "llama:ckpt", "8"),
+    ("ckstep", "ckpt step", ["4096", "1024", "2048", "8192"], "llama:ckpt_step", "4096"),
 ]
 MTPLX_ADV = [
-    ("sched", "scheduler", ["default", "serial", "cooperative", "ar_batch", "hyper"], "SCHEDULER", "default"),
-    ("batching", "batching", ["default", "latency", "agent", "solo", "throughput"], "BATCHING", "default"),
-    ("pchunk", "prefill chunk", ["default", "1024", "2048", "4096"], "PREFILL_CHUNK", "default"),
-    ("ssd", "SSD sessions", ["on", "off", "write-only"], "SSD_CACHE", "on"),
+    ("sched", "scheduler", ["default", "serial", "cooperative", "ar_batch", "hyper"], "mtplx:scheduler", "default"),
+    ("batching", "batching", ["default", "latency", "agent", "solo", "throughput"], "mtplx:batching", "default"),
+    ("pchunk", "prefill chunk", ["default", "1024", "2048", "4096"], "mtplx:prefill_chunk", "default"),
+    ("ssd", "SSD sessions", ["on", "off", "write-only"], "mtplx:ssd_cache", "on"),
 ]
+MODEL_ROW_KEYS = {r[0]: r[3][2:] for r in LLAMA_ROWS + LLAMA_ADV if r[3] and r[3].startswith("m:")}   # row key -> profile key
 NUMERIC = {"ctx", "mctx", "temp", "presence", "top_k", "top_p", "min_p", "repeat", "specn", "ub", "ckpt", "ckstep", "pchunk", "cache"}
 SETTINGS = [BACKEND_ROW] + LLAMA_ROWS                 # rows() picks the backend's list
 SET_HELP = {
     "backend": "llama.cpp: GGUF models, quantized KV, 2 slots, long context · MTPLX: MLX 27B builds, faster decode, ≤48K",
-    "model": "registry model (host/models.conf); default = the first entry, or the IQ3 35B when that does not fit",
+    "model": "Enter: pick from every model (catalogue, models folder, Hugging Face downloads) · auto = this Mac's default",
     "kv": "q4_0: less memory, the tested default · q8_0: more exact long-range recall, about 2x the KV memory",
-    "ctx": "tokens per slot; 96K is the default · 128K-160K work but read and decode slower (REFERENCE.md)",
+    "ctx": "tokens per slot; green = fast cold reads on this Mac, yellow = slow, red = very slow (see the context zones)",
     "slots": "auto = 2 when two full windows fit (main session + coder subagent), else 1",
+    "spec": "speculative decoding: n-gram copies repeated text, MTP drafts with the model's own head; Auto-tune measures which wins",
+    "specn": "draft tokens per speculation step; more is not faster on Metal for dense models",
     "cache": "RAM prompt cache in MiB: keeps evicted prompts so a session comes back without a full re-read",
     "net": "auto = the VM address if VMware's network is up, else this Mac only · an address = that interface (LAN: other computers can reach it)",
     "temp": "1.0 = Qwen's thinking-mode value (default) · 0.6 = more precise coding (35B card)",
     "presence": "0 = default · 1.5 = fewer repetition loops (35B card, general use)",
-    "spec": "model = the registry's speculative decoding (MTP + n-gram) · none = off",
     "preset": "grant = grant-ai 4-bit build · pocket = PocketAiHub speed build (both abliterated Qwen3.8-27B)",
     "mctx": "one window for the whole server · 48K is the tested limit; 56K failed with 2 sessions (REFERENCE.md, MTPLX)",
     "profile": "sustained = the long-context default · turbo = faster short bursts · stable = conservative",
-    "depth": "MTP draft depth: 2 measured best on this Mac (AR 7.5, D1 13.4, D2 23.6, D3 20.8 tok/s)",
+    "depth": "MTP draft depth: 2 measured best on the M3 Pro (AR 7.5, D1 13.4, D2 23.6, D3 20.8 tok/s)",
     "mkv": "off = bf16 (tested) · q8 / q4 = less memory, but long sessions failed on MTPLX 2.11 (REFERENCE.md)",
     "mnet": "auto = the VM address if VMware's network is up, else this Mac only · an address = that interface (LAN: other computers can reach it)",
-    "adv": "more server settings: sampling, speculation, batch and checkpoints (llama.cpp); scheduler and caches (MTPLX)",
+    "adv": "more server settings: sampling, batch and checkpoints (llama.cpp); scheduler and caches (MTPLX)",
     "top_k": "sample from the k most likely tokens; Qwen: 20 · 0 = off",
     "top_p": "nucleus sampling; Qwen: 0.95 (thinking), 0.8 (no thinking: the client sends it)",
     "min_p": "drop tokens below min_p × the top probability; Qwen: 0",
     "repeat": "repetition penalty; Qwen: 1.0 (off) · use presence instead",
-    "specn": "draft tokens per speculation step; model = the registry value (27B: 1, 35B: 2: measured best)",
     "ub": "-ub physical batch; 512 measured best on Metal (90.5 vs 88.6 / 86.1 tok/s for 1024 / 2048)",
     "ckpt": "context checkpoints per slot (each ~63 MiB on the 35B, ~150 MiB on the 27B); more did not help (Phase 6)",
     "ckstep": "minimum tokens between checkpoints; 1024 vs 4096 made no difference in the Phase 6 test",
@@ -1194,23 +1235,14 @@ SET_HELP = {
 def rows(p):
     mx = p.get("backend") == "mtplx"
     adv = (MTPLX_ADV if mx else LLAMA_ADV) if p.get("adv") == "shown" else []
-    return [BACKEND_ROW] + (MTPLX_ROWS if mx else LLAMA_ROWS) + [ADV_ROW] + adv
+    base = MTPLX_ROWS if mx else [(r[0], r[1], model_choices(), r[3], r[4]) if r[0] == "model" else r for r in LLAMA_ROWS]
+    return [BACKEND_ROW] + base + [ADV_ROW] + adv
 
 ADV_WARN = ("CAUTION: these values are tuned and measured (REFERENCE.md).",
             "         A change can make the model slower, or its answers worse. Defaults (x) sets them back.")
 
 def ctx_label(v):
     return f"{int(v) // 1024}K" if str(v).isdigit() else str(v)
-
-def read_env(path):
-    out = {}
-    try:
-        for line in open(path):
-            if "=" in line and not line.startswith("#"):
-                kk, v = line.strip().split("=", 1); out[kk] = v
-    except OSError:
-        pass
-    return out
 
 def running_settings(d):
     """The values the running server uses: llama.cpp from its command line, MTPLX from its snapshot."""
@@ -1228,57 +1260,107 @@ def running_settings(d):
                 "ssd": ((mx.get("session_bank") or {}).get("cold_tier") or {}).get("mode", "N/A")}
     if "llama-server" not in cmd:
         return {}
-    mfile = os.path.basename(flag(cmd, "-m", "--model", default="") or "")
-    model = next((r["name"] for r in REG if r["file"] == mfile), mfile or "N/A")
-    spec = flag(cmd, "--spec-type", default="none")
-    return {"backend": "llama", "model": model, "kv": flag(cmd, "-ctk", "--cache-type-k", default="f16"),
+    mpath = flag(cmd, "-m", "--model", default="") or ""
+    m = model_by(mpath) or model_by(os.path.basename(mpath))
+    return {"backend": "llama", "model": m["name"] if m else (os.path.basename(mpath) or "N/A"),
+            "kv": flag(cmd, "-ctk", "--cache-type-k", default="f16"),
             "ctx": int(flag(cmd, "--kv-unified-per-slot", default=0) or 0) or d.get("n_ctx") or "N/A",
             "slots": flag(cmd, "--parallel", "-np", default="1"), "cache": int(flag(cmd, "--cache-ram", default=0) or 0),
             "net": net, "temp": flag(cmd, "--temp", default="N/A"), "presence": flag(cmd, "--presence-penalty", default="N/A"),
-            "spec": "none" if spec == "none" else "model",
+            "spec": flag(cmd, "--spec-type", default="none"), "specn": flag(cmd, "--spec-draft-n-max", default="1"),
             "top_k": flag(cmd, "--top-k", default="N/A"), "top_p": flag(cmd, "--top-p", default="N/A"),
             "min_p": flag(cmd, "--min-p", default="N/A"), "repeat": flag(cmd, "--repeat-penalty", default="N/A"),
-            "specn": flag(cmd, "--spec-draft-n-max", default="N/A"), "ub": flag(cmd, "-ub", default="N/A"),
+            "ub": flag(cmd, "-ub", default="N/A"),
             "ckpt": flag(cmd, "--ctx-checkpoints", default="N/A"), "ckstep": flag(cmd, "--checkpoint-min-step", default="N/A")}
 
-FROM_RUNNING = {"kv", "ctx", "temp", "presence", "spec", "model", "preset", "mctx", "profile", "depth", "mkv",
-                "top_k", "top_p", "min_p", "repeat", "ckpt", "ckstep", "ub"}
+FROM_RUNNING = {"kv", "ctx", "temp", "presence", "spec", "specn", "preset", "mctx", "profile", "depth", "mkv",
+                "top_k", "top_p", "min_p", "repeat", "ckpt", "ckstep", "ub", "slots"}
+
+def fmt_val(key, v):
+    """A config / tune value as the Settings rows show it."""
+    if key in ("ctx", "mctx", "cache"):
+        return int(v) if str(v).isdigit() else v
+    if key in ("temp", "repeat") and str(v).replace(".", "", 1).isdigit():
+        return f"{float(v):.1f}"
+    if key in ("presence", "min_p", "top_p") and str(v).replace(".", "", 1).isdigit():
+        return f"{float(v):g}"
+    return str(v)
+
+def resolved_model(p):
+    """The model a start with these settings loads ("auto" resolved for this Mac)."""
+    name = p.get("model", "auto")
+    if name != "auto":
+        return name
+    key = ("auto", MODELS["t"])
+    if S.get("auto_model", (None,))[0] != key:
+        try:
+            cfg = carl.load_config(); cfg.get("llama", {}).pop("model", None)
+            S["auto_model"] = (key, carl.resolve_launch(None, cfg)[0]["name"])
+        except Exception:
+            S["auto_model"] = (key, carl.load_catalog()["default"])
+    return S["auto_model"][1]
+
+def recommended(name, with_config=False):
+    """(values, sources) for a model: Auto-tune > catalogue (> config.json when with_config)."""
+    m = model_by(name)
+    if not m:
+        return {k: s["default"] for k, s in carl.MODEL_KEYS.items()}, {}
+    cfg = carl.load_config() if with_config else {"schema": carl.SCHEMA}
+    return carl.effective_tune(m, cfg)
+
+def load_profile(p, name):
+    """Model rows <- that model's profile (config.json > Auto-tune > catalogue)."""
+    vals, _ = recommended(resolved_model({"model": name}), with_config=True)
+    for key, pk in MODEL_ROW_KEYS.items():
+        p[key] = fmt_val(key, vals[pk])
 
 def pending_init(d):
-    """Start from the running server (so Apply without changes restarts the same setup);
-    slots, cache and network keep their saved or automatic choice (or the running address)."""
+    """Start from config.json and the running server (so Apply without changes restarts the same setup)."""
     run = running_settings(d)
-    saved = {**{f"llama:{k_}": v for k_, v in read_env(SETTINGS_FILE).items()},
-             **{f"mtplx:{k_}": v for k_, v in read_env(SETTINGS_FILE_MTPLX).items()}}
-    p = {"backend": run.get("backend", "llama"), "adv": "hidden"}
-    for be, rws in (("llama", LLAMA_ROWS + LLAMA_ADV), ("mtplx", MTPLX_ROWS + MTPLX_ADV)):
-        for key, _, choices, env, default in rws:
-            v = saved.get(f"{be}:{env}", default) if env else default
-            if run.get("backend") == be and run.get(key) not in (None, "N/A") and (
-                    key in FROM_RUNNING or (key in ("net", "mnet") and f"{be}:NET" not in saved and f"{be}:HOST" not in saved)):
-                v = run[key]
-            if key in ("net", "mnet") and saved.get(f"{be}:HOST"):
-                v = saved[f"{be}:HOST"]
-            if key in ("ctx", "mctx"):
-                v = int(v) if str(v).isdigit() else default
-            if key == "cache" and str(v).isdigit():
-                v = int(v)
-            p[key] = v
+    try:
+        cfg = carl.load_config()
+    except Exception as e:
+        toast(f"{RED}config.json: {e}{R}", 15); cfg = {"schema": carl.SCHEMA}
+    p = {"backend": run.get("backend") or cfg.get("backend", "llama"), "adv": "hidden"}
+    for key, _, _, loc, default in LLAMA_ROWS + LLAMA_ADV + MTPLX_ROWS + MTPLX_ADV:
+        if not loc or loc.startswith("m:"):
+            continue
+        sec, ck = loc.split(":")
+        v = (cfg.get(sec) or {}).get(ck)
+        p[key] = default if v in (None, "") else fmt_val(key, v)
+    for sec, key in (("llama", "net"), ("mtplx", "mnet")):
+        if (cfg.get(sec) or {}).get("host"):
+            p[key] = cfg[sec]["host"]
+    p["model"] = run["model"] if run.get("backend") == "llama" and model_by(run.get("model")) else p.get("model", "auto")
+    load_profile(p, p["model"])
+    if run.get("backend"):
+        for key in FROM_RUNNING:
+            if key in run and run[key] not in (None, "N/A"):
+                p[key] = fmt_val(key, run[key])
+        if run["backend"] == "llama" and "net" not in (cfg.get("llama") or {}) and not (cfg.get("llama") or {}).get("host"):
+            p["net"] = run.get("net", p["net"]) if run.get("net") in NET_CHOICES else p["net"]
     return p
 
-def resolve_default_model(p):
-    if p["model"] != "default":
-        return p["model"]
-    try:
-        name = subprocess.run([sys.executable, os.path.join(REPO, "tools", "llama-fit.py"), "--pick-default",
-                               "--ctx", str(p["ctx"])], capture_output=True, text=True, timeout=20).stdout.strip() or REG[0]["name"]
-    except Exception:
-        name = REG[0]["name"] if REG else ""
-    # Not downloaded: the launcher (host/serve-llama.sh) uses the first downloaded registry model instead.
-    r = next((x for x in REG if x["name"] == name), None)
-    if r and not os.path.exists(os.path.join(MODELS_DIR, r["file"])):
-        name = next((x["name"] for x in REG if os.path.exists(os.path.join(MODELS_DIR, x["file"]))), name)
-    return name
+def value_color(key, p):
+    """Colour of a pending value: green = the tuned value for this model / a fast setting, yellow =
+    changed from the tune or slower, red = very slow or broken on this model."""
+    if p.get("backend") != "llama":
+        return ""
+    name = resolved_model(p)
+    m = model_by(name)
+    if key == "ctx" and m and str(p["ctx"]).isdigit():
+        z = carl.ctx_zone(m, int(p["ctx"]))
+        return {"good": GRN, "slow": YEL, "very_slow": RED}[z]
+    if key == "spec" and m:
+        info = carl.custom_defaults(m["path"])[1] if m["status"] == "downloaded" else {"mtp": m.get("mtp"), "quant": m.get("quant", "")}
+        if "draft-mtp" in p["spec"] and not info.get("mtp"):
+            return RED                                      # no MTP head in this file
+        if "draft-mtp" in p["spec"] and str(p.get("specn")) != "1" and str(info.get("quant", "")).upper().replace("UD-", "").startswith("IQ"):
+            return RED                                      # MTP n>1 loses ~15% on IQ quants (measured 2026-10-03)
+    if key in MODEL_ROW_KEYS:
+        rec = recommended(name)[0][MODEL_ROW_KEYS[key]]
+        return GRN if str(fmt_val(key, rec)) == str(p[key]) else YEL
+    return ""
 
 def fit_line(p):
     """(ok, text): does the pending setup fit the GPU limit, and is the model downloaded?"""
@@ -1290,15 +1372,14 @@ def fit_line(p):
         warn = f" · {YEL}over 48K: two sessions do not fit (tested){R}" if p["mctx"] > 49152 else ""
         return ok, (f"{GRN if ok else RED}{'fits' if ok else 'does not fit'}{R}: MTPLX {p['preset']} needs about {size(need)} "
                     f"for {ctx_label(p['mctx'])} ({'bf16' if p['mkv'] == 'off' else p['mkv']}) of {size(limit)}{warn}")
-    name = resolve_default_model(p)
-    r = next((x for x in REG if x["name"] == name), None)
-    if not r:
+    name = resolved_model(p)
+    m = model_by(name)
+    if not m:
         return False, f"{RED}unknown model {name}{R}"
-    path = os.path.join(MODELS_DIR, r["file"])
-    if not os.path.exists(path):
-        return False, f"{RED}{name} is not downloaded{R}: ./carl.sh download {name}"
+    if m["status"] != "downloaded":
+        return False, f"{RED}{name} is not downloaded{R}: Models panel (]) or ./carl.sh download {name}"
     try:
-        shp, w = model_shape(local_meta(path)), os.path.getsize(path)
+        shp, w = carl.shape_of(m["path"]), os.path.getsize(m["path"])
         need = lambda n: w + kv_bytes_per_token(shp, p["kv"], p["kv"]) * p["ctx"] * n + shp["rs_bytes"] * n + OVERHEAD
         n = 2 if p["slots"] == "auto" and need(2) <= limit else 1 if p["slots"] == "auto" else int(p["slots"])
         ok = need(n) <= limit
@@ -1315,20 +1396,37 @@ def fit_cached(p):
     return FIT["res"]
 
 def write_settings(p):
+    """Save to config.json: server-wide values that differ from the defaults, and the model's
+    profile as the values that differ from its Auto-tune / catalogue tune."""
+    cfg = carl.load_config()
     be = p["backend"]
-    path = SETTINGS_FILE_MTPLX if be == "mtplx" else SETTINGS_FILE
-    lines = [f"# CARL {'MTPLX' if be == 'mtplx' else 'llama.cpp'} settings, written by the monitor's Settings tab.",
-             f"# {'serve.sh grant|pocket' if be == 'mtplx' else 'serve-llama.sh'} reads them: flags > environment > this file > built-in defaults."]
-    for key, _, _, env, default in (MTPLX_ROWS + MTPLX_ADV if be == "mtplx" else LLAMA_ROWS + LLAMA_ADV):
-        if env == "NET" and str(p[key]).count(".") == 3:
-            lines.append(f"HOST={p[key]}")             # one address of this Mac
-        elif env and str(p[key]) != str(default):
-            lines.append(f"{env}={p[key]}")
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, "w") as f:
-        f.write("\n".join(lines) + "\n")
-    os.chmod(path, 0o600)
-    return path
+    cfg["backend"] = be
+    rws = (MTPLX_ROWS + MTPLX_ADV) if be == "mtplx" else (LLAMA_ROWS + LLAMA_ADV)
+    for key, _, _, loc, default in rws:
+        if not loc or loc.startswith("m:"):
+            continue
+        sec, ck = loc.split(":")
+        s = cfg.setdefault(sec, {})
+        v = p[key]
+        if ck == "net":
+            s.pop("host", None)
+            if str(v).count(".") == 3:
+                s["host"] = v; s.pop("net", None); continue
+        if str(v) == str(default) or (sec == "mtplx" and v == "default"):
+            s.pop(ck, None)
+        else:
+            s[ck] = v
+    if be == "llama":
+        name = resolved_model(p)
+        rec = recommended(name)[0]
+        prof = {pk: p[key] for key, pk in MODEL_ROW_KEYS.items() if str(fmt_val(key, rec[pk])) != str(p[key])}
+        cfg.setdefault("models", {})
+        if prof:
+            cfg["models"][name] = prof
+        else:
+            cfg["models"].pop(name, None)
+    carl.save_config(cfg)
+    return CONFIG_FILE
 
 def env_from_cmd(cmd):
     """Environment that makes serve-llama.sh start the same llama.cpp server as cmd (the rollback)."""
@@ -1358,8 +1456,10 @@ def start_server(backend, preset, port, extra_env, console, mode="w"):
     for kk in CLEAN_ENV:
         if kk not in extra_env:
             env.pop(kk, None)                       # the settings file (or the rollback env) decides, not our environment
-    env["SETTINGS_FILE"] = extra_env.get("SETTINGS_FILE", SETTINGS_FILE)
-    env["SETTINGS_FILE_MTPLX"] = extra_env.get("SETTINGS_FILE_MTPLX", SETTINGS_FILE_MTPLX)
+    for kk in ("SETTINGS_FILE", "SETTINGS_FILE_MTPLX"):
+        env.pop(kk, None)
+        if kk in extra_env:
+            env[kk] = extra_env[kk]                 # "none": the rollback ignores config.json
     cmd = ([os.path.join(REPO, "host", "serve.sh"), preset] if backend == "mtplx"
            else [os.path.join(REPO, "host", "serve-llama.sh")])
     out = open(console, mode)                       # the rollback appends: the failed start's output stays
@@ -1404,7 +1504,7 @@ def follow(port, pid, console):
 def restart_worker(p):
     """Background thread: save, stop the old server, start the new one; roll back on failure."""
     be, old_be = p["backend"], D.get("backend") or "llama"
-    path = SETTINGS_FILE_MTPLX if be == "mtplx" else SETTINGS_FILE
+    path = CONFIG_FILE
     old_text = open(path).read() if os.path.exists(path) else None
     old_cmd, old_pid, old_port = D.get("cmd", ""), D.get("target_pid") or D.get("pid"), args.port
     port = old_port if be == old_be else PORTS[be]
@@ -1451,18 +1551,59 @@ def restart_worker(p):
         toast(f"{RED}restart failed: {e}{R}", 20)
     ui["restart"] = None
 
+SUBPANELS = ["Server", "Models", "Auto-tune"]
+
+def wwrap(text, w):
+    """Word-wrap plain text to w columns."""
+    import textwrap
+    return textwrap.wrap(ANSI.sub("", text or ""), max(w, 10)) or [""]
+
+def subpanel_bar():
+    text, spans, col = "", [], 0
+    for i, name in enumerate(SUBPANELS):
+        lab = f" {name} "
+        text += (f"\x1b[1;7m{lab}{R}" if i == ui["sp"] else f"{DIM}{lab}{R}") + " "
+        spans.append((col, col + len(lab), f"sp:{i}")); col += len(lab) + 1
+    text += f"{DIM}  [ ] switch panels{R}"
+    return (" " + text, [(1 + a, 1 + b, act) for a, b, act in spans])
+
+def indent(rows_, n=1):
+    return [(" " * n + t, [(n + a, n + b, act) for a, b, act in sp]) for t, sp in rows_]
+
+def side_by_side(left, right, lw, rw):
+    out = []
+    for i in range(max(len(left), len(right))):
+        lt, ls = left[i] if i < len(left) else (" " * lw, [])
+        rt, rs = right[i] if i < len(right) else ("", [])
+        out.append((" " + fit(lt, lw) + " " + rt, [(1 + a, 1 + b, act) for a, b, act in ls] +
+                                                  [(2 + lw + a, 2 + lw + b, act) for a, b, act in rs]))
+    return out
+
 def body_settings(d, cols, height):
+    out = [subpanel_bar(), ("", [])]
+    if ui.get("picker"):
+        return out + picker_card(cols, height - 2)
+    if ui.get("confirm2"):
+        return out + confirm2_card(cols, height - 2)
+    body = [settings_server, settings_models, settings_tune][ui["sp"]](d, cols, height - 2)
+    return (out + body)[:height]
+
+# ------------------------------------------------------------------ panel 1: server settings + model info
+def settings_server(d, cols, height):
     if ui.get("set") is None:
         ui["set"], ui["set_run"] = pending_init(d), running_settings(d)
     p, run = ui["set"], running_settings(d) or {}
     rws = rows(p)
     ui["set_row"] = min(ui["set_row"], len(rws) - 1)
-    w = cols - 1
+    two = cols >= 130
+    w = min(cols - 1, 84) if two else cols - 1
     L = [f"{DIM}{'':2}{'setting':<14}{'new':<26}{'running now':<18}{R}"]
     same_backend = run.get("backend") == p["backend"]
-    for i, (key, label, choices, env, default) in enumerate(rws):
+    for i, (key, label, choices, loc, default) in enumerate(rws):
         sel = i == ui["set_row"]
         val = ctx_label(p[key]) if key in ("ctx", "mctx") else {"llama": "llama.cpp", "mtplx": "MTPLX"}.get(p[key], str(p[key]))
+        if key == "model" and p[key] == "auto":
+            val = f"auto: {resolved_model(p)}"
         if sel and ui.get("edit") is not None:
             val = ui["edit"] + "▏"
         rv = run.get(key, "N/A") if (same_backend or key == "backend") else "N/A"
@@ -1470,47 +1611,385 @@ def body_settings(d, cols, height):
         rv = ctx_label(rv) if key in ("ctx", "mctx") else ("auto" if key == "cache" and rv == 0 else
                                                           {"llama": "llama.cpp", "mtplx": "MTPLX"}.get(rv, str(rv)))
         mark = (f"{YEL}*{R}" if run and (same_backend or key == "backend") and str(p[key]) != str(run.get(key))
-                and key not in ("slots", "cache", "net", "mnet", "adv", "specn", "sched", "batching", "pchunk") else " ")
+                and key not in ("slots", "cache", "net", "mnet", "adv", "sched", "batching", "pchunk", "model") else " ")
+        col_ = value_color(key, p)
         pre = f"{CYN}{B}›{R} " if sel else "  "
         text = f"{pre}{(B if sel else '')}{label:<14}{R}"
         spans = [(0, 2 + 14, f"setrow:{i}")]
-        col = vlen(text)
-        for lab, act in (("<", f"setdec:{i}"), (f"{val:^18}", f"setrow:{i}"), (">", f"setinc:{i}")):
+        c = vlen(text)
+        for lab, act in (("<", f"setdec:{i}"), (fit(val, 18) if vlen(val) > 18 else f"{val:^18}", f"setrow:{i}" if key != "model" else "setpick"),
+                         (">", f"setinc:{i}")):
             b = f"[{lab}]" if lab in "<>" else lab
-            spans.append((col, col + len(b), act)); text += f"{CYN}{b}{R}"; col += len(b)
-        text += f" {mark}  {DIM}{rv}{R}"
+            spans.append((c, c + vlen(b), act)); text += f"{col_ or CYN}{b}{R}"; c += vlen(b)
+        text += f" {mark}  {DIM}{fit(rv, 22) if vlen(str(rv)) > 22 else rv}{R}"
         L.append(Ln(text, spans=spans))
     L += [""] * max(len(LLAMA_ROWS) + 2 - len(rws), 0)  # the same height for both backends
     key = rws[ui["set_row"]][0]
     adv_on = p.get("adv") == "shown"
-    L += ["", f"{DIM}{SET_HELP[key]}{R}" + (f"  {CYN}(type a value, Enter){R}" if key in NUMERIC else ""),
-          f"{YEL}{ADV_WARN[0]}{R}" if adv_on else "", f"{YEL}{ADV_WARN[1]}{R}" if adv_on else ""]
+    hint = f"  {CYN}(type a value, Enter){R}" if key in NUMERIC else f"  {CYN}(Enter: choose){R}" if key == "model" else ""
+    L += [""] + [f"{DIM}{x}{R}" for x in wwrap(SET_HELP[key], w - 6)[:2]]
+    L[-1] += hint
+    L += [f"{YEL}{ADV_WARN[0]}{R}" if adv_on else "", f"{YEL}{ADV_WARN[1]}{R}" if adv_on else ""]
     ok, fl = fit_cached(p)
-    path = SETTINGS_FILE_MTPLX if p["backend"] == "mtplx" else SETTINGS_FILE
-    reader = "./carl.sh grant|pocket" if p["backend"] == "mtplx" else "./carl.sh llama"
     L.append(lv("fit", fl, 6))
-    L.append(lv("file", path.replace(os.path.expanduser("~"), "~") + f"{DIM} (read by {reader}; flags still win){R}", 6))
-    L.append("")
+    L.append(lv("file", CONFIG_FILE.replace(os.path.expanduser("~"), "~") + f"{DIM} (./carl.sh config show){R}", 6))
+    L.append(f"{DIM}colours: {GRN}tuned / fast{R}{DIM} · {YEL}changed / slower{R}{DIM} · {RED}very slow / no MTP head{R}")
     if ui.get("restart"):
         L.append(f"{YEL}{ui['restart']}{R}")
     else:
         L.append(buttons("", [("Apply and restart (a)" if run else "Start server (a)", "setapply" if ok else "setnofit"), ("Revert (r)", "setrevert"),
-                              ("Defaults (x)", "setdefaults")]))
-    L.append(f"{DIM}↑↓ select · ←→ change · * differs from the running server · a change of backend, context or slots needs install.sh again{R}")
+                              ("Tuned values (x)", "setdefaults")]))
+    L.append(f"{DIM}↑↓ select · ←→ change · * differs from the running server · backend, context or slots: run install.sh again{R}")
     srv = {"llama": "llama.cpp", "mtplx": "MTPLX"}.get(run.get("backend"), "no server")
-    rows_ = draw_card("settings", "SERVER SETTINGS", f"{DIM}running: {srv} · port {args.port}{R}", L, w, lvl=2)
+    left = draw_card("settings", "SERVER SETTINGS", f"{DIM}running: {srv} · port {args.port}{R}", L, w, lvl=2)
+    right = model_info_card(p, key, cols - w - 3 if two else cols - 1) if p["backend"] == "llama" else []
+    rows_ = side_by_side(left, right, w, cols - w - 3) if two else indent(left) + indent(right)
     if ui.get("confirm"):
         switch = run.get("backend") and run.get("backend") != p["backend"]
         new = "MTPLX" if p["backend"] == "mtplx" else "llama.cpp"
         first = ("This stops the server and starts it again with the new settings." if run and not switch else
                  f"This stops {srv} and starts {new} on port {PORTS[p['backend']]}." if run else
                  f"This starts {new} on port {PORTS[p['backend']] if p['backend'] != 'llama' else args.port}.")
-        rows_ += draw_card("confirm", "START?" if not run else "RESTART?", "", [
+        rows_ = indent(draw_card("confirm", "START?" if not run else "RESTART?", "", [
             "", first,
             "Requests in progress stop. The model loads again (about 30 s to 2 min)." if run else "The model loads (about 30 s to 2 min).",
             "If the new server does not start, the old one starts again." if run else "", "",
-            buttons("  ", [("Yes, restart (y)" if run else "Yes, start (y)", "setyes"), ("Cancel (n)", "setno")])], min(w, 80), lvl=2)
-    return rows_[:height]
+            buttons("  ", [("Yes, restart (y)" if run else "Yes, start (y)", "setyes"), ("Cancel (n)", "setno")])], min(w, 80), lvl=2)) + rows_
+    sc = min(ui.get("set_scroll", 0), max(len(rows_) - height, 0))
+    return rows_[sc:sc + height]
+
+def model_info_card(p, key, w):
+    """Right side: what the selected model is, its tuned settings and why."""
+    name = resolved_model(p)
+    m = model_by(name)
+    if not m:
+        return draw_card("modelinfo", "MODEL", "", [f"{RED}unknown model {name}{R}"], w, lvl=2)
+    rec, src = recommended(name)
+    tune = (m.get("local") or {}).get("tune")
+    tags = [m.get("arch", "?").upper() if m.get("arch") else None, m.get("quant"),
+            f"{RED}abliterated{R}" if m.get("abliterated") else None, "custom" if m.get("custom") else None,
+            f"{GRN}tuned here {tune['date']}{R}" if tune else f"{DIM}catalogue tune{R}" if not m.get("custom") else f"{YEL}not tuned{R}"]
+    tw = w - 4
+    L = [f"{B}{m.get('label', name)}{R}  " + f"{DIM} · {R}".join(t for t in tags if t)]
+    if m.get("summary"):
+        L += [f"{CYN}{x}{R}" for x in wwrap(m["summary"], tw)]
+    L += [f"{DIM}{x}{R}" for x in wwrap(m.get("description", ""), tw)[:6]]
+    L += ["", f"{B}Recommended for this model{R} {DIM}(Auto-tune > catalogue){R}"]
+    for k_, lab in (("kv", "KV cache"), ("ctx", "context"), ("slots", "slots"), ("spec", "speculation"), ("spec_n", "draft tokens"),
+                    ("temp", "temperature")):
+        v = ctx_label(rec[k_]) if k_ == "ctx" else rec[k_]
+        rk = next((rk for rk, pk in MODEL_ROW_KEYS.items() if pk == k_), k_)
+        mine = str(fmt_val(rk, rec[k_])) == str(p.get(rk))
+        L.append(f"  {lab:<13}{(GRN if mine else YEL)}{v}{R} {DIM}{src.get(k_, '')}{'' if mine else ' · you: ' + str(p.get(rk))}{R}")
+    good, slow, very = carl.ctx_zones(m)
+    L.append(f"  {'zones':<13}{GRN}≤{ctx_label(good)} fast{R} · {YEL}≤{ctx_label(slow)} slow{R} · {RED}>{ctx_label(slow)} very slow{R} "
+             f"{DIM}({'measured here' if tune and tune.get('ctx_zones') else 'catalogue'}){R}")
+    wk = {"specn": "spec", "presence": "temp", "top_k": "temp", "top_p": "temp", "min_p": "temp", "repeat": "temp"}.get(key, key)
+    why = (m.get("why") or {}).get(wk)
+    if tune and wk == "spec":
+        res = (tune.get("results") or {}).get("speculation") or {}
+        why = "Measured here (" + tune["date"] + "): " + " · ".join(
+            f"{mode.replace('draft-mtp', 'MTP').replace('ngram-mod', 'n-gram').replace(',', '+')} {r['prose']}/{r['code']}/{r['edit']}"
+            for mode, r in res.items()) + " tok/s (prose/code/re-emit)."
+    if why:
+        L += ["", f"{B}Why{R} {DIM}({dict((r[0], r[1]) for r in LLAMA_ROWS + LLAMA_ADV).get(key, key)}){R}"]
+        L += wwrap(why, tw)[:7]
+    return draw_card("modelinfo", "MODEL", f"{DIM}{name}{R}", L, w, lvl=2)
+
+# ------------------------------------------------------------------ picker (model drop-down)
+def model_line(m, w):
+    st = {"downloaded": f"{GRN}downloaded{R}", "partial": f"{YEL}partial{R}", "missing": f"{DIM}not here{R}"}[m["status"]]
+    tuned = f"{GRN}✓tuned{R}" if (m.get("local") or {}).get("tune") else "      "
+    mx = model_max_ctx(m)
+    fitc = f"{(GRN if mx >= 65536 else YEL if mx >= 32768 else RED)}{ctx_label(mx) if mx else 'no fit':>5}{R}" if mx is not None else f"{DIM}{'?':>5}{R}"
+    head = f"{m['name']:<26} {size(m['bytes']):>8}  {st:<10}{' ' * max(0, 10 - vlen(st))} {fitc} {tuned} "
+    return head + f"{DIM}{m.get('summary', '')}{R}"
+
+def model_max_ctx(m):
+    """Largest window per slot (q4_0, 1 slot) that fits this Mac, or None if unknown."""
+    if m["status"] != "downloaded":
+        return None
+    try:
+        shp = carl.shape_of(m["path"])
+        room = (S.get("gpu_limit") or gpu_limit())[0] - os.path.getsize(m["path"]) - shp["rs_bytes"] - OVERHEAD
+        return 0 if room <= 0 else min(int(room // kv_bytes_per_token(shp, "q4_0")) // 4096 * 4096, shp.get("ctx_train") or 262144)
+    except Exception:
+        return None
+
+def open_model_picker():
+    ms = models()
+    items = [("auto", f"{'auto':<26} {DIM}this Mac's default: {resolved_model({'model': 'auto'})}{R}")]
+    items += [(m["name"], m) for m in ms if m["status"] == "downloaded"] + [(m["name"], m) for m in ms if m["status"] != "downloaded"]
+    cur = ui["set"].get("model", "auto")
+    ui["picker"] = {"title": "CHOOSE A MODEL", "items": items, "sel": next((i for i, it in enumerate(items) if it[0] == cur), 0),
+                    "on_pick": "pickmodel"}
+
+def picker_card(cols, height):
+    pk = ui["picker"]
+    w = cols - 2
+    n = len(pk["items"])
+    vis = max(height - 9, 3)
+    top = min(max(pk["sel"] - vis // 2, 0), max(n - vis, 0))
+    L = [pk.get("header") or f"{DIM}{'':2}{'model':<26} {'size':>8}  {'status':<10} {'fits':>5} {'':6} summary{R}"]
+    for i in range(top, min(top + vis, n)):
+        val, item = pk["items"][i]
+        line = item if isinstance(item, str) else model_line(item, w)
+        sel = i == pk["sel"]
+        L.append(Ln((f"{CYN}{B}›{R} " if sel else "  ") + (f"\x1b[7m{fit(line, w - 8)}{R}" if sel else line), act=f"pick:{i}"))
+    sel_item = pk["items"][pk["sel"]][1]
+    if not isinstance(sel_item, str):
+        L += ["", *[f"{DIM}{x}{R}" for x in wwrap(sel_item.get("description") or sel_item.get("summary", ""), w - 6)[:3]]]
+    L += ["", buttons("", [("Choose (Enter)", "pickok"), ("Cancel (Esc)", "pickno")]),
+          f"{DIM}{pk.get('foot') or '↑↓ select · fits = largest window per slot that fits this Mac (q4_0, 1 slot) · not-here models: Models panel'}{R}"]
+    return indent(draw_card("picker", pk["title"], f"{DIM}{n} {pk.get('noun', 'models')}{R}", L, w, lvl=2))
+
+def picker_choose():
+    pk = ui.pop("picker")
+    val = pk["items"][pk["sel"]][0]
+    if pk["on_pick"] == "pickmodel":
+        ui["set"]["model"] = val
+        load_profile(ui["set"], val)
+        m = model_by(resolved_model(ui["set"]))
+        if m and m["status"] != "downloaded":
+            toast(f"{m['name']} is not downloaded: Models panel (]) → Download", 8)
+    elif pk["on_pick"] == "pickhf":
+        start_download(f"hf:{ui['hf']['repo']}/{val}")
+    elif pk["on_pick"] == "picktune":
+        ui["tune_model"] = val
+
+# ------------------------------------------------------------------ panel 2: models + downloads
+def settings_models(d, cols, height):
+    ms = models()
+    ui["mrow"] = max(0, min(ui.get("mrow", 0), len(ms) - 1))
+    w = cols - 2
+    mdir = carl.models_dir()
+    try:
+        free = shutil.disk_usage(mdir).free
+    except OSError:
+        free = 0
+    L = [f"{DIM}{'':2}{'model':<26} {'size':>8}  {'status':<10} {'fits':>5} {'':6} summary{R}"]
+    vis = max(height - 22, 4)
+    top = min(max(ui["mrow"] - vis // 2, 0), max(len(ms) - vis, 0))
+    for i in range(top, min(top + vis, len(ms))):
+        sel = i == ui["mrow"]
+        line = model_line(ms[i], w)
+        L.append(Ln((f"{CYN}{B}›{R} " if sel else "  ") + (f"\x1b[7m{fit(line, w - 8)}{R}" if sel else line), act=f"mrow:{i}"))
+    if len(ms) > vis:
+        L.append(f"{DIM}  {top + 1}-{min(top + vis, len(ms))} of {len(ms)} (↑↓){R}")
+    m = ms[ui["mrow"]] if ms else None
+    if m:
+        hf = m.get("hf") or {}
+        L += ["", f"{B}{m.get('label', m['name'])}{R}  {DIM}{m['source']}{R}"]
+        L += [f"{DIM}{x}{R}" for x in wwrap(m.get("description") or m.get("summary", ""), w - 6)[:4]]
+        if hf.get("repo"):
+            L.append(lv("source", f"huggingface.co/{hf['repo']} · {hf.get('file')}" + (f" @ {hf['revision'][:8]}" if hf.get("revision") else ""), 8))
+        L.append(lv("file", m["path"].replace(os.path.expanduser("~"), "~"), 8))
+        tune = (m.get("local") or {}).get("tune")
+        if tune:
+            s_ = tune["settings"]
+            L.append(lv("tuned", f"{GRN}{tune['date']}{R} on {tune.get('machine', '?')}: {s_['spec']} n={s_['spec_n']}, "
+                                 f"{ctx_label(s_['ctx'])} x {s_['slots']} slot(s)", 8))
+    L.append("")
+    dl = ui.get("dl")
+    if dl:
+        L += download_status(dl, w)
+    can_dl = m and m["status"] != "downloaded" and (m.get("hf") or {}).get("repo")
+    acts = [("Use (Enter)", "museit")]
+    if can_dl:
+        acts.append(("Download (d)", "mdl"))
+    if m and m["status"] == "downloaded":
+        acts += [("Verify (v)", "mverify"), ("Auto-tune (u)", "mtune"), ("Delete (x)", "mdelete")]
+    elif m and m["status"] == "partial":
+        acts.append(("Delete (x)", "mdelete"))
+    acts.append(("Add from Hugging Face (h)", "mhf"))
+    L.append(buttons("", acts))
+    L.append(f"{DIM}↑↓ select · any .gguf in {mdir.replace(os.path.expanduser('~'), '~')} shows up here · free disk {size(free)}{R}")
+    if ui.get("text"):
+        tx = ui["text"]
+        L += ["", f"{B}{tx['prompt']}{R} {CYN}{tx['value']}▏{R}  {DIM}(Enter ok · Esc cancel){R}"]
+    hfs = ui.get("hf")
+    if hfs and hfs.get("status"):
+        L += ["", f"{YEL}{hfs['status']}{R}"]
+    return indent(draw_card("models", "MODELS", f"{DIM}catalogue + models folder + Hugging Face downloads{R}", L, w, lvl=2))
+
+def download_status(dl, w):
+    p, proc = dl["path"], dl["proc"]
+    have = os.path.getsize(p) if os.path.exists(p) else 0
+    total = dl.get("bytes") or 0
+    now = time.time()
+    hist = dl.setdefault("hist", [])
+    hist.append((now, have)); del hist[:-20]
+    rate = (hist[-1][1] - hist[0][1]) / max(hist[-1][0] - hist[0][0], 1e-6) if len(hist) > 1 else 0
+    tail = open(dl["log"], errors="replace").read().strip().splitlines()[-1:] if os.path.exists(dl["log"]) else []
+    if proc.poll() is None:
+        frac = have / total if total else 0
+        eta = dur((total - have) / rate) if rate > 0 and total else "–"
+        verifying = any("verifying" in x for x in tail)
+        line = (f"{YEL}verifying the checksum of {dl['name']}…{R}" if verifying else
+                f"{B}downloading {dl['name']}{R} {bar(frac, 24)} {frac:5.1%} {size(have)} / {size(total)} · {size(rate)}/s · ETA {eta}")
+        return [line, buttons("", [("Cancel download (c)", "mcancel")])]
+    ok = proc.returncode == 0
+    if not dl.get("done"):
+        dl["done"] = True; models(refresh=True)
+        toast(f"{dl['name']}: " + ("downloaded and verified" if ok else f"{RED}download failed{R}: " + " ".join(tail)[-120:]), 12)
+    return [f"{GRN if ok else RED}{dl['name']}: {'downloaded and verified' if ok else 'failed: ' + ' '.join(tail)[-100:]}{R}"]
+
+def start_download(spec):
+    if ui.get("dl") and ui["dl"]["proc"].poll() is None:
+        toast("a download is already running (c cancels it)", 6); return
+    name, path, total = spec, None, 0
+    if spec.startswith("hf:"):
+        repo, file, _ = carl.parse_hf(spec)
+        info = next((x for x in (ui.get("hf") or {}).get("files", []) if x[0] == file), None)
+        name = re.sub(r"[^a-z0-9._-]+", "-", os.path.basename(file)[:-5].lower())
+        path, total = os.path.join(carl.models_dir(), os.path.basename(file)), info[1] if info else 0
+    else:
+        m = model_by(spec)
+        path, total = m["path"], m["bytes"]
+    log = os.path.expanduser("~/models/logs/.download.out")
+    os.makedirs(os.path.dirname(log), exist_ok=True)
+    proc = subprocess.Popen([sys.executable, os.path.join(REPO, "tools", "carl.py"), "download", spec], stdout=open(log, "w"),
+                            stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, start_new_session=True)
+    ui["dl"] = {"name": name, "path": path, "bytes": total, "proc": proc, "log": log}
+    toast(f"downloading {name} (resumable: cancelling keeps the part)", 6)
+
+def hf_lookup(repo):
+    """Background: the GGUF files of a Hugging Face repo -> a picker."""
+    ui["hf"] = {"repo": repo, "status": f"looking up {repo} on Hugging Face…"}
+    try:
+        r, file, _ = carl.parse_hf(repo if repo.startswith(("hf:", "http")) else "hf:" + repo)
+        files = carl.hf_files(r)
+        if file:
+            files = [f for f in files if f[0] == file] or files
+        if not files:
+            ui["hf"] = {"repo": r, "status": f"{r} has no .gguf files"}; return
+        ui["hf"] = {"repo": r, "files": files, "status": ""}
+        ui["picker"] = {"title": f"HUGGING FACE · {r}", "sel": 0, "on_pick": "pickhf", "noun": "GGUF files",
+                        "header": f"{DIM}{'':2}{'file':<60} {'size':>9}{R}",
+                        "foot": "↑↓ select · Enter downloads it to the models folder (resumable, checked against its SHA-256)",
+                        "items": [(f, f"{f:<60} {size(b):>9}  {DIM}sha256 {sha[:12] if sha else '?'}{R}") for f, b, sha in files]}
+    except Exception as e:
+        ui["hf"] = {"repo": repo, "status": f"Hugging Face lookup failed: {e}"}
+
+# ------------------------------------------------------------------ panel 3: auto-tune
+def tune_models():
+    return [m for m in models() if m["status"] == "downloaded"]
+
+def settings_tune(d, cols, height):
+    ms = tune_models()
+    w = cols - 2
+    if not ms:
+        return indent(draw_card("tune", "AUTO-TUNE", "", ["No model is downloaded yet: Models panel (]) → Download."], w, lvl=2))
+    names = [m["name"] for m in ms]
+    if ui.get("tune_model") not in names:
+        cur = resolved_model(ui["set"]) if ui.get("set") else names[0]
+        ui["tune_model"] = cur if cur in names else names[0]
+    m = model_by(ui["tune_model"])
+    tn = ui.get("tune")
+    running = tn and tn["proc"].poll() is None
+    L = [f"{DIM}Measures this model on this Mac and saves the best settings for it (~5-10 min; the model loads once per mode):{R}",
+         f"{DIM}  1 memory: the largest window with 1 and 2 slots · 2 speculation: none, n-gram, MTP, MTP + n-gram (n = 1, 2) on{R}",
+         f"{DIM}    prose, code and a code re-emit · 3 prompt reading at 8K/32K/64K → this Mac's context zones · 4 the result{R}",
+         f"{DIM}  Every start of the model then uses it, unless you change a value in the Server panel (config.json wins).{R}", ""]
+    sel = f"{CYN}[<]{R} {B}{m['name']:^30}{R} {CYN}[>]{R}"
+    L.append(Ln(f"model     {sel}   {DIM}{m.get('summary', '')}{R}", spans=[(10, 13, "tprev"), (14, 44, "tpick"), (45, 48, "tnext")]))
+    L.append(Ln(f"mode      {CYN}[{'x' if ui.get('tune_quick') else ' '}]{R} quick {DIM}(space; n=1 modes only, no 64K read: ~4 min){R}",
+                spans=[(10, 13, "tquick")]))
+    L.append("")
+    if running or (tn and tn.get("model") == m["name"]):
+        L += tune_progress(tn, w)
+    else:
+        L.append(buttons("", [("Run auto-tune (Enter)", "trun")]))
+    t = (m.get("local") or {}).get("tune")
+    L.append("")
+    if t:
+        s_ = t["settings"]
+        L.append(f"{B}Last result{R} {DIM}{t['date']} · {t.get('machine', '?')} · {t.get('llama_cpp', '')}{R}")
+        L.append(f"  {GRN}kv {s_['kv']} · speculation {s_['spec']} n={s_['spec_n']} · context {ctx_label(s_['ctx'])} per slot · "
+                 f"{s_['slots']} slot(s){R}")
+        res = (t.get("results") or {}).get("speculation") or {}
+        best = f"{s_['spec']}:{s_['spec_n']}"
+        L.append(f"  {DIM}{'speculation':<24}{'prose':>7}{'code':>7}{'re-emit':>9}{'score':>8}{R}")
+        for mode, r in res.items():
+            hi = GRN + B if mode == best else ""
+            L.append(f"  {hi}{mode:<24}{r['prose']:>7}{r['code']:>7}{r['edit']:>9}{r['score']:>8}{R}")
+        pr = (t.get("results") or {}).get("prompt_read") or []
+        if pr:
+            L.append("  prompt reading: " + " · ".join(f"{int(n) // 1024}K at {tps:.0f} tok/s" for n, tps in pr))
+        z = t.get("ctx_zones")
+        if z:
+            L.append(f"  context zones: {GRN}≤{ctx_label(z['good'])} fast{R} · {YEL}≤{ctx_label(z['slow'])} slow{R} · "
+                     f"{RED}>{ctx_label(z['slow'])} very slow{R}")
+        L.append(buttons("  ", [("Use these values (clear my overrides for this model)", "tclear")]))
+    else:
+        L.append(f"{DIM}Not tuned on this Mac yet: the catalogue's values apply{' (measured on another Mac)' if not m.get('custom') else ' (from the GGUF header: a guess)'}.{R}")
+    return indent(draw_card("tune", "AUTO-TUNE", f"{DIM}per model, per Mac{R}", L, w, lvl=2))
+
+def tune_progress(tn, w):
+    lines = open(tn["log"], errors="replace").read().splitlines() if os.path.exists(tn["log"]) else []
+    steps = [x for x in lines if x.startswith("STEP ")]
+    out = []
+    if steps:
+        mm = re.match(r"STEP (\d+)/(\d+) (.*)", steps[-1])
+        if mm:
+            out.append(f"{B}step {mm.group(1)} of {mm.group(2)}{R} {bar(int(mm.group(1)) / int(mm.group(2)), 24)} {mm.group(3)}")
+    out += [f"{DIM}{fit(x, w - 6)}{R}" for x in lines[-9:]]
+    if tn["proc"].poll() is None:
+        out.append(buttons("", [("Cancel (c)", "tcancel")]))
+    else:
+        ok = tn["proc"].returncode == 0
+        if not tn.get("done"):
+            tn["done"] = True; models(refresh=True)
+            toast(("auto-tune finished: " + (lines[-1][5:] if lines and lines[-1].startswith("DONE") else "") if ok
+                   else f"{RED}auto-tune failed{R}: " + (lines[-1] if lines else "")), 15)
+            if tn.get("restart"):
+                restart_after_tune(tn)
+        out.append(f"{GRN if ok else RED}{'finished' if ok else 'failed'}{R}" + (f"{DIM} · starting the server again…{R}" if tn.get("restart") and not D.get("up") else ""))
+        out.append(buttons("", [("Run again (Enter)", "trun")]))
+    return out
+
+def run_tune(confirmed=False):
+    tn = ui.get("tune")
+    if tn and tn["proc"].poll() is None:
+        toast("auto-tune is already running", 5); return
+    pid = D.get("target_pid") if not D.get("exited") else None
+    if pid and pid_alive(pid) and not confirmed:
+        ui["confirm2"] = {"title": "AUTO-TUNE?", "lines": [
+            f"Auto-tune needs the GPU to itself: it stops the running server (pid {pid}),",
+            f"tunes {ui['tune_model']} (~5-10 min), then starts the server again with the saved settings.",
+            "Requests in progress stop."], "yes": "tyes"}
+        return
+    restart = bool(pid and pid_alive(pid))
+    def work():
+        if restart:
+            ui["restart"] = f"stopping the server (pid {pid}) for auto-tune…"
+            args.server_pid = None
+            stop_pid(pid)
+            ui["restart"] = None
+        log = os.path.expanduser("~/models/logs/.tune.out")
+        cmd = [sys.executable, os.path.join(REPO, "tools", "carl-tune.py"), ui["tune_model"]] + (["--quick"] if ui.get("tune_quick") else [])
+        proc = subprocess.Popen(cmd, stdout=open(log, "w"), stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, start_new_session=True)
+        ui["tune"] = {"model": ui["tune_model"], "proc": proc, "log": log, "restart": restart}
+    threading.Thread(target=work, daemon=True).start()
+
+def restart_after_tune(tn):
+    """Start the server again after a tune stopped it: llama.cpp with the saved settings."""
+    def work():
+        port = PORTS["llama"]
+        console = os.path.expanduser(f"~/models/logs/.console-{port}.out")
+        ui["restart"] = "starting the server again with the saved (and newly tuned) settings…"
+        proc = start_server("llama", "", port, {}, console)
+        follow(port, proc.pid, console)
+        ok = wait_up(proc, port)
+        ui["restart"] = None; ui["set"] = None
+        toast("server running again" if ok else f"{RED}the server did not start again{R}: see the Log tab", 12)
+    threading.Thread(target=work, daemon=True).start()
+
+def confirm2_card(cols, height):
+    c = ui["confirm2"]
+    w = min(cols - 2, 96)
+    L = [""] + c["lines"] + ["", buttons("  ", [("Yes (y)", c["yes"]), ("Cancel (n)", "c2no")])]
+    return indent(draw_card("confirm2", c["title"], "", L, w, lvl=2))
 
 INT_KEYS = {"ctx", "mctx", "cache", "top_k", "specn", "ub", "ckpt", "ckstep", "pchunk"}
 
@@ -1524,12 +2003,92 @@ def commit_edit(key):
     if num < 0 or (key in ("ctx", "mctx") and not 4096 <= num <= 262144) or (key in ("top_p", "min_p") and num > 1):
         toast(f"{v} is out of range for {key}", 5); return
     ui["set"][key] = int(num) if key in INT_KEYS else (f"{num:g}" if num != int(num) else f"{num:.1f}" if key in ("temp", "repeat") else f"{int(num)}")
+    if key in INT_KEYS and key not in ("ctx", "mctx", "cache"):
+        ui["set"][key] = str(ui["set"][key])
 
 def settings_action(act):
+    # ---- picker, confirmations, text input
+    if act.startswith("pick:"):
+        ui["picker"]["sel"] = int(act[5:]); return
+    if act == "pickok":
+        picker_choose(); return
+    if act == "pickno":
+        ui.pop("picker", None); return
+    if act == "c2no":
+        ui.pop("confirm2", None); return
+    if act.startswith("sp:"):
+        ui["sp"] = int(act[3:]); return
+    # ---- models panel
+    if act.startswith("mrow:"):
+        ui["mrow"] = int(act[5:]); return
+    ms = models()
+    m = ms[ui.get("mrow", 0)] if ms else None
+    if act == "museit" and m:
+        if ui.get("set") is None:
+            ui["set"] = pending_init(D)
+        ui["set"]["backend"] = "llama"; ui["set"]["model"] = m["name"]; load_profile(ui["set"], m["name"])
+        ui["sp"] = 0; ui["set_row"] = 1
+        toast(f"{m['name']} selected: Apply (a) to start it" + ("" if m["status"] == "downloaded" else " after the download"), 6); return
+    if act == "mdl" and m:
+        start_download(m["name"]); return
+    if act == "mverify" and m:
+        threading.Thread(target=lambda: toast(
+            (f"{m['name']}: checksum OK" if subprocess.run([sys.executable, os.path.join(REPO, "tools", "carl.py"), "verify", m["name"]],
+                                                           capture_output=True).returncode == 0 else f"{RED}{m['name']}: checksum mismatch{R}"), 10),
+            daemon=True).start()
+        toast(f"verifying {m['name']} (sha256, ~1 min)…", 60); return
+    if act == "mdelete" and m:
+        if D.get("cmd") and m["path"] in D.get("cmd", ""):
+            toast("that model is loaded: stop the server first", 6); return
+        ui["confirm2"] = {"title": "DELETE?", "lines": [f"Delete {m['name']} ({size(m['bytes'])})?",
+                          m["path"].replace(os.path.expanduser("~"), "~")], "yes": "mdelyes", "model": m["name"]}; return
+    if act == "mdelyes":
+        c = ui.pop("confirm2"); mm = model_by(c["model"])
+        if mm:
+            carl.delete(mm); models(refresh=True); toast(f"deleted {mm['name']}", 6)
+        return
+    if act == "mhf":
+        ui["text"] = {"prompt": "Hugging Face repo (OWNER/REPO, or a URL to a .gguf):", "value": "", "on_enter": "hf"}; return
+    if act == "mcancel" and ui.get("dl"):
+        try:
+            os.killpg(ui["dl"]["proc"].pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+        toast("download cancelled (the part stays: Download resumes it)", 6); return
+    if act == "mtune" and m:
+        ui["tune_model"] = m["name"]; ui["sp"] = 2; return
+    # ---- auto-tune panel
+    if act in ("tprev", "tnext"):
+        names = [x["name"] for x in tune_models()]
+        if names:
+            i = names.index(ui["tune_model"]) if ui.get("tune_model") in names else 0
+            ui["tune_model"] = names[(i + (1 if act == "tnext" else -1)) % len(names)]
+        return
+    if act == "tpick":
+        ui["picker"] = {"title": "AUTO-TUNE WHICH MODEL?", "sel": 0, "on_pick": "picktune",
+                        "items": [(x["name"], x) for x in tune_models()]}; return
+    if act == "tquick":
+        ui["tune_quick"] = not ui.get("tune_quick"); return
+    if act == "trun":
+        run_tune(); return
+    if act == "tyes":
+        ui.pop("confirm2", None); run_tune(confirmed=True); return
+    if act == "tcancel" and ui.get("tune"):
+        try:
+            os.killpg(ui["tune"]["proc"].pid, signal.SIGINT)
+        except ProcessLookupError:
+            pass
+        return
+    if act == "tclear":
+        cfg = carl.load_config(); (cfg.get("models") or {}).pop(ui["tune_model"], None); carl.save_config(cfg)
+        ui["set"] = None; toast(f"{ui['tune_model']}: the tuned values apply (config.json overrides cleared)", 8); return
+    # ---- server panel
     if ui.get("set") is None:
         return
     rws = rows(ui["set"])
-    if act.startswith("setrow:"):
+    if act == "setpick":
+        ui["set_row"] = 1; open_model_picker()
+    elif act.startswith("setrow:"):
         ui["set_row"] = min(int(act[7:]), len(rws) - 1)
     elif act.startswith(("setinc:", "setdec:")):
         i = min(int(act[7:]), len(rws) - 1); ui["set_row"] = i
@@ -1537,16 +2096,23 @@ def settings_action(act):
         cur = ui["set"][key]
         j = next((n for n, c in enumerate(choices) if str(c) == str(cur)), 0)
         ui["set"][key] = choices[(j + (1 if act.startswith("setinc") else -1)) % len(choices)]
+        if key == "model":
+            load_profile(ui["set"], ui["set"]["model"])
     elif act == "setrevert":
         ui["set"] = None
     elif act == "setdefaults":
-        be = ui["set"]["backend"]
-        adv = ui["set"].get("adv", "hidden")
+        be, adv = ui["set"]["backend"], ui["set"].get("adv", "hidden")
+        model = ui["set"].get("model", "auto")
         ui["set"] = {key: default for key, _, _, _, default in [BACKEND_ROW] + LLAMA_ROWS + MTPLX_ROWS + LLAMA_ADV + MTPLX_ADV}
-        ui["set"].update(backend=be, adv=adv)
+        ui["set"].update(backend=be, adv=adv, model=model)
+        vals = recommended(resolved_model(ui["set"]))[0]           # the model's tune, without my overrides
+        for key, pk in MODEL_ROW_KEYS.items():
+            ui["set"][key] = fmt_val(key, vals[pk])
     elif act == "setnofit":
         toast("this setup does not fit or is not downloaded: see the fit line", 6)
     elif act == "setapply" and not ui.get("restart"):
+        if not fit_cached(ui["set"])[0]:
+            toast("this setup does not fit or is not downloaded: see the fit line", 6); return
         if D.get("cmd") and "llama-server" not in D["cmd"] and "mtplx" not in D["cmd"]:
             toast("another server (not llama.cpp or MTPLX) uses this port: stop it first", 8); return
         ui["confirm"] = True
@@ -1556,6 +2122,56 @@ def settings_action(act):
         ui["confirm"] = False
         ui["restart"] = "saving the settings…"
         threading.Thread(target=restart_worker, args=(dict(ui["set"]),), daemon=True).start()
+
+def settings_keys(rest):
+    """Keys in the Settings tab. Returns True when the input was used here."""
+    if ui.get("text"):
+        tx = ui["text"]
+        for ch in rest:
+            if ch in "\r\n":
+                v = tx["value"].strip(); ui.pop("text")
+                if v and tx["on_enter"] == "hf":
+                    threading.Thread(target=hf_lookup, args=(v,), daemon=True).start()
+                return True
+            if ch == "\x1b":
+                ui.pop("text"); return True
+            if ch in "\x7f\x08":
+                tx["value"] = tx["value"][:-1]
+            elif ch.isprintable():
+                tx["value"] += ch
+        return True
+    if ui.get("picker"):
+        pk = ui["picker"]
+        if "\x1b[A" in rest: pk["sel"] = max(pk["sel"] - 1, 0)
+        elif "\x1b[B" in rest: pk["sel"] = min(pk["sel"] + 1, len(pk["items"]) - 1)
+        elif "\x1b[5~" in rest: pk["sel"] = max(pk["sel"] - 10, 0)
+        elif "\x1b[6~" in rest: pk["sel"] = min(pk["sel"] + 10, len(pk["items"]) - 1)
+        elif rest in ("\r", "\n"): picker_choose()
+        elif rest == "\x1b": ui.pop("picker")
+        return True
+    if ui.get("confirm2"):
+        for ch in rest:
+            if ch in "yY": do(ui["confirm2"]["yes"]); break
+            if ch in "nN\x1b": ui.pop("confirm2", None); break
+        return True
+    if rest in ("[", "]"):
+        ui["sp"] = (ui["sp"] + (1 if rest == "]" else -1)) % len(SUBPANELS); return True
+    if ui["sp"] == 1:
+        ms = models()
+        if "\x1b[A" in rest: ui["mrow"] = max(ui.get("mrow", 0) - 1, 0); return True
+        if "\x1b[B" in rest: ui["mrow"] = min(ui.get("mrow", 0) + 1, len(ms) - 1); return True
+        acts = {"\r": "museit", "\n": "museit", "d": "mdl", "v": "mverify", "x": "mdelete", "h": "mhf", "c": "mcancel", "u": "mtune"}
+        if rest in acts:
+            settings_action(acts[rest]); return True
+        return rest not in ("q", "Q", "\x03", "\t") and not rest.isdigit()
+    if ui["sp"] == 2:
+        acts = {"\r": "trun", "\n": "trun", "\x1b[C": "tnext", "\x1b[D": "tprev", "c": "tcancel", " ": "tquick"}
+        if rest in acts:
+            settings_action(acts[rest]); return True
+        return rest not in ("q", "Q", "\x03", "\t") and not rest.isdigit()
+    if ui["sp"] == 0 and ui.get("set") is not None and rest in ("\r", "\n") and rows(ui["set"])[ui["set_row"]][0] == "model":
+        open_model_picker(); return True
+    return False
 
 
 def quit_dialog(d, cols, height):
@@ -1651,7 +2267,9 @@ def show_config(kind):
           + (" copied to the clipboard" if ok else ": clipboard unavailable, select it on screen"))
 
 def do(action):
-    if action.startswith("set"):
+    if action.startswith(("set", "sp:", "pick", "mrow:", "c2no")) or action in (
+            "museit", "mdl", "mverify", "mdelete", "mdelyes", "mhf", "mcancel", "mtune",
+            "tprev", "tnext", "tpick", "tquick", "trun", "tyes", "tcancel", "tclear"):
         settings_action(action)
     elif action.startswith("level:"):
         nm = action[6:]
@@ -1723,7 +2341,9 @@ def handle_input(data):
             if ch in "yY": do("setyes")
             elif ch in "nN": do("setno")
         return
-    if ui["tab"] == 4 and ui["set"] is not None and not ui["quit"]:
+    if ui["tab"] == 4 and not ui["quit"] and not ui["confirm"] and rest and ui.get("edit") is None and settings_keys(rest):
+        return
+    if ui["tab"] == 4 and ui["set"] is not None and not ui["quit"] and ui["sp"] == 0:
         key = rows(ui["set"])[ui["set_row"]][0]
         if ui.get("edit") is not None:               # typing a value: digits . k, Backspace, Enter, Esc
             for ch in rest:
@@ -1745,7 +2365,7 @@ def handle_input(data):
     for seq, step in seqs.items():
         if seq in rest:
             scroll(step)
-    if ui["tab"] == 4 and ui["set"] is not None:
+    if ui["tab"] == 4 and ui["set"] is not None and ui["sp"] == 0:
         if "\x1b[C" in rest: do(f"setinc:{ui['set_row']}")
         if "\x1b[D" in rest: do(f"setdec:{ui['set_row']}")
     if "\x1b[F" in rest or "\x1b[4~" in rest:
@@ -1754,7 +2374,7 @@ def handle_input(data):
     for ch in rest:
         if ch in "qQ\x03": do("quit")
         elif ch in "12345": ui["tab"] = int(ch) - 1
-        elif ui["tab"] == 4 and ch in "arx": do({"a": "setapply", "r": "setrevert", "x": "setdefaults"}[ch])
+        elif ui["tab"] == 4 and ui["sp"] == 0 and ch in "arx": do({"a": "setapply", "r": "setrevert", "x": "setdefaults"}[ch])
         elif ch == "\t": ui["tab"] = (ui["tab"] + 1) % len(TABS)
         elif ch == "k": do("key")
         elif ch == "o": do("opencode")

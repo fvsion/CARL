@@ -1,7 +1,7 @@
 {
   "name": "llm-deploy-subagents-sidebar",
   "version": "1.0.0",
-  "description": "OpenCode sidebar panel showing the current session's subagents live: agent, task, status, elapsed time, context and current tool. Click one to open it.",
+  "description": "OpenCode sidebar panel for the current session's subagents: running ones live (agent, task, elapsed time, current tool), finished ones below as a short ✓/✗ list that folds away after a few minutes. Click one to open it.",
   "type": "module",
   "license": "MIT",
   "exports": {

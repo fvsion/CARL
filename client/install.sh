@@ -49,8 +49,11 @@ LLAMA_PORT="${pos[2]:-8080}"
 [[ -n "$MODE" ]] || { [[ "$OS" == Darwin ]] && MODE=local || MODE=vm; }
 
 listen_addr() {  # address a local server listens on for port $1 (macOS/Linux)
-  if command -v lsof >/dev/null 2>&1; then
-    { lsof -nP -iTCP:"$1" -sTCP:LISTEN 2>/dev/null || true; } | awk 'NR>1{split($9,a,":"); print a[1]; exit}'
+  # netstat, not lsof: lsof hangs on a stale network share
+  if [[ "$OS" == Darwin ]]; then
+    /usr/sbin/netstat -anv -p tcp 2>/dev/null | awk -v p="$1" '$6=="LISTEN" && $4 ~ ("[.]" p "$") {a=$4; sub("[.]" p "$","",a); print (a=="*" ? "127.0.0.1" : a); exit}'
+  elif command -v ss >/dev/null 2>&1; then
+    ss -Hltn "sport = :$1" 2>/dev/null | awk '{split($4,a,":"); print a[1]; exit}'
   fi
   return 0
 }

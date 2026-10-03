@@ -1,0 +1,373 @@
+{
+  "schema": 1,
+  "_comment": "CARL built-in model catalogue. Downloaded and custom models are tracked separately in ~/.config/llm-deploy/models.json. Fields: hf (download source, pinned revision, sha256, bytes), tune (recommended server settings), why (the reason for each tuned value), ctx_zones (context per slot: <= good is fast, <= slow is usable, above very_slow is very slow; Auto-tune replaces these with measured values for this Mac), measured (reference measurements).",
+  "default": "qwen3.6-35b-a3b",
+  "default_small": "qwen3.6-35b-a3b-iq3",
+  "models": [
+    {
+      "name": "qwen3.6-35b-a3b",
+      "label": "Qwen3.6 35B-A3B · Q4",
+      "family": "qwen3.6-35b-a3b",
+      "arch": "moe",
+      "params": "35B total, 3B active per token",
+      "quant": "UD-Q4_K_M",
+      "abliterated": false,
+      "mtp": true,
+      "min_ram_gb": 32,
+      "tested": true,
+      "summary": "Default. Fast MoE: ~4x the decode and ~6x the prompt reading of the 27B, tiny KV cache.",
+      "description": "Stock Qwen3.6-35B-A3B (not abliterated), unsloth dynamic Q4_K_M with the MTP head. Only 3B parameters are active per token, so decode is bandwidth-cheap (42-45 tok/s new text, 117 re-emitting code on an M3 Pro) and its KV cache is tiny (5.6 KiB/token at q4_0): two 96K slots cost under 1 GiB of KV. Thinking is on/off only (no effort levels). Needs a 32 GB+ Mac; 24 GB Macs get the IQ3 build.",
+      "tune": {
+        "kv": "q4_0",
+        "ctx": 98304,
+        "slots": "auto",
+        "temp": 1.0,
+        "top_p": 0.95,
+        "top_k": 20,
+        "min_p": 0,
+        "presence": 0,
+        "spec": "draft-mtp,ngram-mod",
+        "spec_n": 2
+      },
+      "why": {
+        "kv": "q4_0 K and V: measured +16% cold prompt reading and ~2 GB less memory than q8_0, same decode speed and 8/8 needle recall at 66K. Never mix K and V types: mixed q8_0/q4_0 reads prompts ~5x slower on Metal.",
+        "temp": "Qwen's thinking-mode recommendation from the model card: temperature 1.0, top_p 0.95, top_k 20, min_p 0. Clients that send their own values (OpenCode's no-thinking variant) win per request.",
+        "spec": "MTP (n=2) + n-gram: measured best on Q4_K_M (M3 Pro): 42-45 tok/s new text vs 33 without speculation, 117 tok/s re-emitting code. The n-gram drafter copies repeated text (edits, file rewrites) almost for free.",
+        "ctx": "96K per slot: cold reads stay fast (64K reads at 229 tok/s, 128K at 117 tok/s on the M3 Pro). 128K-160K work with 8/8 recall but every cold re-read takes 4x longer.",
+        "slots": "2 slots: the main OpenCode session and a coder subagent each keep their own cache; the follow-up after a subagent takes 0.6 s instead of a full re-read."
+      },
+      "ctx_zones": {
+        "good": 98304,
+        "slow": 131072,
+        "very_slow": 163840
+      },
+      "measured": [
+        {
+          "machine": "M3 Pro 36 GB",
+          "date": "2026-10-01",
+          "decode": "42-45 tok/s (117 re-emitting)",
+          "prefill": "490-580 tok/s at 2-9K"
+        }
+      ],
+      "alias": "qwen3.6-35b-a3b",
+      "hf": {
+        "repo": "unsloth/Qwen3.6-35B-A3B-MTP-GGUF",
+        "revision": "5bc3e238d916f48a861bac2f8a1990a0e9b7e98d",
+        "file": "Qwen3.6-35B-A3B-UD-Q4_K_M.gguf",
+        "sha256": "0b21525e972670ed59e1812e170b27c26355381f0656ecc4e25617ece7dac58b",
+        "bytes": 22663387424
+      }
+    },
+    {
+      "name": "qwen3.8-27b",
+      "label": "Qwen3.8 27B · Q4",
+      "family": "qwen3.8-27b",
+      "arch": "dense",
+      "params": "27B dense",
+      "quant": "UD-Q4_K_M",
+      "abliterated": false,
+      "mtp": true,
+      "min_ram_gb": 32,
+      "tested": false,
+      "summary": "Stock dense 27B: slower (~11 tok/s) but stronger per token; effort levels for thinking.",
+      "description": "Stock Qwen3.8-27B (not abliterated), unsloth dynamic Q4_K_M with the MTP head. Dense: every parameter is read for every token, so decode is ~11 tok/s and prompt reading ~85-90 tok/s. Same architecture and speed profile as the measured orcarouter build. Thinking supports effort levels (low/medium/xhigh, none = off). Its KV cache is 3x the 35B's (18 KiB/token at q4_0).",
+      "tune": {
+        "kv": "q4_0",
+        "ctx": 98304,
+        "slots": "auto",
+        "temp": 1.0,
+        "top_p": 0.95,
+        "top_k": 20,
+        "min_p": 0,
+        "presence": 0,
+        "spec": "draft-mtp,ngram-mod",
+        "spec_n": 1
+      },
+      "why": {
+        "kv": "q4_0 K and V: measured +16% cold prompt reading and ~2 GB less memory than q8_0, same decode speed and 8/8 needle recall at 66K. Never mix K and V types: mixed q8_0/q4_0 reads prompts ~5x slower on Metal.",
+        "temp": "Qwen's thinking-mode recommendation from the model card: temperature 1.0, top_p 0.95, top_k 20, min_p 0. Clients that send their own values (OpenCode's no-thinking variant) win per request.",
+        "spec": "MTP n=1 + n-gram: measured best on the dense 27B (10.5-11 tok/s new text vs 7.4 without, 27 tok/s re-emitting). n>1 loses on Metal for dense models: the extra draft verify costs more than it saves.",
+        "ctx": "96K per slot. On the 27B a cold read of a long session is slow (~56-65 tok/s at 66K: a full 96K window takes ~25 min), so keep windows modest.",
+        "slots": "2 slots keep the main session cached while a subagent runs (1.9 s follow-up). Both generating at once time-share: no combined speed-up on dense models."
+      },
+      "ctx_zones": {
+        "good": 65536,
+        "slow": 98304,
+        "very_slow": 131072
+      },
+      "measured": [
+        {
+          "machine": "M3 Pro 36 GB",
+          "date": "2026-09-25",
+          "decode": "10.5-11 tok/s (27 re-emitting)",
+          "prefill": "85-90 tok/s at 2-9K",
+          "model": "orcarouter-27b (same architecture)"
+        }
+      ],
+      "alias": "qwen3.8-27b",
+      "hf": {
+        "repo": "unsloth/Qwen3.8-27B-GGUF",
+        "revision": "4ca720788d1e01f1bff70c033e0d0028fd02e502",
+        "file": "Qwen3.8-27B-UD-Q4_K_M.gguf",
+        "sha256": "322e194ff79741c7baa497c240f677f54b201b0efab44ca8e50f122b39123482",
+        "bytes": 16464440224
+      }
+    },
+    {
+      "name": "orcarouter-27b",
+      "label": "orcarouter 27B · Q4 (abliterated)",
+      "family": "qwen3.8-27b",
+      "arch": "dense",
+      "params": "27B dense",
+      "quant": "Q4_K_M imatrix",
+      "abliterated": true,
+      "mtp": true,
+      "min_ram_gb": 32,
+      "tested": true,
+      "summary": "Abliterated 27B with published figures (0-2.7% refusals, MMLU +0.4). Fully measured.",
+      "description": "orcarouter's abliterated Qwen3.8-27B, bartowski Q4_K_M with an imatrix calibrated on lots of tool calls, MTP head included. The only abliterated build with a documented method and published refusal and MMLU figures. Every CARL measurement of the 27B was made with this file.",
+      "tune": {
+        "kv": "q4_0",
+        "ctx": 98304,
+        "slots": "auto",
+        "temp": 1.0,
+        "top_p": 0.95,
+        "top_k": 20,
+        "min_p": 0,
+        "presence": 0,
+        "spec": "draft-mtp,ngram-mod",
+        "spec_n": 1
+      },
+      "why": {
+        "kv": "q4_0 K and V: measured +16% cold prompt reading and ~2 GB less memory than q8_0, same decode speed and 8/8 needle recall at 66K. Never mix K and V types: mixed q8_0/q4_0 reads prompts ~5x slower on Metal.",
+        "temp": "Qwen's thinking-mode recommendation from the model card: temperature 1.0, top_p 0.95, top_k 20, min_p 0. Clients that send their own values (OpenCode's no-thinking variant) win per request.",
+        "spec": "MTP n=1 + n-gram: 10.5-11 tok/s new text, 27 tok/s re-emitting (none: 7.4). Measured with tools/llama-spec-sweep.sh on the M3 Pro.",
+        "ctx": "96K per slot; cold reads at 66K run ~56-65 tok/s, so longer windows mean long waits after a restart or eviction.",
+        "slots": "2 slots: main session + subagent each keep their cache (1.9 s follow-up)."
+      },
+      "ctx_zones": {
+        "good": 65536,
+        "slow": 98304,
+        "very_slow": 131072
+      },
+      "measured": [
+        {
+          "machine": "M3 Pro 36 GB",
+          "date": "2026-09-25",
+          "decode": "10.5-11 tok/s (27 re-emitting)",
+          "prefill": "85-90 tok/s at 2-9K, 56-65 at 66K"
+        }
+      ],
+      "alias": "qwen3.8-27b-abliterated-llama",
+      "hf": {
+        "repo": "bartowski/orcarouter_Qwen3.8-27B-Uncensored-GGUF",
+        "revision": "87d37daf5e5eb72a926d8b413e08809a57f1a120",
+        "file": "orcarouter_Qwen3.8-27B-Uncensored-Q4_K_M.gguf",
+        "sha256": "6c8c7658fe13eef22666aa89862f7fb70aa72109838cf19989e59b15875e5e08",
+        "bytes": 17772538112
+      }
+    },
+    {
+      "name": "qwen3.8-27b-q3",
+      "label": "Qwen3.8 27B · Q3_K_XL",
+      "family": "qwen3.8-27b",
+      "arch": "dense",
+      "params": "27B dense",
+      "quant": "UD-Q3_K_XL",
+      "abliterated": false,
+      "mtp": true,
+      "min_ram_gb": 24,
+      "tested": false,
+      "summary": "Stock 27B in dynamic 3-bit K-quant, for 24 GB Macs (~148K window under a 16 GiB GPU limit).",
+      "description": "Stock Qwen3.8-27B, unsloth dynamic Q3_K_XL: sensitive layers stay at higher precision. A K-quant, so it unpacks fast on Metal. For 24 GB Macs that want the 27B. Untested in CARL.",
+      "tune": {
+        "kv": "q4_0",
+        "ctx": 65536,
+        "slots": "auto",
+        "temp": 1.0,
+        "top_p": 0.95,
+        "top_k": 20,
+        "min_p": 0,
+        "presence": 0,
+        "spec": "draft-mtp,ngram-mod",
+        "spec_n": 1
+      },
+      "why": {
+        "kv": "q4_0 K and V: measured +16% cold prompt reading and ~2 GB less memory than q8_0, same decode speed and 8/8 needle recall at 66K. Never mix K and V types: mixed q8_0/q4_0 reads prompts ~5x slower on Metal.",
+        "temp": "Qwen's thinking-mode recommendation from the model card: temperature 1.0, top_p 0.95, top_k 20, min_p 0. Clients that send their own values (OpenCode's no-thinking variant) win per request.",
+        "spec": "Same as the Q4 27B (MTP n=1 + n-gram); untested on this quant: run Auto-tune.",
+        "ctx": "64K per slot: on a 24 GB Mac the 27B's KV cache (18 KiB/token) fills the GPU limit quickly.",
+        "slots": "auto: 2 slots only when two full windows fit."
+      },
+      "ctx_zones": {
+        "good": 65536,
+        "slow": 98304,
+        "very_slow": 131072
+      },
+      "measured": [],
+      "alias": "qwen3.8-27b",
+      "hf": {
+        "repo": "unsloth/Qwen3.8-27B-GGUF",
+        "revision": "4ca720788d1e01f1bff70c033e0d0028fd02e502",
+        "file": "Qwen3.8-27B-UD-Q3_K_XL.gguf",
+        "sha256": "8c2a45ff85e7674ca185ec8eb6cdeab0e617ed9d8018caed0b64380eb2a67a5e",
+        "bytes": 13146393504
+      }
+    },
+    {
+      "name": "orcarouter-27b-q3",
+      "label": "orcarouter 27B · Q3_K_M (abliterated)",
+      "family": "qwen3.8-27b",
+      "arch": "dense",
+      "params": "27B dense",
+      "quant": "Q3_K_M imatrix",
+      "abliterated": true,
+      "mtp": true,
+      "min_ram_gb": 24,
+      "tested": false,
+      "summary": "Abliterated 27B in 3-bit for 24 GB Macs (~68K window, estimate).",
+      "description": "orcarouter's abliterated 27B, bartowski Q3_K_M imatrix, MTP head. For 24 GB Macs. Untested in CARL.",
+      "tune": {
+        "kv": "q4_0",
+        "ctx": 65536,
+        "slots": "auto",
+        "temp": 1.0,
+        "top_p": 0.95,
+        "top_k": 20,
+        "min_p": 0,
+        "presence": 0,
+        "spec": "draft-mtp,ngram-mod",
+        "spec_n": 1
+      },
+      "why": {
+        "kv": "q4_0 K and V: measured +16% cold prompt reading and ~2 GB less memory than q8_0, same decode speed and 8/8 needle recall at 66K. Never mix K and V types: mixed q8_0/q4_0 reads prompts ~5x slower on Metal.",
+        "temp": "Qwen's thinking-mode recommendation from the model card: temperature 1.0, top_p 0.95, top_k 20, min_p 0. Clients that send their own values (OpenCode's no-thinking variant) win per request.",
+        "spec": "Same as the Q4 27B (MTP n=1 + n-gram); untested on this quant: run Auto-tune.",
+        "ctx": "64K per slot: about the largest window that fits a 24 GB Mac with this file.",
+        "slots": "auto: usually 1 slot on a 24 GB Mac."
+      },
+      "ctx_zones": {
+        "good": 65536,
+        "slow": 98304,
+        "very_slow": 131072
+      },
+      "measured": [],
+      "alias": "qwen3.8-27b-abliterated-llama",
+      "hf": {
+        "repo": "bartowski/orcarouter_Qwen3.8-27B-Uncensored-GGUF",
+        "revision": "87d37daf5e5eb72a926d8b413e08809a57f1a120",
+        "file": "orcarouter_Qwen3.8-27B-Uncensored-Q3_K_M.gguf",
+        "sha256": "c9d1882db0093b1abf7c6520c4ef525068c4f1f5e5f2b95f35f88ee1c0e01ba0",
+        "bytes": 14605736192
+      }
+    },
+    {
+      "name": "qwen3.6-35b-a3b-iq3",
+      "label": "Qwen3.6 35B-A3B · IQ3_XXS",
+      "family": "qwen3.6-35b-a3b",
+      "arch": "moe",
+      "params": "35B total, 3B active per token",
+      "quant": "UD-IQ3_XXS",
+      "abliterated": false,
+      "mtp": true,
+      "min_ram_gb": 24,
+      "tested": true,
+      "summary": "The 35B MoE in ~3-bit for 24 GB Macs. MTP + n-gram at n=1 (n=2 loses on IQ quants).",
+      "description": "Stock Qwen3.6-35B-A3B, unsloth dynamic IQ3_XXS (~3-bit). Default on 24 GB Macs: 2 x 96K slots fit in ~15.3 GiB. IQ formats use lookup tables that unpack more slowly on Metal than K-quants; with only 3B active parameters decode is still fast (~45-50 tok/s on an M2 Max).",
+      "tune": {
+        "kv": "q4_0",
+        "ctx": 98304,
+        "slots": "auto",
+        "temp": 1.0,
+        "top_p": 0.95,
+        "top_k": 20,
+        "min_p": 0,
+        "presence": 0,
+        "spec": "draft-mtp,ngram-mod",
+        "spec_n": 1
+      },
+      "why": {
+        "kv": "q4_0 K and V: measured +16% cold prompt reading and ~2 GB less memory than q8_0, same decode speed and 8/8 needle recall at 66K. Never mix K and V types: mixed q8_0/q4_0 reads prompts ~5x slower on Metal.",
+        "temp": "Qwen's thinking-mode recommendation from the model card: temperature 1.0, top_p 0.95, top_k 20, min_p 0. Clients that send their own values (OpenCode's no-thinking variant) win per request.",
+        "spec": "MTP + n-gram, n=1. Measured on an M2 Max 32 GB (2026-10-03, llama.cpp 0.5.0, 400-token runs, mean of 2, tok/s prose/code/re-emit): none 49/45/46, MTP n=1 47/44/46, MTP n=2 40/41/49, n-gram 47/42/117, MTP+n-gram n=1 49/50/93, MTP+n-gram n=2 42/43/83. MTP alone adds nothing on IQ3 (the IQ kernels make the draft verify expensive) and n=2 costs ~15%; with n-gram at n=1 it is the best overall (n-gram alone wins only on re-emitting).",
+        "ctx": "96K per slot: the MoE KV cache is tiny, so long windows cost little memory; cold reads slow down past 128K.",
+        "slots": "2 slots fit even on 24 GB Macs: main session + subagent."
+      },
+      "ctx_zones": {
+        "good": 98304,
+        "slow": 131072,
+        "very_slow": 163840
+      },
+      "measured": [
+        {
+          "machine": "M2 Max 32 GB",
+          "date": "2026-10-03",
+          "decode": "~49 tok/s prose, ~50 code, ~93 re-emitting (MTP+n-gram n=1)",
+          "prefill": "~500 tok/s at 2K"
+        }
+      ],
+      "alias": "qwen3.6-35b-a3b",
+      "hf": {
+        "repo": "unsloth/Qwen3.6-35B-A3B-MTP-GGUF",
+        "revision": "5bc3e238d916f48a861bac2f8a1990a0e9b7e98d",
+        "file": "Qwen3.6-35B-A3B-UD-IQ3_XXS.gguf",
+        "sha256": "36f9ec0e4c775f6efd3a61c1ea76f0875128469c3d012e3d9e2495a90e7a7150",
+        "bytes": 14069266720
+      }
+    },
+    {
+      "name": "qwen3.8-27b-iq3",
+      "label": "Qwen3.8 27B · IQ3_XXS",
+      "family": "qwen3.8-27b",
+      "arch": "dense",
+      "params": "27B dense",
+      "quant": "UD-IQ3_XXS",
+      "abliterated": false,
+      "mtp": true,
+      "min_ram_gb": 24,
+      "tested": true,
+      "summary": "Smallest 27B (10.9 GB): for 24 GB Macs, or where nothing larger fits.",
+      "description": "Stock Qwen3.8-27B, unsloth dynamic IQ3_XXS. The smallest 27B build: leaves room for a long window on 24 GB Macs. On 16 GB Macs the weights (10.2 GiB) exceed the default GPU limit (~10.7 GiB with buffers): it needs a raised limit (sudo sysctl iogpu.wired_limit_mb). IQ3 unpacks slowly on Metal and loses more quality than Q3_K/Q4 in tool calls and edits; pick it only when nothing larger fits.",
+      "tune": {
+        "kv": "q4_0",
+        "ctx": 65536,
+        "slots": "auto",
+        "temp": 1.0,
+        "top_p": 0.95,
+        "top_k": 20,
+        "min_p": 0,
+        "presence": 0,
+        "spec": "draft-mtp,ngram-mod",
+        "spec_n": 1
+      },
+      "why": {
+        "kv": "q4_0 K and V: measured +16% cold prompt reading and ~2 GB less memory than q8_0, same decode speed and 8/8 needle recall at 66K. Never mix K and V types: mixed q8_0/q4_0 reads prompts ~5x slower on Metal.",
+        "temp": "Qwen's thinking-mode recommendation from the model card: temperature 1.0, top_p 0.95, top_k 20, min_p 0. Clients that send their own values (OpenCode's no-thinking variant) win per request.",
+        "spec": "MTP + n-gram, n=1. Measured on an M2 Max 32 GB (2026-10-03, llama.cpp 0.5.0, 400-token runs, mean of 2, tok/s prose/code/re-emit): none 9.4/8.9/8.9, MTP n=1 9.7/9.8/11.0, MTP n=2 8.9/9.4/11.3, n-gram 9.8/9.6/21.5, MTP+n-gram n=1 10.0/9.8/31.1, MTP+n-gram n=2 8.7/9.7/23.3. MTP alone gains only ~5-10% on IQ3 (vs ~45% on Q4 on an M3 Pro); MTP+n-gram n=1 is best, n=2 loses.",
+        "ctx": "64K per slot: dense 27B cold reads are slow; keep windows modest.",
+        "slots": "auto: 2 slots when two windows fit."
+      },
+      "ctx_zones": {
+        "good": 65536,
+        "slow": 98304,
+        "very_slow": 131072
+      },
+      "measured": [
+        {
+          "machine": "M2 Max 32 GB",
+          "date": "2026-10-03",
+          "decode": "~10 tok/s new text, ~31 re-emitting (MTP+n-gram n=1)",
+          "prefill": "~37 tok/s at <100 tokens, ~88 at 1.9K"
+        }
+      ],
+      "alias": "qwen3.8-27b",
+      "hf": {
+        "repo": "unsloth/Qwen3.8-27B-GGUF",
+        "revision": "4ca720788d1e01f1bff70c033e0d0028fd02e502",
+        "file": "Qwen3.8-27B-UD-IQ3_XXS.gguf",
+        "sha256": "c0b7c3038681ed2e3040456c1dd45f9858b6c2290bed172c70388a94874f3eee",
+        "bytes": 10934860704
+      }
+    }
+  ]
+}

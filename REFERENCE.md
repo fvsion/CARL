@@ -40,8 +40,10 @@ Each behaviour in this document was checked against the source code (MTPLX 2.11.
  │ monitor in the same terminal              │          │                                   │
  │ OpenCode / Pi here too (--local mode)     │          │                                   │
  └──────────────────────────────────────────┘          └──────────────────────────────────┘
-      ~/models/gguf/      GGUF weights (registry: host/models.conf)
+      ~/models/gguf/      GGUF weights (catalogue: host/catalog.json; any other .gguf here is listed too)
       ~/models/logs/      server logs
+      ~/.config/llm-deploy/config.json   your settings (Settings tab, ./carl.sh config)
+      ~/.config/llm-deploy/models.json   custom models and Auto-tune results (this Mac)
       ~/models/templates/ patched chat templates (thinking toggle)
       ~/.mtplx/api-key    shared API key (both backends; created on first start)
 ```
@@ -57,11 +59,11 @@ Each behaviour in this document was checked against the source code (MTPLX 2.11.
 | `carl.sh` | The launcher in the project root. It runs `host/serve.sh` with the same arguments: `./carl.sh` opens the dashboard, `./carl.sh -h` shows the help. `./carl.sh --no-start` opens only the dashboard (nothing loads). `./host/serve.sh` continues to work. |
 | `CHANGELOG.md` | What changed in each release. |
 | `assets/` | The logo and the README screenshots. `tools/tuishot.py` makes the screenshots. |
-| `host/serve.sh` | The entry point on the Mac. Server commands: `llama`, `grant`, `pocket`. Tools: `monitor`, `fit`, `models`, `download`, `verify`. `help [command]` shows the help for one command, and `-h` prints the overview. `--help-adv` lists every backend flag. With no arguments, it opens the dashboard. It runs MTPLX itself, and it gives `llama` to `serve-llama.sh`. |
-| `host/common.sh` | Both launchers use this file. It contains the network mode (`--vm` / `--local` / auto, never 0.0.0.0), the API-key creation, the launch guard and `run_server`. `run_server` runs the server in the background in its own process group, with the monitor in front. If there is no terminal, it runs a plain foreground server. |
-| `host/serve-llama.sh` | The llama.cpp launcher: `--model`, `--kv q4\|q8`, `--ctx N\|Nk`, logging, keep-awake, thinking-toggle template, speculation for each model. |
-| `host/models.conf` | The GGUF registry: name, HF repo, pinned revision, file, SHA-256, size, served alias, speculation (`spec[:n]`), notes. The first entry is the default. |
-| `host/models.sh` | The registry tool: `list`, `download NAME\|all` (aria2c, resumable, verified), `verify`, `path`, `get`, `default`. |
+| `host/serve.sh` | The entry point on the Mac. Server commands: `llama`, `grant`, `pocket`. Tools: `monitor`, `fit`, `models`, `download`, `verify`, `tune`, `config`, `install`. `help [command]` shows the help for one command, and `-h` prints the overview. `--help-adv` lists every backend flag. With no arguments, it opens the dashboard. It runs MTPLX itself, and it gives `llama` to `serve-llama.sh`. |
+| `host/common.sh` | Both launchers use this file. It contains the network mode (`--vm` / `--local` / auto, never 0.0.0.0), the API-key creation, `ensure_deps` (the Homebrew tools), `port_pid` / `port_host` (port lookups with `netstat`), the launch guard and `run_server`. `run_server` runs the server in the background in its own process group, with the monitor in front. If there is no terminal, it runs a plain foreground server. |
+| `host/serve-llama.sh` | The llama.cpp launcher: `--model`, `--kv q4\|q8`, `--ctx N\|Nk`, logging, keep-awake, thinking-toggle template. It gets the model and its settings from `tools/carl.py launch-env`. |
+| `host/catalog.json` | The built-in model catalogue. For each model: `hf` (repo, pinned revision, file, SHA-256, size), `summary`, `description`, `tune` (kv, ctx, slots, spec, spec_n, sampling), `why` (the reason for each tuned value), `ctx_zones`, `measured`. `default` and `default_small` select the default models. |
+| `host/models.sh` | A thin wrapper around `tools/carl.py`: `list`, `download NAME\|default\|all\|hf:OWNER/REPO/FILE.gguf`, `verify`, `delete`, `path`, `get`, `default`, `downloaded`. |
 | `host/gguf-chat-template.py` | Extracts the chat template of a GGUF. Then it adds the rule "`reasoning_effort: none` → thinking off" at the start of the template. |
 | `client/install-clients.sh` | Run it in the VM or on a Mac. It installs OpenCode and/or Pi from npm into `~/.local`. If necessary, it also installs a Linux or macOS Node 22. It does not use sudo. |
 | `client/install.sh` | Run it in the VM (`--vm`, default on Linux) or on the Mac (`--local`, default on macOS). It stores the API key. It makes a backup, then writes the OpenCode and Pi configs. It sets the context limit to the server value. It does a smoke test of both ports. |
@@ -69,12 +71,14 @@ Each behaviour in this document was checked against the source code (MTPLX 2.11.
 | `client/opencode/opencode.json` | The OpenCode config template (`llamacpp` and `mtplx` providers). |
 | `client/agents/coder.md`, `client/agents/delegation.md` | The **coder** subagent (OpenCode and Pi both use it): its "when to use" description and its work method. Also the delegation rule for the main agent: delegate only if the agent is stuck after two failed fixes, or if the task is large. |
 | `client/pi/extensions/subagent/` | The official subagent extension for Pi (vendored, MIT). A patch makes it list the installed agents in the tool description. Thus, the model can delegate without help. |
-| `client/opencode/plugins/subagents-sidebar/` | An OpenCode TUI plugin: a live list of subagents in the sidebar (agent, task, status, elapsed time, current tool, context; click to open). `install.sh` installs it into `tui.json`. |
+| `client/opencode/plugins/subagents-sidebar/` | An OpenCode TUI plugin: a live list of subagents in the sidebar. Running subagents on top (agent, task, elapsed time, current tool, context); finished ones below (✓/✗, duration; the 5 newest for 5 minutes, then a `+N more` line). It resets when you go to a different parent session. Click to open. `install.sh` installs it into `tui.json`. |
 | `client/opencode/plugins/session-switcher/` | An OpenCode TUI plugin: a session switcher in the prompt box (`‹ 2/3 ● title ›`), and `/switch` for a list of the recent sessions with their state. `install.sh` installs it into `tui.json`. |
 | `client/opencode/plugins/mtplx-session-headers/` | An OpenCode plugin: session headers that let MTPLX use its prompt cache again (MTPLX only). |
 | `client/pi/models.json` | The Pi config template. |
 | `client/pi/extensions/mtplx-request-policy.ts` | A Pi extension: it sets session ids and controls the output cap for the MTPLX models. |
-| `tools/llama-monitor.py` | The live monitor (the dashboard) for llama.cpp and MTPLX. Tabs: Overview, Connect, Requests, Log, Settings. The Settings tab changes the backend, the model, the KV cache, the context and other server settings, and restarts the server. |
+| `tools/carl.py` | One place for the models and the settings: the catalogue, the models on this Mac (catalogue, models folder, Hugging Face downloads), `config.json` (validated) and the settings order. Downloads (pinned, SHA-256 verified), `launch-env` / `mtplx-env` for the launchers, `config show\|get\|set\|unset\|path`. The launchers, `llama-fit.py` and the monitor use it. |
+| `tools/carl-tune.py` | Auto-tune (`./carl.sh tune NAME [--quick]`): memory fit, speculation modes, prompt reading at 8K/32K/64K, context zones. It saves the result in `~/.config/llm-deploy/models.json`. |
+| `tools/llama-monitor.py` | The live monitor (the dashboard) for llama.cpp and MTPLX. Tabs: Overview, Connect, Requests, Log, Settings. The Settings tab has three panels: Server (the backend, the model and its settings, with the reason for each tuned value; restarts the server), Models (download, verify, delete, add from Hugging Face) and Auto-tune. |
 | `tools/llama-fit.py`, `tools/gguf_shape.py`, `tools/metal-limit.swift` | `serve.sh fit` and the memory check at server start. `gguf_shape.py` reads the GGUF metadata and does the KV/state maths (the monitor uses it too). `metal-limit.swift` reads the GPU memory limit of the Mac. |
 | `tools/make-share-zip.sh` | Makes a clean zip of this folder that you can share. |
 | `tools/tuishot.py` | Renders terminal screenshots and GIFs (the dashboard, OpenCode) for the README. |
@@ -95,7 +99,7 @@ For the use of each tool, see USERGUIDE.md, "Benchmarking and testing".
 | Version | 0.4.1 (Homebrew), `llama-server` | 2.11.3 (`uv tool`), `mtplx serve` |
 | Port | 8080 | 8000 |
 | API | OpenAI API (`/v1/chat/completions`, `/v1/models`), Bearer key `~/.mtplx/api-key` | the same API and the same key |
-| Weights | GGUF (`~/models/gguf/`), all models in the registry | MLX (`~/.mtplx/models/`), only the two Qwen3.8-27B abliterated builds |
+| Weights | GGUF (`~/models/gguf/`): the catalogue models, and any other GGUF | MLX (`~/.mtplx/models/`), only the two Qwen3.8-27B abliterated builds |
 | Models available | Qwen3.6-35B-A3B (default, `qwen3.6-35b-a3b`), Qwen3.8-27B stock, Qwen3.8-27B abliterated (orcarouter), and their Q3/IQ3 builds | Qwen3.8-27B abliterated only: `grant` = `grant-ai/Qwen3.8-27B-Abliterated-MTPLX-4bit` (15.8 GiB, ~16 tok/s); `pocket` = `PocketAiHub/Qwen3.8-27B-Abliterated-MTPLX-Optimized-Speed` (19.8 GiB, ~13 tok/s, an alternative abliteration) |
 | KV cache | Real q4_0 (default) or q8_0. Set it with `--kv`. | bf16 (`off`). Its q8 mode also keeps a bf16 copy (more memory). Its q4 mode is real, but it still fails at ~56K. |
 | Usable context | 96K per slot by default, up to 256K (`--ctx`) | 48K. Append turns after ~56K fail with HTTP 507. |
@@ -109,7 +113,7 @@ For the use of each tool, see USERGUIDE.md, "Benchmarking and testing".
 | Effort values accepted | Depends on the template of the model ([section 6](#6-thinking-by-model)) | low/medium/high/xhigh, with a smaller set for each model family. `high` → `xhigh` on Qwen3.8. |
 | Bad effort value | The Qwen3.8 template raises an error (the request fails). | HTTP 400 for unrecognized (junk) values. Values similar to "off" become `low`. |
 | Concurrency | 2 slots by default (`--slots auto`): two conversations at the same time, each with its own cache. More requests wait in a queue. | No slots. Serial scheduler: one request at a time. A retry during a long prefill gets HTTP 409. ([MTPLX and the coder subagent](#mtplx-and-the-coder-subagent-measured-2026-10-02)) |
-| Stop | Ctrl-C or `kill $(lsof -tiTCP:8080 -sTCP:LISTEN)` | Ctrl-C or kill on :8000 (`mtplx stop` cannot find a server bound to 192.168.42.1) |
+| Stop | In the monitor: `q`, then `s`. Or kill the PID that `netstat -anv -p tcp` shows for :8080 ([Port and PID lookups](#port-and-pid-lookups-no-lsof)) | The same on :8000 (`mtplx stop` cannot find a server bound to 192.168.42.1) |
 | Logs | `~/models/logs/llama-server-*.log` (`tools/llama-log.sh`) | No server log file. Request log in `~/.mtplx/logs/` (e.g. `request-log-8000.jsonl`). The console output goes to `~/models/logs/.console-8000.out` when the dashboard starts the server. |
 | Health | `/health`, `/props`, `/metrics`, `/slots` | `/health` (with memory and allocator details), `/v1/mtplx/snapshot`, `/v1/mtplx/flight` |
 
@@ -146,7 +150,7 @@ For the use of each tool, see USERGUIDE.md, "Benchmarking and testing".
   - **Evidence:** before this change, idle sleep (1 min on battery) froze a 74K prompt for 30+ min.
 - **The server ignores the model name in a request.** The GGUF that is loaded answers all requests. Thus, the model picker in the client must match the server.
 - **Template override.** The server uses `--chat-template-file ~/models/templates/<model>.thinking-toggle.jinja`. This file is generated at start ([section 5](#5-how-thinking-works)). To use the template of the GGUF, set `THINK_TOGGLE=0`.
-- **Speculation per model** (registry `spec[:n]`): The 27B dense uses 1 draft token. The 35B MoE uses 2. More drafts help a MoE, because with 3B active parameters it costs little to verify more tokens.
+- **Speculation per model** (catalogue `tune.spec` and `tune.spec_n`, or the Auto-tune result): The 27B dense uses MTP + n-gram with 1 draft token. The 35B MoE (Q4) uses 2. More drafts help a MoE, because with 3B active parameters it costs little to verify more tokens. The IQ3 builds use MTP + n-gram with 1 draft token: 2 drafts lose on IQ quants ([IQ3 speculation](#iq3-speculation-measured-2026-10-03)).
 - **The monitor (since 2026-10-01):** `tools/llama-monitor.py`.
   - It has a header with the status and **[ Quit ]**.
   - Tabs: Overview (cards), Connect (URL, key, config copy), Requests, Log, Settings.
@@ -165,16 +169,60 @@ For the use of each tool, see USERGUIDE.md, "Benchmarking and testing".
   - `--local` = 127.0.0.1. Only the Mac can connect. Use it for OpenCode/Pi on the Mac, or on a Mac without VMware.
   - auto = VM if present, else local.
   - `--host ADDR` (or `HOST=ADDR`) has priority over the modes. ADDR must exist on an interface of this Mac: for example its LAN address, or the address on a Parallels network (often `10.211.55.2`). `VM_HOST=ADDR` changes the address of `--vm` and auto mode.
-  - The saved settings can hold `HOST=ADDR` (the Settings tab writes it when you select an address in the network row). Order of priority: flag, environment, settings file.
+  - The settings file can hold an address (`llama.host` or `mtplx.host` in `config.json`; the Settings tab writes it when you select an address in the network row). Order of priority: flag, environment, settings file.
   - The start-up banner shows the mode. For an address that is not 127.0.0.1 or the VM address, it shows a CAUTION: every computer that can reach the address can use the server, and only the API key protects it.
   - After a restart from the Settings tab, the health check also tries the selected address. Thus, a server on the LAN address is not taken as a failed start.
   - CAUTION: The script refuses 0.0.0.0 / `::`, also through `HOST=0.0.0.0`. The macOS firewall is off on this Mac, so a wildcard bind would make the model available to the LAN.
   - `client/install.sh --local` sets the clients to the address on which the server actually listens. `--host ADDR` sets any address.
   - API key for `client/install.sh` (first hit wins): `--key KEY` / `--key-file FILE`, `$MTPLX_API_KEY`, a file `api-key` next to the script, the server key on the same Mac (`~/.mtplx/api-key`), the key from a previous run, a hidden prompt. The installer stores it at `~/.config/mtplx/api-key` (mode 600). `--key` leaves the key in the shell history.
 - **Memory check before load.** `serve-llama.sh` runs `tools/llama-fit.py --check`. It warns when weights + KV + buffers are more than the GPU limit ([below](#gpu-memory-limit-and-what-fits)). The warning does not block the start.
-- **Port guard.** `serve-llama.sh` does not start if a process already listens on the port. It does this check before it touches `llama-server-latest.log` or loads anything. Before this guard, a second `serve.sh` (10:08 on 2026-10-01) failed to bind. But it had already pointed the `latest` symlink to its own 4-line failure log.
+- **Port guard.** `serve-llama.sh` does not start if a process already listens on the port (`port_pid`, see below). It does this check before it touches `llama-server-latest.log` or loads anything. Before this guard, a second `serve.sh` (10:08 on 2026-10-01) failed to bind. But it had already pointed the `latest` symlink to its own 4-line failure log.
 - **`/metrics` gauges reset at each read.** (`--metrics` enables this Prometheus endpoint.) `prompt_tokens_seconds` and `predicted_tokens_seconds` cover only the time since the last scrape. Thus, you must calculate averages from the `*_total` counters. The monitor does this.
 - **The server does not log its KV cache size** at the default log level. Thus, the monitor calculates it ([below](#context-memory-kv-cache-and-recurrent-state)).
+- **Dependency check** (`ensure_deps` in `host/common.sh`). Before a start, the launchers look for `llama-server` (llama.cpp), `aria2c` and `ansifilter`. In a terminal, they offer to run `brew install` for the missing tools. Without a terminal, they show the command. Only `llama-server` is necessary; the others are optional. MTPLX presets check for `mtplx` instead of `llama-server`. `SKIP_DEPS=1` skips the check.
+- **No model, or the default is not downloaded.** `./carl.sh` with no arguments offers to download the default for this Mac if no model is downloaded. If you answer no, it opens the dashboard without a server. If the default is not downloaded but another model is, `tools/carl.py` (`resolve_launch`) uses the first downloaded model, and says so.
+
+### Port and PID lookups (no lsof)
+
+CARL does not use `lsof`. `lsof` checks each mounted file system. On a stale network share (for example a Time Machine SMB volume that is disconnected), it hangs in the kernel, and no signal can stop it. Before version 1.1.0, this froze the monitor and `./carl.sh` on a Mac with such a volume.
+
+The launchers (`port_pid`, `port_host` in `host/common.sh`), the monitor, `client/install.sh` and the test tools use `netstat -anv -p tcp`. Its `process:pid` column gives the PID of the process that listens on a port. To do the same by hand:
+
+```bash
+netstat -anv -p tcp | awk '$6=="LISTEN" && $4 ~ /[.]8080$/ {n=split($(NF-8),a,":"); print a[n]; exit}'
+```
+
+`$(NF-8)` counts from the end of the line, because a process name can contain spaces.
+
+### Settings: config.json, Auto-tune and the catalogue
+
+`tools/carl.py` gives each llama.cpp start its model and settings (`launch-env`). Each value comes from the first source that has it:
+
+| Order | Source | Where |
+|---|---|---|
+| 1 | Command-line flags | `--model`, `--ctx`, `--kv`, `--slots`, … |
+| 2 | Environment variables | `CTX`, `KV`, `SPEC`, `SPEC_N`, `TEMP`, … |
+| 3 | `config.json` | `~/.config/llm-deploy/config.json`: the `llama` section, and the profile `models.<name>` |
+| 4 | Auto-tune result for this Mac | `~/.config/llm-deploy/models.json`: `models.<name>.tune.settings` |
+| 5 | Catalogue | `host/catalog.json`: `tune` of the model. For a custom model: values from its GGUF header |
+| 6 | Built-in defaults | q4_0, 96K, auto slots, MTP + n-gram n=1, temperature 1.0, … |
+
+- **`config.json` sections:** `backend`; `llama` (`model`, `net`, `host`, `cache_ram`, `ub`, `batch`, `ckpt`, `ckpt_step`, `think_toggle`, `extra_args`); `models.<name>` (`kv`, `ctx`, `slots`, `spec`, `spec_n`, `temp`, `top_p`, `top_k`, `min_p`, `presence`, `repeat`, `alias`); `mtplx` (`preset`, `context`, `profile`, `depth`, `kv_quant`, `net`, `host`, `scheduler`, `batching`, `prefill_chunk`, `ssd_cache`); `paths` (`models_dir`).
+- **Validation:** each key has a type, a range or a list of choices (`./carl.sh config show` lists them). A bad value stops the start with an error. An unknown key is ignored. CARL writes the file atomically, with mode 600.
+- **Migration:** before `config.json`, the dashboard wrote `llama.env` and `mtplx.env`. If `config.json` is missing, CARL converts these files into it one time.
+- `SETTINGS_FILE=none` skips `config.json` for llama.cpp. `SETTINGS_FILE_MTPLX=none` skips the `mtplx` section for `grant` / `pocket`.
+- **Custom models:** each `.gguf` in the models folder (`paths.models_dir`, or `MODELS_DIR`) is a model, also if it is not in the catalogue. `./carl.sh download hf:OWNER/REPO/FILE.gguf` resolves the revision, the size and the SHA-256 from the Hugging Face API, records the model in `models.json`, downloads it and verifies it.
+
+### Auto-tune
+
+`./carl.sh tune NAME [--quick]` (`tools/carl-tune.py`) measures one model on this Mac. It starts its own server on port 8093, one time for each speculation mode (about 5–10 min in all). It refuses to start if a server runs on 8080 or 8000, or if another large process is in memory (more than `BIG_GB`, default 8 GB, or a known model server; `ALLOW_SECOND_MODEL=1` skips this check, as for the launch guard).
+
+1. **Memory:** the largest window for each slot that fits the GPU limit, with 1 and 2 slots (the same maths as `./carl.sh fit`).
+2. **Speculation:** none, `ngram-mod` (n=2), and, if the GGUF has an MTP head, `draft-mtp` and `draft-mtp,ngram-mod` at n=1 and n=2 (`--quick`: n=1 only). Each mode generates prose, new code and a code re-emit, two times. The score is a weighted geometric mean (prose 0.4, code 0.4, re-emit 0.2). A mode with drafting must beat a simpler mode by 3% to win.
+3. **Prompt reading:** a cold read at 8K and 32K tokens, and 64K without `--quick`. The time for each token grows about linearly with the depth. From this, Auto-tune calculates the time to read a full window. The context zones of this Mac: a full cold read in ≤3 min = fast, ≤10 min = slow, more = very slow.
+4. **Result:** kv q4_0, the best speculation, the largest standard window (32K, 48K, 64K, 96K, 128K, 160K) in the fast zone that fits, and 2 slots if two windows fit. It is saved in `~/.config/llm-deploy/models.json`, with the speed of each mode, the read speeds and the zones.
+
+The dashboard (Settings, Auto-tune panel) stops the running server, runs the tune, and starts the server again.
 
 ### Server flags
 
@@ -192,17 +240,17 @@ This table shows the flags that `host/serve-llama.sh` gives to `llama-server`, a
 | Prompt cache | `--ctx-checkpoints 8 --checkpoint-min-step 4096 --cache-ram N` (N comes from the free RAM, 1–8 GiB) | Checkpoints let follow-up turns use the cache again, because the recurrent layers of Qwen cannot trim it. The RAM cache holds conversations that do not fit in the slots (a third session). Each held state is 2–2.5 GiB. Size = RAM − weights − KV − reserve (10 GiB with the VM network, else 6; `RESERVE_GB`). |
 | Templates | `--jinja --reasoning-format deepseek`, `preserve_thinking: true`, `--chat-template-file` (patched) | The server sends the reasoning to `reasoning_content`. `reasoning_effort: none` turns off thinking ([section 5](#5-how-thinking-works)). |
 | Sampling | `--temp 1.0 --top-p 0.95 --top-k 20 --min-p 0 --presence-penalty 0 --repeat-penalty 1.0` (`TEMP`, `TOP_P`, `TOP_K`, `MIN_P`, `PRESENCE`) | The Qwen recommendation for thinking mode ([section 9](#9-sampling-and-output-limits)). |
-| Speculation | `--spec-type draft-mtp,ngram-mod --spec-draft-n-max N` (N for each model) | The best of 7 configs that were measured on each model ([section 13](#13-performance-measured)). |
+| Speculation | `--spec-type draft-mtp,ngram-mod --spec-draft-n-max N` (type and N from the tune of each model: N 1 for the dense 27B and the IQ3 builds, 2 for the Q4 35B) | The best of 7 configs that were measured on each model ([section 13](#13-performance-measured), [IQ3 speculation](#iq3-speculation-measured-2026-10-03)). |
 | Logging | `--log-file ~/models/logs/llama-server-<ts>.log --log-timestamps --log-prefix` | `llama-server-latest.log` points to the newest log. Use `tools/llama-log.sh` to read it. |
 | Keep awake | `caffeinate -i -w <server pid>` | If the Mac goes to sleep, requests stop in the middle of the prompt. |
 | Monitor in the same terminal | `run_server` in `host/common.sh` | One command shows the server live. `MONITOR=0` gives a plain foreground server. |
 | Network | `--vm` (192.168.42.1), `--local` (127.0.0.1), default auto | The launcher refuses 0.0.0.0. |
 | Memory check | `tools/llama-fit.py --check` before the model loads | A warning if weights + KV + buffers are more than the GPU limit, with the largest context window that fits (`FIT_CHECK=0` skips it). |
 | Launch guard | `guard_other_models` | No start if a second model is in memory (`ALLOW_SECOND_MODEL=1` skips it). |
-| Port guard | No start if the port is in use | A second model would collide with the running one. Also, `llama-server-latest.log` continues to point at the running server. |
+| Port guard | No start if the port is in use (`netstat`, not `lsof`) | A second model would collide with the running one. Also, `llama-server-latest.log` continues to point at the running server. |
 | Metrics | `--metrics` | A Prometheus endpoint at `/metrics`. |
 
-You can override the settings with environment variables (`CTX`, `KV`, `KV_K`/`KV_V`, `UB`, `SPEC`, `SPEC_N`, `MODEL`, `ALIAS`, `HOST`, `PORT`, `LOG_FILE`, `THINK_TOGGLE`, `KEEP_AWAKE`). Extra arguments go directly to `llama-server`. `./carl.sh -h` lists all of them, with the current defaults.
+You can override the settings with environment variables (`CTX`, `KV`, `KV_K`/`KV_V`, `UB`, `SPEC`, `SPEC_N`, `MODEL`, `ALIAS`, `HOST`, `PORT`, `LOG_FILE`, `THINK_TOGGLE`, `KEEP_AWAKE`), or in `config.json` ([Settings](#settings-configjson-auto-tune-and-the-catalogue)). Extra arguments go directly to `llama-server` (also `llama.extra_args` in `config.json`). `./carl.sh -h` lists all of them, with the current defaults.
 
 ### GPU memory limit and what fits
 
@@ -210,7 +258,7 @@ You can override the settings with environment variables (`CTX`, `KV`, `KV_K`/`K
   - On this M3 Pro 36 GB, it is **28.1 GiB (78%)**.
   - Macs with 24–32 GB get approximately **2/3 of RAM**: ~16 GiB on a 24 GB Mac (estimate; not measured here). Macs with more than 32 GB get approximately **3/4**.
   - `sudo sysctl iogpu.wired_limit_mb=N` overrides this limit until the next reboot.
-- **`./carl.sh fit`** (`tools/llama-fit.py`) calculates these values for each model in the registry:
+- **`./carl.sh fit`** (`tools/llama-fit.py`) calculates these values for each model (the catalogue and the models folder):
   - **Need** = weights (file size) + KV cache (window × bytes per token) + recurrent state + ~1 GiB for compute buffers and the MTP draft context.
   - The largest context window for each KV type that keeps need ≤ limit.
 - **Sources of the inputs:**
@@ -226,8 +274,10 @@ You can override the settings with environment variables (`CTX`, `KV`, `KV_K`/`K
 | `orcarouter-27b-q3` | 13.6 GiB | 256K | ~68K | ~184K |
 | `qwen3.6-35b-a3b` | 21.1 GiB | 256K | does not fit | does not fit |
 | `qwen3.6-35b-a3b-iq3` (24 GB default) | 13.1 GiB | 256K | 256K (2 × 96K slots: ~15.3 GiB) | 256K |
+| `qwen3.8-27b-iq3` | 10.2 GiB | 256K | 256K (2 slots: ~128K each) | 256K |
 
-- **On a 24 GB Mac, the Q3 27B entries get only 1 slot.** Thus, `install.sh` does not install the coder subagent there. The IQ3 35B gets 2 × 96K slots.
+- **On a 24 GB Mac, the Q3 27B entries get only 1 slot.** Thus, `install.sh` does not install the coder subagent there. The IQ3 35B gets 2 × 96K slots. The IQ3 27B gets 2 × 64K slots (its default window).
+- **16 GB Macs (~10.7 GiB limit, estimate):** no catalogue model fits under the default limit. The IQ3 27B (10.2 GiB of weights) needs a raised limit (`sudo sysctl iogpu.wired_limit_mb=…`). `./carl.sh fit --ram 16` shows the numbers.
 - **The ~1 GiB buffer allowance is a conservative estimate.** On the 35B, the monitor measured ~0.5 GiB of "other" memory.
 - **The fit check does not include** the RAM that the rest of macOS and its apps need.
   - CAUTION: Keep ≥ 6 GB free. Monitor the pressure line on the SYSTEM card.
@@ -336,7 +386,7 @@ By contrast, llama.cpp allocates a real q4_0/q8_0 cache one time, with no bf16 c
 - **Profile `sustained`** gave better results than `turbo` here. The profile overwrites some env vars. You can override only the keys in `PROFILE_ENV_USER_OVERRIDE_KEYS`.
 - **Thinking budget guard:** MTPLX has a reasoning budget for each effort level (low 1536, medium 3072, high 6144, xhigh 12288 tokens). But the guard is **disabled by default** (project policy since 2026-07-20). The model itself sets the reasoning length.
 - **The serial scheduler** puts a second request (e.g. the title agent of OpenCode) in a queue after the main request. One request waited 10.7 min and caused a cache clear. Retries during a long prefill get HTTP 409 `already in flight`.
-- **Saved settings:** the Settings tab of the dashboard writes `~/.config/llm-deploy/mtplx.env` (`CONTEXT`, `PROFILE`, `DEPTH`, `KV_QUANT`, `NET`). `./carl.sh grant|pocket` reads it. The order of priority is: environment, then the file, then the preset defaults. `SETTINGS_FILE_MTPLX=none` ignores the file.
+- **Saved settings:** the Settings tab of the dashboard writes the `mtplx` section of `~/.config/llm-deploy/config.json` (`preset`, `context`, `profile`, `depth`, `kv_quant`, `net`, `host`, and the advanced `scheduler`, `batching`, `prefill_chunk`, `ssd_cache`). `./carl.sh grant|pocket` reads it (`tools/carl.py mtplx-env`). The order of priority is: environment, then the file, then the preset defaults. `SETTINGS_FILE_MTPLX=none` ignores the file.
 
 ### MTPLX and the coder subagent (measured 2026-10-02)
 
@@ -375,19 +425,26 @@ The test used the `grant` 27B with a 48K context window.
 |---|---|
 | unsloth Qwen3.8-27B UD-Q4_K_M (`qwen3.8-27b`) | Stock (not abliterated) 27B. It is the smallest Q4 build of the 27B (16.5 GB), so it fits on more Macs. It has the same architecture and speed profile as the measured orcarouter build. |
 | orcarouter Qwen3.8-27B Q4_K_M (bartowski, `orcarouter-27b`) | Abliteration with published figures (0–2.7% refusals, MMLU +0.4). Its imatrix was calibrated with a large quantity of tool calls. MTP head in the file. Q4_K_M is the nearest GGUF to the Q4_K_L class that was requested first. |
-| unsloth Qwen3.6-35B-A3B UD-Q4_K_M (MTP build, **default**, `qwen3.6-35b-a3b`, the first entry in `host/models.conf`) | Stock MoE with 3B active. It has approximately 4× the decode speed and 6× the prompt read speed of the 27B. Its KV cache is very small, so long sessions and 2 slots cost little. It is the default since 2026-10-01 (the dense 27B is heavy for general use). |
+| unsloth Qwen3.6-35B-A3B UD-Q4_K_M (MTP build, **default**, `qwen3.6-35b-a3b`, the `default` of `host/catalog.json`) | Stock MoE with 3B active. It has approximately 4× the decode speed and 6× the prompt read speed of the 27B. Its KV cache is very small, so long sessions and 2 slots cost little. It is the default since 2026-10-01 (the dense 27B is heavy for general use). |
 | unsloth Qwen3.8-27B UD-Q3_K_XL (`qwen3.8-27b-q3`, 13.1 GB) | For 24 GB Macs: ~148K window under a 16 GiB GPU limit (estimate). The unsloth "dynamic" 3-bit format keeps sensitive layers at higher precision. |
-| unsloth Qwen3.6-35B-A3B UD-IQ3_XXS (`qwen3.6-35b-a3b-iq3`, 14.1 GB) | **Default on 24 GB Macs** (registry `default-small`, selected when the main default cannot fit). Its MoE KV is very small (5.6 KiB/token at q4), so 2 × 96K slots fit in ~15.3 GiB. Thus, subagents work on these Macs. IQ formats unpack more slowly on Metal than K-quants, but only 3B parameters are active for each token. Not tested here. |
+| unsloth Qwen3.6-35B-A3B UD-IQ3_XXS (`qwen3.6-35b-a3b-iq3`, 14.1 GB) | **Default on 24 GB Macs** (catalogue `default_small`, selected when the main default cannot fit). Its MoE KV is very small (5.6 KiB/token at q4), so 2 × 96K slots fit in ~15.3 GiB. Thus, subagents work on these Macs. IQ formats unpack more slowly on Metal than K-quants, but only 3B parameters are active for each token: ~45–50 tok/s on an M2 Max (measured 2026-10-03, [below](#iq3-speculation-measured-2026-10-03)). Speculation: MTP + n-gram, 1 draft. |
+| unsloth Qwen3.8-27B UD-IQ3_XXS (`qwen3.8-27b-iq3`, 10.9 GB) | The smallest 27B build. For 24 GB Macs that want the dense 27B with 2 slots (2 × 64K fit), or a long window with 1 slot. It does not fit a 16 GB Mac under the default GPU limit (catalogue `min_ram_gb` 24; on 16 GB it needs a raised GPU limit). IQ3 loses more quality than Q3_K/Q4 in tool calls and edits: use it only when nothing larger fits. ~10 tok/s on new text, 31 tok/s on a re-emit (M2 Max). Speculation: MTP + n-gram, 1 draft. |
 | orcarouter Qwen3.8-27B Q3_K_M (`orcarouter-27b-q3`, 14.6 GB) | Abliterated, for 24 GB Macs: ~68K window (estimate). Q3_K_L (15.3 GB) and Q3_K_XL (16.4 GB, bigger than the stock Q4) were not used. |
 
-- **Five entries have the MTP head in the file.** This was checked in the GGUF headers: `nextn_predict_layers = 1` and the four `nextn` tensors in block 64. The sixth entry, `qwen3.6-35b-a3b-iq3`, comes from the same MTP repository, but its headers were not checked.
+- **All seven entries have the MTP head in the file.** For five entries, this was checked in the GGUF headers: `nextn_predict_layers = 1` and the four `nextn` tensors in block 64. For the two IQ3 builds, `nextn_predict_layers = 1` was checked on 2026-10-03, and MTP drafting ran on the 35B IQ3. Auto-tune reads the header, and tests MTP only if the head is there.
   - unsloth also publishes the head as a separate file (`MTP/mtp-Qwen3.8-27B-Q4_0.gguf`). But the main unsloth files include the head, so you do not need that file.
 - **Q3 entries use the model name of their Q4 sibling**, so client configs work without change.
-- **The default model is the first entry in `host/models.conf`.** If that entry cannot fit, the launcher uses the default for small Macs (`default-small`, `qwen3.6-35b-a3b-iq3`). `./carl.sh fit` shows which model this Mac gets.
+- **The default model is `default` in `host/catalog.json`.** If that model cannot fit one window, the launcher uses the default for small Macs (`default_small`, `qwen3.6-35b-a3b-iq3`). If the selected default is not downloaded, the launcher uses the first downloaded model. `./carl.sh fit` shows which model this Mac gets.
 
 **Policy:** Use only models with a known and documented uncensoring method. Do not use "uncensored" fine-tunes with an undisclosed method, even if they are popular.
 
-### IQ quants considered (2026-09-24, not adopted)
+### IQ quants (2026-09-24 study; IQ3 builds adopted 2026-10-03)
+
+- **On a 36 GB Mac, IQ quants are not used.** The 2026-09-24 study (below) found the gain too small and the quality loss too large for the 27B.
+- **Since 2026-10-03, two IQ3 builds are in the catalogue,** for Macs where no larger file fits: `qwen3.6-35b-a3b-iq3` (the 24 GB default) and `qwen3.8-27b-iq3` (the smallest 27B).
+- **Their speculation:** MTP + n-gram with 1 draft token, as on the 27B K-quants. MTP alone helps much less than on the K-quants, and 2 drafts lose ([IQ3 speculation](#iq3-speculation-measured-2026-10-03)).
+
+#### The 2026-09-24 study (27B, IQ4_XS and IQ3_M)
 
 The candidates were IQ4_XS and IQ3_M from `HauhauCS/Qwen3.8-27B-uncensored-hauhaucs-aggressive-mtp-gguf`.
 
@@ -407,7 +464,7 @@ The HauhauCS model also has differences from orcarouter that are not related to 
 - **"Minimal preamble":** It can give shorter answers. This could save more time than the quant.
 - **FastMTP:** Its "up to 3×" claim needs a patched llama.cpp build, and was measured on NVIDIA. Homebrew llama.cpp cannot run it. The standard MTP head works as usual.
 
-**Decision: not adopted.** The reasons are:
+**Decision (2026-09-24): not adopted on 36 GB.** The reasons are:
 - The gain was small.
 - IQ3_M loses too much quality for agent work.
 - The HauhauCS method is not documented.
@@ -416,7 +473,40 @@ If you examine this again, do these steps:
 1. Test **orcarouter IQ4_XS** first (bartowski, 15.57 GB). It is the same model, so the test isolates the effect of the quant.
 2. Use `tools/llama-spec-sweep.sh`, the 66K recall test (`tools/llama-kv-longctx.py`) and a real OpenCode session.
 
-IQ3_M is a good choice only where no larger file fits, for example on a 24 GB Mac.
+IQ3_M is a good choice only where no larger file fits, for example on a 24 GB Mac. This is the role of the IQ3 builds in the catalogue now.
+
+#### IQ3 speculation (measured 2026-10-03)
+
+**Setup:** Apple M2 Max 32 GB, llama.cpp 0.5.0 (build 11146), 400-token runs, thinking off. The values are the decode speed in tok/s (the mean of 2 runs): prose / code / re-emit (the model writes code again). The bold row is the catalogue setting.
+
+**`qwen3.6-35b-a3b-iq3`** (unsloth UD-IQ3_XXS, 14.1 GB):
+
+| Speculation | Prose | Code | Re-emit |
+|---|---|---|---|
+| none | 49 | 45 | 46 |
+| MTP, n=1 | 47 | 44 | 46 |
+| MTP, n=2 | 40 | 41 | 49 |
+| n-gram (`ngram-mod`, n=2) | 47 | 42 | 117 |
+| **MTP + n-gram, n=1** | **49** | **50** | **93** |
+| MTP + n-gram, n=2 | 42 | 43 | 83 |
+
+**`qwen3.8-27b-iq3`** (unsloth UD-IQ3_XXS, 10.9 GB), same setup:
+
+| Speculation | Prose | Code | Re-emit |
+|---|---|---|---|
+| none | 9.4 | 8.9 | 8.9 |
+| MTP, n=1 | 9.7 | 9.8 | 11.0 |
+| MTP, n=2 | 8.9 | 9.4 | 11.3 |
+| n-gram (`ngram-mod`, n=2) | 9.8 | 9.6 | 21.5 |
+| **MTP + n-gram, n=1** | **10.0** | **9.8** | **31.1** |
+| MTP + n-gram, n=2 | 8.7 | 9.7 | 23.3 |
+
+**Results:**
+- **MTP alone helps little on IQ3.** On the 35B IQ3, it adds about nothing. On the 27B IQ3, it adds only ~5–10%. On the Q4 builds (M3 Pro), MTP alone added 27–50% ([section 13](#13-performance-measured)). The IQ kernels make the verification of the drafts expensive. Thus, for MTP alone, the hypothesis "IQ quants do not do well with MTP" is correct.
+- **2 drafts lose on IQ3.** On the 35B IQ3, MTP n=2 is about 15% slower on new text than no speculation.
+- **MTP + n-gram with 1 draft is the best on both models.** With the Auto-tune score (weighted geometric mean: prose 0.4, code 0.4, re-emit 0.2), it is about 4–5% better than n-gram alone on the 35B IQ3, and about 9% better on the 27B IQ3. n-gram alone is better only on a code re-emit on the 35B (117 vs 93 tok/s).
+- **Thus, the catalogue tune for both IQ3 builds is `draft-mtp,ngram-mod` with n=1.** The earlier setting of the 35B IQ3 (MTP + n-gram, n=2, copied from the Q4) was the second slowest mode on new text. The Q4 35B keeps n=2 (measured on the M3 Pro).
+- The Settings tab shows MTP with more than 1 draft on an IQ quant in red. To measure a model on your own Mac, run `./carl.sh tune NAME`.
 
 ### Qwen3.6-35B-A3B on MTPLX at 48K? (not tested)
 
@@ -623,7 +713,7 @@ Qwen ran its agentic coding benchmarks (SWE-bench, Terminal-Bench, Claude Code h
 | Pi `off` (thinking off) | thinking-mode values | Pi changes only `chat_template_kwargs` for each level. It cannot change the sampling for each level. Small effect: direct answers are slightly more random. |
 | MTPLX (`grant`, `pocket`) | 1.0 / 0.95 / 20 | The MTPLX Qwen3.8 family sampler (`QWEN3_8_SAMPLER_DEFAULTS`). The OpenCode plugin removes the 0.55 / 1.0 that OpenCode ≤1.18.20 injects. |
 
-- **Reason for explicit flags:** The five registry GGUFs that were checked contain 1.0 / 20 / 0.95 (`general.sampling.*`). The flags also cover `qwen3.6-35b-a3b-iq3`, which was not checked. But a GGUF without these values would get the generic llama.cpp defaults with no warning (temperature 0.8, top_k 40, min_p 0.05).
+- **Reason for explicit flags:** The five catalogue GGUFs that were checked contain 1.0 / 20 / 0.95 (`general.sampling.*`). The flags also cover the two IQ3 builds and custom models, which were not checked. But a GGUF without these values would get the generic llama.cpp defaults with no warning (temperature 0.8, top_k 40, min_p 0.05).
 - **35B-A3B choices:** Temperature 1.0 with presence 0 agrees with the Qwen agentic benchmark settings.
   - If the model loops or repeats text, start the server with `PRESENCE=1.5` (the general recommendation of the card).
   - For precise code work, use `TEMP=0.6`.
@@ -663,7 +753,8 @@ curl -s -H "Authorization: Bearer $K" -H 'Content-Type: application/json' http:/
 # Same for MTPLX (:8000): use "enable_thinking":false instead of reasoning_effort
 
 # Is the patched template loaded?
-ps -o command= -p $(lsof -tiTCP:8080 -sTCP:LISTEN) | grep -o -- '--chat-template-file [^ ]*'
+PID=$(netstat -anv -p tcp | awk '$6=="LISTEN" && $4 ~ /[.]8080$/ {n=split($(NF-8),a,":"); print a[n]; exit}')
+ps -o command= -p $PID | grep -o -- '--chat-template-file [^ ]*'
 head -2 ~/models/templates/*.thinking-toggle.jinja
 
 # Server sampling defaults and context
@@ -691,14 +782,14 @@ The installer writes these settings into `~/.config/opencode/opencode.json` (tem
 | Provider / model | Context | Thinking (`/effort` variants) | Default |
 |---|---|---|---|
 | `llamacpp/qwen3.6-35b-a3b` (also its IQ3) | server `--ctx` | `none` (off), `high` (on) | `high`; **the default model** |
-| `llamacpp/qwen3.8-27b` (stock; also its Q3) | server `--ctx` | `none` (off), `low`, `medium`, `xhigh` | `low` |
+| `llamacpp/qwen3.8-27b` (stock; also its Q3 and IQ3) | server `--ctx` | `none` (off), `low`, `medium`, `xhigh` | `low` |
 | `llamacpp/qwen3.8-27b-abliterated-llama` (orcarouter; also its Q3) | server `--ctx` | `none` (off), `low`, `medium`, `xhigh` | `low` |
 | `mtplx/qwen3.8-27b-abliterated-grant` | 48K | `low`, `medium`, `xhigh` | |
 | `mtplx/qwen3.8-27b-abliterated` (PocketAiHub) | 48K | `low`, `medium`, `xhigh` | |
 
 - **Timeouts:** the config sets `timeout: false` and `chunkTimeout: 900000` (15 min). A long cold prompt can take many minutes before the first token.
 - **Title agent:** the title agent of OpenCode stays on (earlier versions disabled it). With 2 slots, it runs at the same time as the main session. It does not wait in a queue behind the main session.
-- **Plugins:** `subagents-sidebar` and `session-switcher` are TUI plugins in `~/.config/opencode/tui.json`. `mtplx-session-headers` is in the `plugin` list. It has an effect only on the `mtplx` provider.
+- **Plugins:** `subagents-sidebar` and `session-switcher` are TUI plugins in `~/.config/opencode/tui.json`. To update them, run `install.sh` again and restart OpenCode. `mtplx-session-headers` is in the `plugin` list. It has an effect only on the `mtplx` provider.
 - **Coder subagent:** see [The coder subagent](#the-coder-subagent).
 - **Pi** (`~/.pi/agent/models.json`, `~/.pi/agent/settings.json`): defaults (only if they are unset or still ours) are provider `llamacpp`, model `qwen3.6-35b-a3b`, thinking `low`. For the thinking format, see [section 7](#7-thinking-by-client-and-backend).
 
@@ -716,7 +807,7 @@ All values come from this M3 Pro 36 GB with llama.cpp 0.4.1. The decode speed is
 | MTP + ngram, 1 draft | **10.5 / 10.9 / 27.3** | 44 / 44 / 70 |
 | MTP + ngram, 2 drafts | 9.1 / 10.3 / 17.4 | **42 / 45 / 117** |
 
-The bold rows are the registry settings: MTP + ngram is the best of 7 configs on both models. The 27B uses 1 draft. The 35B uses 2.
+The bold rows are the catalogue settings (`tune.spec`, `tune.spec_n`): MTP + ngram is the best of 7 configs on both models. The 27B uses 1 draft. The 35B uses 2. The IQ3 builds use MTP + n-gram with 1 draft ([IQ3 speculation](#iq3-speculation-measured-2026-10-03)). Auto-tune (`./carl.sh tune NAME`) repeats this measurement on your Mac.
 
 | | Qwen3.8-27B | Qwen3.6-35B-A3B |
 |---|---|---|

@@ -4,13 +4,14 @@
 #   tools/llama-spec-sweep.sh "draft-mtp:1" "draft-mtp:2" "ngram-mod:2" ...
 set -uo pipefail
 cd "$(dirname "$0")/.."
+source host/common.sh   # port_pid (netstat-based)
 LOGDIR="${LOGDIR:-/tmp}"
 PORT="${PORT:-8080}"
 
 stop_server() {
-  local pid; pid=$(lsof -tiTCP:"$PORT" -sTCP:LISTEN 2>/dev/null)
+  local pid; pid=$(port_pid "$PORT")
   [[ -n "$pid" ]] && kill -TERM $pid
-  while lsof -nP -iTCP:"$PORT" -sTCP:LISTEN >/dev/null 2>&1; do sleep 1; done
+  while [[ -n "$(port_pid "$PORT")" ]]; do sleep 1; done
 }
 
 for cfg in "$@"; do

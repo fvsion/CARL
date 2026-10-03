@@ -12,7 +12,9 @@
 #   ./host/serve.sh monitor               live dashboard (tools/llama-monitor.py); a server start in a
 #                                         terminal shows it automatically (MONITOR=0 = off)
 #   --local | --vm                        network mode for any server command (host/common.sh)
-#   ./host/serve.sh models|download|verify   GGUF registry (host/models.sh)
+#   ./host/serve.sh models|download|verify   models (host/models.sh -> tools/carl.py)
+#   ./host/serve.sh tune NAME             auto-tune a model for this Mac (tools/carl-tune.py)
+#   ./host/serve.sh config ...            the settings file (tools/carl.py config)
 #
 # Binds to the vmnet8 host address (192.168.42.1) or 127.0.0.1, never 0.0.0.0:
 # with the macOS firewall off, 0.0.0.0 would expose the model on the LAN.
@@ -50,10 +52,14 @@ $(row "" "loads; its Settings tab can start one)")
 $(row "install [opencode|pi]" "install OpenCode and/or Pi, then point them at this server (--vm / --host for")
 $(row "" "another address; --clients-only / --config-only for one step)")
 $(row "monitor" "attach the live dashboard to a running server (connect info, configs, stats)")
-$(row "models" "list the GGUF registry and what's downloaded")
+$(row "models" "list the models (catalogue + models folder + custom) and what's downloaded")
 $(row "fit [--ram GB] [--slots N]" "which models fit this Mac's GPU memory, and the largest window for each")
-$(row "download NAME|default|all" "download registry models (resumable, SHA-256 verified); default = this Mac's default")
+$(row "download NAME|default|all" "download catalogue models (resumable, SHA-256 verified); default = this Mac's default")
 $(row "verify [NAME...]" "re-check downloaded models' size and SHA-256")
+$(row "download hf:OWNER/REPO/F" "any GGUF from Hugging Face (hf:OWNER/REPO lists its files); custom models are")
+$(row "" "also any .gguf you put in ~/models/gguf")
+$(row "tune NAME [--quick]" "auto-tune a model for this Mac: speculation, context window, slots (~5-10 min)")
+$(row "config [show|set K V]" "the settings file ~/.config/llm-deploy/config.json (show lists every key)")
 $(row "help [TOPIC]" "this page, or: llama grant pocket monitor fit models download verify env tuning")
 
 NETWORK (every server command)
@@ -80,7 +86,7 @@ QUICK START
 
 The monitor's CONNECT section shows the URL and API key and copies ready-made
 OpenCode / Pi configs. Its Settings tab (5) changes the model, KV cache, context,
-slots, RAM cache, network and sampling, saves them to ~/.config/llm-deploy/llama.env
+slots, RAM cache, network and sampling, saves them to ~/.config/llm-deploy/config.json
 and restarts the server; $CMD llama then starts with them (flags still
 win; delete the file for the defaults). Quit (q, Ctrl-C or [ Quit ]) asks: stop
 the server, or leave it running. Client setup: client/install.sh (in the VM) or client/install.sh --local.
@@ -99,7 +105,7 @@ USAGE
   $CMD [options]                    (same: a leading flag means llama)
 
 OPTIONS
-$(row "--model NAME|PATH" "registry model (see: models, fit) or a .gguf path. Default: qwen3.6-35b-a3b (qwen3.6-35b-a3b-iq3 where it doesn't fit)")
+$(row "--model NAME|PATH" "a model name (see: models, fit) or a .gguf path. Default: qwen3.6-35b-a3b (qwen3.6-35b-a3b-iq3 where it doesn't fit)")
 $(row "--kv q4|q8" "KV cache quantization for K and V (default q4 = q4_0). --q4 / --q8 shorthands")
 $(row "--ctx N|Nk" "window per slot, 4k..256k (default 96k; 128k-160k for long sessions, slower: see REFERENCE.md). Re-run client/install.sh after changing it")
 $(row "--local | --vm" "listen on 127.0.0.1 / on 192.168.42.1 (default: auto, see 'help env')")
@@ -112,7 +118,7 @@ $(row "CTX=98304" "window per slot in tokens")
 $(row "KV=q4_0" "KV type for both caches: q4_0, q8_0, f16")
 $(row "KV_K / KV_V" "per-cache override. Keep them equal: mixed types prefill ~5x slower")
 $(row "UB=$(llama_default UB)" "-ub physical batch (512 measured best)")
-$(row "SPEC / SPEC_N" "speculation type and draft count (default per model: models.conf)")
+$(row "SPEC / SPEC_N" "speculation type and draft count (default per model: catalogue, Auto-tune, config.json)")
 $(row "TEMP TOP_P TOP_K MIN_P" "sampling: 1.0 0.95 20 0 (Qwen thinking mode). PRESENCE=0 (presence penalty)")
 $(row "SLOTS, CACHE_RAM" "slots as --slots; RAM prompt cache in MiB (default: sized from free RAM, 1-8 GiB)")
 $(row "RESERVE_GB" "RAM kept free for macOS + apps when sizing the cache (10 with the VM network up, else 6)")
@@ -171,17 +177,20 @@ help_monitor() { exec python3 "$HERE/../tools/llama-monitor.py" --help; }
 
 help_models() {
   cat <<EOF
-models | download | verify -- the GGUF registry (host/models.conf), files in ~/models/gguf
+models | download | verify | delete -- the catalogue (host/catalog.json), files in ~/models/gguf
 
 USAGE
   $CMD models                    list models, sizes, download status, free disk
   $CMD download NAME [NAME...]   download (aria2c 16 connections, resumable), verify SHA-256
-  $CMD download all              every registry model
+  $CMD download all              every catalogue model
   $CMD verify [NAME...]          re-check size and SHA-256 of downloaded files
 
   A file failing its checksum is renamed *.bad. Re-running a download resumes it.
-  Add a model: append a line to host/models.conf (format in its header).
-  Env: MODELS_DIR (default ~/models/gguf), MODELS_CONF.
+  Any GGUF:  $CMD download hf:OWNER/REPO/FILE.gguf (verified against Hugging Face's SHA-256);
+             $CMD download hf:OWNER/REPO lists the repo's files. Or drop a .gguf into ~/models/gguf.
+  Built-in models: host/catalog.json. Custom models and Auto-tune results: ~/.config/llm-deploy/models.json.
+  $CMD delete NAME               delete a downloaded model file
+  Env: MODELS_DIR (default ~/models/gguf; config.json paths.models_dir).
 EOF
 }
 
@@ -197,8 +206,9 @@ $(row "API_KEY_FILE" "~/.mtplx/api-key, the Bearer key both backends use (create
 $(row "KEEP_AWAKE=1" "caffeinate -i while the server runs (a sleeping Mac stalls requests)")
 $(row "MONITOR=1" "show the monitor in this terminal on start; 0 = foreground server, no monitor")
 $(row "ALLOW_SECOND_MODEL=1" "start although a process > 8 GB (BIG_GB) is in memory; a second model can crash the Mac")
-$(row "SETTINGS_FILE" "~/.config/llm-deploy/llama.env (monitor Settings tab); none = ignore it. flags > env > file")
-$(row "SETTINGS_FILE_MTPLX" "~/.config/llm-deploy/mtplx.env, the same for grant / pocket (CONTEXT PROFILE DEPTH KV_QUANT NET)")
+$(row "SETTINGS_FILE=none" "ignore ~/.config/llm-deploy/config.json for llama (flags > env > config.json > Auto-tune > catalogue)")
+$(row "SETTINGS_FILE_MTPLX=none" "the same for grant / pocket (config.json \"mtplx\" section)")
+$(row "MODELS_DIR" "the models folder (default ~/models/gguf; config.json paths.models_dir)")
 EOF
 }
 
@@ -230,7 +240,7 @@ show_help() {
     grant|pocket|mtplx) help_mtplx ;;
     monitor) help_monitor ;;
     fit) exec python3 "$HERE/../tools/llama-fit.py" --help ;;
-    models|download|verify) help_models ;;
+    models|download|verify|delete) help_models ;;
     env) help_env ;;
     tuning) help_tuning ;;
     *) echo "no help topic '$1'" >&2; help_main; exit 2 ;;
@@ -271,19 +281,19 @@ client_install() {
 }
 
 # ---- dispatch -------------------------------------------------------------
+source "$HERE/common.sh"
 LAST_FILE="$HOME/.config/llm-deploy/last-backend"
 if [[ $# -eq 0 ]]; then
   # No arguments: the dashboard. Attach to a server that runs already (one model
   # at a time), else start the last used backend with its saved settings.
   for p in 8080 8000; do
-    if lsof -tiTCP:"$p" -sTCP:LISTEN >/dev/null 2>&1; then
+    if [[ -n "$(port_pid "$p")" ]]; then
       exec python3 "$HERE/../tools/llama-monitor.py" --port "$p"
     fi
   done
   last="$(cat "$LAST_FILE" 2>/dev/null || true)"
   case "$last" in llama|grant|pocket) ;; *) last=llama ;; esac
   if [[ "$last" == llama ]]; then
-    source "$HERE/common.sh"
     ensure_deps
     # No model yet (a fresh clone): offer this Mac's default, else open the
     # dashboard without a server (its Settings tab starts one later).
@@ -315,13 +325,15 @@ case "$1" in
     # The dashboard without starting a server: attach to one that runs, else
     # open it offline (its Settings tab can start a server).
     shift; port=8080
-    lsof -tiTCP:8080 -sTCP:LISTEN >/dev/null 2>&1 || { lsof -tiTCP:8000 -sTCP:LISTEN >/dev/null 2>&1 && port=8000; }
+    [[ -n "$(port_pid 8080)" ]] || { [[ -n "$(port_pid 8000)" ]] && port=8000; }
     exec python3 "$HERE/../tools/llama-monitor.py" --port "$port" "$@" ;;
   install) shift; client_install "$@"; exit $? ;;
   monitor) shift; exec python3 "$HERE/../tools/llama-monitor.py" "$@" ;;
   fit) shift; exec python3 "$HERE/../tools/llama-fit.py" "$@" ;;
   models) shift; exec "$HERE/models.sh" list "$@" ;;
-  download|verify) exec "$HERE/models.sh" "$@" ;;
+  config) shift; exec python3 "$HERE/../tools/carl.py" config "$@" ;;
+  tune) shift; exec python3 "$HERE/../tools/carl-tune.py" "$@" ;;
+  download|verify|delete) exec "$HERE/models.sh" "$@" ;;
 esac
 
 PRESET="llama"
@@ -357,16 +369,15 @@ if [[ "$PRESET" == "llama" ]]; then
   exec "$(dirname "$0")/serve-llama.sh" "$@"
 fi
 
-# Saved MTPLX settings, written by the monitor's Settings tab: environment >
-# this file > preset defaults. SETTINGS_FILE_MTPLX=none ignores it.
-MX_SETTINGS="${SETTINGS_FILE_MTPLX:-$HOME/.config/llm-deploy/mtplx.env}"
+# Saved MTPLX settings (config.json "mtplx", via tools/carl.py): environment >
+# config.json > preset defaults. SETTINGS_FILE_MTPLX=none ignores them.
 MX_USED=()
-if [[ "$MX_SETTINGS" != none && -f "$MX_SETTINGS" ]]; then
-  while IFS='=' read -r k v || [[ -n "$k" ]]; do
-    [[ "$k" =~ ^(CONTEXT|PROFILE|DEPTH|KV_QUANT|NET|HOST|SCHEDULER|BATCHING|PREFILL_CHUNK|SSD_CACHE)$ ]] || continue
-    [[ "$v" =~ ^[A-Za-z0-9_.-]+$ && -z "${!k:-}" ]] || continue
+if [[ "${SETTINGS_FILE_MTPLX:-}" != none ]]; then
+  MX_ENV="$(python3 "$HERE/../tools/carl.py" mtplx-env)" || exit 1
+  while IFS='=' read -r k v; do
+    [[ "$k" =~ ^(CONTEXT|PROFILE|DEPTH|KV_QUANT|NET|HOST|SCHEDULER|BATCHING|PREFILL_CHUNK|SSD_CACHE)$ && -z "${!k:-}" ]] || continue
     printf -v "$k" '%s' "$v"; MX_USED+=("$k=$v")
-  done < "$MX_SETTINGS"
+  done <<< "$MX_ENV"
 fi
 
 # MTPLX presets: bf16 KV + 48K. (The planner "fits" -- off 114,688/49,152,
@@ -404,13 +415,12 @@ while [[ $# -gt 0 ]]; do
   shift
 done
 set -- ${pass[@]+"${pass[@]}"}
-source "$HERE/common.sh"
 ensure_deps mtplx
 resolve_host "$NET_FLAG"
 PORT="${PORT:-8000}"
 API_KEY_FILE="${API_KEY_FILE:-$HOME/.mtplx/api-key}"
 ensure_api_key "$API_KEY_FILE"
-if pid=$(lsof -tiTCP:"$PORT" -sTCP:LISTEN 2>/dev/null) && [[ -n "$pid" ]]; then
+if pid=$(port_pid "$PORT") && [[ -n "$pid" ]]; then
   echo "error: port $PORT is already in use by: $(ps -o command= -p ${pid%%$'\n'*} | cut -c1-100)" >&2
   exit 1
 fi
@@ -418,7 +428,7 @@ guard_other_models               # a second model can crash the Mac (host/common
 
 echo "network: $NET_NOTE"
 echo "preset=$PRESET model=$MODEL id=$MODEL_ID kv=$KV_QUANT ctx=$CONTEXT profile=$PROFILE depth=$DEPTH"
-(( ${#MX_USED[@]} )) && echo "saved settings: ${MX_USED[*]} (${MX_SETTINGS/#$HOME/~})"
+(( ${#MX_USED[@]} )) && echo "saved settings: ${MX_USED[*]} (./carl.sh config show)"
 # MTPLX writes its log to stdout: in monitor mode that is the console file.
 run_server "$PORT" none mtplx serve \
   --model "$MODEL" \

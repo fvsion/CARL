@@ -9,6 +9,15 @@ server's RSS + system wired memory after each turn.
 """
 import glob, json, os, subprocess, sys, time, urllib.request
 
+def listen_pid(port):  # netstat-based: lsof hangs on a stale network share
+    import re as _re
+    out = subprocess.check_output(["/usr/sbin/netstat", "-anv", "-p", "tcp"], text=True)
+    for line in out.splitlines():
+        f = line.split()
+        if len(f) > 5 and f[5] == "LISTEN" and f[3].endswith("." + str(port)):
+            return int(_re.search(r":(\d+)\s+\d{5}\s", line).group(1))
+    raise SystemExit(f"no server listens on port {port}")
+
 d, base = sys.argv[1], (sys.argv[2] if len(sys.argv) > 2 else "http://192.168.42.1:8080")
 key = open(os.path.expanduser("~/.mtplx/api-key")).read().strip()
 site = subprocess.check_output(["uv", "tool", "dir"], text=True).strip() + "/mtplx/lib/python3.12/site-packages/mtplx"
@@ -16,7 +25,7 @@ msgs = json.load(open(os.path.join(d, "memtest-msgs.json")))
 big = sorted(glob.glob(site + "/server/*.py"), key=os.path.getsize)
 
 def mem():
-    pid = subprocess.check_output(["lsof", "-tiTCP:" + base.rsplit(":", 1)[1], "-sTCP:LISTEN"], text=True).split()[0]
+    pid = listen_pid(base.rsplit(":", 1)[1])
     rss = int(subprocess.check_output(["ps", "-o", "rss=", "-p", pid], text=True)) / 1048576
     wired = [l for l in subprocess.check_output(["vm_stat"], text=True).splitlines() if "wired" in l][0]
     swap = subprocess.check_output(["sysctl", "-n", "vm.swapusage"], text=True).split("used = ")[1].split()[0]
