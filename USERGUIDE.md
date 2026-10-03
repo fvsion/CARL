@@ -232,7 +232,7 @@ For users who prefer to choose models on the fly. In router mode, llama.cpp's ro
 
 WARNING: every switch empties the prompt cache. The model that loads starts cold, so the next request re-reads the whole conversation (a long OpenCode session: minutes, see [section 5](#5-context-window)), and so does switching back. Switch with this in consideration.
 
-- **Turn it on:** Settings (tab 5) → **Router** panel → **OpenCode / Pi switch models (router)**, then `y`. It saves `llama.mode = router` in `config.json` and restarts a running server. Or: `./carl.sh --router` (this start only), `./carl.sh config set llama.mode router`. Back: the panel's **Dashboard only**, or `./carl.sh --single`.
+- **Turn it on:** Settings (tab 5) → **Router** panel → **OpenCode / Pi switch models (router)**, then `y`. It saves `llama.mode = router` in `config.json`, restarts a running server, and then updates the OpenCode / Pi configs on this Mac (when CARL set them up here; a VM: run `./install.sh` there again). Or: `./carl.sh --router` (this start only), `./carl.sh config set llama.mode router`. Back: the panel's **Dashboard only**, or `./carl.sh --single`.
 - **Each model gets the settings a single start of it would use** (your `config.json` profile, else its Auto-tune result, else the catalogue): window, slots, KV cache, speculation, sampling, RAM cache. A model whose setup doesn't fit the GPU limit is left out, and the start says why. `--model`, `--ctx`, `--kv` and `--slots` don't apply to a router start. The presets are written to `~/.config/carl/router-presets.ini` at each start (don't edit it).
 - **The model loaded first** is the one a single start would load (`llama.model`, or auto fit's pick).
 - **The Router panel** shows each model's state (loaded, loading, unloaded) with **Load** / **Unload** buttons, the recent switches, and whether the OpenCode / Pi lists match the installed models (**Update the OpenCode / Pi configs**).
@@ -748,7 +748,7 @@ NOTE: CARL does not use `lsof`. On a Mac with a stale network share (for example
 ## 9. Updating the client configs
 
 Run the installer again in these conditions:
-- you downloaded or deleted a model (the lists show the installed models only; the dashboard's Connect tab warns when they are out of date, and `u` there updates this Mac's configs),
+- you downloaded or deleted a model (the lists show the installed models only; the dashboard's Connect tab warns when they are out of date: its tab shows ⚠, and `u` there updates this Mac's configs),
 - the bundle in `client/` changed (new options), or
 - you restarted the server with a different `--ctx`.
 

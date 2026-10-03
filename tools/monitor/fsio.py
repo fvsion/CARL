@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 import os
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 
 def read_key(path: str) -> str:
@@ -74,17 +74,26 @@ def client_state(folder: str) -> object:
 CLIENT_CONFIGS = {"OpenCode": (".config/opencode", "opencode.json"), "Pi": (".pi/agent", "models.json")}
 
 
-def listed_models(home: str, client: str, provider: str) -> Optional[List[str]]:
-    """The model ids a client's config lists under our provider (None when it can't be read)."""
+def _window(entry: object, client: str) -> int:
+    """A model entry's context window (OpenCode limit.context, Pi contextWindow; 0 if unknown)."""
+    if not isinstance(entry, dict):
+        return 0
+    v = (entry.get("limit") or {}).get("context") if client == "OpenCode" else entry.get("contextWindow")
+    return v if isinstance(v, int) and not isinstance(v, bool) else 0
+
+
+def listed_models(home: str, client: str, provider: str) -> Optional[Dict[str, int]]:
+    """The model ids a client's config lists under our provider, with each one's context window
+    (0 if unknown); None when the config can't be read."""
     folder, name = CLIENT_CONFIGS[client]
     try:
         with open(os.path.join(home, folder, name)) as f:
             cfg = json.load(f)
-        prov = cfg["provider" if client == "OpenCode" else "providers"][provider]
-        ms = prov["models"]
-        ids = list(ms) if isinstance(ms, dict) else [m["id"] for m in ms if isinstance(m, dict) and "id" in m]
-        return [str(i) for i in ids]
-    except (OSError, ValueError, KeyError, TypeError):
+        ms = cfg["provider" if client == "OpenCode" else "providers"][provider]["models"]
+        if isinstance(ms, dict):
+            return {str(k): _window(v, client) for k, v in ms.items()}
+        return {str(m["id"]): _window(m, client) for m in ms if isinstance(m, dict) and "id" in m}
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
         return None
 
 

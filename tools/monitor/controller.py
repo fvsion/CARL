@@ -389,6 +389,7 @@ class Controller:
                     "the dashboard picks the model (single model)")
             ui.confirm2 = Confirm("MODEL SWITCHING?", [
                 f"Switch to: {what}. Saved as llama.mode = {mode} in config.json.",
+                "The OpenCode / Pi configs on this Mac are updated with it (when CARL set them up here).",
                 ("The server restarts in this mode now (requests in progress stop; the model loads again)."
                  if running and running != mode else "The next server start uses it."),
                 *(["Router mode: every downloaded model that fits is offered; the clients' configs list them all "
@@ -416,12 +417,18 @@ class Controller:
                 ui.toast(f"{RED}config.json: {e}{R}", 10)
                 return
             running = "router" if d.router is not None else "single" if d.up else None
+            # the clients on this Mac follow: their configs are updated (after the restart: the
+            # installer reads the new server), when CARL set them up here
+            update = bool(fsio.installed_here(self.endpoint.base, self.home))
             if running and running != mode and not ui.restart:
                 if ui.pending is None:
                     ui.pending = self.pending_init(d)
+                ui.install_after_restart = update
                 self.jobs.restart(ui.pending, d)
             else:
                 ui.toast(f"saved: llama.mode = {mode}" + ("" if running == mode else " (the next start uses it)"), 8)
+                if update:
+                    self.jobs.start_install(config_only=True)
             return
         name = act.split(":", 1)[1]
         self.jobs.router_load(name, unload=act.startswith("runload:"))

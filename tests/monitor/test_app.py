@@ -302,12 +302,7 @@ class AppTest(unittest.TestCase):
         self.assertIn("OPENCODE CONFIG", self.screen())
 
     def test_connect_warns_when_the_client_lists_are_out_of_date(self) -> None:
-        home = self.tmp.name
-        os.makedirs(os.path.join(home, ".config/opencode"))
-        with open(os.path.join(home, ".config/opencode/carl.json"), "w", encoding="utf-8") as f:
-            json.dump({"providers": {"llamacpp": "llamacpp"}, "base_url": "http://127.0.0.1:8095/v1"}, f)
-        with open(os.path.join(home, ".config/opencode/opencode.json"), "w", encoding="utf-8") as f:
-            json.dump({"provider": {"llamacpp": {"models": {"gone": {}}}}}, f)
+        self.write_client_state({"gone": {}})
         self.keys("2")
         text = " ".join(" ".join(x.strip(" │") for x in ANSI.sub("", self.screen()).splitlines()).split())
         installed = [m["name"] for m in self.store.models if m["status"] == "downloaded"]
@@ -361,9 +356,36 @@ class AppTest(unittest.TestCase):
         self.keys("y")                                          # no server runs: saved for the next start
         self.assertEqual(self.store.saved[-1]["llama"]["mode"], "router")
         self.assertIn("the next start uses it", self.ui.toast_msg[0])
+        self.assertIsNone(self.ui.install)                      # CARL didn't set up clients here: nothing to update
         self.ctl.do("rmode:single")
         self.keys("y")
         self.assertNotIn("mode", self.store.saved[-1].get("llama", {}))      # the default is left out
+
+    def test_a_mode_switch_updates_the_clients_set_up_here(self) -> None:
+        self.fake_serve('echo "args: $*"\n')
+        self.write_client_state()
+        self.keys("5")
+        self.ctl.do("rmode:router")
+        self.keys("y")
+        self.finish_install()                                   # no server: at once (else after the restart)
+        assert self.ui.install is not None
+        self.assertEqual(self.ui.install.lines, ["args: install --local --port 8095 --config-only"])
+
+    def write_client_state(self, models: object = None) -> None:
+        home = self.tmp.name
+        os.makedirs(os.path.join(home, ".config/opencode"), exist_ok=True)
+        with open(os.path.join(home, ".config/opencode/carl.json"), "w", encoding="utf-8") as f:
+            json.dump({"providers": {"llamacpp": "llamacpp"}, "base_url": "http://127.0.0.1:8095/v1"}, f)
+        with open(os.path.join(home, ".config/opencode/opencode.json"), "w", encoding="utf-8") as f:
+            json.dump({"provider": {"llamacpp": {"models": models if models is not None else {}}}}, f)
+
+    def test_connect_tab_label_warns_while_the_configs_are_out_of_date(self) -> None:
+        self.assertNotIn("Connect ⚠", self.screen())           # no client set up here
+        self.write_client_state({"gone": {}})
+        self.assertIn("2 Connect ⚠", self.screen())
+        installed = {m["name"]: {} for m in self.store.models if m["status"] == "downloaded"}
+        self.write_client_state(installed)
+        self.assertNotIn("Connect ⚠", self.screen())
 
     def test_server_card_sections_at_80_and_160_columns(self) -> None:
         """About this setting, Status, the buttons and Keys are separate, and nothing is cut."""

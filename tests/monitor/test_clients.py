@@ -47,9 +47,16 @@ class SnippetTest(unittest.TestCase):
 
 class DriftTest(unittest.TestCase):
     def test_out_of_date_lists(self) -> None:
-        out = drift({"OpenCode": ["a", "gone"], "Pi": ["a", "b"], "broken": None}, ["a", "b"])
+        out = drift({"OpenCode": {"a": 98304, "gone": 98304}, "Pi": {"a": 98304, "b": 0}, "broken": None}, ["a", "b"])
         self.assertEqual([(d.client, d.added, d.removed) for d in out], [("OpenCode", ["b"], ["gone"])])
         self.assertEqual(out[0].line(2), "OpenCode lists 2 models; installed now: 2 — added b; removed gone")
+
+    def test_the_running_window_changed(self) -> None:
+        listed = {"OpenCode": {"a": 98304}, "Pi": {"a": 131072}}
+        out = drift(listed, ["a"], running=("a", 131072))                  # the server now runs 128K per slot
+        self.assertEqual([d.client for d in out], ["OpenCode"])
+        self.assertEqual(out[0].line(1), "OpenCode window of a: 96K in the config, 128K on the server")
+        self.assertEqual(drift(listed, ["a"], running=("other", 4096)), [])
 
     def test_listed_models_reads_our_provider(self) -> None:
         with tempfile.TemporaryDirectory() as home:
@@ -59,8 +66,8 @@ class DriftTest(unittest.TestCase):
                 json.dump({"provider": {"carl": {"models": {"a": {}, "b": {}}}, "mine": {"models": {"x": {}}}}}, f)
             with open(os.path.join(home, ".pi/agent/models.json"), "w", encoding="utf-8") as f:
                 json.dump({"providers": {"llamacpp": {"models": [{"id": "a"}]}}}, f)
-            self.assertEqual(fsio.listed_models(home, "OpenCode", "carl"), ["a", "b"])
-            self.assertEqual(fsio.listed_models(home, "Pi", "llamacpp"), ["a"])
+            self.assertEqual(fsio.listed_models(home, "OpenCode", "carl"), {"a": 0, "b": 0})
+            self.assertEqual(fsio.listed_models(home, "Pi", "llamacpp"), {"a": 0})
             self.assertIsNone(fsio.listed_models(home, "Pi", "nope"))
 
 

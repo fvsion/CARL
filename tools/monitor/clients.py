@@ -12,7 +12,7 @@ import json
 import os
 import sys
 from dataclasses import dataclass
-from typing import Callable, Dict, List, Optional, Sequence
+from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
 from .model import JSONDict, ServerData, jdict
 
@@ -105,27 +105,35 @@ def config_text(kind: str, s: Served, templates: Dict[str, JSONDict], base: str,
 
 @dataclass(frozen=True)
 class Drift:
-    """A client config whose model list differs from the installed models."""
+    """A client config that is out of date: its model list differs from the installed models,
+    or the running model's window differs from the server's (the context or slots changed)."""
     client: str
     listed: int
     added: List[str]            # installed, not in the config
     removed: List[str]          # in the config, not installed (OpenCode would get HTTP 400 in router mode)
+    window: Optional[str] = None    # "MODEL: 96K in the config, 128K on the server"
 
     def line(self, installed: int) -> str:
         parts = ([f"added {', '.join(self.added)}"] if self.added else []) + (
             [f"removed {', '.join(self.removed)}"] if self.removed else [])
-        return f"{self.client} lists {self.listed} models; installed now: {installed} — {'; '.join(parts)}"
+        lists = f"lists {self.listed} models; installed now: {installed} — {'; '.join(parts)}" if parts else ""
+        win = f"window of {self.window}" if self.window else ""
+        return f"{self.client} " + " · ".join(x for x in (lists, win) if x)
 
 
-def drift(listed: Dict[str, Optional[List[str]]], installed: Sequence[str]) -> List[Drift]:
-    """The clients (configured for this server) whose model list is out of date; a config that
-    can't be read is left out."""
+def drift(listed: Dict[str, Optional[Dict[str, int]]], installed: Sequence[str],
+          running: Optional[Tuple[str, int]] = None) -> List[Drift]:
+    """The clients (configured for this server) whose config is out of date; a config that
+    can't be read is left out. running: the served model and its window per slot."""
     out = []
     for client, ids in listed.items():
         if ids is None:
             continue
         added = [m for m in installed if m not in ids]
         removed = [m for m in ids if m not in installed]
-        if added or removed:
-            out.append(Drift(client, len(ids), added, removed))
+        window = None
+        if running and running[1] and ids.get(running[0]) not in (None, 0, running[1]):
+            window = f"{running[0]}: {ids[running[0]] // 1024}K in the config, {running[1] // 1024}K on the server"
+        if added or removed or window:
+            out.append(Drift(client, len(ids), added, removed, window))
     return out

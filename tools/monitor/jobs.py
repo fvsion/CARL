@@ -133,9 +133,12 @@ class ServerJobs:
                 changed = [r.label for r in self.svc.rows(p)
                            if r.key in REINSTALL and str(p[r.key]) != str(ui.set_run.get(r.key))]
                 ui.toast("restarted with the new settings"
-                         + (f"; {' and '.join(changed)} changed: run install.sh again on each client" if changed else ""), 12)
+                         + (f"; {' and '.join(changed)} changed: update the clients (Connect tab ⚠)" if changed else ""), 12)
                 ui.restart = None
                 ui.pending = None
+                if ui.install_after_restart:
+                    ui.install_after_restart = False
+                    self.start_install(config_only=True)
                 return
             tail = last_lines(console, 3)
             system.stop_pid(proc.pid)
@@ -154,6 +157,7 @@ class ServerJobs:
         except Exception as e:      # anything (disk, config, process): the restart stops here and says why
             ui.toast(f"{RED}restart failed: {e}{R}", 20)
         ui.restart = None
+        ui.install_after_restart = False
 
     # ------------------------------------------------------------ Auto-tune
     def run_tune(self, d: ServerData, confirmed: bool = False) -> None:

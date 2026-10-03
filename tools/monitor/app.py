@@ -115,9 +115,10 @@ class App:
         head = fit(left, cols - self.logo_cols - vlen(right) - 1) + " " + right
         regions.append(Region(1, cols - len(QUIT_LABEL) + 1, cols + 1, "quit"))
         tabs, x = " ", 2 + self.logo_cols
+        stale = self.configs_stale()
         for i, t in enumerate(TABS):
-            lab = f" {i + 1} {t} "
-            tabs += (f"\x1b[1;7m{lab}{R}" if i == ui.tab else f"{DIM}{lab}{R}") + " "
+            lab = f" {i + 1} {t}{' ⚠' if i == 1 and stale else ''} "
+            tabs += (f"\x1b[1;7m{lab}{R}" if i == ui.tab else f"{YEL}{lab}{R}" if i == 1 and stale else f"{DIM}{lab}{R}") + " "
             regions.append(Region(2, x, x + len(lab), f"tab:{i}"))
             x += len(lab) + 1
         out = [head, fit(tabs, cols - self.logo_cols), fit(DIM + "─" * cols, cols)]
@@ -172,8 +173,20 @@ class App:
     def client_drift(self, here: List[Tuple[str, str]]) -> Tuple[List[Drift], int]:
         """The client configs on this Mac (for this server) that list other models than are
         installed, and how many are installed."""
+        if not here:                # no client set up here for this server: nothing to compare
+            return [], 0
         installed = [m["name"] for m in self.svc.models.downloaded()]
-        return drift({c: fsio.listed_models(self.opts.home, c, pid) for c, pid in here}, installed), len(installed)
+        d = self.ctl.data
+        running = (d.alias, d.n_ctx) if d.up and d.alias and d.n_ctx else None
+        return (drift({c: fsio.listed_models(self.opts.home, c, pid) for c, pid in here}, installed, running),
+                len(installed))
+
+    def configs_stale(self) -> bool:
+        """The client configs on this Mac need ./carl.sh install --config-only (the Connect tab's ⚠)."""
+        try:
+            return bool(self.client_drift(fsio.installed_here(self.endpoint.base, self.opts.home))[0])
+        except Exception:           # a model list that can't be read: no warning (the Settings tab says why)
+            return False
 
     def saved_mode(self) -> str:
         """llama.mode in config.json (single when unset or unreadable)."""
