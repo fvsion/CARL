@@ -22,20 +22,25 @@
 # Env: KV_CONFIGS="q8_0:q8_0 q8_0:q4_0 q4_0:q4_0"  UB_CONFIGS="512 1024 2048"
 #      LONG_TOKENS=65536  LOGDIR=~/models/logs
 # Results are also written to $LOGDIR/ab-<timestamp>.txt.
-set -uo pipefail
-cd "$(dirname "$0")/.."
+set -uo pipefail        # no -e: one failed config is reported and the run goes on
+cd "$(dirname "$0")/.." || exit 1
+# shellcheck source=SCRIPTDIR/../host/common.sh
 source host/common.sh   # port_pid (netstat-based)
 MODE="${1:-all}"
+case "$MODE" in kv|ub|all) ;; *) echo "usage: $0 [kv|ub|all]" >&2; exit 2 ;; esac
 PORT=8080
 LOGDIR="${LOGDIR:-$HOME/models/logs}"; mkdir -p "$LOGDIR"
 KV_CONFIGS="${KV_CONFIGS:-q8_0:q8_0 q8_0:q4_0 q4_0:q4_0}"
 UB_CONFIGS="${UB_CONFIGS:-512 1024 2048}"
 LONG_TOKENS="${LONG_TOKENS:-65536}"
+require_int LONG_TOKENS "$LONG_TOKENS" 1024
+read -r -a kv_configs <<< "$KV_CONFIGS"   # space-separated lists: split without globbing
+read -r -a ub_configs <<< "$UB_CONFIGS"
 UB_KV="${UB_KV:-q4_0}"
 RESULTS="$LOGDIR/ab-$(date +%Y%m%d-%H%M%S).txt"
 exec > >(tee -a "$RESULTS") 2>&1
 
-stop() { local p; p=$(port_pid "$PORT"); [[ -n "$p" ]] && kill -TERM $p
+stop() { local p; p=$(port_pid "$PORT"); [[ -n "$p" ]] && kill -TERM "$p"
          while [[ -n "$(port_pid "$PORT")" ]]; do sleep 1; done; }
 start() { local name=$1; shift
           env LOG_FILE="$LOGDIR/ab-$name.log" "$@" nohup ./host/serve-llama.sh > "$LOGDIR/ab-$name.out" 2>&1 &
@@ -46,7 +51,7 @@ idle_rss() { ps -o rss= -p "$(port_pid "$PORT")" | awk '{printf "%.2fG", $1/1048
 echo "== llama-ab $MODE $(date '+%F %T')  kv=[$KV_CONFIGS] ub=[$UB_CONFIGS] long=$LONG_TOKENS"
 
 if [[ "$MODE" == kv || "$MODE" == all ]]; then
-  for cfg in $KV_CONFIGS; do
+  for cfg in ${kv_configs[@]+"${kv_configs[@]}"}; do
     kk="${cfg%%:*}"; kv="${cfg##*:}"; label="K$kk/V$kv"; name="kv-$kk-$kv"
     stop
     if ! start "$name" KV_K="$kk" KV_V="$kv"; then echo "$label FAILED: $(grep -m1 -E 'error|failed' "$LOGDIR/ab-$name.out")"; continue; fi
@@ -57,7 +62,7 @@ if [[ "$MODE" == kv || "$MODE" == all ]]; then
 fi
 
 if [[ "$MODE" == ub || "$MODE" == all ]]; then
-  for ub in $UB_CONFIGS; do
+  for ub in ${ub_configs[@]+"${ub_configs[@]}"}; do
     label="ub$ub K$UB_KV/V$UB_KV"; name="ub-$ub"
     stop
     if ! start "$name" UB="$ub" KV_K="$UB_KV" KV_V="$UB_KV"; then echo "$label FAILED: $(grep -m1 -E 'error|failed' "$LOGDIR/ab-$name.out")"; continue; fi

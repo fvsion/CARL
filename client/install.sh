@@ -46,7 +46,13 @@ done
 [[ ${#pos[@]} -ge 1 ]] && { HOST="${pos[0]}"; MODE="${MODE:-host}"; }
 PORT="${pos[1]:-8000}"
 LLAMA_PORT="${pos[2]:-8080}"
-[[ -n "$MODE" ]] || { [[ "$OS" == Darwin ]] && MODE=local || MODE=vm; }
+if [[ -z "$MODE" ]]; then
+  if [[ "$OS" == Darwin ]]; then MODE=local; else MODE=vm; fi
+fi
+valid_port() { [[ "$1" =~ ^[0-9]{1,5}$ ]] && (( 10#$1 >= 1 && 10#$1 <= 65535 )); }
+for p in "$PORT" "$LLAMA_PORT"; do
+  valid_port "$p" || { echo "error: not a TCP port: '$p'" >&2; exit 2; }
+done
 
 listen_addr() {  # address a local server listens on for port $1 (macOS/Linux)
   # netstat, not lsof: lsof hangs on a stale network share
@@ -61,6 +67,8 @@ case "$MODE" in
   local) HOST="$(listen_addr "$LLAMA_PORT")"; HOST="${HOST:-$(listen_addr "$PORT")}"; HOST="${HOST:-127.0.0.1}" ;;
   vm) HOST="${HOST:-192.168.42.1}" ;;
 esac
+# The address goes into URLs and the client configs: a host name or an IP address only.
+[[ "$HOST" =~ ^[A-Za-z0-9][A-Za-z0-9.:-]*$ ]] || { echo "error: not a host name or address: '$HOST'" >&2; exit 2; }
 echo "Target: $MODE mode, server at $HOST (llama.cpp :$LLAMA_PORT, MTPLX :$PORT)"
 
 python3 -c 'import json' 2>/dev/null || {
@@ -86,9 +94,17 @@ elif [[ -s "$KEY_FILE" ]]; then
 else
   read -rsp "API key (on the server Mac: cat ~/.mtplx/api-key, or the monitor's CONNECT section): " key; echo
 fi
+key="${key#"${key%%[![:space:]]*}"}"; key="${key%"${key##*[![:space:]]}"}"   # trim (a pasted newline)
 [[ -n "$key" ]] || { echo "error: empty API key" >&2; exit 1; }
+# It goes into an HTTP header: printable characters, no spaces (never echoed back).
+[[ "$key" =~ ^[[:graph:]]+$ ]] || { echo "error: the API key contains spaces or control characters" >&2; exit 1; }
 mkdir -p "$KEY_DIR"; chmod 700 "$KEY_DIR"
 ( umask 077; printf '%s' "$key" > "$KEY_FILE" )
+chmod 600 "$KEY_FILE"
+
+# api_get URL: GET with the key as Bearer header. The header is read from a file
+# descriptor, so the key never appears in curl's command line (ps).
+api_get() { curl -fsS -m 5 -H @<(printf 'Authorization: Bearer %s\n' "$key") "$1"; }
 
 # --- llama.cpp context window --------------------------------------------------
 # The clients' context limit (OpenCode limit.context, Pi contextWindow) is
@@ -98,11 +114,11 @@ mkdir -p "$KEY_DIR"; chmod 700 "$KEY_DIR"
 # Re-run this script after restarting the server with a different --ctx.
 if [[ -n "${LLAMA_CTX:-}" ]]; then
   v="$(printf '%s' "$LLAMA_CTX" | tr '[:upper:]' '[:lower:]')"
-  if [[ "$v" =~ ^([0-9]+)k$ ]]; then ctx=$(( ${BASH_REMATCH[1]} * 1024 ))
-  elif [[ "$v" =~ ^[0-9]+$ ]]; then ctx="$v"
+  if [[ "$v" =~ ^([0-9]{1,6})k$ ]]; then ctx=$(( 10#${BASH_REMATCH[1]} * 1024 ))
+  elif [[ "$v" =~ ^[0-9]{1,9}$ ]]; then ctx=$(( 10#$v ))
   else echo "error: LLAMA_CTX takes tokens or Nk (e.g. 96k), got '$LLAMA_CTX'" >&2; exit 1; fi
   ctx_src="LLAMA_CTX"
-elif ctx=$(curl -fsS -m 5 -H "Authorization: Bearer $key" "http://$HOST:$LLAMA_PORT/props" 2>/dev/null \
+elif ctx=$(api_get "http://$HOST:$LLAMA_PORT/props" 2>/dev/null \
            | python3 -c 'import json,sys; print(int(json.load(sys.stdin)["default_generation_settings"]["n_ctx"]))' 2>/dev/null); then
   ctx_src="running llama.cpp server"
 else
@@ -119,13 +135,13 @@ echo "llama.cpp context for clients: $ctx tokens ($ctx_src)"
 # without a full re-read: measured 3.8 s for 24K tokens, 2026-10-02).
 # CODER=1 forces it on, NO_CODER=1 off. If
 # the server isn't reachable, a previous choice is kept (default: on).
-slots=$(curl -fsS -m 5 -H "Authorization: Bearer $key" "http://$HOST:$LLAMA_PORT/props" 2>/dev/null \
+slots=$(api_get "http://$HOST:$LLAMA_PORT/props" 2>/dev/null \
         | python3 -c 'import json,sys; print(int(json.load(sys.stdin).get("total_slots", 1)))' 2>/dev/null || true)
 if [[ "${NO_CODER:-0}" == 1 ]]; then CODER=0; coder_src="NO_CODER=1"
 elif [[ "${CODER:-}" == 1 ]]; then CODER=1; coder_src="CODER=1"
 elif [[ -n "$slots" ]]; then
   if (( slots >= 2 )); then CODER=1; coder_src="server has $slots slots"; else CODER=0; coder_src="server has 1 slot: delegating would evict the main session"; fi
-elif curl -fsS -m 5 -H "Authorization: Bearer $key" "http://$HOST:$PORT/v1/mtplx/snapshot" >/dev/null 2>&1; then
+elif api_get "http://$HOST:$PORT/v1/mtplx/snapshot" >/dev/null 2>&1; then
   CODER=1; coder_src="MTPLX: one request at a time, each session comes back from its session bank"
 elif grep -qs '"coder_agent"' "$HOME/.config/opencode/llm-deploy.json" || [[ ! -f "$HOME/.config/opencode/llm-deploy.json" ]]; then CODER=1; coder_src="server not reachable; keeping it on"
 else CODER=0; coder_src="server not reachable; keeping it off"; fi
@@ -143,7 +159,7 @@ python3 "$HERE/configure.py" --bundle "$HERE" --home "$HOME" --host "$HOST" --po
 # --- Smoke test (only one server usually runs at a time) -------------------
 echo
 for p in "$LLAMA_PORT:llama.cpp" "$PORT:MTPLX"; do
-  if out=$(curl -fsS -m 5 -H "Authorization: Bearer $key" "http://$HOST:${p%%:*}/v1/models" 2>/dev/null); then
+  if out=$(api_get "http://$HOST:${p%%:*}/v1/models" 2>/dev/null); then
     echo "OK: ${p#*:} reachable at http://$HOST:${p%%:*}/v1 -> $(echo "$out" | grep -o '"id":"[^"]*"' | head -1)"
   else
     echo "--: ${p#*:} not running on http://$HOST:${p%%:*} (start it on the Mac with ./carl.sh ...)"

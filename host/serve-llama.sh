@@ -24,6 +24,7 @@
 # whether to stop the server or leave it running.
 # Override via env, e.g.  CTX=163840 SPEC=ngram-mod ./host/serve-llama.sh
 set -euo pipefail
+HERE="$(cd "$(dirname "$0")" && pwd)"
 
 # Script flags (consumed here); everything else passes through to llama-server.
 KV_FLAG=""
@@ -34,7 +35,7 @@ NET_FLAG=""
 pass=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    -h|--help|--help-adv) exec "$(dirname "$0")/serve.sh" llama "$1" ;;
+    -h|--help|--help-adv) exec "$HERE/serve.sh" llama "$1" ;;
     --local) NET_FLAG=local ;;
     --vm) NET_FLAG=vm ;;
     --host|--host=*)
@@ -67,8 +68,8 @@ while [[ $# -gt 0 ]]; do
       v="${1#--ctx}"; v="${v#=}"
       if [[ -z "$v" ]]; then shift; v="${1:-}"; fi
       v="$(printf '%s' "$v" | tr '[:upper:]' '[:lower:]')"
-      if [[ "$v" =~ ^([0-9]+)k$ ]]; then CTX_FLAG=$(( ${BASH_REMATCH[1]} * 1024 ))
-      elif [[ "$v" =~ ^[0-9]+$ ]]; then CTX_FLAG="$v"
+      if [[ "$v" =~ ^([0-9]{1,6})k$ ]]; then CTX_FLAG=$(( 10#${BASH_REMATCH[1]} * 1024 ))
+      elif [[ "$v" =~ ^[0-9]{1,9}$ ]]; then CTX_FLAG=$(( 10#$v ))
       else echo "error: --ctx takes tokens (e.g. 131072) or Nk (e.g. 128k), got '$v'" >&2; exit 2; fi
       if (( CTX_FLAG < 4096 || CTX_FLAG > 262144 )); then
         echo "error: --ctx must be between 4k and 256k (model max 262144), got $CTX_FLAG" >&2; exit 2
@@ -79,7 +80,8 @@ while [[ $# -gt 0 ]]; do
 done
 set -- ${pass[@]+"${pass[@]}"}
 
-source "$(dirname "$0")/common.sh"
+# shellcheck source=SCRIPTDIR/common.sh
+source "$HERE/common.sh"
 ensure_deps                      # llama-server, aria2, ansifilter (asks to brew install them)
 
 # Model and settings from tools/carl.py: config.json (monitor Settings tab, or
@@ -91,21 +93,23 @@ ensure_deps                      # llama-server, aria2, ansifilter (asks to brew
 model_arg="${MODEL_FLAG:-${MODEL:-}}"
 carl_args=(launch-env); [[ -n "$model_arg" ]] && carl_args+=(--model "$model_arg")
 [[ "${SETTINGS_FILE:-}" == none ]] && carl_args+=(--no-config)
-CARL_ENV="$(python3 "$(dirname "$0")/../tools/carl.py" "${carl_args[@]}")" || exit 1
+CARL_ENV="$(python3 "$HERE/../tools/carl.py" "${carl_args[@]}")" || exit 1
 CARL_SOURCES=""
-while IFS='=' read -r k v; do
-  [[ "$k" =~ ^[A-Z_]+$ ]] || continue
-  case "$k" in
-    MODEL|MODEL_NAME|CARL_SOURCES) printf -v "$k" '%s' "$v" ;;   # carl.py resolved them (flag/env included)
-    *) [[ -z "${!k:-}" ]] && printf -v "$k" '%s' "$v" ;;          # environment wins
-  esac
-done <<< "$CARL_ENV"
+# MODEL, MODEL_NAME and CARL_SOURCES: carl.py resolved them (flag/env included);
+# for the other keys the environment wins.
+apply_settings "MODEL|MODEL_NAME|CARL_SOURCES|ALIAS|KV|CTX|SLOTS|SPEC|SPEC_N|TEMP|TOP_P|TOP_K|MIN_P|PRESENCE|REPEAT|NET|HOST|CACHE_RAM|UB|BATCH|CKPT|CKPT_STEP|THINK_TOGGLE|EXTRA_ARGS" \
+  "MODEL|MODEL_NAME|CARL_SOURCES" <<< "$CARL_ENV"
 [[ -f "$MODEL" ]] || { echo "error: model file not found: $MODEL" >&2; exit 1; }
 ALIAS="${ALIAS:-$(basename "$MODEL" .gguf)}"
-# config.json llama.extra_args: more llama-server flags (command-line extras still come last)
-[[ -n "${EXTRA_ARGS:-}" ]] && set -- $EXTRA_ARGS "$@"
+# config.json llama.extra_args: more llama-server flags (command-line extras still
+# come last). One string of space-separated words (carl.py allows no quotes or
+# glob characters), split into an array: no globbing, no evaluation.
+extra_args=()
+[[ -n "${EXTRA_ARGS:-}" ]] && read -r -a extra_args <<< "$EXTRA_ARGS"
+set -- ${extra_args[@]+"${extra_args[@]}"} "$@"
 resolve_host "$NET_FLAG"
 PORT="${PORT:-8080}"
+is_port "$PORT" || { echo "error: PORT must be a TCP port (1-65535), got '$PORT'" >&2; exit 2; }
 API_KEY_FILE="${API_KEY_FILE:-$HOME/.mtplx/api-key}"
 CTX="${CTX_FLAG:-${CTX:-98304}}"   # per slot: --ctx flag > CTX env > 96K. Measured on the 35B (q4_0 KV, 2026-10-01):
                                    # 64K reads a cold prompt at 229 tok/s, decodes 20 tok/s; 128K: 117 / 13.9.
@@ -122,6 +126,8 @@ CTX="${CTX_FLAG:-${CTX:-98304}}"   # per slot: --ctx flag > CTX env > 96K. Measu
 # (llama.cpp's default with unified KV), and -sps 0.5 stops a subagent that shares
 # the system prompt (~20% of its tokens) from taking the main session's slot.
 SLOTS="${SLOTS_FLAG:-${SLOTS:-auto}}"
+[[ "$SLOTS" == auto ]] || require_int SLOTS "$SLOTS" 1 4
+require_int CTX "$CTX" 4096 262144
 
 KV="${KV_FLAG:-${KV:-q4_0}}"    # --kv flag > KV env > default q4_0
 KV_K="${KV_K:-$KV}"             # per-cache overrides. Keep K and V the SAME type: mixed
@@ -151,11 +157,14 @@ CKPT="${CKPT:-8}"; CKPT_STEP="${CKPT_STEP:-4096}"   # context checkpoints (hybri
 # LOG_FILE=none disables file logging (terminal output only).
 LOG_DIR="${LOG_DIR:-$HOME/models/logs}"
 LOG_FILE="${LOG_FILE:-$LOG_DIR/llama-server-$(date +%Y%m%d-%H%M%S).log}"
+for v in UB BATCH CKPT CKPT_STEP SPEC_N; do require_int "$v" "${!v}"; done
+[[ -z "${CACHE_RAM:-}" ]] || require_int CACHE_RAM "$CACHE_RAM"
+[[ -z "${RESERVE_GB:-}" ]] || require_int RESERVE_GB "$RESERVE_GB"
 
 # One server per port, and in practice one model at a time (two don't fit in
 # 36 GB). Fail before touching the log symlink or loading anything.
 if pid=$(port_pid "$PORT") && [[ -n "$pid" ]]; then
-  echo "error: port $PORT is already in use by: $(ps -o command= -p ${pid%%$'\n'*} | cut -c1-100)" >&2
+  echo "error: port $PORT is already in use by: $(ps -o command= -p "${pid%%$'\n'*}" | cut -c1-100)" >&2
   echo "       Stop it first (Ctrl-C in its terminal, or kill $pid). Watch it: ./carl.sh monitor" >&2
   exit 1
 fi
@@ -168,18 +177,22 @@ ensure_api_key "$API_KEY_FILE"
 # second subagent). Its size is what RAM allows after weights + KV + a reserve
 # for macOS and apps (10 GiB with the VMware network up, else 6; RESERVE_GB=N),
 # clamped to 1-8 GiB. Parked states measured 2.1-2.3 GiB at 40-60K tokens (35B).
-if plan=$(python3 "$(dirname "$0")/../tools/llama-fit.py" --plan "$MODEL" --ctx "$CTX" --kv "$KV_K" \
-            --want-slots "$SLOTS" ${RESERVE_GB:+--reserve-gb "$RESERVE_GB"} 2>/dev/null); then
-  [[ "$SLOTS" == auto ]] && SLOTS_NOTE="auto" || SLOTS_NOTE="set"
-  SLOTS="${plan%% *}"; CACHE_RAM="${CACHE_RAM:-${plan##* }}"
+reserve_args=()
+[[ -n "${RESERVE_GB:-}" ]] && reserve_args=(--reserve-gb "$RESERVE_GB")
+if plan=$(python3 "$HERE/../tools/llama-fit.py" --plan "$MODEL" --ctx "$CTX" --kv "$KV_K" \
+            --want-slots "$SLOTS" ${reserve_args[@]+"${reserve_args[@]}"} 2>/dev/null) \
+   && [[ "$plan" =~ ^([1-9])\ ([0-9]+)$ ]]; then
+  if [[ "$SLOTS" == auto ]]; then SLOTS_NOTE="auto"; else SLOTS_NOTE="set"; fi
+  SLOTS="${BASH_REMATCH[1]}"; CACHE_RAM="${CACHE_RAM:-${BASH_REMATCH[2]}}"
 else
-  [[ "$SLOTS" == auto ]] && SLOTS=1; SLOTS_NOTE="fallback"; CACHE_RAM="${CACHE_RAM:-4096}"
+  [[ "$SLOTS" == auto ]] && SLOTS=1
+  SLOTS_NOTE="fallback"; CACHE_RAM="${CACHE_RAM:-4096}"
 fi
 
 # Memory check (tools/llama-fit.py): warn, don't block, if weights + KV +
 # buffers exceed what macOS lets the GPU use. FIT_CHECK=0 skips it.
 if [[ "${FIT_CHECK:-1}" != 0 ]]; then
-  python3 "$(dirname "$0")/../tools/llama-fit.py" --check "$MODEL" --ctx "$CTX" --slots "$SLOTS" --kv "$KV_K" || true
+  python3 "$HERE/../tools/llama-fit.py" --check "$MODEL" --ctx "$CTX" --slots "$SLOTS" --kv "$KV_K" || true
 fi
 
 # Thinking toggle for OpenCode: llama-server gets the model's own chat template
@@ -190,8 +203,8 @@ tmpl_args=()
 if [[ "${THINK_TOGGLE:-1}" != 0 ]]; then
   TMPL_DIR="$HOME/models/templates"; mkdir -p "$TMPL_DIR"
   TMPL="$TMPL_DIR/$(basename "$MODEL" .gguf).thinking-toggle.jinja"
-  if [[ ! -s "$TMPL" || "$MODEL" -nt "$TMPL" || "$(dirname "$0")/gguf-chat-template.py" -nt "$TMPL" ]]; then
-    python3 "$(dirname "$0")/gguf-chat-template.py" "$MODEL" "$TMPL" || rm -f "$TMPL"
+  if [[ ! -s "$TMPL" || "$MODEL" -nt "$TMPL" || "$HERE/gguf-chat-template.py" -nt "$TMPL" ]]; then
+    python3 "$HERE/gguf-chat-template.py" "$MODEL" "$TMPL" || rm -f "$TMPL"
   fi
   [[ -s "$TMPL" ]] && tmpl_args=(--chat-template-file "$TMPL")
 fi

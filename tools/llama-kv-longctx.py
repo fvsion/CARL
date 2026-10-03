@@ -17,83 +17,112 @@ Server RSS / wired / swap are sampled after each turn. Thinking is off so
 decode numbers aren't dominated by variable reasoning length. Sampling is the
 production default (temp 1.0), so expect +-5% run-to-run noise on tok/s.
 """
-import glob, json, os, random, re, subprocess, sys, time, urllib.request
+from __future__ import annotations
 
-def listen_pid(port):  # netstat-based: lsof hangs on a stale network share
-    import re as _re
-    out = subprocess.check_output(["/usr/sbin/netstat", "-anv", "-p", "tcp"], text=True)
-    for line in out.splitlines():
-        f = line.split()
-        if len(f) > 5 and f[5] == "LISTEN" and f[3].endswith("." + str(port)):
-            return int(_re.search(r":(\d+)\s+\d{5}\s", line).group(1))
-    raise SystemExit(f"no server listens on port {port}")
+import argparse
+import glob
+import os
+import random
+import re
+import sys
+import time
+from dataclasses import dataclass
 
-label = sys.argv[1]
-target = int(sys.argv[2]) if len(sys.argv) > 2 else 65536
-base = sys.argv[3] if len(sys.argv) > 3 else "http://192.168.42.1:8080"
-key = open(os.path.expanduser("~/.mtplx/api-key")).read().strip()
-site = subprocess.check_output(["uv", "tool", "dir"], text=True).strip() + "/mtplx/lib/python3.12/site-packages/mtplx"
+from carl_bench import DEFAULT_BASE, Message, chat_body, completion_from, mtplx_source_dir, port_of, post_chat, \
+    read_api_key, read_source, server_memory, validate_base
 
-# ---- deterministic haystack -------------------------------------------------
-chars_per_token = 3.7          # measured on this corpus (207K chars ~ 56K tokens)
-budget = int(target * chars_per_token)
-files = sorted(glob.glob(site + "/**/*.py", recursive=True), key=lambda f: (os.path.getsize(f), f))
-parts, n = [], 0
-for f in files:                                # many small files, smallest first
-    t = open(f, errors="ignore").read()
-    if n + len(t) > budget:
-        break
-    parts.append(f"### FILE: {os.path.relpath(f, site)}\n{t}")
-    n += len(t)
-haystack = "\n\n".join(parts)
-# Needles at exact character depths (snapped to the next line break).
-rng = random.Random(42)
-needles, inserts = [], []
-for i, depth in enumerate([0.02, 0.10, 0.25, 0.40, 0.55, 0.70, 0.85, 0.98]):
-    code = f"{rng.randint(1000, 9999)}-{rng.choice('ABCDEFGHJKLMNPQRSTUVWXYZ')}{rng.randint(10, 99)}"
-    needles.append((f"vault-{i+1}", code))
-    pos = haystack.find("\n", int(depth * len(haystack))) + 1
-    inserts.append((pos, f"# NOTE: the access code for vault-{i+1} is {code}.\n"))
-for pos, text in sorted(inserts, reverse=True):
-    haystack = haystack[:pos] + text + haystack[pos:]
-fifth = haystack[int(0.2 * len(haystack)):int(0.3 * len(haystack))]
-deep_fn = re.findall(r"\ndef (\w{6,})\(", fifth)           # a function ~20-30% deep
+CHARS_PER_TOKEN = 3.7          # measured on this corpus (207K chars ~ 56K tokens)
+DEPTHS = (0.02, 0.10, 0.25, 0.40, 0.55, 0.70, 0.85, 0.98)
 
-def mem():
-    pid = listen_pid(base.rsplit(":", 1)[1])
-    rss = int(subprocess.check_output(["ps", "-o", "rss=", "-p", pid], text=True)) / 1048576
-    wired = [l for l in subprocess.check_output(["vm_stat"], text=True).splitlines() if "wired" in l][0]
-    swap = subprocess.check_output(["sysctl", "-n", "vm.swapusage"], text=True).split("used = ")[1].split()[0]
-    return f"rss={rss:.1f}G wired={int(wired.split()[-1].rstrip('.'))*16384/2**30:.1f}G swap={swap}"
 
-msgs = [{"role": "user", "content": haystack + "\n\nThe text above contains access codes for vault-1 "
-         "through vault-8 in comments. Reply with ONLY a JSON object mapping each vault name to its code."}]
+@dataclass(frozen=True)
+class Haystack:
+    text: str
+    parts: list[str]                    # the files, "### FILE: path" + source
+    needles: list[tuple[str, str]]      # (vault name, access code)
+    deep_functions: list[str]           # functions defined ~20-30% deep
 
-def call(tag, max_tokens):
-    body = {"model": "x", "max_tokens": max_tokens, "chat_template_kwargs": {"enable_thinking": False}, "messages": msgs}
-    req = urllib.request.Request(base + "/v1/chat/completions", data=json.dumps(body).encode(),
-                                 headers={"Authorization": "Bearer " + key, "content-type": "application/json"})
-    t0 = time.time()
-    r = json.load(urllib.request.urlopen(req, timeout=7200))
-    t = r.get("timings", {})
-    acc = f" spec {t.get('draft_n_accepted')}/{t.get('draft_n')}" if t.get("draft_n") else ""
-    print(f"{label:18} {tag}: ctx={r['usage']['prompt_tokens']} cached={t.get('cache_n')} "
-          f"read {t.get('prompt_n')} @ {t.get('prompt_per_second',0):.1f} tok/s | "
-          f"gen {t.get('predicted_n')} @ {t.get('predicted_per_second',0):.2f} tok/s{acc} | "
-          f"{time.time()-t0:.0f}s | {mem()}", flush=True)
-    out = r["choices"][0]["message"]["content"]
-    msgs.append({"role": "assistant", "content": out})
-    return out
 
-a1 = call("t1 recall ", 200)
-got = sum(1 for name, code in needles if code in a1)
-print(f"{label:18} recall: {got}/{len(needles)} needles correct", flush=True)
+def build_haystack(files: dict[str, str], target_tokens: int, seed: int = 42) -> Haystack:
+    """Deterministic haystack from FILES (relative path -> source, smallest first)
+    with needles at exact character depths (snapped to the next line break)."""
+    budget = int(target_tokens * CHARS_PER_TOKEN)
+    parts: list[str] = []
+    n = 0
+    for rel, t in files.items():                # many small files, smallest first
+        if n + len(t) > budget:
+            break
+        parts.append(f"### FILE: {rel}\n{t}")
+        n += len(t)
+    haystack = "\n\n".join(parts)
+    rng = random.Random(seed)
+    needles: list[tuple[str, str]] = []
+    inserts: list[tuple[int, str]] = []
+    for i, depth in enumerate(DEPTHS):
+        code = f"{rng.randint(1000, 9999)}-{rng.choice('ABCDEFGHJKLMNPQRSTUVWXYZ')}{rng.randint(10, 99)}"
+        needles.append((f"vault-{i + 1}", code))
+        pos = haystack.find("\n", int(depth * len(haystack))) + 1
+        inserts.append((pos, f"# NOTE: the access code for vault-{i + 1} is {code}.\n"))
+    for pos, text in sorted(inserts, reverse=True):
+        haystack = haystack[:pos] + text + haystack[pos:]
+    fifth = haystack[int(0.2 * len(haystack)):int(0.3 * len(haystack))]
+    return Haystack(haystack, parts, needles, re.findall(r"\ndef (\w{6,})\(", fifth))
 
-msgs.append({"role": "user", "content": "Thanks. Now, drawing on the code above, write a ~400-word explanation of how "
-             "these modules fit together, as plain prose. " + " ".join(
-                 f"Consider {p.splitlines()[0][10:]}." for p in parts[:: max(1, len(parts) // 40)])})
-call("t2 decode ", 400)
 
-fn = deep_fn[0] if deep_fn else "the first function in the file listed about a fifth of the way in"
-msgs.append({"role": "user", "content": f"Reproduce the full source of `{fn}` exactly as it appears above, code only."})
-call("t3 re-emit", 400)
+def corpus(site: str) -> dict[str, str]:
+    files = sorted(glob.glob(site + "/**/*.py", recursive=True), key=lambda f: (os.path.getsize(f), f))
+    return {os.path.relpath(f, site): read_source(f) for f in files}
+
+
+class Session:
+    """One conversation with the server; each call prints its timings and memory."""
+
+    def __init__(self, base: str, key: str, label: str, first: str) -> None:
+        self.base, self.key, self.label = base, key, label
+        self.port = port_of(base)
+        self.msgs: list[Message] = [{"role": "user", "content": first}]
+
+    def ask(self, tag: str, max_tokens: int, question: str | None = None) -> str:
+        if question is not None:
+            self.msgs.append({"role": "user", "content": question})
+        t0 = time.time()
+        c = completion_from(post_chat(self.base, self.key, chat_body(self.msgs, max_tokens), timeout=7200))
+        t = c.timings
+        m = server_memory(self.port)
+        acc = f" spec {t.get('draft_n_accepted')}/{t.get('draft_n')}" if t.get("draft_n") else ""
+        print(f"{self.label:18} {tag}: ctx={c.usage.get('prompt_tokens')} cached={t.get('cache_n')} "
+              f"read {t.get('prompt_n')} @ {t.get('prompt_per_second', 0):.1f} tok/s | "
+              f"gen {t.get('predicted_n')} @ {t.get('predicted_per_second', 0):.2f} tok/s{acc} | "
+              f"{time.time() - t0:.0f}s | rss={m.rss_gib:.1f}G wired={m.wired_gib:.1f}G swap={m.swap_used}", flush=True)
+        self.msgs.append({"role": "assistant", "content": c.content})
+        return c.content
+
+
+def main(argv: list[str]) -> int:
+    ap = argparse.ArgumentParser(description="Long-context KV-cache A/B measurement (needle recall, decode, re-emit).")
+    ap.add_argument("label", help="name printed in front of each result row")
+    ap.add_argument("target", nargs="?", type=int, default=65536, help="haystack size in tokens (default 65536)")
+    ap.add_argument("base", nargs="?", default=DEFAULT_BASE, help=f"server URL (default {DEFAULT_BASE})")
+    a = ap.parse_args(argv)
+    if a.target < 1024:
+        raise SystemExit("error: TARGET_TOKENS must be at least 1024")
+    base, key = validate_base(a.base), read_api_key()
+    h = build_haystack(corpus(mtplx_source_dir()), a.target)
+
+    s = Session(base, key, a.label, h.text + "\n\nThe text above contains access codes for vault-1 "
+                "through vault-8 in comments. Reply with ONLY a JSON object mapping each vault name to its code.")
+    a1 = s.ask("t1 recall ", 200)
+    got = sum(1 for _, code in h.needles if code in a1)
+    print(f"{a.label:18} recall: {got}/{len(h.needles)} needles correct", flush=True)
+
+    s.ask("t2 decode ", 400, "Thanks. Now, drawing on the code above, write a ~400-word explanation of how "
+          "these modules fit together, as plain prose. " + " ".join(
+              f"Consider {p.splitlines()[0][10:]}." for p in h.parts[:: max(1, len(h.parts) // 40)]))
+
+    fn = h.deep_functions[0] if h.deep_functions else "the first function in the file listed about a fifth of the way in"
+    s.ask("t3 re-emit", 400, f"Reproduce the full source of `{fn}` exactly as it appears above, code only.")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

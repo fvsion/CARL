@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "_comment": "CARL built-in model catalogue. Downloaded and custom models are tracked separately in ~/.config/llm-deploy/models.json. Fields: hf (download source, pinned revision, sha256, bytes), tune (recommended server settings), why (the reason for each tuned value), ctx_zones (context per slot: <= good is fast, <= slow is usable, above very_slow is very slow; Auto-tune replaces these with measured values for this Mac), measured (reference measurements).",
+  "_comment": "CARL built-in model catalogue. Downloaded and custom models are tracked separately in ~/.config/llm-deploy/models.json. Fields: hf (download source, pinned revision, sha256, bytes), tune (recommended server settings), why (the reason for each tuned value), ctx_zones (context per slot: <= good is fast (never below 96K, the floor), <= slow is usable, above very_slow is very slow; Auto-tune replaces these with measured values for this Mac), measured (reference measurements).",
   "default": "qwen3.6-35b-a3b",
   "default_small": "qwen3.6-35b-a3b-iq3",
   "models": [
@@ -87,13 +87,13 @@
         "kv": "q4_0 K and V: measured +16% cold prompt reading and ~2 GB less memory than q8_0, same decode speed and 8/8 needle recall at 66K. Never mix K and V types: mixed q8_0/q4_0 reads prompts ~5x slower on Metal.",
         "temp": "Qwen's thinking-mode recommendation from the model card: temperature 1.0, top_p 0.95, top_k 20, min_p 0. Clients that send their own values (OpenCode's no-thinking variant) win per request.",
         "spec": "MTP n=1 + n-gram: measured best on the dense 27B (10.5-11 tok/s new text vs 7.4 without, 27 tok/s re-emitting). n>1 loses on Metal for dense models: the extra draft verify costs more than it saves.",
-        "ctx": "96K per slot. On the 27B a cold read of a long session is slow (~56-65 tok/s at 66K: a full 96K window takes ~25 min), so keep windows modest.",
+        "ctx": "96K per slot, the floor CARL keeps (agents need that much context). On the 27B a cold read of a long session is slow (~56-65 tok/s at 66K: a full 96K window takes ~25 min), so windows above 96K are flagged as slow.",
         "slots": "2 slots keep the main session cached while a subagent runs (1.9 s follow-up). Both generating at once time-share: no combined speed-up on dense models."
       },
       "ctx_zones": {
-        "good": 65536,
-        "slow": 98304,
-        "very_slow": 131072
+        "good": 98304,
+        "slow": 131072,
+        "very_slow": 163840
       },
       "measured": [
         {
@@ -142,13 +142,13 @@
         "kv": "q4_0 K and V: measured +16% cold prompt reading and ~2 GB less memory than q8_0, same decode speed and 8/8 needle recall at 66K. Never mix K and V types: mixed q8_0/q4_0 reads prompts ~5x slower on Metal.",
         "temp": "Qwen's thinking-mode recommendation from the model card: temperature 1.0, top_p 0.95, top_k 20, min_p 0. Clients that send their own values (OpenCode's no-thinking variant) win per request.",
         "spec": "MTP n=1 + n-gram: 10.5-11 tok/s new text, 27 tok/s re-emitting (none: 7.4). Measured with tools/llama-spec-sweep.sh on the M3 Pro.",
-        "ctx": "96K per slot; cold reads at 66K run ~56-65 tok/s, so longer windows mean long waits after a restart or eviction.",
+        "ctx": "96K per slot, the floor CARL keeps; cold reads at 66K run ~56-65 tok/s, so windows above 96K (flagged as slow) mean long waits after a restart or eviction.",
         "slots": "2 slots: main session + subagent each keep their cache (1.9 s follow-up)."
       },
       "ctx_zones": {
-        "good": 65536,
-        "slow": 98304,
-        "very_slow": 131072
+        "good": 98304,
+        "slow": 131072,
+        "very_slow": 163840
       },
       "measured": [
         {
@@ -182,7 +182,7 @@
       "description": "Stock Qwen3.8-27B, unsloth dynamic Q3_K_XL: sensitive layers stay at higher precision. A K-quant, so it unpacks fast on Metal. For 24 GB Macs that want the 27B. Untested in CARL.",
       "tune": {
         "kv": "q4_0",
-        "ctx": 65536,
+        "ctx": 98304,
         "slots": "auto",
         "temp": 1.0,
         "top_p": 0.95,
@@ -196,13 +196,13 @@
         "kv": "q4_0 K and V: measured +16% cold prompt reading and ~2 GB less memory than q8_0, same decode speed and 8/8 needle recall at 66K. Never mix K and V types: mixed q8_0/q4_0 reads prompts ~5x slower on Metal.",
         "temp": "Qwen's thinking-mode recommendation from the model card: temperature 1.0, top_p 0.95, top_k 20, min_p 0. Clients that send their own values (OpenCode's no-thinking variant) win per request.",
         "spec": "Same as the Q4 27B (MTP n=1 + n-gram); untested on this quant: run Auto-tune.",
-        "ctx": "64K per slot: on a 24 GB Mac the 27B's KV cache (18 KiB/token) fills the GPU limit quickly.",
+        "ctx": "96K per slot, the floor CARL keeps (agents need that much context). On a 24 GB Mac the 27B's KV cache (18 KiB/token) fills the GPU limit quickly: larger windows may not fit and are flagged as slow.",
         "slots": "auto: 2 slots only when two full windows fit."
       },
       "ctx_zones": {
-        "good": 65536,
-        "slow": 98304,
-        "very_slow": 131072
+        "good": 98304,
+        "slow": 131072,
+        "very_slow": 163840
       },
       "measured": [],
       "alias": "qwen3.8-27b",
@@ -243,13 +243,13 @@
         "kv": "q4_0 K and V: measured +16% cold prompt reading and ~2 GB less memory than q8_0, same decode speed and 8/8 needle recall at 66K. Never mix K and V types: mixed q8_0/q4_0 reads prompts ~5x slower on Metal.",
         "temp": "Qwen's thinking-mode recommendation from the model card: temperature 1.0, top_p 0.95, top_k 20, min_p 0. Clients that send their own values (OpenCode's no-thinking variant) win per request.",
         "spec": "Same as the Q4 27B (MTP n=1 + n-gram); untested on this quant: run Auto-tune.",
-        "ctx": "64K per slot: about the largest window that fits a 24 GB Mac with this file.",
+        "ctx": "64K per slot: this 3-bit build is for 24 GB Macs, where 96K does not fit (~68K estimated). It is the one exception to the 96K floor: larger Macs use the Q4 build. Run Auto-tune (./carl.sh tune orcarouter-27b-q3) to size the window for your Mac; it picks 96K wherever that fits.",
         "slots": "auto: usually 1 slot on a 24 GB Mac."
       },
       "ctx_zones": {
-        "good": 65536,
-        "slow": 98304,
-        "very_slow": 131072
+        "good": 98304,
+        "slow": 131072,
+        "very_slow": 163840
       },
       "measured": [],
       "alias": "qwen3.8-27b-abliterated-llama",
@@ -330,7 +330,7 @@
       "description": "Stock Qwen3.8-27B, unsloth dynamic IQ3_XXS. The smallest 27B build: leaves room for a long window on 24 GB Macs. On 16 GB Macs the weights (10.2 GiB) exceed the default GPU limit (~10.7 GiB with buffers): it needs a raised limit (sudo sysctl iogpu.wired_limit_mb). IQ3 unpacks slowly on Metal and loses more quality than Q3_K/Q4 in tool calls and edits; pick it only when nothing larger fits.",
       "tune": {
         "kv": "q4_0",
-        "ctx": 65536,
+        "ctx": 98304,
         "slots": "auto",
         "temp": 1.0,
         "top_p": 0.95,
@@ -344,13 +344,13 @@
         "kv": "q4_0 K and V: measured +16% cold prompt reading and ~2 GB less memory than q8_0, same decode speed and 8/8 needle recall at 66K. Never mix K and V types: mixed q8_0/q4_0 reads prompts ~5x slower on Metal.",
         "temp": "Qwen's thinking-mode recommendation from the model card: temperature 1.0, top_p 0.95, top_k 20, min_p 0. Clients that send their own values (OpenCode's no-thinking variant) win per request.",
         "spec": "MTP + n-gram, n=1. Measured on an M2 Max 32 GB (2026-10-03, llama.cpp 0.5.0, 400-token runs, mean of 2, tok/s prose/code/re-emit): none 9.4/8.9/8.9, MTP n=1 9.7/9.8/11.0, MTP n=2 8.9/9.4/11.3, n-gram 9.8/9.6/21.5, MTP+n-gram n=1 10.0/9.8/31.1, MTP+n-gram n=2 8.7/9.7/23.3. MTP alone gains only ~5-10% on IQ3 (vs ~45% on Q4 on an M3 Pro); MTP+n-gram n=1 is best, n=2 loses.",
-        "ctx": "64K per slot: dense 27B cold reads are slow; keep windows modest.",
+        "ctx": "96K per slot, the floor CARL keeps (agents need that much context). Dense 27B cold reads are slow, so windows above 96K are flagged as slow.",
         "slots": "auto: 2 slots when two windows fit."
       },
       "ctx_zones": {
-        "good": 65536,
-        "slow": 98304,
-        "very_slow": 131072
+        "good": 98304,
+        "slow": 131072,
+        "very_slow": 163840
       },
       "measured": [
         {

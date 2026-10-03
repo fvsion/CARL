@@ -1,0 +1,168 @@
+"""The models CARL knows, config.json and GGUF shapes: the ModelStore port, its adapter
+over tools/carl.py and tools/gguf_shape.py, and a short-lived cache of the model list."""
+from __future__ import annotations
+
+import os
+import time
+from typing import Any, Callable, Dict, List, Optional, Protocol, Tuple
+
+from . import gguf
+from .model import JSONDict, ModelInfo, Shape
+
+HFFile = Tuple[str, Optional[int], Optional[str]]     # (file name, bytes, sha256)
+
+
+class ModelStore(Protocol):
+    """Models, their tunes, config.json and GGUF memory shapes."""
+
+    config_file: str
+    conf_dir: str
+
+    def all_models(self) -> List[ModelInfo]: ...
+    def find(self, name: str, models: List[ModelInfo]) -> Optional[ModelInfo]: ...
+    def builtin_tune(self) -> JSONDict: ...
+    def effective_tune(self, m: ModelInfo, cfg: JSONDict) -> Tuple[JSONDict, Dict[str, str]]: ...
+    def ctx_zones(self, m: ModelInfo) -> Tuple[int, int, int]: ...
+    def ctx_zone(self, m: ModelInfo, ctx: int) -> str: ...
+    def header_info(self, path: str) -> JSONDict: ...
+    def shape_of(self, path: str) -> Shape: ...
+    def file_size(self, path: str) -> int: ...
+    def gpu_limit(self) -> Tuple[int, str]: ...
+    def empty_config(self) -> JSONDict: ...
+    def load_config(self) -> JSONDict: ...
+    def save_config(self, cfg: JSONDict) -> None: ...
+    def launch_model(self, cfg: JSONDict) -> str: ...
+    def catalog_default(self) -> str: ...
+    def models_dir(self) -> str: ...
+    def parse_hf(self, spec: str) -> Tuple[str, Optional[str], Optional[str]]: ...
+    def hf_files(self, repo: str) -> List[HFFile]: ...
+    def delete(self, m: ModelInfo) -> None: ...
+
+
+class CarlStore:
+    """ModelStore over tools/carl.py (untyped: its results are taken as the documented shapes)."""
+
+    def __init__(self) -> None:
+        import carl
+        self._carl: Any = carl
+        self.config_file: str = carl.CONFIG_FILE
+        self.conf_dir: str = carl.CONF_DIR
+
+    def all_models(self) -> List[ModelInfo]:
+        models: List[ModelInfo] = self._carl.all_models()
+        return models
+
+    def find(self, name: str, models: List[ModelInfo]) -> Optional[ModelInfo]:
+        m: Optional[ModelInfo] = self._carl.find(name, models)
+        return m
+
+    def builtin_tune(self) -> JSONDict:
+        return {k: s["default"] for k, s in self._carl.MODEL_KEYS.items()}
+
+    def effective_tune(self, m: ModelInfo, cfg: JSONDict) -> Tuple[JSONDict, Dict[str, str]]:
+        vals, src = self._carl.effective_tune(m, cfg)
+        return vals, src
+
+    def ctx_zones(self, m: ModelInfo) -> Tuple[int, int, int]:
+        good, slow, very = self._carl.ctx_zones(m)
+        return good, slow, very
+
+    def ctx_zone(self, m: ModelInfo, ctx: int) -> str:
+        zone: str = self._carl.ctx_zone(m, ctx)
+        return zone
+
+    def header_info(self, path: str) -> JSONDict:
+        """What the GGUF header says about a model that is not in the catalogue (mtp, quant, ...)."""
+        info: JSONDict = self._carl.custom_defaults(path)[1]
+        return info
+
+    def shape_of(self, path: str) -> Shape:
+        shape: Shape = self._carl.shape_of(path)
+        return shape
+
+    def file_size(self, path: str) -> int:
+        return os.path.getsize(path)
+
+    def gpu_limit(self) -> Tuple[int, str]:
+        return gguf.gpu_limit()
+
+    def empty_config(self) -> JSONDict:
+        return {"schema": self._carl.SCHEMA}
+
+    def load_config(self) -> JSONDict:
+        cfg: JSONDict = self._carl.load_config()
+        return cfg
+
+    def save_config(self, cfg: JSONDict) -> None:
+        self._carl.save_config(cfg)
+
+    def launch_model(self, cfg: JSONDict) -> str:
+        """The model a llama.cpp start with cfg loads (carl.resolve_launch)."""
+        name: str = self._carl.resolve_launch(None, cfg)[0]["name"]
+        return name
+
+    def catalog_default(self) -> str:
+        name: str = self._carl.load_catalog()["default"]
+        return name
+
+    def models_dir(self) -> str:
+        path: str = self._carl.models_dir()
+        return path
+
+    def parse_hf(self, spec: str) -> Tuple[str, Optional[str], Optional[str]]:
+        repo, file, rev = self._carl.parse_hf(spec)
+        return repo, file, rev
+
+    def hf_files(self, repo: str) -> List[HFFile]:
+        return [(str(f), b, sha) for f, b, sha in self._carl.hf_files(repo)]
+
+    def delete(self, m: ModelInfo) -> None:
+        self._carl.delete(m)
+
+
+class ModelList:
+    """The model list, re-read from the store at most every 10 s (it lists the models
+    folder and reads config.json), plus what "auto" means on this Mac."""
+
+    def __init__(self, store: ModelStore, on_error: Callable[[str], None],
+                 clock: Callable[[], float] = time.time) -> None:
+        self.store = store
+        self.on_error = on_error
+        self.clock = clock
+        self.items: List[ModelInfo] = []
+        self.t = 0.0
+        self._auto: Optional[Tuple[float, str]] = None     # (list time, model name)
+
+    def get(self, refresh: bool = False) -> List[ModelInfo]:
+        if refresh or self.clock() - self.t > 10:
+            try:
+                self.items = self.store.all_models()
+            except Exception as e:      # carl.py's errors vary (config, catalogue, disk): show, keep the old list
+                self.on_error(f"models: {e}")
+            self.t = self.clock()
+        return self.items
+
+    def by_name(self, name: Optional[str]) -> Optional[ModelInfo]:
+        return self.store.find(name, self.get()) if name else None
+
+    def choices(self) -> List[str]:
+        """"auto", then the downloaded models, then the others."""
+        ms = self.get()
+        return (["auto"] + [m["name"] for m in ms if m["status"] == "downloaded"]
+                + [m["name"] for m in ms if m["status"] != "downloaded"])
+
+    def downloaded(self) -> List[ModelInfo]:
+        return [m for m in self.get() if m["status"] == "downloaded"]
+
+    def auto_model(self) -> str:
+        """The model "auto" starts on this Mac (config.json's llama.model ignored),
+        recomputed when the list is re-read."""
+        if self._auto is None or self._auto[0] != self.t:
+            try:
+                cfg = self.store.load_config()
+                cfg.get("llama", {}).pop("model", None)
+                name = self.store.launch_model(cfg)
+            except Exception:           # nothing downloaded, bad config, ...: the catalogue's default
+                name = self.store.catalog_default()
+            self._auto = (self.t, name)
+        return self._auto[1]

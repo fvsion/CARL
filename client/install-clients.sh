@@ -71,6 +71,7 @@ npm install -g --prefix "$PREFIX" "${pkgs[@]}"
 hash -r
 
 # --- PATH --------------------------------------------------------------------
+# shellcheck disable=SC2016  # written to the rc file literally; the shell expands it there
 line='export PATH="$HOME/.local/bin:$PATH"  # mtplx-vm-client'
 for rc in "$HOME/.zshrc" "$HOME/.bashrc"; do
   [[ -f "$rc" ]] || continue

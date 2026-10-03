@@ -2,15 +2,16 @@
 # Restart llama-server once per speculative-decoding config and run
 # tools/llama-spec-bench.py against each. Logs go to $LOGDIR (default /tmp).
 #   tools/llama-spec-sweep.sh "draft-mtp:1" "draft-mtp:2" "ngram-mod:2" ...
-set -uo pipefail
-cd "$(dirname "$0")/.."
+set -uo pipefail        # no -e: one failed config is reported and the sweep goes on
+cd "$(dirname "$0")/.." || exit 1
+# shellcheck source=SCRIPTDIR/../host/common.sh
 source host/common.sh   # port_pid (netstat-based)
 LOGDIR="${LOGDIR:-/tmp}"
 PORT="${PORT:-8080}"
 
 stop_server() {
   local pid; pid=$(port_pid "$PORT")
-  [[ -n "$pid" ]] && kill -TERM $pid
+  [[ -n "$pid" ]] && kill -TERM "$pid"
   while [[ -n "$(port_pid "$PORT")" ]]; do sleep 1; done
 }
 

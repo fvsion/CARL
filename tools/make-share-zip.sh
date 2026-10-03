@@ -6,14 +6,14 @@
 # Finder files and any api-key file. Models, logs and keys live outside the
 # repo (~/models, ~/.mtplx), so nothing personal is included.
 set -euo pipefail
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/.." || exit 1
 name=CARL
 repo="$PWD"
 docs=0
 [[ "${1:-}" == --with-docs ]] && { docs=1; shift; }
 out="${1:-../$name-$(date +%Y%m%d).zip}"
 case "$out" in /*) ;; *) out="$PWD/$out" ;; esac          # absolute, before we cd
-excl=("$name/.git/*" "*/__pycache__/*" "*.pyc" "*.DS_Store" "*/api-key" "*.bak.*" "$name/carl_logo.JPG")
+excl=("$name/.git/*" "*/__pycache__/*" "*.pyc" "*/.mypy_cache/*" "*/.pytest_cache/*" "*.DS_Store" "*/api-key" "*.bak.*" "$name/carl_logo.JPG")
 excl+=("$name/task_manager.py" "$name/tasks.json")      # local files from a client session, not part of the project
 [[ $docs == 1 ]] || excl+=("$name/docs/*")
 rm -f "$out"

@@ -109,6 +109,7 @@
           "reasoning": true,
           "thinkingLevelMap": {
             "minimal": null,
+            "high": null,
             "xhigh": "xhigh"
           },
           "input": [
@@ -129,6 +130,7 @@
           "reasoning": true,
           "thinkingLevelMap": {
             "minimal": null,
+            "high": null,
             "xhigh": "xhigh"
           },
           "input": [

@@ -11,47 +11,123 @@ enable_thinking=false inside the template. Everything else is unchanged.
 Usage: gguf-chat-template.py MODEL.gguf OUT.jinja
 Exit 3 if the template has no enable_thinking switch (nothing to patch).
 """
-import struct, sys
+from __future__ import annotations
 
-model, out = sys.argv[1], sys.argv[2]
+import argparse
+import struct
+import sys
+
+HEAD_BYTES = 64 * 1024 * 1024          # KV metadata sits at the front
+TEMPLATE_KEY = "tokenizer.chat_template"
+EXIT_NOTHING_TO_PATCH = 3
 PATCH = (
     "{#- serve-llama.sh: reasoning_effort none/minimal/off => thinking off (OpenCode) -#}\n"
     "{%- if reasoning_effort is defined and reasoning_effort in "
     "('none', 'minimal', 'off', 'disable', 'disabled') %}"
     "{%- set enable_thinking = false %}{%- endif %}\n"
 )
+# GGUF metadata value types: fixed sizes in bytes; 8 = string, 9 = array.
+GGUF_STRING, GGUF_ARRAY = 8, 9
+SIZES: dict[int, int] = {0: 1, 1: 1, 2: 2, 3: 2, 4: 4, 5: 4, 6: 4, 7: 1, 10: 8, 11: 8, 12: 8}
 
-with open(model, "rb") as f:
-    head = f.read(64 * 1024 * 1024)          # KV metadata sits at the front
-if head[:4] != b"GGUF":
-    sys.exit(f"not a GGUF file: {model}")
-o = 4
-def rd(fmt):
-    global o
-    v = struct.unpack_from(fmt, head, o); o += struct.calcsize(fmt); return v[0]
-def rstr():
-    global o
-    n = rd("<Q"); s = head[o:o + n]; o += n; return s
-SIZES = {0: 1, 1: 1, 2: 2, 3: 2, 4: 4, 5: 4, 6: 4, 7: 1, 10: 8, 11: 8, 12: 8}
-rd("<I"); rd("<Q"); nkv = rd("<Q")
-tpl = None
-for _ in range(nkv):
-    key = rstr().decode(); t = rd("<I")
-    if t == 8:
-        val = rstr()
-        if key == "tokenizer.chat_template":
-            tpl = val.decode(); break
-    elif t == 9:
-        at = rd("<I"); n = rd("<Q")
-        if at == 8:
-            for _ in range(n): rstr()
+
+class GGUFError(ValueError):
+    pass
+
+
+class MetadataReader:
+    """Sequential reader over the start of a GGUF file (little-endian)."""
+
+    def __init__(self, head: bytes) -> None:
+        self.head = head
+        self.pos = 0
+
+    def u32(self) -> int:
+        return self._unpack("<I")
+
+    def u64(self) -> int:
+        return self._unpack("<Q")
+
+    def string(self) -> bytes:
+        n = self.u64()
+        if self.pos + n > len(self.head):
+            raise GGUFError("metadata runs past the part of the file read")
+        s = self.head[self.pos:self.pos + n]
+        self.pos += n
+        return s
+
+    def skip_value(self, vtype: int) -> None:
+        if vtype == GGUF_STRING:
+            self.string()
+        elif vtype == GGUF_ARRAY:
+            atype, n = self.u32(), self.u64()
+            if atype == GGUF_STRING:
+                for _ in range(n):
+                    self.string()
+            else:
+                self.pos += self._size(atype) * n
         else:
-            o += SIZES[at] * n
-    else:
-        o += SIZES[t]
-if tpl is None:
-    sys.exit("no tokenizer.chat_template in GGUF")
-if "enable_thinking" not in tpl:
-    sys.exit(3)
-with open(out, "w") as f:
-    f.write(PATCH + tpl)
+            self.pos += self._size(vtype)
+
+    def _size(self, vtype: int) -> int:
+        if vtype not in SIZES:
+            raise GGUFError(f"unknown metadata value type {vtype}")
+        return SIZES[vtype]
+
+    def _unpack(self, fmt: str) -> int:
+        try:
+            (v,) = struct.unpack_from(fmt, self.head, self.pos)
+        except struct.error:
+            raise GGUFError("metadata runs past the part of the file read") from None
+        self.pos += struct.calcsize(fmt)
+        return int(v)
+
+
+def chat_template(head: bytes) -> str | None:
+    """The tokenizer.chat_template string of a GGUF, or None if it has none."""
+    if head[:4] != b"GGUF":
+        raise GGUFError("not a GGUF file")
+    r = MetadataReader(head)
+    r.pos = 4
+    r.u32()                                  # version
+    r.u64()                                  # tensor count
+    for _ in range(r.u64()):                 # metadata key/value count
+        key = r.string().decode("utf-8", errors="replace")
+        vtype = r.u32()
+        if vtype == GGUF_STRING and key == TEMPLATE_KEY:
+            return r.string().decode("utf-8")
+        r.skip_value(vtype)
+    return None
+
+
+def patched(template: str) -> str | None:
+    """The template with the thinking-off rule in front; None if it has no switch."""
+    return PATCH + template if "enable_thinking" in template else None
+
+
+def main(argv: list[str]) -> int:
+    ap = argparse.ArgumentParser(description="Write a GGUF's chat template with a reasoning_effort=none => "
+                                             "thinking-off rule (exit 3: no enable_thinking switch).")
+    ap.add_argument("model", help="the .gguf file")
+    ap.add_argument("out", help="the .jinja file to write")
+    a = ap.parse_args(argv)
+    try:
+        with open(a.model, "rb") as f:
+            head = f.read(HEAD_BYTES)
+        tpl = chat_template(head)
+    except OSError as e:
+        sys.exit(f"cannot read {a.model}: {e.strerror}")
+    except GGUFError as e:
+        sys.exit(f"{e}: {a.model}")
+    if tpl is None:
+        sys.exit("no tokenizer.chat_template in GGUF")
+    out = patched(tpl)
+    if out is None:
+        return EXIT_NOTHING_TO_PATCH
+    with open(a.out, "w", encoding="utf-8") as f:
+        f.write(out)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

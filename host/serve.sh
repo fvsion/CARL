@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC2088  # help texts show paths as ~/...: printed, not expanded
 # Entry point for the local model servers that OpenCode / Pi in the VMware
 # Fusion guest use over the NAT network (vmnet8). One server at a time: two
 # models don't fit in 36 GB together.
@@ -55,9 +56,12 @@ $(row "monitor" "attach the live dashboard to a running server (connect info, co
 $(row "models" "list the models (catalogue + models folder + custom) and what's downloaded")
 $(row "fit [--ram GB] [--slots N]" "which models fit this Mac's GPU memory, and the largest window for each")
 $(row "download NAME|default|all" "download catalogue models (resumable, SHA-256 verified); default = this Mac's default")
-$(row "verify [NAME...]" "re-check downloaded models' size and SHA-256")
-$(row "download hf:OWNER/REPO/F" "any GGUF from Hugging Face (hf:OWNER/REPO lists its files); custom models are")
-$(row "" "also any .gguf you put in ~/models/gguf")
+$(row "download hf:OWNER/REPO" "ANY model from Hugging Face: lists the repo's GGUF files; then")
+$(row "" "download hf:OWNER/REPO/FILE.gguf (a huggingface.co URL works too; SHA-256 verified).")
+$(row "" "Any .gguf you put in ~/models/gguf also shows up as a model. In the dashboard:")
+$(row "" "Settings (5) → ] Models panel → Add from Hugging Face (h)")
+$(row "verify [NAME...]" "re-check downloaded models' size and SHA-256 (no names: all of them)")
+$(row "delete NAME" "delete a downloaded model file")
 $(row "tune NAME [--quick]" "auto-tune a model for this Mac: speculation, context window, slots (~5-10 min)")
 $(row "config [show|set K V]" "the settings file ~/.config/llm-deploy/config.json (show lists every key)")
 $(row "help [TOPIC]" "this page, or: llama grant pocket monitor fit models download verify env tuning")
@@ -81,6 +85,9 @@ QUICK START
   $CMD llama                          # default model; monitor opens in this terminal
   $CMD llama --local                  # this Mac only (no VM)
   $CMD llama --model qwen3.8-27b      # the dense 27B (slower; orcarouter-27b = abliterated)
+  $CMD download hf:Qwen/Qwen3-0.6B-GGUF                     # list a Hugging Face repo's GGUF files
+  $CMD download hf:Qwen/Qwen3-0.6B-GGUF/Qwen3-0.6B-Q8_0.gguf  # download one (then: $CMD llama --model qwen3-0.6b-q8_0)
+  $CMD tune qwen3-0.6b-q8_0           # tune it for this Mac
   $CMD llama --ctx 192k --kv q8       # bigger window, q8_0 KV
   $CMD monitor                        # re-attach after "leave running"
 
@@ -281,6 +288,7 @@ client_install() {
 }
 
 # ---- dispatch -------------------------------------------------------------
+# shellcheck source=SCRIPTDIR/common.sh
 source "$HERE/common.sh"
 LAST_FILE="$HOME/.config/llm-deploy/last-backend"
 if [[ $# -eq 0 ]]; then
@@ -318,7 +326,9 @@ case "$1" in
 esac
 # "<command> -h|--help" -> that command's help (--help-adv is handled below)
 for a in "${@:2}"; do
-  case "$a" in -h|--help) [[ "$1" == -* ]] && show_help llama || show_help "$1"; exit 0 ;; esac
+  case "$a" in
+    -h|--help) if [[ "$1" == -* ]]; then show_help llama; else show_help "$1"; fi; exit 0 ;;
+  esac
 done
 case "$1" in
   dashboard|--no-start)
@@ -345,7 +355,8 @@ esac
 # Remember the backend: ./host/serve.sh with no arguments starts it next time.
 # Not for a server on another port (a test server).
 if [[ " $* " != *" --help-adv "* && ( -z "${PORT:-}" || "$PORT" == 8080 || "$PORT" == 8000 ) ]]; then
-  mkdir -p "$(dirname "$LAST_FILE")" && printf '%s\n' "$PRESET" > "$LAST_FILE" 2>/dev/null || true
+  # shellcheck disable=SC2174  # 0700 is meant for the settings folder only, not ~/.config
+  mkdir -p -m 700 "$(dirname "$LAST_FILE")" && printf '%s\n' "$PRESET" > "$LAST_FILE" 2>/dev/null || true
 fi
 
 for arg in "$@"; do
@@ -374,10 +385,8 @@ fi
 MX_USED=()
 if [[ "${SETTINGS_FILE_MTPLX:-}" != none ]]; then
   MX_ENV="$(python3 "$HERE/../tools/carl.py" mtplx-env)" || exit 1
-  while IFS='=' read -r k v; do
-    [[ "$k" =~ ^(CONTEXT|PROFILE|DEPTH|KV_QUANT|NET|HOST|SCHEDULER|BATCHING|PREFILL_CHUNK|SSD_CACHE)$ && -z "${!k:-}" ]] || continue
-    printf -v "$k" '%s' "$v"; MX_USED+=("$k=$v")
-  done <<< "$MX_ENV"
+  apply_settings "CONTEXT|PROFILE|DEPTH|KV_QUANT|NET|HOST|SCHEDULER|BATCHING|PREFILL_CHUNK|SSD_CACHE" "" <<< "$MX_ENV"
+  MX_USED=(${SETTINGS_USED[@]+"${SETTINGS_USED[@]}"})
 fi
 
 # MTPLX presets: bf16 KV + 48K. (The planner "fits" -- off 114,688/49,152,
@@ -418,10 +427,11 @@ set -- ${pass[@]+"${pass[@]}"}
 ensure_deps mtplx
 resolve_host "$NET_FLAG"
 PORT="${PORT:-8000}"
+is_port "$PORT" || { echo "error: PORT must be a TCP port (1-65535), got '$PORT'" >&2; exit 2; }
 API_KEY_FILE="${API_KEY_FILE:-$HOME/.mtplx/api-key}"
 ensure_api_key "$API_KEY_FILE"
 if pid=$(port_pid "$PORT") && [[ -n "$pid" ]]; then
-  echo "error: port $PORT is already in use by: $(ps -o command= -p ${pid%%$'\n'*} | cut -c1-100)" >&2
+  echo "error: port $PORT is already in use by: $(ps -o command= -p "${pid%%$'\n'*}" | cut -c1-100)" >&2
   exit 1
 fi
 guard_other_models               # a second model can crash the Mac (host/common.sh)

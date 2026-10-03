@@ -10,4 +10,5 @@
 #   host/models.sh verify NAME... | delete NAME | path NAME | get NAME FIELD | default | downloaded
 #
 # Also reachable as: ./carl.sh models | download | verify
+set -euo pipefail
 exec python3 "$(dirname "$0")/../tools/carl.py" "${@:-list}"

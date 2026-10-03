@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 # Shared by host/serve.sh (MTPLX presets) and host/serve-llama.sh. Sourced, not run.
 #
 # Network mode -- where the server listens:
@@ -17,16 +18,48 @@ VM_HOST="${VM_HOST:-192.168.42.1}"
 # port_host PORT: the address it listens on. netstat, not lsof: lsof stats every
 # mounted filesystem and hangs, unkillable, on a stale network share (a dead
 # Time Machine SMB volume froze ./carl.sh and the monitor).
-_listen() { /usr/sbin/netstat -anv -p tcp 2>/dev/null | awk -v p="$1" '
+# A PORT that isn't a number gives no answer (it is used inside an awk regex).
+is_port() { [[ "$1" =~ ^[0-9]{1,5}$ ]] && (( 10#$1 >= 1 && 10#$1 <= 65535 )); }
+_listen() { is_port "$1" || return 0; /usr/sbin/netstat -anv -p tcp 2>/dev/null | awk -v p="$1" '
   $6 == "LISTEN" && $4 ~ ("[.]" p "$") { a = $4; sub("[.]" p "$", "", a)
     pid = ""; if (match($0, /:[0-9]+ +[0-9][0-9][0-9][0-9][0-9] /)) { pid = substr($0, RSTART + 1, RLENGTH); sub(/ .*/, "", pid) }
     print a, pid; exit }'; }
 port_pid() { _listen "$1" | awk '{print $2}'; }
 port_host() { _listen "$1" | awk '{print ($1 == "*" ? "127.0.0.1" : $1)}'; }
 
-has_addr() { ifconfig 2>/dev/null | grep -q "inet ${1//./\\.} "; }
+has_addr() { ifconfig 2>/dev/null | grep -qF "inet $1 "; }
+
+# require_int NAME VALUE [MIN [MAX]]: fail unless VALUE is a whole number in range.
+# Settings reach bash arithmetic, which would evaluate anything else as an expression.
+require_int() {
+  local name="$1" v="$2" min="${3:-}" max="${4:-}"
+  if [[ ! "$v" =~ ^(0|[1-9][0-9]{0,8})$ ]] || { [[ -n "$min" ]] && (( 10#$v < min )); } || { [[ -n "$max" ]] && (( 10#$v > max )); }; then
+    echo "error: $name must be a whole number${min:+ from $min}${max:+ to $max}, got '$v'" >&2
+    exit 2
+  fi
+}
+
+# apply_settings ALLOWED FORCED: read KEY=value lines (tools/carl.py launch-env /
+# mtplx-env) from stdin and set each KEY matching the ALLOWED regex, unless the
+# environment already sets it (KEYs matching FORCED are always set). Values are
+# assigned with printf -v, never evaluated. SETTINGS_USED lists what was set.
+SETTINGS_USED=()
+apply_settings() {
+  local allowed="^($1)\$" forced="^($2)\$" k v
+  SETTINGS_USED=()
+  while IFS='=' read -r k v; do
+    [[ -n "$k" ]] || continue
+    if [[ ! "$k" =~ $allowed ]]; then
+      echo "warning: ignoring unknown setting '$k' from tools/carl.py" >&2; continue
+    fi
+    [[ "$k" =~ $forced || -z "${!k:-}" ]] || continue
+    printf -v "$k" '%s' "$v"
+    SETTINGS_USED+=("$k=$v")
+  done
+}
 
 # resolve_host MODE -> sets HOST (and NET_NOTE for the start-up banner)
+# shellcheck disable=SC2034  # NET_NOTE is read by the scripts that source this file
 resolve_host() {
   local mode="${1:-${NET:-auto}}"
   NET_NOTE=""
@@ -56,7 +89,7 @@ resolve_host() {
     esac
   fi
   case "$HOST" in
-    0.0.0.0|::|"[::]") echo "error: refusing to bind $HOST (would expose the server to the LAN)" >&2; exit 1 ;;
+    0.0.0.0|0|::|"[::]"|"*") echo "error: refusing to bind $HOST (would expose the server to the LAN)" >&2; exit 1 ;;
     127.0.0.1|localhost|::1) ;;
     *) has_addr "$HOST" || { echo "error: no interface has $HOST" >&2; exit 1; } ;;
   esac
@@ -66,9 +99,12 @@ resolve_host() {
 # no MTPLX installed). Clients copy it: client/install.sh, or the monitor's CONNECT section.
 ensure_api_key() {
   local f="$1"
-  [[ -s "$f" ]] && return 0
+  # An existing key (e.g. MTPLX's own) is kept, readable by its owner only.
+  if [[ -s "$f" ]]; then chmod go-rwx "$f" 2>/dev/null || true; return 0; fi
   mkdir -p "$(dirname "$f")"; chmod 700 "$(dirname "$f")"
-  ( umask 077; LC_ALL=C tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 40 > "$f" )
+  # pipefail off here: head closing the pipe ends tr with SIGPIPE, which would
+  # fail the subshell (and, under set -e, silently end the server start).
+  ( set +o pipefail; umask 077; LC_ALL=C tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 40 > "$f" )
   echo "created API key: $f (clients need it: ./carl.sh monitor shows it, or client/install.sh)" >&2
 }
 
@@ -80,7 +116,8 @@ ensure_deps() {
   [[ "${SKIP_DEPS:-0}" == 1 ]] && return 0
   local missing=() need_llama=1 a
   [[ "${1:-}" == mtplx ]] && need_llama=0
-  [[ -x /opt/homebrew/bin/brew ]] && eval "$(/opt/homebrew/bin/brew shellenv)" 2>/dev/null
+  # Homebrew's bin on PATH (what `brew shellenv` adds), for shells that lack it
+  [[ -x /opt/homebrew/bin/brew && ":$PATH:" != *":/opt/homebrew/bin:"* ]] && PATH="/opt/homebrew/bin:/opt/homebrew/sbin:$PATH"
   (( need_llama )) && ! command -v llama-server >/dev/null && missing+=(llama.cpp)
   command -v aria2c >/dev/null || missing+=(aria2)
   command -v ansifilter >/dev/null || missing+=(ansifilter)
@@ -92,6 +129,7 @@ ensure_deps() {
   echo "CARL needs: ${missing[*]} (not installed)"
   if ! command -v brew >/dev/null; then
     echo "Install Homebrew first (https://brew.sh), then run this again:" >&2
+    # shellcheck disable=SC2016  # the command is printed for the user, not run
     echo '  /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"' >&2
     exit 1
   fi
@@ -118,7 +156,8 @@ ensure_deps() {
 # name. ALLOW_SECOND_MODEL=1 skips the check.
 guard_other_models() {
   [[ "${ALLOW_SECOND_MODEL:-0}" == 1 ]] && return 0
-  local big=$(( ${BIG_GB:-8} * 1024 * 1024 )) found
+  require_int BIG_GB "${BIG_GB:-8}" 1
+  local big=$(( 10#${BIG_GB:-8} * 1024 * 1024 )) found
   found="$(ps -axo pid=,rss=,comm= 2>/dev/null | awk -v big="$big" -v me="$$" '
     $1 != me && ($2 > big || $3 ~ /(^|\/)(llama-server|mtplx|ollama|LM Studio)/) {
       printf "  pid %s, %.1f GB: %s\n", $1, $2 / 1048576, $3 }')"

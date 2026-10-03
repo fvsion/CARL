@@ -1,7 +1,13 @@
 // Vendored from @earendil-works/pi-coding-agent 1.0.0, examples/extensions/subagent
-// (MIT License). One change for LLM-Deploy: the tool description lists the
-// installed user-level agents with their "when to use" descriptions, so the
-// model can decide to delegate on its own (upstream lists no agents).
+// (MIT License). Changes for LLM-Deploy, all marked "LLM-Deploy:" (configure.py
+// also looks for that marker to recognise this copy as ours):
+// - the tool description lists the installed user-level agents with their
+//   "when to use" descriptions, so the model can decide to delegate on its own
+//   (upstream lists no agents);
+// - a promptSnippet and promptGuidelines put the tool and the coder rule into
+//   the system prompt;
+// - no `any`: tool-call arguments and the subagent's JSON events are `unknown`
+//   until checked.
 /**
  * Subagent Tool - Delegate tasks to specialized agents
  *
@@ -28,6 +34,7 @@ import {
 	type ExtensionAPI,
 	getAgentDir,
 	getMarkdownTheme,
+	type ThemeColor,
 	withFileMutationQueue,
 } from "@earendil-works/pi-coding-agent";
 import { Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
@@ -75,7 +82,7 @@ function formatUsageStats(
 function formatToolCall(
 	toolName: string,
 	args: Record<string, unknown>,
-	themeFg: (color: any, text: string) => string,
+	themeFg: (color: ThemeColor, text: string) => string,
 ): string {
 	const shortenPath = (p: string) => {
 		const home = os.homedir();
@@ -205,7 +212,7 @@ function truncateParallelOutput(output: string): string {
 	return `${truncated}\n\n[Output truncated: ${byteLength - Buffer.byteLength(truncated, "utf8")} bytes omitted. Full output preserved in tool details.]`;
 }
 
-type DisplayItem = { type: "text"; text: string } | { type: "toolCall"; name: string; args: Record<string, any> };
+type DisplayItem = { type: "text"; text: string } | { type: "toolCall"; name: string; args: Record<string, unknown> };
 
 function getDisplayItems(messages: Message[]): DisplayItem[] {
 	const items: DisplayItem[] = [];
@@ -218,6 +225,16 @@ function getDisplayItems(messages: Message[]): DisplayItem[] {
 		}
 	}
 	return items;
+}
+
+/** LLM-Deploy: a line of `pi --mode json` output; only `type` and `message` are read. */
+interface JsonEvent {
+	type?: unknown;
+	message?: unknown;
+}
+
+function isJsonEvent(value: unknown): value is JsonEvent {
+	return typeof value === "object" && value !== null;
 }
 
 async function mapWithConcurrencyLimit<TIn, TOut>(
@@ -356,12 +373,13 @@ async function runSingleAgent(
 
 			const processLine = (line: string) => {
 				if (!line.trim()) return;
-				let event: any;
+				let event: unknown;
 				try {
 					event = JSON.parse(line);
 				} catch {
 					return;
 				}
+				if (!isJsonEvent(event)) return;
 
 				if (event.type === "message_end" && event.message) {
 					const msg = event.message as Message;
@@ -472,7 +490,43 @@ const SubagentParams = Type.Object({
 	cwd: Type.Optional(Type.String({ description: "Working directory for the agent process (single mode)" })),
 });
 
+// LLM-Deploy: the user-level agents, read once when the extension loads. A
+// broken agents directory must not stop the tool from registering.
+function installedUserAgents(): AgentConfig[] {
+	try {
+		return discoverAgents(process.cwd(), "user").agents;
+	} catch {
+		return [];
+	}
+}
+
+// LLM-Deploy: the description lines that list the agents.
+function agentListing(agents: AgentConfig[]): string[] {
+	return agents.length ? ["\n\nAvailable agents:", ...agents.map((a) => `\n- ${a.name}: ${a.description}`)] : [];
+}
+
+// LLM-Deploy: without promptSnippet Pi leaves custom tools out of the system
+// prompt's "Available tools" list, and the model rarely delegates. The
+// guidelines carry the coder rule into the Guidelines section.
+function delegationPrompt(agents: AgentConfig[]): { promptSnippet?: string; promptGuidelines?: string[] } {
+	const names = agents.map((a) => a.name);
+	if (!names.length) return {};
+	// "llm-deploy-coder" when the user already had their own agent called "coder"
+	const coder = names.find((n) => n === "coder") ?? names.find((n) => n === "llm-deploy-coder");
+	return {
+		promptSnippet: `subagent: hand a task to a specialist agent with its own fresh context (agents: ${names.join(", ")})`,
+		promptGuidelines: coder
+			? [
+					`Large request (3+ files, ~150+ lines, a new module/package/tool/CLI, implementation plus tests, a multi-step feature or refactor): your FIRST action is the subagent tool with agent "${coder}" and a self-contained task. Do not start writing it yourself.`,
+					`Stuck: if a fix for the same code has already failed twice (your attempts, or ones the user says failed), delegate to agent "${coder}" with the code, the exact error and what was tried, instead of a third attempt.`,
+					"Questions, explanations, reading or searching code, and small or single-file edits: do them yourself, no subagent.",
+				]
+			: [],
+	};
+}
+
 export default function (pi: ExtensionAPI) {
+	const userAgents = installedUserAgents();
 	pi.registerTool({
 		name: "subagent",
 		label: "Subagent",
@@ -482,39 +536,9 @@ export default function (pi: ExtensionAPI) {
 			`Default agent scope is "user" (from ${path.join(getAgentDir(), "agents")}).`,
 			`To enable project-local agents in ${CONFIG_DIR_NAME}/agents, set agentScope: "both" (or "project").`,
 			// LLM-Deploy: tell the model which agents exist and when each one applies.
-			...(() => {
-				try {
-					const found = discoverAgents(process.cwd(), "user").agents;
-					return found.length
-						? ["\n\nAvailable agents:", ...found.map((a) => `\n- ${a.name}: ${a.description}`)]
-						: [];
-				} catch {
-					return [];
-				}
-			})(),
+			...agentListing(userAgents),
 		].join(" "),
-		// LLM-Deploy: without promptSnippet Pi leaves custom tools out of the system
-		// prompt's "Available tools" list, and the model rarely delegates. The
-		// guidelines carry the coder rule into the Guidelines section.
-		...(() => {
-			let names: string[] = [];
-			try {
-				names = discoverAgents(process.cwd(), "user").agents.map((a) => a.name);
-			} catch {}
-			if (!names.length) return {};
-			// "llm-deploy-coder" when the user already had their own agent called "coder"
-			const coder = names.find((n) => n === "coder") ?? names.find((n) => n === "llm-deploy-coder");
-			return {
-				promptSnippet: `subagent: hand a task to a specialist agent with its own fresh context (agents: ${names.join(", ")})`,
-				promptGuidelines: coder
-					? [
-							`Large request (3+ files, ~150+ lines, a new module/package/tool/CLI, implementation plus tests, a multi-step feature or refactor): your FIRST action is the subagent tool with agent "${coder}" and a self-contained task. Do not start writing it yourself.`,
-							`Stuck: if a fix for the same code has already failed twice (your attempts, or ones the user says failed), delegate to agent "${coder}" with the code, the exact error and what was tried, instead of a third attempt.`,
-							"Questions, explanations, reading or searching code, and small or single-file edits: do them yourself, no subagent.",
-						]
-					: [],
-			};
-		})(),
+		...delegationPrompt(userAgents),
 		parameters: SubagentParams,
 
 		async execute(_toolCallId, params, signal, onUpdate, ctx) {

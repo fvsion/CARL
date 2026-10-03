@@ -1,0 +1,180 @@
+"""Terminal text: ANSI colours, column-exact cutting and padding, bars, human-readable
+numbers, and the bordered cards every tab is drawn from. Pure functions."""
+from __future__ import annotations
+
+import re
+import textwrap
+import unicodedata
+from dataclasses import dataclass, field
+from typing import NamedTuple, Sequence, Union
+
+ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
+R, DIM, B = "\x1b[0m", "\x1b[2m", "\x1b[1m"
+GRN, YEL, RED, CYN, MAG = "\x1b[32m", "\x1b[33m", "\x1b[31m", "\x1b[36m", "\x1b[35m"
+NA = f"{DIM}N/A{R}"     # a value that is not known yet: cards keep their height
+
+Span = tuple[int, int, str]     # clickable columns of a row: (first, end exclusive, action), 0-based
+Row = tuple[str, list[Span]]    # one screen row and its clickable parts
+
+
+def cw(c: str) -> int:
+    """Terminal columns of one character: 2 for wide ones (emoji, CJK)."""
+    return 2 if unicodedata.east_asian_width(c) in "WF" else 1
+
+
+def vlen(s: str) -> int:
+    """Visible columns of a string that may hold colour codes."""
+    return sum(cw(c) for c in ANSI.sub("", s))
+
+
+def fit(s: str, w: int) -> str:
+    """Cut a coloured string to w visible columns and pad it."""
+    out: list[str] = []
+    n = i = 0
+    while i < len(s):
+        m = ANSI.match(s, i)
+        if m:
+            out.append(m.group())
+            i = m.end()
+            continue
+        c = cw(s[i])
+        if n + c > w:
+            break
+        if n + c >= w and vlen(s[i:]) > c:
+            out.append("…")
+            n += 1
+            break
+        out.append(s[i])
+        n += c
+        i += 1
+    return "".join(out) + R + " " * max(0, w - n)
+
+
+def wrap(s: str, w: int) -> list[str]:
+    """Hard-wrap the plain text of s every w characters (log lines)."""
+    plain = ANSI.sub("", s)
+    return [plain[i:i + w] for i in range(0, max(len(plain), 1), w)]
+
+
+def wwrap(text: str | None, w: int) -> list[str]:
+    """Word-wrap the plain text of text to w columns (at least 10)."""
+    return textwrap.wrap(ANSI.sub("", text or ""), max(w, 10)) or [""]
+
+
+def bar(frac: float | None, w: int = 18) -> str:
+    """A w-column fill bar: green below 70 %, yellow below 90 %, red above."""
+    f = max(0.0, min(1.0, frac or 0))
+    col = GRN if f < 0.7 else YEL if f < 0.9 else RED
+    n = round(f * w)
+    return f"{col}{'█' * n}{DIM}{'░' * (w - n)}{R}"
+
+
+def size(b: float | None) -> str:
+    """Bytes as 1.5G / 300.0M / 12K / 7B."""
+    if b is None:
+        return "?"
+    for unit, div in (("G", 2**30), ("M", 2**20), ("K", 2**10)):
+        if abs(b) >= div:
+            return f"{b / div:.0f}{unit}" if unit == "K" else f"{b / div:.1f}{unit}"
+    return f"{b:.0f}B"
+
+
+def knum(n: float | None) -> str:
+    """A token count as 12.3K or 950 (None counts as 0)."""
+    v = n or 0
+    return f"{v / 1000:.1f}K" if v >= 1000 else f"{v:.0f}"
+
+
+def dur(s: float | None) -> str:
+    """Seconds as 1h02m / 3m05s / 42s; None as a dash."""
+    if s is None:
+        return "–"
+    n = int(s)
+    return f"{n // 3600}h{n % 3600 // 60:02d}m" if n >= 3600 else f"{n // 60}m{n % 60:02d}s" if n >= 60 else f"{n}s"
+
+
+def ctx_label(v: object) -> str:
+    """A context size in tokens as 96K; anything that is not a whole number as itself."""
+    return f"{int(str(v)) // 1024}K" if str(v).isdigit() else str(v)
+
+
+def home_short(path: str, home: str) -> str:
+    """A path with the home directory shown as ~."""
+    return path.replace(home, "~")
+
+
+def pill(text: str, bg: str) -> str:
+    """Bold black text on a coloured background (bg: an SGR background code such as 42)."""
+    return f"\x1b[1;30;{bg}m {text} {R}"
+
+
+def lv(label: str, value: str, w: int = 10) -> str:
+    """A dim label padded to w columns, then the value."""
+    return f"{DIM}{label:<{w}}{R}{value}"
+
+
+@dataclass
+class Ln:
+    """A line of card text, optionally clickable as a whole (act) or in parts (spans of visible columns)."""
+    text: str = ""
+    act: str | None = None
+    spans: list[Span] = field(default_factory=list)
+
+
+CardLine = Union[str, Ln]
+
+
+class Card(NamedTuple):
+    """The content of a card: title, a summary after it in the header, and its lines."""
+    title: str
+    summary: str
+    lines: list[CardLine]
+
+
+def buttons(prefix: str, items: Sequence[tuple[str, str]]) -> Ln:
+    """A line of inline buttons after prefix: items = [(label, action)]."""
+    text, spans, col = prefix, [], vlen(prefix)
+    for label, act in items:
+        b = f"[ {label} ]"
+        spans.append((col, col + len(b), act))
+        text += f"{B}{CYN}{b}{R}  "
+        col += len(b) + 2
+    return Ln(text, spans=spans)
+
+
+def draw_card(name: str, title: str, summary: str, lines: Sequence[CardLine], w: int, lvl: int) -> list[Row]:
+    """Rows of a bordered card w columns wide. Its header (clickable: "level:<name>") shows
+    the detail level as dots: ○○ collapsed (the lines are hidden), ●○ normal, ●● full."""
+    arrow = "▾" if lvl else "▸"
+    dots = f"{CYN}{'●' * lvl}{DIM}{'○' * (2 - lvl)}{R}"
+    head = f"{DIM}╭─{R} {B}{CYN}{arrow} {title}{R} {dots} "
+    if summary:
+        head += f"{summary} "
+    fill = max(w - vlen(head) - 1, 0)
+    rows: list[Row] = [(fit(head + DIM + "─" * fill, w - 1) + f"{DIM}╮{R}", [(0, w, f"level:{name}")])]
+    if lvl:
+        for item in lines:
+            ln = item if isinstance(item, Ln) else Ln(item)
+            spans = [(2 + a, 2 + b, act) for a, b, act in ln.spans]
+            if ln.act:
+                spans.append((2, w - 2, ln.act))
+            rows.append((f"{DIM}│{R} " + fit(ln.text, w - 4) + f" {DIM}│{R}", spans))
+    rows.append((f"{DIM}╰{'─' * (w - 2)}╯{R}", []))
+    return rows
+
+
+def indent(rows: Sequence[Row], n: int = 1) -> list[Row]:
+    """Rows moved n columns to the right, clickable parts included."""
+    return [(" " * n + t, [(n + a, n + b, act) for a, b, act in sp]) for t, sp in rows]
+
+
+def side_by_side(left: Sequence[Row], right: Sequence[Row], lw: int, pad_left: bool = True) -> list[Row]:
+    """Two columns of rows, the left one lw columns wide, with a space before and between them.
+    pad_left=False trusts the left rows to be exactly lw wide already (cards are)."""
+    out: list[Row] = []
+    for i in range(max(len(left), len(right))):
+        lt, ls = left[i] if i < len(left) else (" " * lw, [])
+        rt, rs = right[i] if i < len(right) else ("", [])
+        out.append((" " + (fit(lt, lw) if pad_left else lt) + " " + rt,
+                    [(1 + a, 1 + b, act) for a, b, act in ls] + [(2 + lw + a, 2 + lw + b, act) for a, b, act in rs]))
+    return out

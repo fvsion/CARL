@@ -50,6 +50,7 @@ Each behaviour in this document was checked against the source code (MTPLX 2.11.
 
 - **CAUTION:** Run only one server at a time. Each model needs about 14–23 GB, and two models do not fit in 36 GB. If you run two servers, GPU out-of-memory errors occur. The running server then stays broken until you restart it. The launchers refuse to start a second model ([section 2](#2-llamacpp-details), "Launch guard").
 - **Both backends use the OpenAI API** (`/v1/chat/completions`, `/v1/models`) and the same Bearer key.
+- **Code layers on the Mac:** the shell launchers (`host/`) get their model and settings from `tools/carl.py`. `tools/carl.py` and `tools/gguf_shape.py` are thin facades over the package `tools/carl_core/`: a pure `domain/` (no I/O) and `adapters/` for the files, `sysctl` / `netstat`, Hugging Face, the downloads and `llama-server`. The monitor, `llama-fit.py` and `carl-tune.py` use the same facades ([Repository layout](#repository-layout)).
 - **The client side is a self-contained bundle** (`client/`). You can run it in the VM (copy it through the Fusion shared folder) or on the Mac itself (`./client/install.sh --local`).
 
 ## Repository layout
@@ -60,7 +61,7 @@ Each behaviour in this document was checked against the source code (MTPLX 2.11.
 | `CHANGELOG.md` | What changed in each release. |
 | `assets/` | The logo and the README screenshots. `tools/tuishot.py` makes the screenshots. |
 | `host/serve.sh` | The entry point on the Mac. Server commands: `llama`, `grant`, `pocket`. Tools: `monitor`, `fit`, `models`, `download`, `verify`, `tune`, `config`, `install`. `help [command]` shows the help for one command, and `-h` prints the overview. `--help-adv` lists every backend flag. With no arguments, it opens the dashboard. It runs MTPLX itself, and it gives `llama` to `serve-llama.sh`. |
-| `host/common.sh` | Both launchers use this file. It contains the network mode (`--vm` / `--local` / auto, never 0.0.0.0), the API-key creation, `ensure_deps` (the Homebrew tools), `port_pid` / `port_host` (port lookups with `netstat`), the launch guard and `run_server`. `run_server` runs the server in the background in its own process group, with the monitor in front. If there is no terminal, it runs a plain foreground server. |
+| `host/common.sh` | Both launchers use this file. It contains the network mode (`--vm` / `--local` / auto, never 0.0.0.0), the API-key creation, `ensure_deps` (the Homebrew tools), `port_pid` / `port_host` (port lookups with `netstat`), `apply_settings` (reads the `KEY=value` lines of `tools/carl.py` with an allow-list; values are never evaluated), `require_int` and `is_port` (input checks), the launch guard and `run_server`. `run_server` runs the server in the background in its own process group, with the monitor in front. If there is no terminal, it runs a plain foreground server. |
 | `host/serve-llama.sh` | The llama.cpp launcher: `--model`, `--kv q4\|q8`, `--ctx N\|Nk`, logging, keep-awake, thinking-toggle template. It gets the model and its settings from `tools/carl.py launch-env`. |
 | `host/catalog.json` | The built-in model catalogue. For each model: `hf` (repo, pinned revision, file, SHA-256, size), `summary`, `description`, `tune` (kv, ctx, slots, spec, spec_n, sampling), `why` (the reason for each tuned value), `ctx_zones`, `measured`. `default` and `default_small` select the default models. |
 | `host/models.sh` | A thin wrapper around `tools/carl.py`: `list`, `download NAME\|default\|all\|hf:OWNER/REPO/FILE.gguf`, `verify`, `delete`, `path`, `get`, `default`, `downloaded`. |
@@ -76,19 +77,23 @@ Each behaviour in this document was checked against the source code (MTPLX 2.11.
 | `client/opencode/plugins/mtplx-session-headers/` | An OpenCode plugin: session headers that let MTPLX use its prompt cache again (MTPLX only). |
 | `client/pi/models.json` | The Pi config template. |
 | `client/pi/extensions/mtplx-request-policy.ts` | A Pi extension: it sets session ids and controls the output cap for the MTPLX models. |
-| `tools/carl.py` | One place for the models and the settings: the catalogue, the models on this Mac (catalogue, models folder, Hugging Face downloads), `config.json` (validated) and the settings order. Downloads (pinned, SHA-256 verified), `launch-env` / `mtplx-env` for the launchers, `config show\|get\|set\|unset\|path`. The launchers, `llama-fit.py` and the monitor use it. |
+| `tools/carl_core/` | The models and settings logic, in layers. `domain/` is pure (no I/O): `types`, `settings`, `gguf`, `fit`, `models`, `hf`, `launch`, `records`, `tuning`, `ports`. `adapters/` does the I/O: `json_files`, `filesystem`, `gguf_reader`, `system` (sysctl, the GPU limit, the `netstat` parser), `huggingface`, `downloader`, `llama_server`, `console`. `app.py` holds the use cases, and `wiring.py` connects the adapters. |
+| `tools/carl.py` | A thin facade over `tools/carl_core` (its CLI and the API of the monitor). One place for the models and the settings: the catalogue, the models on this Mac (catalogue, models folder, Hugging Face downloads), `config.json` (validated) and the settings order. Downloads (pinned, SHA-256 verified), `launch-env` / `mtplx-env` for the launchers, `config show\|get\|set\|unset\|path`. The launchers, `llama-fit.py` and the monitor use it. |
 | `tools/carl-tune.py` | Auto-tune (`./carl.sh tune NAME [--quick]`): memory fit, speculation modes, prompt reading at 8K/32K/64K, context zones. It saves the result in `~/.config/llm-deploy/models.json`. |
-| `tools/llama-monitor.py` | The live monitor (the dashboard) for llama.cpp and MTPLX. Tabs: Overview, Connect, Requests, Log, Settings. The Settings tab has three panels: Server (the backend, the model and its settings, with the reason for each tuned value; restarts the server), Models (download, verify, delete, add from Hugging Face) and Auto-tune. |
-| `tools/llama-fit.py`, `tools/gguf_shape.py`, `tools/metal-limit.swift` | `serve.sh fit` and the memory check at server start. `gguf_shape.py` reads the GGUF metadata and does the KV/state maths (the monitor uses it too). `metal-limit.swift` reads the GPU memory limit of the Mac. |
+| `tools/llama-monitor.py` | The live monitor (the dashboard) for llama.cpp and MTPLX. Tabs: Overview, Connect, Requests, Log, Settings. The Settings tab has three panels: Server (the backend, the model and its settings, with the reason for each tuned value; restarts the server), Models (download, verify, delete, add from Hugging Face) and Auto-tune. On the Server panel the model card sits under the settings, full width; a click on its title cycles collapsed / normal / full. A thin launcher over the `tools/monitor/` package. |
+| `tools/monitor/` | The dashboard's code: pure formatting, state, settings and views (`fmt`, `model`, `keys`, `settings`, `cards`, `views`, `settings_view`, `state`), adapters (`system` for ps/netstat/sysctl/pmset, `api`, `collector`, `logtail`, `store` over `carl.py`, `jobs` for restart, Auto-tune and downloads, `terminal`), wiring (`app`, `controller`, `cli`). |
+| `tools/llama-fit.py`, `tools/gguf_shape.py`, `tools/metal-limit.swift` | `serve.sh fit` and the memory check at server start. `gguf_shape.py` (now a thin facade over `carl_core`) reads the GGUF metadata and does the KV/state maths (the monitor uses it too). `metal-limit.swift` reads the GPU memory limit of the Mac. |
 | `tools/make-share-zip.sh` | Makes a clean zip of this folder that you can share. |
 | `tools/tuishot.py` | Renders terminal screenshots and GIFs (the dashboard, OpenCode) for the README. |
 | `tools/llama-log.sh` | Shows the server log as plain text. |
-| `tools/llama-spec-sweep.sh`, `tools/llama-spec-bench.py` | The speculative-decoding sweep and its benchmark. |
+| `tools/llama-spec-sweep.sh`, `tools/llama-spec-bench.py` | The speculative-decoding sweep and its benchmark. The edit workload re-emits the (rewritten, 1.1.0) source of the bench, so its edit numbers are not directly comparable with older measurements. |
 | `tools/llama-ab.sh`, `tools/llama-ab-measure.py`, `tools/llama-kv-longctx.py` | The KV-type and `-ub` A/B test, and the ~64K needle test. |
 | `tools/llama-wait-idle.sh` | Waits until the server is idle. |
 | `tools/llama-sesstest.py` | A long-session test for llama.cpp. |
-| `tools/req-capture-proxy.py` | A request-capture proxy. |
-| `tools/make-memtest-prompt.py`, `tools/sesstest.py` | A memory test for long MTPLX sessions. |
+| `tools/req-capture-proxy.py` | A request-capture proxy. It refuses wildcard listen addresses, and it writes its log with mode 600. |
+| `tools/make-memtest-prompt.py`, `tools/sesstest.py` | A memory test for long MTPLX sessions. `sesstest.py` takes KEY `-` to read the key file (the key then does not show in `ps`). |
+| `tools/carl_bench.py` | Shared helpers for the small benchmark tools: the API key, chat requests, the PID of the listening server (`netstat`), the server memory. |
+| `tests/` | Unit tests. `python3 -m unittest discover -s tests` (the `carl_core` domain, app and adapters) `python3 -m unittest discover -s tests/scripts` (the shell helpers, `client/configure.py`, the small tools) and `python3 -m unittest discover -s tests/monitor -t tests/monitor` (the dashboard). They need no server and no model. |
 
 For the use of each tool, see USERGUIDE.md, "Benchmarking and testing".
 
@@ -174,7 +179,7 @@ For the use of each tool, see USERGUIDE.md, "Benchmarking and testing".
   - After a restart from the Settings tab, the health check also tries the selected address. Thus, a server on the LAN address is not taken as a failed start.
   - CAUTION: The script refuses 0.0.0.0 / `::`, also through `HOST=0.0.0.0`. The macOS firewall is off on this Mac, so a wildcard bind would make the model available to the LAN.
   - `client/install.sh --local` sets the clients to the address on which the server actually listens. `--host ADDR` sets any address.
-  - API key for `client/install.sh` (first hit wins): `--key KEY` / `--key-file FILE`, `$MTPLX_API_KEY`, a file `api-key` next to the script, the server key on the same Mac (`~/.mtplx/api-key`), the key from a previous run, a hidden prompt. The installer stores it at `~/.config/mtplx/api-key` (mode 600). `--key` leaves the key in the shell history.
+  - API key for `client/install.sh` (first hit wins): `--key KEY` / `--key-file FILE`, `$MTPLX_API_KEY`, a file `api-key` next to the script, the server key on the same Mac (`~/.mtplx/api-key`), the key from a previous run, a hidden prompt. The installer stores it at `~/.config/mtplx/api-key` (mode 600). `--key` leaves the key in the shell history. The smoke test gives the key to `curl` through a header file (`curl -H @file`, curl 7.55 or later), so the key does not show in `ps`.
 - **Memory check before load.** `serve-llama.sh` runs `tools/llama-fit.py --check`. It warns when weights + KV + buffers are more than the GPU limit ([below](#gpu-memory-limit-and-what-fits)). The warning does not block the start.
 - **Port guard.** `serve-llama.sh` does not start if a process already listens on the port (`port_pid`, see below). It does this check before it touches `llama-server-latest.log` or loads anything. Before this guard, a second `serve.sh` (10:08 on 2026-10-01) failed to bind. But it had already pointed the `latest` symlink to its own 4-line failure log.
 - **`/metrics` gauges reset at each read.** (`--metrics` enables this Prometheus endpoint.) `prompt_tokens_seconds` and `predicted_tokens_seconds` cover only the time since the last scrape. Thus, you must calculate averages from the `*_total` counters. The monitor does this.
@@ -219,8 +224,12 @@ netstat -anv -p tcp | awk '$6=="LISTEN" && $4 ~ /[.]8080$/ {n=split($(NF-8),a,":
 
 1. **Memory:** the largest window for each slot that fits the GPU limit, with 1 and 2 slots (the same maths as `./carl.sh fit`).
 2. **Speculation:** none, `ngram-mod` (n=2), and, if the GGUF has an MTP head, `draft-mtp` and `draft-mtp,ngram-mod` at n=1 and n=2 (`--quick`: n=1 only). Each mode generates prose, new code and a code re-emit, two times. The score is a weighted geometric mean (prose 0.4, code 0.4, re-emit 0.2). A mode with drafting must beat a simpler mode by 3% to win.
-3. **Prompt reading:** a cold read at 8K and 32K tokens, and 64K without `--quick`. The time for each token grows about linearly with the depth. From this, Auto-tune calculates the time to read a full window. The context zones of this Mac: a full cold read in ≤3 min = fast, ≤10 min = slow, more = very slow.
-4. **Result:** kv q4_0, the best speculation, the largest standard window (32K, 48K, 64K, 96K, 128K, 160K) in the fast zone that fits, and 2 slots if two windows fit. It is saved in `~/.config/llm-deploy/models.json`, with the speed of each mode, the read speeds and the zones.
+3. **Prompt reading:** a cold read at 8K and 32K tokens, and 64K without `--quick`. The time for each token grows about linearly with the depth. From this, Auto-tune calculates the time to read a full window. The context zones of this Mac: a full cold read in ≤3 min = fast, ≤10 min = slow, more = very slow. The fast zone is never smaller than 96K (`ctx_zones()` in `carl_core/domain/models.py`).
+4. **Result** (`choose_ctx()` in `carl_core/domain/tuning.py`): kv q4_0, the best speculation, the context, and 2 slots if two windows fit. It is saved in `~/.config/llm-deploy/models.json`, with the speed of each mode, the read speeds and the zones.
+   - If 96K fits one slot, 96K is the floor. Above it, Auto-tune keeps the catalogue window while a cold read of it is not worse than slow on this Mac and it fits. Otherwise, it uses the largest standard window (96K, 128K, 160K) in the fast zone that fits.
+   - If 96K does not fit, it uses the largest standard window (32K, 48K, 64K) that fits.
+
+NOTE: The re-emit workload copies `tools/carl_core/adapters/llama_server.py` back (since 1.1.0). Thus, re-emit scores are not directly comparable with older Auto-tune results.
 
 The dashboard (Settings, Auto-tune panel) stops the running server, runs the tune, and starts the server again.
 
@@ -276,7 +285,7 @@ You can override the settings with environment variables (`CTX`, `KV`, `KV_K`/`K
 | `qwen3.6-35b-a3b-iq3` (24 GB default) | 13.1 GiB | 256K | 256K (2 × 96K slots: ~15.3 GiB) | 256K |
 | `qwen3.8-27b-iq3` | 10.2 GiB | 256K | 256K (2 slots: ~128K each) | 256K |
 
-- **On a 24 GB Mac, the Q3 27B entries get only 1 slot.** Thus, `install.sh` does not install the coder subagent there. The IQ3 35B gets 2 × 96K slots. The IQ3 27B gets 2 × 64K slots (its default window).
+- **On a 24 GB Mac, the Q3 27B entries get only 1 slot.** Thus, `install.sh` does not install the coder subagent there. The IQ3 35B gets 2 × 96K slots. The IQ3 27B gets 2 × 96K slots (the default window). `orcarouter-27b-q3` is the one exception to the 96K floor: its catalogue window is 64K, because 96K does not fit a 24 GB Mac (~68K, estimate) and larger Macs use the Q4 build. An untuned start prints a note to run `./carl.sh tune orcarouter-27b-q3`; Auto-tune selects 96K wherever it fits.
 - **16 GB Macs (~10.7 GiB limit, estimate):** no catalogue model fits under the default limit. The IQ3 27B (10.2 GiB of weights) needs a raised limit (`sudo sysctl iogpu.wired_limit_mb=…`). `./carl.sh fit --ram 16` shows the numbers.
 - **The ~1 GiB buffer allowance is a conservative estimate.** On the 35B, the monitor measured ~0.5 GiB of "other" memory.
 - **The fit check does not include** the RAM that the rest of macOS and its apps need.
@@ -284,7 +293,7 @@ You can override the settings with environment variables (`CTX`, `KV`, `KV_K`/`K
 
 ### Context length: what longer windows cost
 
-The default is **96K tokens per slot** (both slots), for all models. Longer context windows work. But each cold read of a long session is slower, and each new token is slower. The table shows measurements on the 35B (q4_0 KV, 2 slots, M3 Pro 36 GB, `tools/llama-kv-longctx.py`, 2026-10-01):
+The default is **96K tokens per slot** (both slots), for all models. **96K is a floor:** users need that much context to work. The catalogue, the custom-model defaults and Auto-tune never select less if 96K fits. The Settings tab warns (yellow, red) only about windows above 96K. You can still select a larger window. Longer context windows work. But each cold read of a long session is slower, and each new token is slower. The table shows measurements on the 35B (q4_0 KV, 2 slots, M3 Pro 36 GB, `tools/llama-kv-longctx.py`, 2026-10-01):
 
 | Session size | Cold prompt read | Time to read it all | Decode (prose) | Decode (re-emit) | Recall (8 needles) |
 |---|---|---|---|---|---|
@@ -428,7 +437,7 @@ The test used the `grant` 27B with a 48K context window.
 | unsloth Qwen3.6-35B-A3B UD-Q4_K_M (MTP build, **default**, `qwen3.6-35b-a3b`, the `default` of `host/catalog.json`) | Stock MoE with 3B active. It has approximately 4× the decode speed and 6× the prompt read speed of the 27B. Its KV cache is very small, so long sessions and 2 slots cost little. It is the default since 2026-10-01 (the dense 27B is heavy for general use). |
 | unsloth Qwen3.8-27B UD-Q3_K_XL (`qwen3.8-27b-q3`, 13.1 GB) | For 24 GB Macs: ~148K window under a 16 GiB GPU limit (estimate). The unsloth "dynamic" 3-bit format keeps sensitive layers at higher precision. |
 | unsloth Qwen3.6-35B-A3B UD-IQ3_XXS (`qwen3.6-35b-a3b-iq3`, 14.1 GB) | **Default on 24 GB Macs** (catalogue `default_small`, selected when the main default cannot fit). Its MoE KV is very small (5.6 KiB/token at q4), so 2 × 96K slots fit in ~15.3 GiB. Thus, subagents work on these Macs. IQ formats unpack more slowly on Metal than K-quants, but only 3B parameters are active for each token: ~45–50 tok/s on an M2 Max (measured 2026-10-03, [below](#iq3-speculation-measured-2026-10-03)). Speculation: MTP + n-gram, 1 draft. |
-| unsloth Qwen3.8-27B UD-IQ3_XXS (`qwen3.8-27b-iq3`, 10.9 GB) | The smallest 27B build. For 24 GB Macs that want the dense 27B with 2 slots (2 × 64K fit), or a long window with 1 slot. It does not fit a 16 GB Mac under the default GPU limit (catalogue `min_ram_gb` 24; on 16 GB it needs a raised GPU limit). IQ3 loses more quality than Q3_K/Q4 in tool calls and edits: use it only when nothing larger fits. ~10 tok/s on new text, 31 tok/s on a re-emit (M2 Max). Speculation: MTP + n-gram, 1 draft. |
+| unsloth Qwen3.8-27B UD-IQ3_XXS (`qwen3.8-27b-iq3`, 10.9 GB) | The smallest 27B build. For 24 GB Macs that want the dense 27B with 2 slots (2 × 96K fit), or a long window with 1 slot. It does not fit a 16 GB Mac under the default GPU limit (catalogue `min_ram_gb` 24; on 16 GB it needs a raised GPU limit). IQ3 loses more quality than Q3_K/Q4 in tool calls and edits: use it only when nothing larger fits. ~10 tok/s on new text, 31 tok/s on a re-emit (M2 Max). Speculation: MTP + n-gram, 1 draft. |
 | orcarouter Qwen3.8-27B Q3_K_M (`orcarouter-27b-q3`, 14.6 GB) | Abliterated, for 24 GB Macs: ~68K window (estimate). Q3_K_L (15.3 GB) and Q3_K_XL (16.4 GB, bigger than the stock Q4) were not used. |
 
 - **All seven entries have the MTP head in the file.** For five entries, this was checked in the GGUF headers: `nextn_predict_layers = 1` and the four `nextn` tensors in block 64. For the two IQ3 builds, `nextn_predict_layers = 1` was checked on 2026-10-03, and MTP drafting ran on the 35B IQ3. Auto-tune reads the header, and tests MTP only if the head is there.
@@ -675,7 +684,7 @@ What you select → what occurs.
 |---|---|---|---|
 | `qwen3.8-27b-abliterated-llama` | off, low, medium, xhigh | `enable_thinking: false` → off | sent as `chat_template_kwargs.reasoning_effort` |
 | `qwen3.6-35b-a3b` | off, high | off | `high` = on (level ignored) |
-| MTPLX models | off, low, medium, high, xhigh | top-level `enable_thinking: false` → off | `high` → MTPLX changes it to `xhigh` |
+| MTPLX models | off, low, medium, xhigh | top-level `enable_thinking: false` → off | sent as `reasoning_effort`; `high` is hidden (MTPLX would change it to `xhigh`), as in OpenCode |
 
 The Pi `thinkingLevelMap` hides levels with `null`. `minimal` is hidden for all models.
 

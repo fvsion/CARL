@@ -2,19 +2,44 @@
 """One A/B measurement against a freshly started llama-server (empty cache).
 Prefill ~12K tokens cold, then generate 200 tokens at that context.
 Usage: python3 tools/llama-ab-measure.py LABEL [BASE_URL]"""
-import glob, json, os, subprocess, sys, urllib.request
-label = sys.argv[1]; base = sys.argv[2] if len(sys.argv) > 2 else "http://192.168.42.1:8080"
-key = open(os.path.expanduser("~/.mtplx/api-key")).read().strip()
-site = subprocess.check_output(["uv", "tool", "dir"], text=True).strip() + "/mtplx/lib/python3.12/site-packages/mtplx"
-buf, n = [], 0
-for f in sorted(glob.glob(site + "/*.py"), key=os.path.getsize):
-    t = open(f, errors="ignore").read()
-    if n + len(t) > 46000: continue
-    buf.append(f"### {os.path.basename(f)}\n{t}"); n += len(t)
-msgs = [{"role": "user", "content": "\n\n".join(buf) + "\n\nWrite a detailed summary of what these files do."}]
-body = {"model": "x", "max_tokens": 200, "chat_template_kwargs": {"enable_thinking": False}, "messages": msgs}
-req = urllib.request.Request(base + "/v1/chat/completions", data=json.dumps(body).encode(),
-                             headers={"Authorization": "Bearer " + key, "content-type": "application/json"})
-t = json.load(urllib.request.urlopen(req, timeout=3600)).get("timings", {})
-print(f"{label:22} prefill {t.get('prompt_n')} tok @ {t.get('prompt_per_second',0):6.1f} tok/s | "
-      f"gen@ctx {t.get('predicted_n')} @ {t.get('predicted_per_second',0):5.2f} tok/s", flush=True)
+from __future__ import annotations
+
+import argparse
+import glob
+import os
+import sys
+
+from carl_bench import DEFAULT_BASE, Message, chat_body, completion_from, mtplx_source_dir, post_chat, \
+    read_api_key, read_source, validate_base
+
+PROMPT_CHARS = 46000            # ~12K tokens of MTPLX source
+
+
+def build_prompt(site: str, limit: int = PROMPT_CHARS) -> str:
+    """The smallest files of SITE that fit LIMIT chars, plus the question."""
+    buf: list[str] = []
+    n = 0
+    for f in sorted(glob.glob(site + "/*.py"), key=os.path.getsize):
+        t = read_source(f)
+        if n + len(t) > limit:
+            continue
+        buf.append(f"### {os.path.basename(f)}\n{t}")
+        n += len(t)
+    return "\n\n".join(buf) + "\n\nWrite a detailed summary of what these files do."
+
+
+def main(argv: list[str]) -> int:
+    ap = argparse.ArgumentParser(description="One cold-prefill + decode A/B measurement against llama-server.")
+    ap.add_argument("label", help="name printed in front of the result")
+    ap.add_argument("base", nargs="?", default=DEFAULT_BASE, help=f"server URL (default {DEFAULT_BASE})")
+    a = ap.parse_args(argv)
+    base, key = validate_base(a.base), read_api_key()
+    msgs: list[Message] = [{"role": "user", "content": build_prompt(mtplx_source_dir())}]
+    t = completion_from(post_chat(base, key, chat_body(msgs, 200), timeout=3600)).timings
+    print(f"{a.label:22} prefill {t.get('prompt_n')} tok @ {t.get('prompt_per_second', 0):6.1f} tok/s | "
+          f"gen@ctx {t.get('predicted_n')} @ {t.get('predicted_per_second', 0):5.2f} tok/s", flush=True)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

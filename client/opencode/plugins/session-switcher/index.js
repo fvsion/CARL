@@ -1,2 +1,4 @@
-// Server half of the plugin: nothing to do server-side; the switcher lives in tui.js.
+// Server half of the plugin: nothing to do server-side; the switcher lives in
+// tui.js (OpenCode loads it through exports["./tui"]).
+/** @type {import("@opencode-ai/plugin").PluginModule & { id: string }} */
 export default { id: "session-switcher", server: async () => ({}) };

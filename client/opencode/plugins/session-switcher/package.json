@@ -1,7 +1,7 @@
 {
   "name": "llm-deploy-session-switcher",
   "version": "1.0.0",
-  "description": "OpenCode session switcher in the prompt box: the recent top-level sessions of this project with their state; arrows cycle, the title opens a picker, /switch opens it too.",
+  "description": "OpenCode session switcher in the prompt box: the recent top-level sessions of this project with their state (busy, waiting for you, idle); click ‹ › to cycle, the title or /switch opens a picker.",
   "type": "module",
   "license": "MIT",
   "exports": {

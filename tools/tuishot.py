@@ -16,27 +16,44 @@ Environment: COLS, ROWS (default 132 x 40), FONT_SIZE (default 15), TITLE (windo
 GIF_MS (frame time), TUISHOT_LOGO=PNG (draw that image in the top-left 4 x 2 cells, where
 iTerm2 shows the CARL logo; pyte cannot show images).
 """
-import fcntl, json, os, pty, select, signal, struct, sys, termios, time
+from __future__ import annotations
+
+import fcntl
+import json
+import os
+import pty
+import select
+import signal
+import struct
+import sys
+import termios
+import time
+from typing import Any
 
 import pyte
 from PIL import Image, ImageDraw, ImageFont
+
+RGB = tuple[int, int, int]
+Font = ImageFont.FreeTypeFont | ImageFont.ImageFont
 
 COLS, ROWS = int(os.environ.get("COLS", 132)), int(os.environ.get("ROWS", 40))
 FONT_SIZE = int(os.environ.get("FONT_SIZE", 15))
 FONT_DIRS = [os.path.expanduser("~/Library/Fonts"), "/Library/Fonts", "/System/Library/Fonts"]
 
 # A dark theme (Catppuccin Mocha-like): background, foreground, dim text, 16 ANSI colours.
-BG, FG, DIM_FG = (30, 30, 46), (205, 214, 244), (127, 132, 156)
-ANSI = {"black": (69, 71, 90), "red": (243, 139, 168), "green": (166, 227, 161), "brown": (249, 226, 175),
+BG: RGB = (30, 30, 46)
+FG: RGB = (205, 214, 244)
+DIM_FG: RGB = (127, 132, 156)
+ANSI: dict[str, RGB] = {"black": (69, 71, 90), "red": (243, 139, 168), "green": (166, 227, 161), "brown": (249, 226, 175),
         "yellow": (249, 226, 175), "blue": (137, 180, 250), "magenta": (245, 194, 231), "cyan": (148, 226, 213),
         "white": (186, 194, 222), "brightblack": (88, 91, 112), "brightred": (243, 139, 168),
         "brightgreen": (166, 227, 161), "brightyellow": (249, 226, 175), "brightblue": (137, 180, 250),
         "brightmagenta": (245, 194, 231), "brightcyan": (148, 226, 213), "brightwhite": (166, 173, 200)}
-KEYS = {"enter": "\r", "esc": "\x1b", "tab": "\t", "up": "\x1b[A", "down": "\x1b[B", "right": "\x1b[C",
+KEYS: dict[str, str] = {"enter": "\r", "esc": "\x1b", "tab": "\t", "up": "\x1b[A", "down": "\x1b[B", "right": "\x1b[C",
         "left": "\x1b[D", "ctrl-c": "\x03"}
 
 
-def font(names):
+def font(names: list[str]) -> Font:
     for d in FONT_DIRS:
         for n in names:
             p = os.path.join(d, n)
@@ -48,32 +65,37 @@ def font(names):
 REG = font(["FiraCode-Regular.ttf", "Menlo.ttc"])
 BOLD = font(["FiraCode-Bold.ttf", "FiraCode-SemiBold.ttf", "Menlo.ttc"])
 FALLBACKS = [font(["Menlo.ttc"]), font(["Apple Symbols.ttf"]), font(["STIXTwoMath.otf", "Monaco.ttf"])]
-CW = int(round(REG.getlength("M")))
+CW: int = int(round(REG.getlength("M")))
 CH = int(FONT_SIZE * 1.45)
 
 
 class DimScreen(pyte.Screen):
     """pyte drops SGR 2 (dim); keep it as 'italics', which these programs do not use."""
-    def select_graphic_rendition(self, *attrs, private=False):
-        out = []
+    def select_graphic_rendition(self, *attrs: int, private: bool = False) -> None:
+        out: list[int] = []
         for a in attrs:
             out += [3] if a == 2 else [22, 23] if a == 22 else [a]
         super().select_graphic_rendition(*out)
 
 
-def colour(name, default):
+def colour(name: str, default: RGB) -> RGB:
+    """A pyte colour (a name, or 6 hex digits) as RGB."""
     if name == "default":
         return default
     if name in ANSI:
         return ANSI[name]
+    if len(name) != 6:
+        return default
     try:
-        return tuple(int(name[i:i + 2], 16) for i in (0, 2, 4))
+        return (int(name[0:2], 16), int(name[2:4], 16), int(name[4:6], 16))
     except ValueError:
         return default
 
 
-_NOTDEF = {}
-def has_glyph(f, ch):
+_NOTDEF: dict[Font, bytes] = {}
+
+
+def has_glyph(f: Font, ch: str) -> bool:
     """False when f draws ch as its 'missing glyph' box (compared with a code point no font has)."""
     if ch == " ":
         return True
@@ -82,18 +104,23 @@ def has_glyph(f, ch):
             _NOTDEF[f] = bytes(f.getmask("\U0010fffd"))
         m = f.getmask(ch)
         return m.getbbox() is not None and bytes(m) != _NOTDEF[f]
-    except Exception:
+    except Exception:                       # PIL raises various errors for unrenderable glyphs
         return False
 
 
-def pick_font(f, ch):
+def pick_font(f: Font, ch: str) -> Font | None:
     """The first font that has ch, or None (then the cell stays empty instead of a box)."""
     if has_glyph(f, ch):
         return f
     return next((g for g in FALLBACKS if has_glyph(g, ch)), None)
 
 
-def render(screen, title):
+def dim(c: RGB) -> RGB:
+    """Dim text: c 62% of the way from the background."""
+    return (int(c[0] * 0.62 + BG[0] * 0.38), int(c[1] * 0.62 + BG[1] * 0.38), int(c[2] * 0.62 + BG[2] * 0.38))
+
+
+def render(screen: pyte.Screen, title: str) -> Image.Image:
     pad, bar = 18, 34
     w, h = COLS * CW + 2 * pad, ROWS * CH + 2 * pad + bar
     img = Image.new("RGB", (w, h), (17, 17, 27))
@@ -110,7 +137,7 @@ def render(screen, title):
             if ch.reverse:
                 fg, bg = bg, fg
             if ch.italics and not ch.reverse:
-                fg = tuple(int(c * 0.62 + b * 0.38) for c, b in zip(fg, BG))
+                fg = dim(fg)
             px, py = pad + x * CW, pad + bar + y * CH
             if bg != BG:
                 d.rectangle([px, py, px + CW, py + CH], fill=bg)
@@ -123,14 +150,19 @@ def render(screen, title):
     if logo and os.path.exists(logo):
         ic = Image.open(logo).convert("RGBA")
         side = min(4 * CW, 2 * CH)
-        ic = ic.resize((side, side), Image.LANCZOS)
+        ic = ic.resize((side, side), Image.Resampling.LANCZOS)
         img.paste(ic, (pad + (4 * CW - side) // 2, pad + bar), ic)
     return img
 
 
-def main():
+def main() -> None:
+    if "--" not in sys.argv or sys.argv.index("--") != 3 or len(sys.argv) < 5 or sys.argv[1] in ("-h", "--help"):
+        print(__doc__)
+        sys.exit(0 if len(sys.argv) > 1 and sys.argv[1] in ("-h", "--help") else 2)
     i = sys.argv.index("--")
-    steps, out = json.load(open(sys.argv[1])), sys.argv[2]
+    with open(sys.argv[1], encoding="utf-8") as f:
+        steps: list[list[Any]] = json.load(f)
+    out = sys.argv[2]
     cmd = sys.argv[i + 1:]
     os.makedirs(out, exist_ok=True)
     pid, fd = pty.fork()
@@ -141,9 +173,9 @@ def main():
     screen = DimScreen(COLS, ROWS)
     stream = pyte.ByteStream(screen)
     title = os.environ.get("TITLE", os.path.basename(cmd[0]))
-    gifs = {}
+    gifs: dict[str, list[Image.Image]] = {}
 
-    def pump(t):
+    def pump(t: float) -> None:
         end = time.time() + t
         while time.time() < end:
             r, _, _ = select.select([fd], [], [], 0.05)
@@ -156,7 +188,7 @@ def main():
                     return
                 stream.feed(data)
 
-    def find(text):
+    def find(text: str) -> tuple[int, int] | None:
         for y, line in enumerate(screen.display):
             x = line.find(text)
             if x >= 0:
@@ -188,7 +220,7 @@ def main():
                 gifs.setdefault(rest[0], []).append(render(screen, title))
                 pump(rest[2])
     for name, frames in gifs.items():
-        small = [f.convert("P", palette=Image.ADAPTIVE, colors=128) for f in frames]
+        small = [f.convert("P", palette=Image.Palette.ADAPTIVE, colors=128) for f in frames]
         small[0].save(os.path.join(out, name + ".gif"), save_all=True, append_images=small[1:],
                       duration=int(os.environ.get("GIF_MS", 900)), loop=0, optimize=True)
         print(f"gif {name}: {len(frames)} frames", flush=True)

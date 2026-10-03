@@ -161,9 +161,9 @@ Use this procedure when the clients are not in the VMware Fusion VM and not on t
    | Model | Largest context window (q4 KV) |
    |---|---|
    | **`qwen3.6-35b-a3b-iq3`** (default on 24 GB: stock fast MoE, 14.1 GB) | 2 × 96K slots (the default) fit in ~15.3 GiB, thus subagents work. 1 slot can go to 256K. |
-   | `qwen3.8-27b-iq3` (stock, the smallest 27B, 10.9 GB) | 2 × 64K slots (its default) fit, thus subagents work. 2 slots can go to ~128K each. 1 slot can go to 256K. |
-   | `qwen3.8-27b-q3` (stock, 13.1 GB) | ~148K, 1 slot |
-   | `orcarouter-27b-q3` (abliterated, 14.6 GB) | ~68K, 1 slot |
+   | `qwen3.8-27b-iq3` (stock, the smallest 27B, 10.9 GB) | 2 × 96K slots (the default) fit, thus subagents work. 2 slots can go to ~128K each. 1 slot can go to 256K. |
+   | `qwen3.8-27b-q3` (stock, 13.1 GB) | ~148K, 1 slot (the default 96K fits) |
+   | `orcarouter-27b-q3` (abliterated, 14.6 GB) | ~68K, 1 slot. Its default window is 64K (the one exception to the 96K floor: this build exists for 24 GB Macs). The start notes it and suggests `./carl.sh tune orcarouter-27b-q3`, which selects the largest window that fits. |
    | `qwen3.8-27b`, `orcarouter-27b` (Q4) | do not fit under the default limit |
    | `qwen3.6-35b-a3b` (Q4) | does not fit |
 
@@ -212,7 +212,7 @@ Use this procedure when the clients are not in the VMware Fusion VM and not on t
 | A 24 GB Mac (the default on that Mac) | `./carl.sh llama`, which selects `qwen3.6-35b-a3b-iq3` | `qwen3.6-35b-a3b` (the IQ3 uses the same name) |
 | A 24 GB Mac, stock | `./carl.sh llama --model qwen3.8-27b-q3` | `qwen3.8-27b` (the Q3 uses the same name) |
 | A 24 GB Mac, stock, the smallest 27B (10.9 GB) | `./carl.sh llama --model qwen3.8-27b-iq3` | `qwen3.8-27b` (the IQ3 uses the same name) |
-| A 24 GB Mac, uncensored | `./carl.sh llama --model orcarouter-27b-q3 --ctx 64k` | `qwen3.8-27b-abliterated-llama` |
+| A 24 GB Mac, uncensored | `./carl.sh llama --model orcarouter-27b-q3` | `qwen3.8-27b-abliterated-llama` |
 | Short session, faster than llama.cpp 27B, max 48K (MTPLX) | `./carl.sh grant` | `qwen3.8-27b-abliterated-grant` |
 
 **Key points:**
@@ -262,7 +262,7 @@ The Pi defaults are provider `llamacpp`, model `qwen3.6-35b-a3b` and thinking `l
 
 ## 5. Context window
 
-The context window is the quantity of conversation that the model can hold. The default is 96K tokens for each slot. Longer context windows work (recall stayed 8/8 up to ~150K), but they need more time. On the 35B, a cold prompt reads in these times:
+The context window is the quantity of conversation that the model can hold. The default is 96K tokens for each slot. 96K is a floor: CARL does not select less if 96K fits (agent work needs that much context). The one exception is `orcarouter-27b-q3`, a build only for 24 GB Macs: it starts at 64K and suggests a tune. The Settings tab warns only about larger windows. Longer context windows work (recall stayed 8/8 up to ~150K), but they need more time. On the 35B, a cold prompt reads in these times:
 
 - 64K: ~5 min
 - 128K: ~19 min
@@ -423,7 +423,7 @@ The Settings tab shows the description and the reasons next to the settings. The
 - **Each `.gguf` in the models folder is a model.** `./carl.sh models` lists it with the source `file`. Its name is the file name in lower case, without `.gguf`. Vision projectors (`mmproj…`) and the second and later parts of a split GGUF are not listed.
 - **`./carl.sh download hf:OWNER/REPO/FILE.gguf` downloads any GGUF from Hugging Face.** It gets the revision, the size and the SHA-256 from the Hugging Face API. Then it downloads the file and verifies it. A `huggingface.co` URL to the file also works. `hf:OWNER/REPO` (no file) lists the GGUF files of the repo.
 - CARL records these models in `~/.config/llm-deploy/models.json`. This file also holds the Auto-tune results for each model on this Mac.
-- **A custom model gets its first settings from its GGUF header:** q4_0 KV, 96K for each slot (MoE) or 64K (dense), and MTP + n-gram (1 draft) if the file has an MTP head. Without an MTP head: n-gram only (2 drafts). These settings are a guess. Run [Auto-tune](#auto-tune) to measure better values.
+- **A custom model gets its first settings from its GGUF header:** q4_0 KV, 96K for each slot (less only if the model was trained for less), and MTP + n-gram (1 draft) if the file has an MTP head. Without an MTP head: n-gram only (2 drafts). These settings are a guess. Run [Auto-tune](#auto-tune) to measure better values.
 - To start it: `./carl.sh llama --model NAME`. A path to a `.gguf` also works.
 - Before you use it from the clients, examine the chat template of the model. The thinking options are different between model families. The server answers with the loaded model for all model names, but the client sends the thinking options of the entry that you select.
 
@@ -449,8 +449,12 @@ Auto-tune measures the best settings for one model on this Mac. It takes about 5
 It does these steps. The model loads one time for each speculation mode.
 1. **Memory:** the largest context window that fits, with 1 slot and with 2 slots.
 2. **Speculation:** none, n-gram, and, if the file has an MTP head, MTP and MTP + n-gram with 1 and 2 drafts (`--quick`: 1 draft only). Each mode writes prose, new code and a code re-emit, two times. The score is a weighted geometric mean (prose 0.4, code 0.4, re-emit 0.2). A mode with drafting must be 3% better than a simpler mode to win.
-3. **Prompt reading:** a cold read at 8K, 32K and 64K tokens (`--quick`: no 64K). From these, it calculates the time to read a full window. This gives the context zones of this Mac: a cold read of the full window in 3 min or less = fast (green), in 10 min or less = slow (yellow), more = very slow (red).
-4. **Result:** q4_0 KV, the best speculation, the largest standard window in the fast zone that fits, and 2 slots if two windows fit.
+3. **Prompt reading:** a cold read at 8K, 32K and 64K tokens (`--quick`: no 64K). From these, it calculates the time to read a full window. This gives the context zones of this Mac: a cold read of the full window in 3 min or less = fast (green), in 10 min or less = slow (yellow), more = very slow (red). The fast zone always includes 96K: CARL never shows 96K or less as slow.
+4. **Result:** q4_0 KV, the best speculation, the context window and the slots (2 if two windows fit).
+   - **The context is never less than 96K if 96K fits one slot.** Users need that much context to work.
+   - Above 96K, Auto-tune keeps the catalogue window if a cold read of it is not worse than slow on this Mac and it fits. Otherwise, it selects the largest standard window in the fast zone (minimum 96K).
+   - If 96K does not fit (for example `orcarouter-27b-q3` on a 24 GB Mac), it selects the largest standard window that fits.
+   - NOTE: The re-emit workload now copies `tools/carl_core/adapters/llama_server.py`. Thus, the re-emit scores are not directly comparable with older Auto-tune results.
 
 - CARL saves the result in `~/.config/llm-deploy/models.json`. Each later start of the model uses it. A value that you set in the settings file has priority ([section 9](#the-settings-file)).
 - CAUTION: **Auto-tune needs the GPU for itself.** It does not start if a server runs on port 8080 or 8000, or if another large process (more than 8 GB, `BIG_GB`) or a known model server is in memory. `ALLOW_SECOND_MODEL=1` skips that check. Stop the server first. The **Auto-tune** panel of the dashboard stops the server for you, and starts it again after the tune.
@@ -575,6 +579,7 @@ The Settings tab (tab 5) has three panels: **Server**, **Models** and **Auto-tun
 3. Look at the colour of the values (llama.cpp):
    - **green:** the tuned value for this model, or a fast setting;
    - **yellow:** changed from the tuned value, or slower;
+   - A context of 96K or less is never yellow or red: 96K for each slot is the floor of the default window. Only larger windows get a warning (you can still select them).
    - **red:** very slow, or does not work on this model. For example, a context in the very slow zone, MTP speculation on a file without an MTP head, or MTP with more than 1 draft on an IQ quant.
 4. Read the right side (below the rows in a narrow terminal). It tells you what the model is, its recommended values (from Auto-tune or the catalogue), its context zones, and **why** the selected value is tuned that way.
 5. Read the **fit** line. It shows whether the model is downloaded and whether it fits in the GPU memory with these settings. If it does not fit, you cannot apply the settings.
@@ -780,15 +785,22 @@ tools/llama-wait-idle.sh 1200 && tools/llama-ab.sh all
 | Tool | Purpose |
 |---|---|
 | `./carl.sh tune NAME [--quick]` (`tools/carl-tune.py`) | Auto-tune: memory, speculation modes, prompt reading at 8K/32K/64K. It saves the result for this Mac in `~/.config/llm-deploy/models.json`. |
-| `tools/llama-spec-sweep.sh CFG...` + `tools/llama-spec-bench.py` | A speculative-decoding sweep. The sweep restarts the server for each config. The bench measures prose, code and edit decode speed. |
+| `tools/llama-spec-sweep.sh CFG...` + `tools/llama-spec-bench.py` | A speculative-decoding sweep. The sweep restarts the server for each config. The bench measures prose, code and edit decode speed. NOTE: the edit workload re-emits the source of `llama-spec-bench.py`, which was rewritten in 1.1.0. Thus, new edit numbers are not directly comparable with older measurements. |
 | `tools/llama-ab.sh [kv\|ub\|all]` | An A/B test of the KV type and `-ub`. It uses `tools/llama-kv-longctx.py` and `tools/llama-ab-measure.py`. It restarts the server. |
 | `tools/llama-kv-longctx.py` | A ~64K haystack with 8 needles: cold prefill, decode, append, recall. |
 | `tools/llama-wait-idle.sh [SECS] [BASE]` | Waits until the server stays idle for SECS (default 1200). |
 | `tools/llama-sesstest.py` | A multi-turn test of a long session (56K start, ~7K appends). It records the RSS. |
-| `tools/req-capture-proxy.py LISTEN UPSTREAM LOG` | A pass-through with a log: it records what a client actually sends. |
-| `tools/make-memtest-prompt.py` + `tools/sesstest.py` | A memory test for long MTPLX sessions. |
+| `tools/req-capture-proxy.py LISTEN UPSTREAM LOG` | A pass-through with a log: it records what a client actually sends. It refuses a wildcard listen address (`0.0.0.0`, `::`), and it writes the log with mode 600. |
+| `tools/make-memtest-prompt.py` + `tools/sesstest.py` | A memory test for long MTPLX sessions. For `sesstest.py`, give `-` as KEY: it then reads the key file (`$API_KEY_FILE` or `~/.mtplx/api-key`), so the key does not show in the process list. |
 
-The file headers give more details.
+The file headers give more details. `tools/carl_bench.py` holds the helpers that these small tools share (the API key, chat requests, the PID of the server from `netstat`, the server memory).
+
+**Unit tests** (no server and no model necessary), from the CARL folder:
+```bash
+python3 -m unittest discover -s tests            # tools/carl_core: domain, app, adapters
+python3 -m unittest discover -s tests/scripts    # shell helpers, client/configure.py, the small tools
+python3 -m unittest discover -s tests/monitor -t tests/monitor   # the dashboard (tools/monitor)
+```
 
 ---
 

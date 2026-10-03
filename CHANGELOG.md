@@ -21,9 +21,10 @@ Dates are local dates on the development Mac (M3 Pro, 36 GB).
   - **Server:** a model list (Enter) with every model. The values have colours: green = tuned / fast, yellow = changed / slower, red = very slow / no MTP head / MTP with n>1 on an IQ quant. The right side explains the model and why each value is tuned.
   - **Models:** the catalogue and the models folder. Download (with progress), verify, delete, add from Hugging Face.
   - **Auto-tune:** run it, and see the last results. It stops the running server, and starts it again after the tune.
-- **New catalogue model: `qwen3.8-27b-iq3`** (unsloth UD-IQ3_XXS, 10.9 GB), the smallest 27B. On a 24 GB Mac, 2 × 64K slots fit.
+- **New catalogue model: `qwen3.8-27b-iq3`** (unsloth UD-IQ3_XXS, 10.9 GB), the smallest 27B. On a 24 GB Mac, 2 × 96K slots fit.
 - **IQ3 speculation measured** (M2 Max 32 GB, llama.cpp 0.5.0, both IQ3 builds): MTP alone helps little on IQ3 (about nothing on the 35B, ~5–10% on the 27B), and n=2 costs ~15% on new text. MTP + n-gram with n=1 is the best on both models (about +5% over n-gram alone on the 35B, +9% on the 27B). Both IQ3 builds now use `draft-mtp,ngram-mod`, n=1; before, the 35B IQ3 used n=2 (copied from the Q4). The Q4 35B keeps n=2 (REFERENCE.md, "IQ3 speculation").
 - **`./carl.sh delete NAME`** deletes a model file. `./carl.sh verify` with no names verifies every downloaded model.
+- **Unit tests:** `python3 -m unittest discover -s tests` (domain, app, adapters) and `python3 -m unittest discover -s tests/scripts` (shell helpers, `client/configure.py`, the small tools).
 - **Dependency check.** `./carl.sh` looks for `llama-server`, `aria2` and `ansifilter`, and offers to `brew install` the missing tools. `SKIP_DEPS=1` skips the check.
 - **No model downloaded:** `./carl.sh` offers to download the default for this Mac, or opens the dashboard without a server.
 
@@ -32,13 +33,26 @@ Dates are local dates on the development Mac (M3 Pro, 36 GB).
 - **A default model that is not downloaded** falls back to the first downloaded model.
 - The REFERENCE.md IQ section: the IQ3 builds are now in the catalogue (for Macs where nothing larger fits). IQ quants are still not used on 36 GB.
 
+- **96K context for each slot is the floor of the default window** (users need that much context to work). The catalogue now gives 96K to `qwen3.8-27b-q3` and `qwen3.8-27b-iq3` (before: 64K), and the dense context zones start at 96K (96K / 128K / 160K). Custom models start at 96K (less only if the model was trained for less). The Settings tab never shows 96K or less in yellow or red; it warns only about larger windows. Auto-tune never selects less than 96K if 96K fits one slot. Above 96K, it keeps the catalogue window while a cold read of it is no worse than "slow" on this Mac and it fits. One exception: `orcarouter-27b-q3` keeps 64K. It exists only for 24 GB Macs, where 96K does not fit (~68K, estimate); larger Macs use the Q4 build. A start of a model whose catalogue window is below 96K, with no Auto-tune result and no window you set, prints a note to run `./carl.sh tune NAME`, and the fit warning (model too big for the window) also suggests a tune.
+- **Code layout:** the logic of `tools/carl.py` and `tools/gguf_shape.py` moved to the package `tools/carl_core/` (a pure `domain/`, `adapters/` for the I/O, `app.py`, `wiring.py`). The two files are now thin facades. `tools/carl_bench.py` holds the helpers that the small benchmark tools share. `host/common.sh` has `apply_settings` (an allow-listed `KEY=value` reader), `require_int` and `is_port`.
+- **Benchmarks:** the Auto-tune re-emit workload now copies `tools/carl_core/adapters/llama_server.py`, and the edit workload of `llama-spec-bench.py` re-emits its own rewritten source. Their re-emit / edit numbers are not directly comparable with older results.
+- **The API key stays out of the process list:** `client/install.sh` gives it to `curl` through a header file (`curl -H @file`, curl 7.55 or later). `tools/sesstest.py` takes KEY `-` to read the key file. `tools/req-capture-proxy.py` refuses wildcard listen addresses, and writes its log with mode 600.
+- **OpenCode plugin `mtplx-session-headers` has a second file, `mtplx.js`.** A manual copy of the plugin must include it (`install.sh` does this).
+
 ### Removed
 - `host/models.conf` (replaced by `host/catalog.json`).
 
 ### Fixed
+- The monitor crashed on its first refresh when `pmset -g assertions` printed a byte that is not UTF-8 (a Bluetooth device name such as a curly apostrophe in "Name’s Magic Keyboard"); command output is now decoded with replacement.
 - **The monitor and `./carl.sh` froze, and Ctrl-C did not stop them.** `lsof` hangs (and cannot be stopped) on a stale network share, for example a disconnected Time Machine SMB volume. CARL no longer uses `lsof`: port and PID lookups use `netstat -anv`.
 - The shell and Python scripts are executable in the repository (a fresh clone could not run `./carl.sh`).
 - Monitor: a mouse report or key sequence split across two reads no longer shows up as key presses. Mouse reporting is always turned off on exit.
+- The first start on a Mac without `~/.mtplx/api-key` no longer ends silently (`pipefail` and SIGPIPE in `ensure_api_key`).
+- OpenCode `mtplx-session-headers`: it read the provider id from the wrong field (`input.provider.id`, now `provider.info.id`), so its fallback never matched. Its `server.js` also had a `setup` function for a session hook that OpenCode 1.18.34 does not have, and it threw an error; it is removed (the V1 hooks already send the headers). Header values are validated (no CR/LF).
+- Pi: the MTPLX models offered thinking level `high`, which MTPLX turns into `xhigh` (Qwen3.8 has no `high`); it is hidden now, as in OpenCode.
+- OpenCode session switcher: it now redraws on question events.
+- Pi subagent extension: it no longer crashes on a JSON `null` line.
+- `tools/llama-sesstest.py` and `tools/llama-kv-longctx.py` no longer crash on the first turn (an int PID was passed to `subprocess`).
 
 ## 1.0.0 - 2026-10-02
 

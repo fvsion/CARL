@@ -4,5 +4,6 @@
 #   ./carl.sh                  the dashboard (attach, or start the last used server)
 #   ./carl.sh llama|grant|pocket [options]
 #   ./carl.sh -h               all commands
+set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CARL_CMD=./carl.sh exec "$here/host/serve.sh" "$@"
