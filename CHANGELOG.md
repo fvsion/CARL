@@ -8,6 +8,9 @@ Dates are local dates on the development Mac (M3 Pro, 36 GB).
 CARL now runs only llama.cpp.
 
 ### Added
+- **`heretic-35b-a3b`:** the Heretic 35B-A3B in Q4_K_M with the MTP head kept (llmfan46's MTP-preserved build, 21.8 GB, 32 GB+ Macs): the abliterated counterpart of the default model. Its settings are copied from the stock Q4 35B (not measured yet: run Auto-tune).
+- **Sort and filter the model lists:** by quality, speed, size, name or downloaded first; show all, a use case, stock, dense, MoE, downloaded or fits this Mac. The Models panel shows every option as clickable chips; `s` / `S` and `f` / `F` step forward and back.
+- **A model list beside the Server settings:** click a model (or `m`, ↑↓, Enter) instead of stepping through the model row; its sort and filter open as drop-downs.
 - **Two abliterated IQ3 builds:** `orcarouter-27b-iq3` (bartowski IQ3_XXS, 12.6 GB; two 96K slots on 24 GB Macs) and `heretic-35b-a3b-iq3` (mradermacher i1-IQ3_XXS of the Heretic 35B-A3B, 13.6 GB: 10/100 refusals vs 83/100, KL 0.0015; no MTP head, so n-gram speculation). Measured on an M2 Max: Heretic n-gram n=1 51.5/48.5/96.1 tok/s (prose/code/re-emit); orcarouter IQ3 n-gram n=2 8.8/8.6/19.8 (a tie with MTP + n-gram n=1). Both carry full model cards.
 
 ### Removed

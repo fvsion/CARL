@@ -7,6 +7,7 @@ import tempfile
 import unittest
 
 from mon_support import GIB, FakeStore
+from monitor.arrange import FILTERS
 from monitor.api import Endpoint
 from monitor.app import App, Machine
 from monitor.cli import Options
@@ -121,6 +122,37 @@ class AppTest(unittest.TestCase):
         self.assertEqual(self.ui.pending and self.ui.pending["kv"], "q4_0")
         self.keys("r")                                  # revert: from config.json again on the next frame
         self.assertEqual(self.ui.pending and self.ui.pending["model"], "auto")
+
+    def test_server_model_list_keys_and_click(self) -> None:
+        self.keys("5")
+        p = self.ui.pending
+        assert p is not None
+        self.keys("m")                                  # focus the list beside the settings
+        self.assertTrue(self.ui.slist)
+        self.keys(DOWN, "\r")                           # auto -> the first listed model
+        self.assertFalse(self.ui.slist)
+        first = p["model"]
+        self.assertNotEqual(first, "auto")
+        click = next(r for r in self.ctl.regions if r.action == "smodel:auto")
+        self.keys(f"\x1b[<0;{click.x0};{click.y}M\x1b[<0;{click.x0};{click.y}m")
+        self.assertEqual(p["model"], "auto")
+        before = (self.ui.msort, self.ui.mfilter)
+        self.keys("s", "f")                             # sort and filter from the Server panel
+        self.assertEqual((self.ui.msort, self.ui.mfilter), (before[0] + 1, before[1] + 1))
+
+    def test_sort_and_filter_drop_downs_and_back_steps(self) -> None:
+        self.keys("5")
+        self.ctl.do("msortpick")                         # the side list's "sort: … ▾" opens a drop-down
+        pk = self.ui.picker
+        assert pk is not None and pk.on_pick == "picksort"
+        self.keys(DOWN, DOWN, "\r")
+        self.assertEqual(self.ui.msort, 2)
+        self.keys("S")                                  # back one
+        self.assertEqual(self.ui.msort, 1)
+        self.keys("F")                                  # filter: back from "all" wraps to the last option
+        self.assertEqual(self.ui.mfilter, len(FILTERS) - 1)
+        self.ctl.do("mfilterset:0")                     # a chip click sets it directly
+        self.assertEqual(self.ui.mfilter, 0)
 
     def screen(self) -> str:
         return "\n".join(self.app.frame(self.ctl.data))

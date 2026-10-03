@@ -6,15 +6,17 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import List, Mapping
+from typing import List, Mapping, Optional, Tuple
 
 from .fmt import (B, CYN, DIM, GRN, R, RED, YEL, CardLine, Ln, Row, bar, buttons, ctx_label, draw_card, dur, fit,
-                  home_short, indent, lv, size, vlen, wwrap)
+                  home_short, indent, lv, side_by_side, size, vlen, wwrap)
 from .model import ModelInfo, ServerData, jdict
 from .settings import (ADV_WARN, LLAMA_ADV, MODEL_ROW_KEYS, NUMERIC, SET_HELP, UNMARKED, Pending,
                        SettingsService, fmt_val, shown_value)
+from .arrange import FILTERS, SORTS, arrange, label as arrange_label
 from .state import SUBPANELS, Confirm, Download, PickItem, Picker, TuneRun, UIState
 
+LIST_W = 40                                            # the Server panel's model list
 MODEL_HEADER = f"{DIM}{'':2}{'model':<26} {'size':>8}  {'status':<10} {'fits':>5} {'':6} role and good for{R}"
 PICKER_FOOT = ("↑↓ select · fits = largest window per slot that fits this Mac (q4_0, 1 slot) · "
                "download / add any GGUF from Hugging Face: ] Models panel (h)")
@@ -76,6 +78,34 @@ def speed_line(m: ModelInfo, tune: object) -> str:
     return f"{DIM}not measured yet: run Auto-tune{R}"
 
 
+def arrange_lines(sort: int, filt: int, w: int) -> List[CardLine]:
+    """Compact sort / filter controls (a narrow list): "sort: quality ▾ 2/5", click for a drop-down."""
+    so, fi = arrange_label(sort, filt)
+    out: List[CardLine] = []
+    for kind, val, idx, n, act in (("sort", so, sort, len(SORTS), "msortpick"), ("show", fi, filt, len(FILTERS), "mfilterpick")):
+        text = f"{kind}: {CYN}{val} ▾{R} {DIM}{idx % n + 1}/{n}{R}"
+        out.append(Ln(fit(text, w), act=act))
+    return out
+
+
+def arrange_chips(sort: int, filt: int, w: int) -> List[CardLine]:
+    """Every sort and filter option as a clickable chip, the current one highlighted (a wide list)."""
+    out: List[CardLine] = []
+    for kind, opts, cur, act in (("Sort", SORTS, sort % len(SORTS), "msortset"), ("Show", FILTERS, filt % len(FILTERS), "mfilterset")):
+        text, col = f"{B}{kind:<5}{R}", 5
+        spans: List[Tuple[int, int, str]] = []
+        for i, o in enumerate(opts):
+            chip = f" {o} "
+            if col + len(chip) + 1 > w:                     # wrap onto another line
+                out.append(Ln(text, spans=spans))
+                text, spans, col = " " * 5, [], 5
+            text += (f"\x1b[7m{chip}{R}" if i == cur else f"{DIM}{chip}{R}") + " "
+            spans.append((col, col + len(chip), f"{act}:{i}"))
+            col += len(chip) + 1
+        out.append(Ln(text, spans=spans))
+    return out
+
+
 class SettingsView:
     """Draws the Settings panels."""
 
@@ -92,8 +122,9 @@ class SettingsView:
         run = svc.running(d)
         rws = svc.rows(p)
         ui.set_row = min(ui.set_row, len(rws) - 1)
-        w = cols - 1
-        vw = 28 if w >= 110 else 18                        # value column: room for "draft-mtp,ngram-mod"
+        side = cols >= 130                                 # room for the model list beside the settings
+        w = cols - 1 - (LIST_W + 1 if side else 0)
+        vw = 28 if w >= 105 else 18                        # value column: room for "draft-mtp,ngram-mod"
         L: List[CardLine] = []
         if svc.models.error:                                # a broken catalogue / models.json: say so here
             L += [f"{RED}{x}{R}" for x in wwrap(f"model list unavailable: {svc.models.error}", w - 6)[:3]]
@@ -122,13 +153,46 @@ class SettingsView:
         L.append(f"{DIM}↑↓ select · ←→ change · * differs from the running server · wheel / PgUp PgDn scroll · "
                  f"context or slots: run install.sh again{R}")
         srv = "llama.cpp" if run else "no server"
-        rows = indent(draw_card("settings", "SERVER SETTINGS", f"{DIM}running: {srv} · port {port}{R}", L, w, 2))
+        card = draw_card("settings", "SERVER SETTINGS", f"{DIM}running: {srv} · port {port}{R}", L, w, 2)
+        if side:
+            rows = side_by_side(card, self.model_list(ui, p, LIST_W, len(card)), w, pad_left=False)
+        else:
+            rows = indent(card) + indent(self.model_list(ui, p, cols - 1, 14))
         ui.levels.setdefault("modelinfo", 1)
-        rows += indent(self.model_info(p, key, w, ui.levels["modelinfo"]))
+        rows += indent(self.model_info(p, key, cols - 1, ui.levels["modelinfo"]))
         if ui.confirm:
             rows = indent(self._confirm_restart(bool(run), port, min(w, 80))) + rows
         ui.set_scroll = max(0, min(ui.set_scroll, len(rows) - height))
         return rows[ui.set_scroll:ui.set_scroll + height]
+
+    def model_list(self, ui: UIState, p: Pending, w: int, height: int) -> List[Row]:
+        """A compact model selector beside the settings: click a model (or m, then ↑↓ Enter) to pick it;
+        s / f sort and filter. Only names and status: the card below has the rest."""
+        items = ["auto"] + [m["name"] for m in self.visible(ui.msort, ui.mfilter)]
+        cur = str(p.get("model", "auto"))
+        if not ui.slist:                                    # the cursor follows the chosen model
+            ui.srow = items.index(cur) if cur in items else 0
+        ui.srow = max(0, min(ui.srow, len(items) - 1))
+        so, fi = arrange_label(ui.msort, ui.mfilter)
+        st = {m["name"]: m["status"] for m in self.svc.models.get()}
+        tw = w - 4
+        L: List[CardLine] = arrange_lines(ui.msort, ui.mfilter, tw)
+        vis = max(height - 5, 3)
+        top = min(max(ui.srow - vis // 2, 0), max(len(items) - vis, 0))
+        for i in range(top, min(top + vis, len(items))):
+            name = items[i]
+            dot = (f"{GRN}●{R}" if st.get(name) == "downloaded" else f"{YEL}◐{R}" if st.get(name) == "partial"
+                   else f"{DIM}○{R}" if name != "auto" else f"{CYN}★{R}")
+            chosen = name == cur
+            text = f"{dot} {(B + CYN) if chosen else ''}{name}{R}" + (f" {DIM}(this Mac's default){R}" if name == "auto" else "")
+            if ui.slist and i == ui.srow:
+                text = f"\x1b[7m{fit(text, tw - 2)}{R}"
+            L.append(Ln(("› " if chosen else "  ") + text, act=f"smodel:{name}"))
+        more = len(items) - vis
+        L.append(f"{DIM}{top + 1}-{min(top + vis, len(items))} of {len(items)} · " if more > 0 else DIM)
+        L[-1] = str(L[-1]) + ("↑↓ Enter · m or Esc: back" if ui.slist else "click, or m for keys") + R
+        summary = f"{DIM}● here ○ not downloaded{R}"
+        return draw_card("modellist", "MODEL", summary, L, w, 2)
 
     def _row(self, ui: UIState, p: Pending, run: Pending, i: int, key: str, label: str, vw: int) -> Ln:
         """One setting: [<] new value [>]  * running value. The value is coloured (value_color)."""
@@ -309,13 +373,28 @@ class SettingsView:
         L += ["", buttons("", [("Choose (Enter)", "pickok"), ("Cancel (Esc)", "pickno")]), f"{DIM}{pk.foot or PICKER_FOOT}{R}"]
         return indent(draw_card("picker", pk.title, f"{DIM}{n} {pk.noun}{R}", L, w, 2))
 
-    def model_picker(self, cur: str) -> Picker:
-        """A drop-down of every model, downloaded ones first, with "auto" on top."""
-        ms = self.svc.models.get()
+    def visible(self, sort: int, filt: int) -> List[ModelInfo]:
+        """The models in the current sort order, filtered (the Models panel and the drop-down)."""
+        return arrange(self.svc.models.get(), sort, filt, self.svc.max_ctx)
+
+    def arrange_picker(self, kind: str, sort: int, filt: int, reopen: Optional[str] = None) -> Picker:
+        """A drop-down of every sort (or filter) option, the current one selected."""
+        opts, cur = (SORTS, sort) if kind == "sort" else (FILTERS, filt)
+        items: List[PickItem] = [(str(i), f"{i + 1:>2}. {o}") for i, o in enumerate(opts)]
+        return Picker(title="SORT MODELS BY" if kind == "sort" else "SHOW MODELS", items=items,
+                      on_pick="picksort" if kind == "sort" else "pickfilter", sel=cur % len(opts),
+                      noun="options", header=f"{DIM}  ↑↓ Enter{R}", foot="↑↓ select · Enter choose · Esc cancel", reopen=reopen)
+
+    def model_picker(self, cur: str, sort: int = 0, filt: int = 0) -> Picker:
+        """A drop-down of the models ("auto" on top) in the chosen order and filter; s / f change them."""
+        ms = self.visible(sort, filt)
         items: List[PickItem] = [("auto", f"{'auto':<26} {DIM}this Mac's default: {self.svc.resolved_model({'model': 'auto'})}{R}")]
-        items += [(m["name"], m) for m in ms if m["status"] == "downloaded"] + [(m["name"], m) for m in ms if m["status"] != "downloaded"]
+        items += [(m["name"], m) for m in ms]
+        so, fi = arrange_label(sort, filt)
         return Picker(title="CHOOSE A MODEL", items=items, on_pick="pickmodel",
-                      sel=next((i for i, it in enumerate(items) if it[0] == cur), 0))
+                      sel=next((i for i, it in enumerate(items) if it[0] == cur), 0),
+                      noun=f"models · sort: {so} · show: {fi}",
+                      foot=PICKER_FOOT + " · s / S sort, f / F filter: next / previous (use case, stock, dense / MoE, downloaded, fits)")
 
     def confirm(self, c: Confirm, cols: int) -> List[Row]:
         """A yes / no question."""
@@ -326,10 +405,15 @@ class SettingsView:
     # ------------------------------------------------------------ panel 2: models + downloads
     def models(self, ui: UIState, cols: int, height: int, mdir: ModelsDir) -> List[Row]:
         """Every model, the selected one's details, the download in progress and the actions."""
-        ms = self.svc.models.get()
+        ms = self.visible(ui.msort, ui.mfilter)
         ui.mrow = max(0, min(ui.mrow, len(ms) - 1))
         w = cols - 2
-        L: List[CardLine] = [MODEL_HEADER]
+        so, fi = arrange_label(ui.msort, ui.mfilter)
+        L: List[CardLine] = [*arrange_chips(ui.msort, ui.mfilter, w - 4),
+                             f"{DIM}{len(ms)} of {len(self.svc.models.get())} models · s / S and f / F step forward / back, or click{R}",
+                             MODEL_HEADER]
+        if not ms:
+            L.append(f"{DIM}  no model matches \"{fi}\": pick another filter above{R}")
         vis = max(height - 22, 4)
         top = min(max(ui.mrow - vis // 2, 0), max(len(ms) - vis, 0))
         for i in range(top, min(top + vis, len(ms))):

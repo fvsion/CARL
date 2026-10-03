@@ -37,6 +37,7 @@ class Picker:
     header: Optional[str] = None
     foot: Optional[str] = None
     noun: str = "models"
+    reopen: Optional[str] = None    # sort / filter picker: reopen the model drop-down on this model
 
 
 @dataclass
@@ -119,7 +120,11 @@ class UIState:
     edit: Optional[str] = None      # a number being typed into the selected row
     confirm: bool = False           # Apply: "restart?" asked
     restart: Optional[str] = None   # what a restart is doing now
-    mrow: int = 0                   # Models panel: the selected model
+    mrow: int = 0                   # Models panel: the selected model (in the sorted, filtered list)
+    msort: int = 0                  # model lists: index into arrange.SORTS
+    slist: bool = False             # Server panel: the model list beside the settings has the keys
+    srow: int = 0                   # Server panel: the cursor in that list
+    mfilter: int = 0                # model lists: index into arrange.FILTERS
     picker: Optional[Picker] = None
     confirm2: Optional[Confirm] = None
     text: Optional[TextPrompt] = None

@@ -589,6 +589,80 @@
       "rank": 6
     },
     {
+      "name": "heretic-35b-a3b",
+      "label": "Heretic 35B-A3B · Q4_K_M (abliterated)",
+      "backend": "llama",
+      "format": "gguf",
+      "family": "qwen3.6-35b-a3b",
+      "arch": "moe",
+      "params": "35B total, 3B active per token",
+      "quant": "Q4_K_M",
+      "abliterated": true,
+      "mtp": true,
+      "min_ram_gb": 32,
+      "tested": false,
+      "alias": "qwen3.6-35b-a3b",
+      "hf": {
+        "repo": "llmfan46/Qwen3.6-35B-A3B-uncensored-heretic-Native-MTP-Preserved-GGUF",
+        "revision": "fa96dc904fe4dafb415ca707afab30aee2d2e703",
+        "file": "Qwen3.6-35B-A3B-uncensored-heretic-Native-MTP-Preserved-Q4_K_M.gguf",
+        "sha256": "fc89d92377b27fe0f80eb683a5105d0921234c24f7c1d70ecc2356ddf994d781",
+        "bytes": 21780313248
+      },
+      "summary": "Abliterated 35B-A3B (Heretic) in Q4_K_M with the MTP head kept: the stock default's speed without refusals, 32 GB+ Macs.",
+      "description": "llmfan46's Qwen3.6-35B-A3B uncensored with Heretic (a documented abliteration tool: 10/100 refusals vs 83/100 for the original, KL divergence 0.0015), the 'Native MTP Preserved' build: all 20 MTP (nextn) tensors kept, so MTP + n-gram speculation works as on the stock Q4. Not yet measured in CARL: its settings are copied from the stock Q4 35B; run Auto-tune.",
+      "tune": {
+        "kv": "q4_0",
+        "ctx": 98304,
+        "slots": "auto",
+        "temp": 1.0,
+        "top_p": 0.95,
+        "top_k": 20,
+        "min_p": 0,
+        "presence": 0,
+        "spec": "draft-mtp,ngram-mod",
+        "spec_n": 2
+      },
+      "why": {
+        "kv": "q4_0 K and V: measured +16% cold prompt reading and ~2 GB less memory than q8_0, same decode speed and 8/8 needle recall at 66K. Never mix K and V types: mixed q8_0/q4_0 reads prompts ~5x slower on Metal.",
+        "temp": "Qwen's thinking-mode recommendation from the model card: temperature 1.0, top_p 0.95, top_k 20, min_p 0. Clients that send their own values (OpenCode's no-thinking variant) win per request.",
+        "spec": "MTP + n-gram, n=2: copied from the stock Q4 35B (measured best there on an M3 Pro); this build keeps the MTP head. Not measured on this build yet: run Auto-tune.",
+        "ctx": "96K per slot: cold reads stay fast (64K reads at 229 tok/s, 128K at 117 tok/s on the M3 Pro). 128K-160K work with 8/8 recall but every cold re-read takes 4x longer.",
+        "slots": "2 slots: the main OpenCode session and a coder subagent each keep their own cache; the follow-up after a subagent takes 0.6 s instead of a full re-read."
+      },
+      "ctx_zones": {
+        "good": 98304,
+        "slow": 131072,
+        "very_slow": 163840
+      },
+      "measured": [],
+      "role": "Uncensored everyday agent coding (32 GB+)",
+      "good_for": [
+        "uncensored",
+        "agent coding",
+        "chat & writing"
+      ],
+      "why_use": "The fast A3B with refusals removed by a documented method (Heretic: 10/100 refusals vs 83/100, KL 0.0015), at 4-bit with the MTP head kept: the abliterated counterpart of the default model.",
+      "trade_offs": "Needs a 32 GB+ Mac (21.8 GB); weaker than the 27B on hard code; never chosen automatically; speculation settings not measured on this build yet.",
+      "pick_instead": [
+        {
+          "model": "heretic-35b-a3b-iq3",
+          "when": "on a 24 GB Mac"
+        },
+        {
+          "model": "orcarouter-27b",
+          "when": "uncensored hard code"
+        },
+        {
+          "model": "qwen3.6-35b-a3b",
+          "when": "refusals don't matter"
+        }
+      ],
+      "hardware": "32 GB Macs and up",
+      "uncensored": "Uncensored: the refusal behaviour was removed from the weights (abliteration), so it answers requests the stock model declines, e.g. security research and exploit analysis, red-team prompts, frank medical, legal or drug questions, mature fiction. It adds no knowledge or skill and keeps the stock model's mistakes; you are responsible for how you use it.",
+      "rank": 5
+    },
+    {
       "name": "heretic-35b-a3b-iq3",
       "label": "Heretic 35B-A3B · IQ3_XXS (abliterated)",
       "backend": "llama",
@@ -652,6 +726,10 @@
       "why_use": "The fast A3B with refusals removed by a documented method (Heretic: 10/100 refusals vs 83/100, KL 0.0015): A3B speed and two 96K slots in ~15 GiB, so it fits 24 GB Macs.",
       "trade_offs": "~3-bit IQ, and no MTP head (n-gram speculation only, a little slower on new text than a build with MTP); weaker than the 27B on hard code; never chosen automatically.",
       "pick_instead": [
+        {
+          "model": "heretic-35b-a3b",
+          "when": "on 32 GB and up (Q4, with the MTP head)"
+        },
         {
           "model": "orcarouter-27b",
           "when": "uncensored hard code (on 32 GB and up)"

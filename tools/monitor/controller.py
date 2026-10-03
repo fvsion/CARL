@@ -17,17 +17,21 @@ from .jobs import ServerJobs
 from .keys import (BACKSPACE, DOWN, END, END_ALT, ENTER, ESC, LEFT, LEFTKEY, PGDN, PGUP, RIGHT, UP, WHEEL_DOWN,
                    WHEEL_UP, Click, split_mouse, strip_escapes)
 from .logtail import LogTail
-from .model import ServerData, clean
+from .model import ModelInfo, ServerData, clean
 from .settings import NUMERIC, Pending, SettingsService, parse_typed, step_choice
+from .arrange import FILTERS, SORTS
 from .settings_view import SettingsView
 from .state import SUBPANELS, TABS, Confirm, Picker, TextPrompt, UIState
 from .store import ModelList
 
 TEMPLATES = {"opencode": "opencode/opencode.json", "pi": "pi/models.json"}     # client config templates in client/
-SETTINGS_ACTIONS = ("museit", "mdl", "mverify", "mdelete", "mdelyes", "mhf", "mcancel", "mtune",
+SETTINGS_ACTIONS = ("msort", "mfilter", "msort-", "mfilter-", "msortpick", "mfilterpick",
+                    "museit", "mdl", "mverify", "mdelete", "mdelyes", "mhf", "mcancel", "mtune",
                     "tprev", "tnext", "tpick", "tquick", "trun", "tyes", "tcancel", "tclear")
 MODEL_KEYS = {"\r": "museit", "\n": "museit", "d": "mdl", "v": "mverify", "x": "mdelete", "h": "mhf", "c": "mcancel",
-              "u": "mtune"}
+              "u": "mtune", "s": "msort", "f": "mfilter",
+              "S": "msort-", "F": "mfilter-"}
+ARRANGE_KEYS = {"s": "msort", "S": "msort-", "f": "mfilter", "F": "mfilter-"}   # every model list
 TUNE_KEYS = {"\r": "trun", "\n": "trun", RIGHT: "tnext", LEFTKEY: "tprev", "c": "tcancel", " ": "tquick"}
 SCROLL_KEYS = {UP: 1, DOWN: -1, PGUP: 10, PGDN: -10}
 PANEL_PASSTHROUGH = ("q", "Q", "\x03", "\t")       # keys the Models / Auto-tune panels leave to the app
@@ -104,7 +108,8 @@ class Controller:
     def do(self, action: str) -> None:
         """Run an action: a clicked region's or button's, or one a key stands for."""
         ui, d = self.ui, self.data
-        if action.startswith(("set", "sp:", "pick", "mrow:", "c2no")) or action in SETTINGS_ACTIONS:
+        if action.startswith(("set", "sp:", "pick", "mrow:", "smodel:", "msortset:", "mfilterset:", "c2no")) \
+                or action in SETTINGS_ACTIONS:
             self.settings_action(action)
         elif action.startswith("level:"):
             nm = action[6:]
@@ -164,7 +169,21 @@ class Controller:
         if act.startswith("mrow:"):
             ui.mrow = int(act[5:])
             return
-        ms = self.models.get()
+        if act.startswith("smodel:"):                    # the Server panel's model list
+            self.choose_model(act[7:])
+            return
+        if act in ("msortpick", "mfilterpick"):         # a drop-down of every sort / filter
+            ui.picker = self.view.arrange_picker("sort" if act == "msortpick" else "filter", ui.msort, ui.mfilter)
+            return
+        if act.startswith(("msort", "mfilter")):        # msort / msort- (step), msortset:N (choose)
+            kind = "sort" if act.startswith("msort") else "filter"
+            if ":" in act:
+                self.set_arrangement(kind, int(act.split(":", 1)[1]))
+            else:
+                cur = ui.msort if kind == "sort" else ui.mfilter
+                self.set_arrangement(kind, cur + (-1 if act.endswith("-") else 1))
+            return
+        ms = self.visible()
         m = ms[min(ui.mrow, len(ms) - 1)] if ms else None
         if act == "museit" and m:
             chosen = ui.pending if ui.pending is not None else self.pending_init(d)
@@ -279,9 +298,54 @@ class Controller:
             ui.confirm = False
             self.jobs.restart(p, d)
 
+    def server_list_keys(self, rest: str) -> bool:
+        """Keys for the Server panel's model list: m focuses it (↑↓ Enter, m / Esc leave); s / f sort
+        and filter it (and every model list)."""
+        ui = self.ui
+        items = ["auto"] + [m["name"] for m in self.visible()]
+        if rest == "m" or (ui.slist and rest == ESC):
+            ui.slist = not ui.slist
+        elif rest in ARRANGE_KEYS:
+            self.settings_action(ARRANGE_KEYS[rest])
+        elif ui.slist and UP in rest:
+            ui.srow = max(ui.srow - 1, 0)
+        elif ui.slist and DOWN in rest:
+            ui.srow = min(ui.srow + 1, len(items) - 1)
+        elif ui.slist and rest in ENTER and items:
+            self.choose_model(items[min(ui.srow, len(items) - 1)])
+            ui.slist = False
+        return True
+
+    def set_arrangement(self, kind: str, index: int) -> None:
+        """Set the model lists' sort or filter (index wraps), keeping the selected model when it is
+        still listed; an open model drop-down is rebuilt in the new order."""
+        ui = self.ui
+        name = self.visible()[ui.mrow]["name"] if self.visible() else None
+        if kind == "sort":
+            ui.msort = index % len(SORTS)
+        else:
+            ui.mfilter = index % len(FILTERS)
+        ms = self.visible()
+        ui.mrow = next((i for i, x in enumerate(ms) if x["name"] == name), 0)
+
+    def visible(self) -> List[ModelInfo]:
+        """The Models panel's list: sorted and filtered as the user chose."""
+        return self.view.visible(self.ui.msort, self.ui.mfilter)
+
     def open_model_picker(self) -> None:
         """Open the model drop-down on the pending model."""
-        self.ui.picker = self.view.model_picker(str((self.ui.pending or {}).get("model", "auto")))
+        self.ui.picker = self.view.model_picker(str((self.ui.pending or {}).get("model", "auto")), self.ui.msort, self.ui.mfilter)
+
+    def choose_model(self, name: str) -> None:
+        """Make name the pending model and load its profile (the picker and the Server panel's list)."""
+        ui = self.ui
+        if ui.pending is None:
+            return
+        ui.pending["model"] = name
+        self.svc.load_profile(ui.pending, name)
+        m = self.models.by_name(self.svc.resolved_model(ui.pending))
+        if m and m["status"] != "downloaded":
+            ui.toast(f"{m['name']} is not downloaded: Models panel (]) → Download", 8)
 
     def picker_choose(self) -> None:
         """Use the picker's selection: a model for the Server panel, a file to download, a model to tune."""
@@ -290,16 +354,16 @@ class Controller:
         if pk is None:
             return
         val = pk.items[pk.sel][0]
-        if pk.on_pick == "pickmodel" and ui.pending is not None:
-            ui.pending["model"] = val
-            self.svc.load_profile(ui.pending, val)
-            m = self.models.by_name(self.svc.resolved_model(ui.pending))
-            if m and m["status"] != "downloaded":
-                ui.toast(f"{m['name']} is not downloaded: Models panel (]) → Download", 8)
+        if pk.on_pick == "pickmodel":
+            self.choose_model(str(val))
         elif pk.on_pick == "pickhf" and ui.hf:
             self.jobs.start_download(f"hf:{ui.hf.repo}/{val}")
         elif pk.on_pick == "picktune":
             ui.tune_model = val
+        elif pk.on_pick in ("picksort", "pickfilter"):
+            self.set_arrangement("sort" if pk.on_pick == "picksort" else "filter", int(str(val)))
+            if pk.reopen:                               # back to the model drop-down it came from
+                ui.picker = self.view.model_picker(pk.reopen, ui.msort, ui.mfilter)
 
     def commit_edit(self, key: str) -> None:
         """Settings: store a typed value (Enter) if it is a valid number for that row."""
@@ -342,6 +406,10 @@ class Controller:
                 pk.sel = max(pk.sel - 10, 0)
             elif PGDN in rest:
                 pk.sel = min(pk.sel + 10, len(pk.items) - 1)
+            elif rest in ARRANGE_KEYS and pk.on_pick == "pickmodel":
+                cur = str(pk.items[pk.sel][0])
+                self.settings_action(ARRANGE_KEYS[rest])
+                ui.picker = self.view.model_picker(cur, ui.msort, ui.mfilter)
             elif rest in ENTER:
                 self.picker_choose()
             elif rest == ESC:
@@ -364,7 +432,7 @@ class Controller:
                 ui.mrow = max(ui.mrow - 1, 0)
                 return True
             if DOWN in rest:
-                ui.mrow = min(ui.mrow + 1, len(self.models.get()) - 1)
+                ui.mrow = max(min(ui.mrow + 1, len(self.visible()) - 1), 0)
                 return True
             if rest in MODEL_KEYS:
                 self.settings_action(MODEL_KEYS[rest])
@@ -375,6 +443,8 @@ class Controller:
                 self.settings_action(TUNE_KEYS[rest])
                 return True
             return rest not in PANEL_PASSTHROUGH and not rest.isdigit()
+        if ui.sp == 0 and ui.pending is not None and (ui.slist or rest == "m" or rest in ARRANGE_KEYS):
+            return self.server_list_keys(rest)
         if ui.sp == 0 and ui.pending is not None and rest in ENTER and self.selected_key() == "model":
             self.open_model_picker()
             return True

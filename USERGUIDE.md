@@ -207,6 +207,7 @@ Use this procedure when the clients are not in the VMware Fusion VM and not on t
 | **The default:** Qwen3.6-35B-A3B (MoE, ~4× faster decode and ~6× faster prompt read than the 27B) | `./carl.sh llama` | `qwen3.6-35b-a3b` |
 | The dense 27B (stock), if you specifically want it | `./carl.sh llama --model qwen3.8-27b` | `qwen3.8-27b` |
 | Uncensored (abliterated) 27B, with the best measured quality in long sessions | `./carl.sh llama --model orcarouter-27b` | `qwen3.8-27b-abliterated-llama` |
+| Uncensored and fast: the abliterated A3B (Heretic, Q4 with the MTP head; 32 GB+) | `./carl.sh llama --model heretic-35b-a3b` | `qwen3.6-35b-a3b` (same name as the stock 35B) |
 | A 24 GB Mac (the default on that Mac) | `./carl.sh llama`, which selects `qwen3.6-35b-a3b-iq3` | `qwen3.6-35b-a3b` (the IQ3 uses the same name) |
 | A 24 GB Mac, stock | `./carl.sh llama --model qwen3.8-27b-q3` | `qwen3.8-27b` (the Q3 uses the same name) |
 | A 24 GB Mac, stock, the smallest 27B (10.9 GB) | `./carl.sh llama --model qwen3.8-27b-iq3` | `qwen3.8-27b` (the IQ3 uses the same name) |
@@ -557,13 +558,14 @@ The Settings tab (tab 5) has three panels: **Server**, **Models** and **Auto-tun
    - **yellow:** changed from the tuned value, or slower;
    - A context of 96K or less is never yellow or red: 96K for each slot is the floor of the default window. Only larger windows get a warning (you can still select them).
    - **red:** very slow, or does not work on this model. For example, a context in the very slow zone, MTP speculation on a file without an MTP head, or MTP with more than 1 draft on an IQ quant.
-4. Read the **MODEL** card below the settings (both are full width). It tells you what the model is for and why to pick it. Click its title to change the detail: collapsed (name, role and tags in the title), normal, full. `e` / `c` expand or collapse all cards, and the mouse wheel or PgUp / PgDn scroll the panel.
+4. **Pick a model from the list beside the settings** (on a wide terminal; below them on a narrow one): click a model, or push `m`, then ↑ ↓ and Enter (`m` or Esc goes back to the settings). `●` = downloaded, `○` = not downloaded, `★ auto` = this Mac's default. Above the list, `sort: … ▾ 1/5` and `show: … ▾ 1/10` open a drop-down of every option when you click them; `s` / `S` and `f` / `F` step through them. The list only selects: everything about the model is on the card below.
+5. Read the **MODEL** card below the settings. It tells you what the model is for and why to pick it. Click its title to change the detail: collapsed (name, role and tags in the title), normal, full. `e` / `c` expand or collapse all cards, and the mouse wheel or PgUp / PgDn scroll the panel.
    - **Normal:** the role, the **good for** tags (`agent coding`, `hard code`, `chat & writing`, `uncensored`), **why use it**, the **trade-offs**, the hardware it is meant for, the speed (measured on this Mac after Auto-tune, else the catalogue figure and the Mac it came from), the recommended values next to yours, the context zones, and **why** the selected value is tuned that way.
    - **Full:** also what *uncensored* means (abliterated models), the models to **pick instead** and when, the quality **rank**, the description, the reason for every tuned value, the Auto-tune table, and the source and file.
    - The model list (Enter on the model row) shows the role and the tags of each model, and *why use it* and the trade-offs of the selected one.
-5. Read the **fit** line. It shows whether the model is downloaded and whether it fits in the GPU memory with these settings. If it does not fit, you cannot apply the settings.
-6. Press `a` (or click **[ Apply and restart ]**; with no server: **[ Start server ]**). Then press `y` to confirm.
-7. Wait while the model loads (about 30 s to 2 min). The footer shows the progress.
+6. Read the **fit** line. It shows whether the model is downloaded and whether it fits in the GPU memory with these settings. If it does not fit, you cannot apply the settings.
+7. Press `a` (or click **[ Apply and restart ]**; with no server: **[ Start server ]**). Then press `y` to confirm.
+8. Wait while the model loads (about 30 s to 2 min). The footer shows the progress.
 
 - CAUTION: **Apply stops the server.** Requests in progress stop. Make sure that no client waits for an answer.
 - **If the new server does not start,** the monitor starts the old server again with its old values. A message shows the last lines of the error.
@@ -589,7 +591,8 @@ The Settings tab (tab 5) has three panels: **Server**, **Models** and **Auto-tun
 - The monitor saves the advanced values in the same settings file. You can also set them as environment variables, for example `TOP_K=40 ./carl.sh llama`.
 
 **Models panel:**
-- It lists the catalogue models and each `.gguf` in the models folder, with the size, the status (downloaded, partial, missing), whether it fits this Mac, and a summary. Below the list: the description, the source and the file of the selected model, and its Auto-tune result.
+- It lists the catalogue models and each `.gguf` in the models folder, with the size, the status (downloaded, partial, missing), whether it fits this Mac, and the role and "good for" tags.
+- **Sort and filter:** the two rows of chips above the list show every option, the current one highlighted. Click one, or step with `s` / `S` (sort: next / previous) and `f` / `F` (filter: next / previous). Sort: downloaded first, quality (the catalogue rank), speed (MoE first, then smaller files), size, name. Show: all, a use case (agent coding, hard code, chat & writing, uncensored), stock, dense, MoE, downloaded, fits this Mac. The same order applies to every model list (the Server panel's list and the model drop-down). Below the list: the description, the source and the file of the selected model, and its Auto-tune result.
 - **Enter:** use this model (the Server panel opens with it; push `a` to start it).
 - **`d`:** download. A progress bar shows the speed and the ETA, then the checksum check. `c` cancels; the partial file stays, and Download continues it.
 - **`v`:** verify the SHA-256 (about 1 min). **`x`:** delete the file (not the model that is loaded). **`u`:** open the Auto-tune panel for this model.
