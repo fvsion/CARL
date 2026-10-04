@@ -9,6 +9,8 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple, TypedDict, Union
 
+from carl_core.domain.gguf import ModelShape
+
 JSONDict = Dict[str, Any]
 TaskId = Union[int, str, None]      # the slot's task number
 
@@ -87,25 +89,7 @@ def flag_int(cmd: str, *names: str, default: int) -> int:
         return default
 
 
-class Shape(TypedDict):
-    """A GGUF model's memory shape (tools/gguf_shape.py model_shape)."""
-    arch: str
-    blocks: int
-    nextn: int
-    attn_layers: int
-    rec_layers: int
-    kv_elems_per_token: int
-    kv_elems_per_token_mtp: int
-    rs_bytes: int
-    experts: int
-    experts_used: int
-    ctx_train: int
-    ftype: str
-    kvh: int
-    kl: int
-    vl: int
-    effort_levels: bool
-    thinking_switch: bool
+Shape = ModelShape        # a GGUF model's memory shape (carl_core.domain.gguf)
 
 
 class ModelInfo(TypedDict, total=False):

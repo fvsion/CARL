@@ -1,6 +1,5 @@
 """HTTP to the llama.cpp server: GETs, and the writes the dashboard makes: a router's
-/models/load and /models/unload (the Router panel's buttons), and the pre-read prompt cache
-(prefix.py: /apply-template, /tokenize, /completion, /slots save and restore)."""
+/models/load and /models/unload (the Router panel's buttons)."""
 from __future__ import annotations
 
 import http.client

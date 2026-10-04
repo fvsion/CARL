@@ -37,6 +37,8 @@ CLI (./carl.sh models | download | verify use it through host/models.sh)
   carl.py config [show|path|get KEY|set KEY VALUE|unset KEY]   KEY like llama.net or models.NAME.ctx
   carl.py card NAME [set FIELD VALUE... | unset FIELD]   a model's card (custom models: yours, editable;
                                        catalogue models: read-only). FIELD like role, good_for, rank
+  carl.py cache [show|trim|clear]      the disk cache of prompt states (~/.config/carl/slots): what it
+                                       holds, trim it to cache.disk_gb, or remove every file
 
 This module is also the public API of the monitor (tools/llama-monitor.py): the functions
 below take and return plain dicts. The logic lives in tools/carl_core.
@@ -316,6 +318,32 @@ def cmd_config(argv: Sequence[str]) -> None:
         save_config(cfg)
 
 
+def cmd_cache(argv: Sequence[str]) -> None:
+    """The disk cache OpenCode and Pi fill (monitor.diskcache): show, trim to the limit, or clear."""
+    from monitor import diskcache          # the dashboard's module: the same rules as its Caching panel
+    sub = argv[0] if argv else "show"
+    folder = os.path.join(os.path.dirname(CONFIG_FILE), "slots")
+    conf = diskcache.config_of(load_config())
+    if sub == "trim":
+        diskcache.remove(folder, diskcache.legacy(folder))
+        gone = diskcache.over_budget(diskcache.listing(folder), conf.limit)
+        diskcache.remove(folder, gone)
+        print(f"removed {len(gone)} file(s) over the {conf.disk_gb} GB limit" if gone else "within the limit")
+        return
+    files = diskcache.listing(folder)
+    if sub == "clear":
+        diskcache.remove(folder, [f.name for f in files])
+        print(f"removed {len(files)} file(s) from {folder}")
+        return
+    if sub != "show":
+        raise ConfigError("usage: carl.py cache [show|trim|clear]")
+    print(f"{folder}: {diskcache.gb(diskcache.used(files))} of {conf.disk_gb} GB, {len(files)} file(s) "
+          f"(prompts {'on' if conf.prefix else 'off'}, conversations {'on' if conf.sessions else 'off'})")
+    for f in sorted(files, key=lambda f: -f.mtime):
+        kind = "prompt" if f.kind == diskcache.PROMPT else "conversation"
+        print(f"  {kind:<12}  {diskcache.describe(f.name):<60} {f.bytes / 2**20:8.0f} MB")
+
+
 def cmd_download(names: List[str]) -> int:
     if not names:
         raise ConfigError("usage: download NAME...|default|all|hf:OWNER/REPO/FILE.gguf")
@@ -429,6 +457,8 @@ def main(argv: List[str]) -> int:
         cmd_config(a)
     elif cmd == "card":
         cmd_card(a)
+    elif cmd == "cache":
+        cmd_cache(a)
     elif cmd in ("-h", "--help", "help"):
         print(__doc__)
     else:

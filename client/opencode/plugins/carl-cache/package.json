@@ -1,0 +1,14 @@
+{
+  "name": "carl-cache",
+  "version": "1.0.0",
+  "description": "CARL's prompt cache for OpenCode: each session's conversation and each agent's prompt saved on the CARL server's disk and restored before the next request, so restarts, model switches and reopened sessions don't re-read everything.",
+  "type": "module",
+  "license": "MIT",
+  "exports": {
+    ".": { "import": "./index.js" },
+    "./server": { "import": "./index.js" }
+  },
+  "peerDependencies": {
+    "@opencode-ai/plugin": ">=1.14.0"
+  }
+}

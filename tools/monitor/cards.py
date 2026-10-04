@@ -44,8 +44,7 @@ class View:
     errors_only: bool = False
     log_scroll: int = 0                 # lines back from the end
     level_override: Dict[str, int] = field(default_factory=dict)
-    prefix: str = ""                    # the pre-read prompt cache's state (tools/monitor/prefix.py)
-    sessions: str = ""                  # the rolling conversation cache's state (tools/monitor/sessions.py)
+    cache: str = ""                     # what the disk cache holds (tools/monitor/diskcache.py)
 
     def level(self, name: str) -> int:
         """A card's detail level: 0 collapsed, 1 normal, 2 full (1 for cards without one)."""
@@ -118,10 +117,8 @@ def card_connect(v: View, d: ServerData) -> Card:
         L.append(Ln(lv("api key", f"{MAG}{shown}{R}  ") + f"{DIM}{'hide' if v.key_shown else 'show'} (k){R}", "key"))
         L.append(lv("reachable", reach))
         L.append(lv("clients", f"{len(d.conns)} connected" + (f" from {', '.join(hosts)}" if hosts else "")))
-        if v.prefix:
-            L.append(lv("pre-read", v.prefix))
-        if v.sessions:
-            L.append(lv("sessions", v.sessions))
+        if v.cache:
+            L.append(lv("cache", v.cache))
         L.append(buttons(f"{DIM}{'copy':<10}{R}", [("OpenCode", "opencode"), ("Pi", "pi"), ("curl", "curl")]))
     if lvl >= 2:
         L.append(lv("key file", home_short(v.key_file, v.home)))

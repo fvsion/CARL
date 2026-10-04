@@ -275,7 +275,7 @@ python3 "$HERE/configure.py" --bundle "$HERE" --home "$HOME" --host "$HOST" \
   --web-search "$web_search" --lsp "$([[ "${NO_LSP:-0}" == 1 || "${LSP:-1}" == 0 ]] && echo 0 || echo 1)" \
   --background "$([[ "${NO_BACKGROUND_SUBAGENTS:-0}" == 1 ]] && echo 0 || echo 1)" \
   --profile "$([[ "${NO_PROFILE:-0}" == 1 ]] && echo 0 || echo 1)" \
-  --prefix-cache "$([[ "${NO_PREFIX_CACHE:-0}" == 1 ]] && echo 0 || echo 1)" \
+  --cache "$([[ "${NO_CACHE:-0}" == 1 || "${NO_PREFIX_CACHE:-0}" == 1 ]] && echo 0 || echo 1)" \
   --browser "$([[ "${NO_BROWSER:-0}" == 1 ]] && echo 0 || echo 1)" --browser-headed "$([[ "${BROWSER_HEADED:-0}" == 1 ]] && echo 1 || echo 0)"
 
 # --- Smoke test ----------------------------------------------------------------

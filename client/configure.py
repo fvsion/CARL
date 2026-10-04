@@ -44,9 +44,10 @@ Rules
   for the main agents and on for a "browser" subagent ("carl-browser" next to a user's own
   "browser"), so the main prompt stays under 10.5K tokens (measured: the 26 browser tools
   are ~4.8K); in Pi a deferred MCP server (tool_search loads its tools when needed).
-- OpenCode plugin carl-prefix-cache (the same kind of entry): records the system prompt and
-  tools OpenCode sends in ~/.config/carl/prefix/, for the dashboard's pre-read prompt cache
-  (tools/monitor/prefix.py). NO_PREFIX_CACHE=1 leaves it out.
+- The prompt cache (client/shared/carl-cache.js): the OpenCode plugin carl-cache (the same kind
+  of entry; it replaces carl-prefix-cache) and the Pi extension carl-cache save each session's
+  conversation and each agent's prompt on the server's disk and restore them before a request.
+  NO_CACHE=1 leaves both out.
 - OpenCode plugin carl-model-check (opencode.json "plugin", with our provider id as its
   option): warns when the model picked isn't the one the server runs, isn't installed, or
   is being loaded (router mode). NO_MODEL_CHECK=1 leaves it out.
@@ -115,7 +116,9 @@ BROWSER_AGENT, BROWSER_AGENT_ALT = "browser", "carl-browser"
 BROWSER_OFF = ("bash", "edit", "write", "lsp", "task", "todowrite", "question", "skill")   # not for the browser agent
 CHROME_APP = "/Applications/Google Chrome.app"
 MODEL_CHECK = "carl-model-check"
-PREFIX_CACHE = "carl-prefix-cache"                      # records OpenCode's prompt prefix for the pre-read cache                        # the OpenCode plugin that warns about the model
+CACHE = "carl-cache"                                    # the prompt cache: OpenCode plugin and Pi extension
+OLD_CACHE = "carl-prefix-cache"                         # its OpenCode plugin before 11.5 (removed)
+CACHE_CORE = "shared/carl-cache.js"                     # the code both carry
 CODER = "coder"                                         # the coder subagent's name in both clients
 CODER_ALT = "carl-coder"                                # ... when the user has their own "coder"
 CODER_NAMES = (CODER, CODER_ALT, "llm-deploy-coder")    # every name CARL used (the last before 1.2.0)
@@ -151,7 +154,7 @@ class Options:
     background: bool = True
     browser: bool = True
     browser_headed: bool = False
-    prefix_cache: bool = True
+    cache: bool = True
     profile: bool = True      # append the pointer to ~/.zshrc / ~/.bashrc (NO_PROFILE=1: print it instead)
 
     @property
@@ -214,7 +217,7 @@ def parse_args(argv: list[str]) -> Options:
     ap.add_argument("--browser", type=switch_arg, default=True)
     ap.add_argument("--browser-headed", type=switch_arg, default=False)
     ap.add_argument("--profile", type=switch_arg, default=True)
-    ap.add_argument("--prefix-cache", type=switch_arg, default=True)
+    ap.add_argument("--cache", "--prefix-cache", dest="cache", type=switch_arg, default=True)
     a = ap.parse_args(argv)
     try:
         models = carl_models.load_list(a.models)
@@ -224,7 +227,7 @@ def parse_args(argv: list[str]) -> Options:
                    running=a.running, coder=a.coder, sidebar=a.sidebar, switcher=a.switcher,
                    model_check=a.model_check, web_search=a.web_search, lsp=a.lsp, background=a.background,
                    browser=a.browser, browser_headed=a.browser_headed, profile=a.profile,
-                   prefix_cache=a.prefix_cache)
+                   cache=a.cache)
 
 
 # ------------------------------------------------------------------ pure helpers
@@ -514,7 +517,11 @@ class Installer:
 
         self._oc_remove_old_plugin(cfg)
         self._oc_server_plugin(cfg, MODEL_CHECK, self.o.model_check, new_id, "model warnings")
-        self._oc_server_plugin(cfg, PREFIX_CACHE, self.o.prefix_cache, new_id, "a pre-read prompt cache")
+        self._oc_server_plugin(cfg, OLD_CACHE, False, new_id, "")
+        self._oc_server_plugin(cfg, CACHE, self.o.cache, new_id, "the prompt cache")
+        old_specs = os.path.join(self.o.home, ".config", "carl", "prefix")    # what carl-prefix-cache recorded
+        if os.path.isdir(old_specs):
+            shutil.rmtree(old_specs, ignore_errors=True)
 
         self._oc_coder(cfg, st, agent)
         self._oc_tools(cfg, st)
@@ -696,6 +703,8 @@ class Installer:
             return
         shutil.rmtree(dest, ignore_errors=True)
         shutil.copytree(self.bundle_path(os.path.join("opencode/plugins", name)), dest)
+        if name == CACHE:
+            shutil.copy(self.bundle_path(CACHE_CORE), dest)
         want = [entry, {"provider": provider_id}]
         if had != [want]:
             self.report.add("updated" if had else "added", f"OpenCode plugin {name} ({what})")
@@ -859,6 +868,7 @@ class Installer:
         self._pi_settings(st, ids, first_install, had_ours_before, renamed)
         self._pi_tools(st)
         self._pi_extensions_and_coder(st)
+        self._pi_cache(st)
 
         st.update({"providers": ids, "base_url": self.o.base_url, "updated": self.stamp})
         self.save_state(pi, "Pi", st)
@@ -1016,6 +1026,31 @@ class Installer:
             st.pop("subagent_ext", None)
         if cur or os.path.exists(asp):
             self.save_text(asp, cur + "\n" if cur else "", mode=0o644)
+
+
+    def _pi_cache(self, st: JsonObj) -> None:
+        """The prompt cache extension (extensions/carl-cache, with the shared carl-cache.js); a folder
+        of that name that isn't ours stays."""
+        dest = os.path.join(self.o.pi_dir, "extensions", CACHE)
+        index = read_or_none(os.path.join(dest, "index.ts"))
+        ours = index is None and not os.path.exists(dest) or index is not None and NAMES.ext_marker in index
+        if not ours:
+            self.report.add("kept", f"Pi extensions/{CACHE} (yours)")
+            return
+        if not self.o.cache:
+            if os.path.isdir(dest):
+                shutil.rmtree(dest)
+                self.report.add("removed", f"Pi extension {CACHE}")
+            st.pop("cache_ext", None)
+            return
+        new = read_or_none(self.bundle_path(f"pi/extensions/{CACHE}/index.ts"))
+        changed = index != new or read_or_none(os.path.join(dest, "carl-cache.js")) != read_or_none(self.bundle_path(CACHE_CORE))
+        shutil.rmtree(dest, ignore_errors=True)
+        shutil.copytree(self.bundle_path(f"pi/extensions/{CACHE}"), dest)
+        shutil.copy(self.bundle_path(CACHE_CORE), dest)
+        if changed:
+            self.report.add("updated" if index is not None else "added", f"Pi extension {CACHE} (the prompt cache)")
+        st["cache_ext"] = True
 
 
 def main(argv: list[str]) -> int:

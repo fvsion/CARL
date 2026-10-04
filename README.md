@@ -56,7 +56,7 @@ The live state of the server: what it does now, the speed, the context, the memo
 - **Models:** download, verify and delete models, or add one from Hugging Face.
 - **Auto fit** (`A` on the Server panel): the best stock model and settings for this Mac, why, and every model ranked. **Use this** sets them in one step.
 - **Auto-tune:** measure the best settings for a model on this Mac.
-- **Router:** who switches the model: the dashboard (the default), or OpenCode / Pi (router mode, for users who prefer to choose models on the fly). WARNING: every switch empties the prompt cache, so the next request re-reads the whole conversation.
+- **Router:** who switches the model: the dashboard (the default), or OpenCode / Pi (router mode, for users who prefer to choose models on the fly). WARNING: every switch empties the prompt cache; OpenCode and Pi put their sessions back from the disk cache, other clients re-read the whole conversation.
 
 ![The Settings tab](assets/settings.png)
 

@@ -4,7 +4,6 @@ checks (tools/carl.py) and Hugging Face lookups. Children run from argument list
 own sessions; their output goes to files under ~/models/logs."""
 from __future__ import annotations
 
-import json
 import os
 import re
 import signal
@@ -13,12 +12,12 @@ import sys
 import threading
 import time
 from dataclasses import dataclass
-from typing import Callable, Dict, List, Mapping, Optional, Sequence, Set, Tuple
+from typing import Callable, Dict, List, Mapping, Optional
 
-from . import api, diskcache, fsio, prefix, sessions, system
+from . import api, diskcache, fsio, system
 from .collector import Collector
 from .fmt import DIM, R, RED, size
-from .model import ServerData, clean, flag
+from .model import ServerData, clean
 from .settings import REINSTALL, Pending, SettingsService, env_from_cmd
 from .state import Confirm, Download, HFLookup, InstallRun, Picker, TuneRun, UIState
 from .store import ModelList
@@ -39,13 +38,8 @@ class Paths:
 
     @property
     def slots(self) -> str:
-        """~/.config/carl/slots: the saved prompt prefixes (the server's --slot-save-path)."""
+        """~/.config/carl/slots: the disk cache of prompt states (the server's --slot-save-path)."""
         return os.path.join(os.path.dirname(self.config_file), "slots")
-
-    @property
-    def prefix_specs(self) -> str:
-        """~/.config/carl/prefix: what OpenCode's carl-prefix-cache plugin recorded."""
-        return os.path.join(os.path.dirname(self.config_file), "prefix")
 
     def console(self, port: int) -> str:
         """Where a server started for port writes its output."""
@@ -110,13 +104,8 @@ class ServerJobs:
         self.models: ModelList = svc.models
         self.paths = paths
         self.vm_addr = vm_addr
-        self._prefix_done: Set[Tuple[Tuple[object, str], float]] = set()   # ((server, model), spec time) handled
-        self._cache_busy = False
-        self._cache_server: Optional[Tuple[object, str]] = None
-        self._filled: Dict[int, int] = {}          # slots the dashboard filled (restored): their tokens
-        self._watch: Dict[int, sessions.SlotWatch] = {}
-        self._restored = False
         self._conf, self._conf_at = diskcache.CacheConfig(), 0.0
+        self._trim_at = 0.0
 
     def cache_conf(self, fresh: bool = False) -> diskcache.CacheConfig:
         """The Caching settings (config.json "cache"), read again every few seconds."""
@@ -132,13 +121,11 @@ class ServerJobs:
         """Remove the oldest saved states over the disk limit (diskcache.py); False when `keep`
         itself had to go (alone over the limit)."""
         folder = self.paths.slots
+        diskcache.remove(folder, diskcache.legacy(folder))
         gone = diskcache.over_budget(diskcache.listing(folder), self.cache_conf().limit, keep)
         if not gone:
             return True
         diskcache.remove(folder, gone)
-        doc = sessions.read_manifest(folder)
-        if any(n in doc for n in gone):
-            sessions.write_manifest(folder, {k: v for k, v in doc.items() if k not in gone})
         return keep not in gone
 
     def _wait_up(self, proc: "subprocess.Popen[bytes]", port: int, host: Optional[str] = None) -> bool:
@@ -163,8 +150,6 @@ class ServerJobs:
                 raise OSError(f"can't read {path}")
             os.makedirs(os.path.dirname(console), exist_ok=True)
             self.svc.save(p)
-            ui.restart = "saving the open conversations (the next start restores them)…"
-            self.save_before_stop(d)
             ui.restart = f"stopping the server (pid {old_pid})…"
             self.collector.server_pid = None
             system.stop_pid(old_pid)
@@ -222,8 +207,6 @@ class ServerJobs:
 
         def work() -> None:
             if restart:
-                ui.restart = "saving the open conversations (the next start restores them)…"
-                self.save_before_stop(d)
                 ui.restart = f"stopping the server (pid {pid}) for auto-tune…"
                 self.collector.server_pid = None
                 system.stop_pid(pid)
@@ -336,183 +319,6 @@ class ServerJobs:
         self.ui.toast(f"{'unloading' if unload else 'loading'} {name}…", 120 if not unload else 10)
         threading.Thread(target=work, daemon=True).start()
 
-    # ------------------------------------------------------------ the pre-read prompt cache (prefix.py)
-    def cache_tick(self, d: ServerData) -> None:
-        """The server's prompt caches on disk (each step in a thread, one at a time, nothing while a
-        request runs): after a start, the saved conversations go back into their slots
-        (sessions.py), then OpenCode's shared prompt prefix into an idle slot (prefix.py); while
-        it runs, a slot with a new conversation state, idle for a while, is saved."""
-        if not (d.up and d.slots and d.slot_list) or self._cache_busy:
-            return
-        model = d.alias
-        if not model:
-            return
-        server = (d.target_pid or d.pid, model)
-        if server != self._cache_server:              # a new server or model: start over
-            self._cache_server, self._filled, self._watch, self._restored = server, {}, {}, False
-        slots = [(s.id, s.busy, s.prompt, s.task if isinstance(s.task, int) else -1)
-                 for s in d.slot_list if s.id is not None]
-        for sid, busy, n, _ in slots:                 # /slots shows a restored slot as empty until it runs
-            if busy or n:
-                self._filled.pop(sid, None)
-        if d.busy:
-            return
-        mfile = flag(d.cmd, "-m", "--model") or ""
-        kv = flag(d.cmd, "-ctk", "--cache-type-k") or "f16"
-        build = str(d.props.get("build_info", ""))
-        router = d.router is not None
-        key = sessions.server_key(mfile, kv, build)
-        conf = self.cache_conf()
-        if not self._restored and conf.sessions:
-            self._run_cache(lambda: self._restore_sessions(model, key, router, [sid for sid, _, n, _ in slots if not n]))
-            return
-        try:
-            stamp = os.path.getmtime(os.path.join(self.paths.prefix_specs, f"{model}.json"))
-        except OSError:
-            stamp = 0.0
-        pkey = (server, stamp)
-        if not conf.prefix:
-            self.ui.prefix_status = "off (Settings > Caching)"
-        elif pkey not in self._prefix_done:
-            slot = prefix.choose_slot([(sid, busy, n or self._filled.get(sid, 0)) for sid, busy, n, _ in slots])
-            if slot is not None:
-                def build_prefix() -> None:
-                    if self._prefix(model, mfile, kv, build, router, slot):
-                        self._prefix_done.add(pkey)
-                        self._filled[slot[0]] = -1               # holds the prefix: not a conversation
-                self._run_cache(build_prefix)
-                return
-        save = sessions.due(self._watch, slots, time.time())
-        if save and conf.sessions:
-            self._run_cache(lambda: self._save_sessions(model, key, router, save))
-
-    def _run_cache(self, step: Callable[[], None]) -> None:
-        self._cache_busy = True
-
-        def work() -> None:
-            try:
-                step()
-            finally:
-                self._cache_busy = False
-        threading.Thread(target=work, daemon=True).start()
-
-    def _restore_sessions(self, model: str, key: str, router: bool, empty: List[int]) -> None:
-        """The saved conversations of this model and server into their (still empty) slots."""
-        folder, ep = self.paths.slots, self.collector.endpoint
-        doc = sessions.read_manifest(folder)
-        for name in sessions.stale(doc, model, key):
-            doc = sessions.forget(doc, folder, name)
-        extra: Dict[str, str] = {"model": model} if router else {}      # a router routes POSTs by the body's model
-        done = []
-        for sid, name, n in sessions.restorable(doc, folder, model, key, empty):
-            try:
-                ep.post(f"/slots/{sid}?action=restore", {"filename": name, **extra}, timeout=300)
-                self._filled[sid] = n
-                done.append((sid, name, n))
-            except api.FETCH_ERRORS:
-                pass        # kept: the slot is read as usual, and its next save replaces the file
-        sessions.write_manifest(folder, doc)
-        self._restored = True
-        text = sessions.summary(done)
-        if text:
-            self.ui.session_status = text
-            self.ui.toast(f"pre-read: {text}", 8)
-
-    def _save_sessions(self, model: str, key: str, router: bool, slot_ids: Sequence[int]) -> None:
-        """Save these slots' conversations (the rolling files: one per model and slot)."""
-        folder, ep = self.paths.slots, self.collector.endpoint
-        if not sessions.free_enough(folder):
-            self.ui.session_status = "conversations not saved: less than 10 GB free on the disk"
-            return
-        extra: Dict[str, str] = {"model": model} if router else {}
-        doc = sessions.read_manifest(folder)
-        saved: List[Tuple[int, str, int]] = []
-        for sid in slot_ids:
-            name = sessions.file_name(model, sid)
-            try:
-                r = json.loads(ep.post(f"/slots/{sid}?action=save", {"filename": name, **extra}, timeout=600))
-            except (api.FETCH_ERRORS + (KeyError, TypeError)):
-                continue
-            n = int(r.get("n_saved") or 0)
-            doc = sessions.record(doc, name, model, sid, key, n, time.time())
-            w = self._watch.get(sid)
-            if w:
-                w.saved = w.state
-            saved.append((sid, name, n))
-        sessions.write_manifest(folder, doc)
-        if not saved:
-            return
-        sid, name, n = saved[-1]
-        kept = self.trim_cache(keep=name)       # the oldest saved states go first
-        self.ui.session_status = (f"conversation in slot {sid} saved ({n / 1000:.1f}K tokens)" if kept else
-                                  f"conversation in slot {sid} not kept: it alone is over the disk limit "
-                                  f"({self.cache_conf().disk_gb} GB, Settings > Caching)")
-
-    def _prefix(self, model: str, mfile: str, kv: str, build: str, router: bool, slot: Tuple[int, bool]) -> bool:
-        """Restore or build OpenCode's saved prompt prefix in the slot (prefix.py); True when done
-        (or there is nothing to do), False to try again later."""
-        ui, ep = self.ui, self.collector.endpoint
-        sid, push = slot
-        spec = prefix.load_spec(self.paths.prefix_specs, model)
-        if spec is None:
-            ui.prefix_status = "nothing recorded yet (OpenCode's plugin records it on the first request)"
-            return True
-        extra: Dict[str, str] = {"model": model} if router else {}      # a router routes POSTs by the body's model
-        try:
-            system, tools = prefix.with_model(spec, model)
-            rendered = str(json.loads(ep.post("/apply-template", prefix.template_body(system, tools, model if router else None)))["prompt"])
-            full = json.loads(ep.post("/tokenize", {"content": rendered, **extra}))["tokens"]
-            part = json.loads(ep.post("/tokenize", {"content": prefix.cut_text(rendered, system), **extra}))["tokens"]
-            n = prefix.common_prefix(full, part)
-            if n < prefix.MIN_TOKENS:
-                ui.prefix_status = "OpenCode's prompt has no shared prefix worth saving"
-                return True
-            toks = full[:n]
-            size = f"{n / 1000:.1f}K tokens"
-            if push:            # the slot's conversation moves to the RAM prompt cache (a new 1-token task)
-                ep.post("/completion", {"prompt": toks[:1], "n_predict": 0, "cache_prompt": True, "id_slot": sid,
-                                        **extra}, timeout=120)
-            name = prefix.slot_file(model, mfile, kv, build, toks)
-            if os.path.exists(os.path.join(self.paths.slots, name)):
-                t0 = time.time()
-                try:
-                    ep.post(f"/slots/{sid}?action=restore", {"filename": name, **extra}, timeout=120)
-                    ui.prefix_status = f"OpenCode's prompt ({size}) restored into slot {sid} in {time.time() - t0:.1f} s"
-                    ui.toast(f"pre-read: {ui.prefix_status}", 8)
-                    return True
-                except api.FETCH_ERRORS:
-                    pass                    # not restorable here: read it again (the save replaces the file)
-            ui.prefix_status = f"reading OpenCode's prompt once ({size}) in slot {sid} to save it…"
-            t0 = time.time()
-            ep.post("/completion", {"prompt": toks, "n_predict": 0, "cache_prompt": True, "id_slot": sid, **extra},
-                    timeout=3600)
-            ep.post(f"/slots/{sid}?action=save", {"filename": name, **extra}, timeout=600)
-            for old in prefix.stale_files(self.paths.slots, name):
-                os.remove(old)
-            if not self.trim_cache(keep=name):
-                ui.prefix_status = (f"OpenCode's prompt ({size}) read, but not kept: it alone is over the disk limit "
-                                    f"({self.cache_conf().disk_gb} GB, Settings > Caching)")
-                return True
-            ui.prefix_status = (f"OpenCode's prompt ({size}) read in {time.time() - t0:.0f} s and saved: the next "
-                                f"start restores it at once")
-            ui.toast(f"pre-read: {ui.prefix_status}", 10)
-            return True
-        except (api.FETCH_ERRORS + (KeyError, TypeError, ValueError)) as e:
-            ui.prefix_status = f"not available yet: {e}"[:120]
-            return False
-
-    def save_before_stop(self, d: ServerData) -> None:
-        """Before CARL stops or restarts the server: save every idle conversation worth keeping
-        (blocking: a few hundred ms to a few seconds)."""
-        if not (d.up and d.slots and d.slot_list and d.alias and self.cache_conf(fresh=True).sessions):
-            return
-        mfile = flag(d.cmd, "-m", "--model") or ""
-        key = sessions.server_key(mfile, flag(d.cmd, "-ctk", "--cache-type-k") or "f16",
-                                  str(d.props.get("build_info", "")))
-        ids = [s.id for s in d.slot_list if s.id is not None and not s.busy and s.prompt >= sessions.MIN_TOKENS]
-        if ids:
-            self._save_sessions(d.alias, key, d.router is not None, ids)
-
     # ------------------------------------------------------------ Connect: the client installer
     def start_install(self, config_only: bool) -> None:
         """./carl.sh install for this Mac (OpenCode and Pi into ~/.local when missing, then their
@@ -538,12 +344,13 @@ class ServerJobs:
             system.kill_group(self.ui.install.proc.pid, signal.SIGTERM)
 
     # ------------------------------------------------------------ progress (every refresh)
-    def poll(self, d: Optional[ServerData] = None) -> None:
+    def poll(self) -> None:
         """Progress of the download and Auto-tune; their end is announced, and after a tune
-        that stopped the server, the server is started again. With a snapshot: the pre-read
-        prompt cache for a freshly loaded model."""
-        if d is not None:
-            self.cache_tick(d)
+        that stopped the server, the server is started again. Every minute: the disk cache within
+        its limit."""
+        if time.time() - self._trim_at > 60:
+            self._trim_at = time.time()
+            threading.Thread(target=self.trim_cache, daemon=True).start()
         dl, tn, ins = self.ui.dl, self.ui.tune, self.ui.install
         if dl and not dl.done:
             self._poll_download(dl)

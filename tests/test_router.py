@@ -34,6 +34,14 @@ class PlanTest(unittest.TestCase):
         self.assertIsNone(p)
         self.assertIn("the weights alone don't fit", why)
 
+    def test_a_sliding_window_model_gets_swa_full(self) -> None:
+        p, why = plan_model("m", "/m.gguf", VALS, {**shape(), "swa": True}, GIB, 24 * GIB, 32 * GIB, 6 * GIB, COMMON, None)
+        assert p is not None, why
+        self.assertIn("swa-full = true", preset_ini(Preset(models=[p]), COMMON))
+        q, _ = plan_model("m", "/m.gguf", VALS, shape(), GIB, 24 * GIB, 32 * GIB, 6 * GIB, COMMON, None)
+        assert q is not None
+        self.assertNotIn("swa-full", preset_ini(Preset(models=[q]), COMMON))
+
     def test_a_path_with_a_line_break_is_refused(self) -> None:
         from carl_core.domain.errors import ConfigError
         with self.assertRaises(ConfigError):

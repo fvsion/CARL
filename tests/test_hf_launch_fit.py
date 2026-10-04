@@ -93,6 +93,8 @@ class LaunchEnvTest(unittest.TestCase):
         self.assertEqual(env["THINK_TOGGLE"], False)
         self.assertEqual(env["EXTRA_ARGS"], "--no-mmap -fa on")
         self.assertEqual(env["CARL_SOURCES"], "ctx:auto-tune kv:catalogue spec:config slots:default")
+        self.assertNotIn("SWA_FULL", env)
+        self.assertIs(launch_env(m, vals, src, cfg, swa=True)["SWA_FULL"], True)     # sliding-window layers
         self.assertIn("SPEC_N=2", shell_lines(env).splitlines())
 
 
@@ -180,6 +182,8 @@ class GgufTest(unittest.TestCase):
         self.assertEqual((shp["attn_layers"], shp["rec_layers"], shp["ftype"]), (10, 30, "IQ3_XXS"))
         self.assertEqual(shp["kv_elems_per_token"], 10 * 2 * 512)
         self.assertTrue(shp["thinking_switch"])
+        self.assertIs(shp.get("swa"), False)
+        self.assertIs(model_shape({"general.architecture": "gemma4", "gemma4.attention.sliding_window": 512})["swa"], True)
 
     def test_truncated_or_foreign_headers(self) -> None:
         self.assertEqual(parse_meta(b"NOPE"), {})

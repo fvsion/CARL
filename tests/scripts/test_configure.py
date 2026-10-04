@@ -62,11 +62,13 @@ class ConfigureTests(unittest.TestCase):
         self.assertEqual(prov["options"]["apiKey"], "{file:" + self.home + "/.config/carl/api-key}")
         self.assertEqual(set(oc["provider"]), {"llamacpp"})
         check = self.path(".config/opencode/plugins/carl-model-check")
-        cache = self.path(".config/opencode/plugins/carl-prefix-cache")
+        cache = self.path(".config/opencode/plugins/carl-cache")
         self.assertEqual(oc["plugin"], [["file:" + check, {"provider": "llamacpp"}],     # the model warnings
-                                        ["file:" + cache, {"provider": "llamacpp"}]])    # the pre-read prompt
+                                        ["file:" + cache, {"provider": "llamacpp"}]])    # the prompt cache
         with open(os.path.join(cache, "package.json"), encoding="utf-8") as f:
             self.assertIn("./server", json.load(f)["exports"])
+        for d in (cache, self.path(".pi/agent/extensions/carl-cache")):            # each carries the shared core
+            self.assertTrue(os.path.isfile(os.path.join(d, "carl-cache.js")), d)
         self.assertTrue(os.path.isfile(os.path.join(check, "check.js")))
         with open(os.path.join(check, "package.json"), encoding="utf-8") as f:     # OpenCode 1.18 loads exports["./server"]
             self.assertIn("./server", json.load(f)["exports"])
@@ -129,11 +131,36 @@ class ConfigureTests(unittest.TestCase):
         entry = "file:" + self.path(".config/opencode/plugins/carl-model-check")
         oc = self.read_json(".config/opencode/opencode.json")
         self.assertEqual(oc["plugin"][:2], ["/home/u/mine.js", [entry, {"provider": "carl"}]])  # ours is "carl" here
-        p = self.run_configure("--model-check", "0", "--prefix-cache", "0")
+        p = self.run_configure("--model-check", "0", "--cache", "0")
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertEqual(self.read_json(".config/opencode/opencode.json")["plugin"], ["/home/u/mine.js"])
         self.assertFalse(os.path.exists(self.path(".config/opencode/plugins/carl-model-check")))
         self.assertIn("removed   OpenCode plugin carl-model-check", p.stdout)
+        self.assertFalse(os.path.exists(self.path(".pi/agent/extensions/carl-cache")))
+        self.assertIn("removed   Pi extension carl-cache", p.stdout)
+
+    def test_the_phase_11_prefix_plugin_is_replaced(self) -> None:
+        old = self.path(".config/opencode/plugins/carl-prefix-cache")
+        os.makedirs(old)
+        specs = self.path(".config/carl/prefix")
+        os.makedirs(specs)
+        self.write_json(".config/opencode/opencode.json", {"plugin": [["file:" + old, {"provider": "llamacpp"}]]})
+        p = self.run_configure()
+        self.assertEqual(p.returncode, 0, p.stderr)
+        names = [x[0] if isinstance(x, list) else x for x in self.read_json(".config/opencode/opencode.json")["plugin"]]
+        self.assertNotIn("file:" + old, names)
+        self.assertIn("file:" + self.path(".config/opencode/plugins/carl-cache"), names)
+        self.assertFalse(os.path.exists(old) or os.path.exists(specs))
+
+    def test_a_pi_extension_of_that_name_that_is_not_ours_stays(self) -> None:
+        mine = self.path(".pi/agent/extensions/carl-cache")
+        os.makedirs(mine)
+        with open(os.path.join(mine, "index.ts"), "w", encoding="utf-8") as f:
+            f.write("export default function () {}\n")
+        p = self.run_configure()
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("kept      Pi extensions/carl-cache (yours)", p.stdout)
+        self.assertFalse(os.path.exists(os.path.join(mine, "carl-cache.js")))
 
     def test_tools_on_by_default(self) -> None:
         p = self.run_configure()

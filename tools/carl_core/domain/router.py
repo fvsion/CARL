@@ -52,6 +52,7 @@ class ModelPlan:
     cache_mib: int
     template: Optional[str]
     need: float
+    swa: bool = False           # sliding-window layers: swa-full (saved prompt states restore; launch.py)
 
     def label(self) -> str:
         return f"{self.slots} × {window_label(self.ctx)} {self.kv}"
@@ -85,7 +86,7 @@ def plan_model(name: str, path: str, vals: Settings, shape: ModelShape, weights:
     cache = common.cache_ram if common.cache_ram is not None else prompt_cache_mib(ram, chk.need, reserve)
     sampling = tuple((key, float(str(vals[k]))) for k, key in SAMPLING_KEYS)
     return ModelPlan(name, path, ctx, slots, kv, str(vals["spec"]), int(str(vals["spec_n"])), sampling, cache,
-                     template, chk.need), ""
+                     template, chk.need, bool(shape.get("swa"))), ""
 
 
 def _num(v: float) -> str:
@@ -114,6 +115,8 @@ def preset_ini(preset: Preset, common: Common) -> str:
             out += [f"spec-type = {m.spec}", f"spec-draft-n-max = {m.spec_n}"]
         if m.template:
             out.append(f"chat-template-file = {m.template}")
+        if m.swa:
+            out.append("swa-full = true")
         if m.name == preset.start:
             out.append("load-on-startup = true")
     if preset.skipped:

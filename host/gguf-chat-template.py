@@ -6,7 +6,8 @@ Why: Qwen3.8's template only disables thinking via enable_thinking=false
 (chat_template_kwargs). OpenCode's TUI sends reasoning_effort but does not
 forward custom variant options such as chat_template_kwargs (verified with a
 request-capture proxy, 2026-09-24), so reasoning_effort "none" must map to
-enable_thinking=false inside the template. Everything else is unchanged.
+enable_thinking=false inside the template. A Qwen template without preserve_thinking gets it
+(see patched()). Everything else is unchanged.
 
 Usage: gguf-chat-template.py MODEL.gguf OUT.jinja
 Exit 3 if the template has no enable_thinking switch (nothing to patch).
@@ -100,9 +101,21 @@ def chat_template(head: bytes) -> str | None:
     return None
 
 
+KEEP_REASONING = "{%- if loop.index0 > ns.last_query_index %}"
+KEEP_REASONING_PATCHED = ("{%- if (preserve_thinking is defined and preserve_thinking is true) or "
+                          "(loop.index0 > ns.last_query_index) %}")
+
+
 def patched(template: str) -> str | None:
-    """The template with the thinking-off rule in front; None if it has no switch."""
-    return PATCH + template if "enable_thinking" in template else None
+    """The template with the thinking-off rule in front; None if it has no switch. A Qwen template
+    without preserve_thinking (the 9B's) also gets it, as the 35B's and 27B's have it: earlier
+    replies keep their reasoning when the server asks (CARL does), so the next prompt starts with
+    exactly what the model generated and a saved conversation can be continued (carl-cache.js)."""
+    if "enable_thinking" not in template:
+        return None
+    if "preserve_thinking" not in template:
+        template = template.replace(KEEP_REASONING, KEEP_REASONING_PATCHED)
+    return PATCH + template
 
 
 def main(argv: list[str]) -> int:

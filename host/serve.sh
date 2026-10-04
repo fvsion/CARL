@@ -15,6 +15,7 @@
 #   ./host/serve.sh tune NAME             auto-tune a model for this Mac (tools/carl-tune.py)
 #   ./host/serve.sh config ...            the settings file (tools/carl.py config)
 #   ./host/serve.sh card NAME [set|unset]  a model's card (tools/carl.py card)
+#   ./host/serve.sh cache [show|trim|clear]   the disk cache of prompt states (tools/carl.py cache)
 #
 # Binds to 127.0.0.1 or the vmnet8 host address (192.168.42.1), never 0.0.0.0:
 # with the macOS firewall off, 0.0.0.0 would expose the model on the LAN.
@@ -64,6 +65,7 @@ $(row "card NAME" "a model's card: what it is good for, why use it, rank. Custom
 $(row "" "(card NAME set FIELD VALUE | unset FIELD; or e in the dashboard's Models panel)")
 $(row "tune NAME [--quick]" "auto-tune a model for this Mac: speculation, context window, slots (~5-10 min)")
 $(row "config [show|set K V]" "the settings file ~/.config/carl/config.json (show lists every key)")
+$(row "cache [show|trim|clear]" "the disk cache OpenCode and Pi fill (~/.config/carl/slots; Settings > Caching)")
 $(row "help [TOPIC]" "this page, or: llama monitor fit models card download verify env tuning")
 
 NETWORK (llama, and $CMD without arguments)
@@ -76,8 +78,9 @@ $(row "(neither)" "local, unless config.json says llama.net vm (Settings → net
 MODEL SWITCHING (llama, and $CMD without arguments)
 $(row "--single" "one model: the dashboard (or auto fit) picks it (the default)")
 $(row "--router" "router mode: OpenCode / Pi switch models; every downloaded model that fits, one loaded at a")
-$(row "" "time. WARNING: a switch empties the prompt cache (the next request re-reads the whole")
-$(row "" "conversation). llama.mode in config.json (Settings → Router) saves the choice")
+$(row "" "time. WARNING: every switch empties the prompt cache (OpenCode / Pi sessions come back from")
+$(row "" "the disk cache; other clients re-read the whole conversation). llama.mode in config.json")
+$(row "" "(Settings → Router) saves the choice")
 
 DEFAULTS YOU GET (no flags needed)
   Model qwen3.6-35b-a3b (the IQ3 build on 24 GB Macs), q4_0 KV cache, 2 slots (auto):
@@ -290,7 +293,7 @@ LLAMA_PORT=8080
 # help, nor for a command that doesn't exist).
 case "${1:-}" in
   help|-h|--help|--help-adv|grant|pocket) ;;
-  ""|dashboard|--no-start|install|monitor|fit|models|config|card|tune|download|verify|delete|llama|-*) migrate_conf_dir ;;
+  ""|dashboard|--no-start|install|monitor|fit|models|config|cache|card|tune|download|verify|delete|llama|-*) migrate_conf_dir ;;
 esac
 if [[ $# -eq 0 ]]; then
   # No arguments: the dashboard. Attach to a server that runs already (one model
@@ -341,6 +344,7 @@ case "$1" in
   fit) shift; exec python3 "$HERE/../tools/llama-fit.py" "$@" ;;
   models) shift; exec "$HERE/models.sh" list "$@" ;;
   config) shift; exec python3 "$HERE/../tools/carl.py" config "$@" ;;
+  cache) shift; exec python3 "$HERE/../tools/carl.py" cache "$@" ;;
   card) shift; exec python3 "$HERE/../tools/carl.py" card "$@" ;;
   tune) shift; exec python3 "$HERE/../tools/carl-tune.py" "$@" ;;
   download|verify|delete) exec "$HERE/models.sh" "$@" ;;

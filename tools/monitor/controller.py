@@ -8,7 +8,7 @@ import signal
 import time
 from typing import Callable, Dict, List, NamedTuple, Optional, cast
 
-from . import diskcache, fsio, sessions, system
+from . import diskcache, fsio, system
 from .api import FETCH_ERRORS, Endpoint
 from carl_core.domain.cards import editable_card
 from carl_core.domain.tuning import DEPTHS, as_depth
@@ -182,7 +182,6 @@ class Controller:
         elif action == "stop":
             pid = d.target_pid
             if pid:
-                self.jobs.save_before_stop(d)           # the open conversations: the next start restores them
                 system.kill(pid, signal.SIGTERM)
                 ui.stopping = (pid, time.time() + 30)
             ui.quit = False
@@ -404,8 +403,9 @@ class Controller:
                  if running and running != mode else "The next server start uses it."),
                 *(["Router mode: every downloaded model that fits is offered; the clients' configs list them all "
                    "(Connect tab: update them).",
-                   "WARNING: every switch empties the prompt cache: the next request re-reads the whole conversation "
-                   "(minutes for a long session), and so does switching back. Switch with this in consideration."]
+                   "WARNING: every switch empties the prompt cache: the model that loads starts cold. OpenCode and Pi "
+                   "put a session back from the disk cache (about a second after the load, Settings > Caching); other "
+                   "clients re-read the whole conversation (minutes for a long one). Switch with this in consideration."]
                   if mode == "router" else [])],
                 "rmodeyes", mode)
             return
@@ -463,7 +463,6 @@ class Controller:
         if act == "clearyes":
             ui.confirm2 = None
             diskcache.remove(folder, [f.name for f in diskcache.listing(folder)])
-            sessions.write_manifest(folder, {})
             ui.toast("disk cache cleared", 6)
             return
         conf = jobs.cache_conf(fresh=True)

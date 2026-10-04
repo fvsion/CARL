@@ -36,7 +36,7 @@ LOCAL_HEADER_BYTES = 64 * 1024 * 1024
 REMOTE_HEADER_BYTES = 24 * 1024 * 1024
 
 
-class ModelShape(TypedDict):
+class _Shape(TypedDict):
     """What the context memory of a model depends on (from its GGUF header)."""
     arch: str
     blocks: int
@@ -55,6 +55,13 @@ class ModelShape(TypedDict):
     vl: int
     effort_levels: bool
     thinking_switch: bool
+
+
+class ModelShape(_Shape, total=False):
+    """_Shape, and whether some layers use sliding-window attention (Gemma): such a model needs
+    --swa-full for a saved state to be usable after a restore (the memory estimate already
+    counts every layer at full length). Absent in shapes cached before 11.5."""
+    swa: bool
 
 
 class _Reader:
@@ -156,6 +163,7 @@ def model_shape(meta: Meta) -> ModelShape:
         "kvh": kvh, "kl": kl, "vl": vl,
         "effort_levels": bool(meta.get("_has_reasoning_effort")),
         "thinking_switch": bool(meta.get("_has_enable_thinking")),
+        "swa": g("attention.sliding_window") > 0,
     }
 
 

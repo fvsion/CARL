@@ -1,12 +1,14 @@
-"""The disk cache's budget (Settings > Caching): ~/.config/carl/slots holds OpenCode's pre-read
-prompts (prefix.py: about 120 MB each on the 35B) and the saved conversations (sessions.py:
-about 13 KB per token on the 35B, so a 74K-token session is about 1 GB). Together they stay
-within cache.disk_gb (config.json, default 5 GB): after every save the oldest conversations
-go first, then the oldest prompts; the file just saved stays unless it alone is over the limit.
+"""The disk cache (Settings > Caching): ~/.config/carl/slots, the server's --slot-save-path, holds
+the prompt states OpenCode and Pi save through the server (client/shared/carl-cache.js): each
+agent's prompt (carl-prefix+MODEL+AGENT+HASH.bin, about 120 MB on the 35B) and each session's
+conversation (carl-session+MODEL+KEY+SESSION.bin, about 13 KB per token on the 35B, so a
+74K-token session is about 1 GB). Together they stay within cache.disk_gb (config.json, default
+5 GB): the oldest conversations go first, then the oldest prompts. The clients on this Mac keep
+the limit after each save; the dashboard checks it every minute (and `./carl.sh cache trim`).
 
 The settings (config.json "cache", carl_core.domain.settings.CACHE_KEYS): disk_gb, prefix
-(pre-read OpenCode's prompt) and sessions (save the conversations). Pure, except listing()
-and remove().
+(pre-read each agent's prompt) and sessions (save the conversations); the clients on this Mac
+read them. Pure, except listing(), legacy() and remove().
 """
 from __future__ import annotations
 
@@ -47,7 +49,7 @@ class CacheFile:
 
     @property
     def kind(self) -> str:
-        return PROMPT if self.name.startswith("carl-prefix-") else CONVERSATION
+        return PROMPT if self.name.startswith("carl-prefix+") else CONVERSATION
 
 
 def listing(folder: str) -> List[CacheFile]:
@@ -58,13 +60,28 @@ def listing(folder: str) -> List[CacheFile]:
     except OSError:
         return []
     for n in names:
-        if n.startswith(("carl-prefix-", "carl-session-")) and n.endswith(".bin"):
+        if n.startswith(("carl-prefix+", "carl-session+")) and n.endswith(".bin"):
             try:
                 st = os.stat(os.path.join(folder, n))
             except OSError:
                 continue
             out.append(CacheFile(n, st.st_size, st.st_mtime))
     return sorted(out, key=lambda f: f.mtime)
+
+
+def legacy(folder: str) -> List[str]:
+    """Files of Phase 11 (the dashboard's pre-read and per-slot saves, named with dashes): no longer used."""
+    try:
+        names = os.listdir(folder)
+    except OSError:
+        return []
+    return [n for n in names if n == "carl-sessions.json" or n.startswith(("carl-prefix-", "carl-session-"))]
+
+
+def describe(name: str) -> str:
+    """A saved state's file name as "model · agent" (a prompt) or "model · session" (a conversation)."""
+    parts = name[:-len(".bin")].split("+") if name.endswith(".bin") else []
+    return f"{parts[1]} · {parts[2 if parts[0] == 'carl-prefix' else 3]}" if len(parts) == 4 else name
 
 
 def used(files: Sequence[CacheFile]) -> int:

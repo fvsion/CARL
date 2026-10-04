@@ -34,9 +34,11 @@ def shell_lines(env: Mapping[str, SettingValue]) -> str:
     return "\n".join(out)
 
 
-def launch_env(m: ModelInfo, vals: Settings, src: Mapping[str, SettingSource], cfg: Config) -> Dict[str, SettingValue]:
+def launch_env(m: ModelInfo, vals: Settings, src: Mapping[str, SettingSource], cfg: Config,
+               swa: bool = False) -> Dict[str, SettingValue]:
     """Settings for serve-llama.sh: the model, its effective tune and the server-wide
-    config values that are set (the script applies flags and environment on top)."""
+    config values that are set (the script applies flags and environment on top). swa: the
+    model has sliding-window layers (SWA_FULL: --swa-full, so saved prompt states restore)."""
     env: Dict[str, SettingValue] = {"MODEL": m.get("path", ""), "MODEL_NAME": m.get("name", ""), "ALIAS": vals["alias"]}
     for k, s in MODEL_KEYS.items():
         if k != "alias" and s.env:
@@ -48,6 +50,8 @@ def launch_env(m: ModelInfo, vals: Settings, src: Mapping[str, SettingSource], c
     extra = cfg.llama.get("extra_args")
     if isinstance(extra, list) and extra:
         env["EXTRA_ARGS"] = " ".join(extra)
+    if swa:
+        env["SWA_FULL"] = True
     env["CARL_SOURCES"] = " ".join(f"{k}:{src[k]}" for k in SOURCE_KEYS)
     return env
 

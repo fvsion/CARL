@@ -51,6 +51,12 @@ class ChatTemplateTests(unittest.TestCase):
         with self.assertRaises(gct.GGUFError):
             gct.chat_template(gguf("{{ enable_thinking }}")[:60])
 
+    def test_reasoning_kept_where_the_template_lacks_preserve_thinking(self) -> None:
+        old = "{% if enable_thinking %}{%- if loop.index0 > ns.last_query_index %}r{% endif %}{% endif %}"
+        self.assertIn(gct.KEEP_REASONING_PATCHED, gct.patched(old) or "")
+        has = "{{ enable_thinking }}{%- if preserve_thinking or (loop.index0 > ns.last_query_index) %}"
+        self.assertNotIn(gct.KEEP_REASONING_PATCHED, gct.patched(has) or "")
+
     def test_patch(self) -> None:
         out = gct.patched("{% if enable_thinking %}x{% endif %}")
         self.assertIsNotNone(out)

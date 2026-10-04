@@ -366,6 +366,7 @@ async function runSingleAgent(
 			const invocation = getPiInvocation(args);
 			const proc = spawn(invocation.command, invocation.args, {
 				cwd: cwd ?? defaultCwd,
+				env: { ...process.env, CARL_AGENT: agentName }, // CARL: names this agent's saved prompt (carl-cache)
 				shell: false,
 				stdio: ["ignore", "pipe", "pipe"],
 			});

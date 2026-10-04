@@ -155,8 +155,6 @@ class UIState:
     install: Optional[InstallRun] = None
     install_shown: bool = False     # its output replaces the config preview until a copy button
     install_after_restart: bool = False             # a mode switch: update this Mac's configs once it is up
-    prefix_status: str = ""         # the pre-read prompt cache: what happened (CONNECT card)
-    session_status: str = ""        # the rolling conversation cache: what happened (CONNECT card)
 
     def toast(self, msg: str, secs: float = 4) -> None:
         """Show msg in the footer for secs seconds."""

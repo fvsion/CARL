@@ -373,7 +373,8 @@ class Carl:
             vals["ctx"], src["ctx"] = plan.ctx, "auto-fit"      # no 96K window fits: auto fit's largest
         advice = dm.tune_advice(m, vals, src)
         note = "\n".join(n for n in (note, advice) if n) or None
-        return build_launch_env(m, vals, src, cfg), note
+        shape = self.shape_of(m)
+        return build_launch_env(m, vals, src, cfg, swa=bool(shape and shape.get("swa"))), note
 
     # ------------------------------------------------------------ Hugging Face + downloads
     def hf_files(self, repo: str, revision: str = "main") -> HfFileList:

@@ -97,7 +97,16 @@ class App:
                     key_shown=ui.key_shown, server_pid=c.server_pid, log=c.tail.book, log_path=c.tail.path,
                     model_path=c.model_path, model_size=c.model_size, gpu_limit=c.gpu_limit, slow=c.slow,
                     total_mem=self.machine.total_mem, home=self.opts.home, wrap=ui.wrap, errors_only=ui.errors_only,
-                    log_scroll=ui.log_scroll, prefix=ui.prefix_status, sessions=ui.session_status)
+                    log_scroll=ui.log_scroll, cache=self.cache_line())
+
+    def cache_line(self) -> str:
+        """The CONNECT card's disk cache line: what OpenCode and Pi have saved, of the limit."""
+        files = diskcache.listing(self.jobs.paths.slots)
+        if not files:
+            return ""
+        n = sum(1 for f in files if f.kind == diskcache.PROMPT)
+        return (f"{n} prompt{'' if n == 1 else 's'} · {len(files) - n} conversation{'' if len(files) - n == 1 else 's'} · "
+                f"{diskcache.gb(diskcache.used(files))} of {self.jobs.cache_conf().disk_gb} GB (Settings > Caching)")
 
     def frame(self, d: ServerData) -> List[str]:
         """The screen's lines; the clickable regions go to the controller."""
@@ -217,7 +226,7 @@ class App:
                                         [s.line(n) for s in stale], cols)[:height - 2]
             elif ui.sp == SP_CACHE:
                 folder = self.jobs.paths.slots
-                body = self.view.caching(ui, self.jobs.cache_conf(), diskcache.listing(folder), folder, cols)[:height - 2]
+                body = self.view.caching(self.jobs.cache_conf(), diskcache.listing(folder), folder, cols)[:height - 2]
             elif ui.sp == SP_MODELS:
                 mdir = self.store.models_dir()
                 body = self.view.models(ui, cols, height - 2, ModelsDir(mdir, disk_free(mdir)))
@@ -264,7 +273,7 @@ class App:
                 if time.time() >= next_fetch:
                     self.ctl.data = c.collect()
                     next_fetch = time.time() + (0.5 if ui.stopping else self.opts.interval)
-                self.jobs.poll(self.ctl.data)
+                self.jobs.poll()
                 if ui.stopping:
                     pid, deadline = ui.stopping
                     if not system.pid_alive(pid):

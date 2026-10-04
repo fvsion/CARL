@@ -110,7 +110,7 @@ CARL_ENV="$(python3 "$HERE/../tools/carl.py" "${carl_args[@]}")" || exit 1
 CARL_SOURCES=""
 # MODEL, MODEL_NAME and CARL_SOURCES: carl.py resolved them (flag/env included);
 # for the other keys the environment wins.
-apply_settings "MODEL|MODEL_NAME|CARL_SOURCES|ALIAS|KV|CTX|SLOTS|SPEC|SPEC_N|TEMP|TOP_P|TOP_K|MIN_P|PRESENCE|REPEAT|NET|HOST|CACHE_RAM|UB|BATCH|CKPT|CKPT_STEP|THINK_TOGGLE|EXTRA_ARGS|LLAMA_MODE" \
+apply_settings "MODEL|MODEL_NAME|CARL_SOURCES|ALIAS|KV|CTX|SLOTS|SPEC|SPEC_N|TEMP|TOP_P|TOP_K|MIN_P|PRESENCE|REPEAT|NET|HOST|CACHE_RAM|UB|BATCH|CKPT|CKPT_STEP|THINK_TOGGLE|EXTRA_ARGS|LLAMA_MODE|SWA_FULL" \
   "MODEL|MODEL_NAME|CARL_SOURCES" <<< "$CARL_ENV"
 LLAMA_MODE="${MODE_FLAG:-${LLAMA_MODE:-single}}"
 case "$LLAMA_MODE" in single|router) ;; *) echo "error: LLAMA_MODE takes single or router, got '$LLAMA_MODE'" >&2; exit 2 ;; esac
@@ -187,9 +187,11 @@ guard_other_models               # a second model can crash the Mac (host/common
 
 ensure_api_key "$API_KEY_FILE"
 
-# Saved KV caches of OpenCode's shared prompt prefix (the dashboard restores them after a start:
-# tools/monitor/prefix.py); one file per model, KV type and prefix.
+# The disk cache of prompt states (--slot-save-path): OpenCode and Pi save each agent's prompt and
+# each session's conversation here through the server (client/shared/carl-cache.js). Trimmed to
+# cache.disk_gb at every start (the dashboard and the clients on this Mac keep it there too).
 SLOT_DIR="$CARL_CONF/slots"; mkdir -p "$SLOT_DIR"
+python3 "$HERE/../tools/carl.py" cache trim >/dev/null 2>&1 || true
 
 # The thinking toggle's chat template for a model file: TMPL (regenerated when the model
 # or the generator is newer).
@@ -224,8 +226,9 @@ if [[ "$LLAMA_MODE" == router ]]; then
   grep -q '^model ' <<< "$presets" || { echo "error: router mode: no downloaded model fits this Mac (./carl.sh fit)" >&2; exit 1; }
   echo "network: $NET_NOTE"
   echo "router mode: OpenCode / Pi switch models (one loaded at a time; a switch takes 30 s - 2 min). Presets: $PRESET"
-  echo "  WARNING: every switch empties the prompt cache: the next request re-reads the whole conversation,"
-  echo "  and so does switching back. Switch with this in consideration."
+  echo "  WARNING: every switch empties the prompt cache: the model that loads starts cold. OpenCode and Pi"
+  echo "  put a session back from the disk cache (about a second after the load); other clients re-read the"
+  echo "  whole conversation. Switch with this in consideration."
   while IFS= read -r line; do
     case "$line" in
       "model "*) echo "  offers  ${line#model }" ;;
@@ -284,6 +287,12 @@ if [[ "${THINK_TOGGLE:-1}" != 0 ]]; then
   [[ -s "$TMPL" ]] && tmpl_args=(--chat-template-file "$TMPL")
 fi
 
+# A model with sliding-window layers (Gemma) keeps every layer's cache at full length, so the prompt
+# states OpenCode and Pi save can be restored (without it llama.cpp re-reads a restored prompt). The
+# memory check already counts every layer at full length.
+swa_args=()
+[[ "${SWA_FULL:-0}" == 1 ]] && swa_args=(--swa-full)
+
 spec_args=()
 if [[ "$SPEC" != "none" ]]; then
   spec_args=(--spec-type "$SPEC" --spec-draft-n-max "$SPEC_N")
@@ -312,4 +321,5 @@ run_server "$PORT" "$LOG_FILE" llama-server \
   ${log_args[@]+"${log_args[@]}"} \
   ${tmpl_args[@]+"${tmpl_args[@]}"} \
   ${spec_args[@]+"${spec_args[@]}"} \
+  ${swa_args[@]+"${swa_args[@]}"} \
   "$@"
