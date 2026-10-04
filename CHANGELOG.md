@@ -3,7 +3,7 @@
 All notable changes to CARL. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Dates are local dates on the development Mac (M3 Pro, 36 GB).
 
-## Unreleased (1.3.0)
+## 1.3.0 - 2026-10-04
 
 Auto fit: the best stock model for this Mac, and a start that doesn't fit is refused. Custom models get a card you write. The server serves this Mac only unless asked, and the dashboard installs the clients. OpenCode and Pi list the models really installed, under their own names, and router mode (opt-in) lets them switch models.
 
@@ -72,7 +72,16 @@ Auto fit: the best stock model for this Mac, and a start that doesn't fit is ref
 - **The dashboard's fit line, slot choices, largest windows and auto fit know sliding-window models:** they plan Gemma's cache as the launcher does (`cache.swa`), and the fit line says which cache a start gets.
 - **The reference pages are in ASD-STE100** and were checked against the code (36 corrections).
 
+- **Code pass (Phase Z):** the dashboard's Settings view and controller split by panel and area; one GGUF parser; `configure.py` as pure merge functions behind a filesystem port (62 install scenarios checked byte for byte); a shared TUI module for the session switcher and the subagents panel; TypeScript strict checks on the plugins (0 errors); the bench tools default to 127.0.0.1.
+- **Docs:** the user guide and README in ASD-STE100 (the README is short); `reference/README.md` is the index (no top-level REFERENCE.md); one **Caching** page; cache results as waiting time; `reference/client-configs.md`; new screenshots.
 ### Fixed
+- **Auto showed the wrong model** in the dashboard after a dead-code pass removed `carl.resolve_launch` (the dashboard calls it through an untyped handle); a test now checks every `carl.py` name the dashboard uses.
+- **The dashboard's averages** showed 1,000,000 tok/s after a 1-token reply; an average now needs 0.5 s of data.
+- **`?` worked only in the Server panel** of the Settings tab; it works in every panel now. The quit dialog's buttons no longer get cut.
+- **The dashboard API was open when no key was known**, and a negative or bad Content-Length read until the client closed; it fails closed now and checks the length. State files (claims, records, turn marks, clients) are 0600 and written atomically, on both sides.
+- **A broken Pi config** stopped the installer only after other configs were written; all configs are checked before any write.
+- **The client sync service** stopped on a config without a version or a cut stream; it checks its inputs and reconnects.
+- **Paths from the cache's records and patches** are used only when they are plain file names.
 - **Gemma 4 26B and 31B: the KV cache counted as free.** Their headers give the KV heads per layer; CARL read none, so fit, `--check` and auto fit ignored the cache (a 31B at 2 × 96K with the full cache needs 64 GiB). The headers cached from Hugging Face are read again once.
 - **`--local` and `--vm` lost to a saved address:** a `llama.host` in config.json (or `HOST`) won, so `./carl.sh --local` could serve on a LAN address. The flags win now; `--host` wins over everything.
 - **The sync service** (found by the Docker test): a client folder whose path has a space did not start under systemd; an install did not restart a running service (the old code kept running); concurrent writes could break `client-sync.json`; `connected` stayed true after the stream ended. The dashboard's Clients list showed a client that left as connected for up to ~50 s and with the config it had when it connected; now at once, with what it reported last.

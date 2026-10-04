@@ -530,6 +530,8 @@ OpenCode and Pi run a subagent as a separate conversation (a child session).
 
 The coder subagent runs in the background, in OpenCode and in Pi.
 
+![Pi: the coder in the background, and its result as a message](assets/pi-subagent.png)
+
 1. The main agent starts the coder and tells you what it does.
 2. The main session is then free. You can ask it other things while the coder works in the other slot.
 3. When the coder ends, its result comes back to the main session as a message.
@@ -730,6 +732,8 @@ The server keeps the conversations that it read in memory: in its slots, and in 
 - The server restarts.
 - Router mode changes the model.
 - Many other sessions push a conversation out.
+
+![The Caching panel](assets/caching.png)
 
 The next request then reads the whole prompt again. This is OpenCode's system prompt and tools (~8–10K tokens: ~13–17 s on the 35B, ~2 min on the 27B). In a session that continues, it is also the whole conversation (minutes for a long one).
 

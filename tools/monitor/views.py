@@ -269,11 +269,12 @@ def quit_dialog(d: ServerData, ui: UIState, cols: int, height: int) -> List[Row]
     """Quit: stop the server, leave it running, or cancel."""
     pid = d.target_pid
     alive = pid and not d.exited and not ui.stopping
-    w = min(70, cols - 4)
+    w = min(76, cols - 4)                   # room for the three buttons on one line
     lines: List[CardLine] = [""]
     if alive:
         lines += [f"The server (pid {pid}) still runs.", "",
-                  buttons("  ", [("Stop server (s)", "stop"), ("Leave it running (d)", "detach"), ("Cancel (Esc)", "cancel")]),
+                  *button_rows("  ", [("Stop server (s)", "stop"), ("Leave it running (d)", "detach"),
+                                      ("Cancel (Esc)", "cancel")], w - 4),
                   "", *cwrap(f"{DIM}Leave it running: the server continues. To attach again, run ./carl.sh monitor.{R}",
                              w - 4)]
     else:
