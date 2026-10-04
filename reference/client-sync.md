@@ -1,6 +1,6 @@
 # CARL Reference: Clients on other computers
 
-[Index](../REFERENCE.md) · the client folder's connection file, the dashboard's API, the config push and the sync service.
+[Index](README.md) · the client folder's connection file, the dashboard's API, the config push and the sync service.
 
 ## The client folder carries the connection
 

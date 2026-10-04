@@ -5,10 +5,10 @@ import struct
 import unittest
 from typing import Dict, List, Tuple, cast
 
-from support import GIB, shape
+from support import GIB, shape, with_window
 from carl_core.domain import fit, hf
 from carl_core.domain.errors import ConfigError
-from carl_core.domain.gguf import kv_bytes_per_token, model_shape, parse_meta
+from carl_core.domain.gguf import GGUFError, Meta, chat_template, kv_bytes_per_token, model_shape, parse_meta
 from carl_core.domain.launch import launch_env, shell_lines
 from carl_core.domain.settings import Config
 from carl_core.domain.types import ModelInfo, SettingSource, Settings
@@ -52,6 +52,9 @@ class HfSpecTest(unittest.TestCase):
         self.assertEqual(hf.gguf_files(tree), [("a.gguf", 5, "f" * 64), ("d/c.gguf", 0, "")])
         with self.assertRaises(ConfigError):
             hf.gguf_files({"error": "x"})
+        self.assertEqual(hf.gguf_files([{"type": "file", "path": "n.gguf", "size": -1}]), [("n.gguf", 0, "")])
+        with self.assertRaises(ConfigError):             # stored in models.json: checked as there
+            hf.gguf_files([{"type": "file", "path": "x.gguf", "size": 5, "lfs": {"oid": "../not-a-sha"}}])
 
     def test_names_and_parts(self) -> None:
         self.assertEqual(hf.model_name("Qwen3.6 35B (Q4).gguf"), "qwen3.6-35b-q4-")
@@ -184,7 +187,7 @@ class GgufTest(unittest.TestCase):
         self.assertEqual(shp["kv_elems_per_token"], 10 * 2 * 512)
         self.assertTrue(shp["thinking_switch"])
         self.assertEqual(shp.get("swa_window"), 0)
-        gemma = {"general.architecture": "gemma4", "gemma4.block_count": 6, "gemma4.attention.head_count_kv": 2,
+        gemma: Meta = {"general.architecture": "gemma4", "gemma4.block_count": 6, "gemma4.attention.head_count_kv": 2,
                  "gemma4.attention.key_length": 512, "gemma4.attention.value_length": 512,
                  "gemma4.attention.key_length_swa": 256, "gemma4.attention.value_length_swa": 256,
                  "gemma4.attention.sliding_window": 512, "gemma4.attention.shared_kv_layers": 2,
@@ -217,15 +220,28 @@ class GgufTest(unittest.TestCase):
         head = gguf_header([("a.x", 4, struct.pack("<I", 1)), ("a.y", 4, struct.pack("<I", 2))])
         self.assertEqual(parse_meta(head[:-2]), {"a.x": 1})
         self.assertEqual(model_shape({})["ftype"], "?")
+        unknown = gguf_header([("a.x", 4, u32(1)), ("a.bad", 99, u32(0)), ("a.y", 4, u32(2))])
+        self.assertEqual(parse_meta(unknown), {"a.x": 1})               # an unknown type ends the parse
+        long_array = u32(5) + struct.pack("<Q", 5000) + b"\0" * 4 * 5000   # longer than any layer list: skipped
+        self.assertEqual(parse_meta(gguf_header([("a.attention.head_count_kv", 9, long_array), ("a.y", 4, u32(2))])),
+                         {"a.y": 2})
 
-
-if __name__ == "__main__":
-    unittest.main()
+    def test_chat_template(self) -> None:
+        """The one parser serves host/gguf-chat-template.py too: strict where parse_meta is lenient."""
+        tpl = b"{{ enable_thinking }}"
+        head = gguf_header([("tokenizer.ggml.tokens", 9, u32(8) + struct.pack("<Q", 1) + struct.pack("<Q", 1) + b"a"),
+                            ("tokenizer.chat_template", 8, struct.pack("<Q", len(tpl)) + tpl)])
+        self.assertEqual(chat_template(head), tpl.decode())
+        self.assertIsNone(chat_template(gguf_header([("a.x", 4, u32(1))])))
+        for bad in (b"PK\x03\x04", head[:-3],
+                    gguf_header([("tokenizer.chat_template", 8, struct.pack("<Q", 2) + b"\xff\xfe")])):
+            with self.subTest(bad=bad[:8]), self.assertRaises(GGUFError):
+                chat_template(bad)
 
 
 class SlidingWindowFitTest(unittest.TestCase):
     """fit.py with sliding-window layers: the window only, or every layer at full length (--swa-full)."""
-    SWA = {**shape(kv_elems=2048, rs_bytes=0), "swa_window": 512, "kv_elems_per_token_swa": 8192}
+    SWA = with_window(shape(kv_elems=2048, rs_bytes=0), 512, 8192)
 
     def test_need_with_and_without_the_full_cache(self) -> None:
         from carl_core.domain.fit import need_bytes
@@ -242,3 +258,7 @@ class SlidingWindowFitTest(unittest.TestCase):
         self.assertEqual(swa_plan("window", self.SWA, GIB, 98304, "auto", "q4_0", roomy), (2, False))
         self.assertEqual(swa_plan("full", self.SWA, GIB, 98304, "auto", "q4_0", tight), (1, True))
         self.assertEqual(swa_plan("auto", shape(), GIB, 98304, "auto", "q4_0", roomy), (2, None))
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -61,22 +61,23 @@ from carl_core.domain import models as _dm  # noqa: E402
 from carl_core.domain.autofit import AutoFit as AutoFit, as_goal, as_scope  # noqa: E402
 from carl_core.domain.errors import ConfigError as ConfigError  # noqa: E402  (re-exported)
 from carl_core.domain.fit import human_gb  # noqa: E402
-from carl_core.domain.gguf import GIB as GIB, ModelShape  # noqa: E402
+from carl_core.domain.gguf import ModelShape  # noqa: E402
 from carl_core.domain.hf import parse_hf as parse_hf  # noqa: E402
 from carl_core.domain.launch import shell_lines as shell_lines  # noqa: E402
-from carl_core.domain.settings import (LLAMA_KEYS as _LLAMA, MODEL_KEYS as _MODEL,  # noqa: E402
-                                       PATH_KEYS as _PATHS, SCHEMA as SCHEMA, SECTIONS as _SECTIONS, Config, SettingSpec,
-                                       get_path, key_path, set_path, unset_path, validate_config as _validate)
+from carl_core.domain.settings import (MODEL_KEYS as _MODEL, SCHEMA as SCHEMA, SECTIONS as _SECTIONS,  # noqa: E402
+                                       Config, SettingSpec, get_path, key_path, set_path, unset_path,
+                                       validate_config as _validate)
 from carl_core.domain.types import (Catalog, CustomCard, CustomInfo, HfFileList, JsonObject, JsonValue,  # noqa: E402
                                     LocalDb, ModelInfo, SettingSource, SettingValue, Settings, Zone)
 from carl_core.wiring import REPO as REPO, CarlPaths, build_carl  # noqa: E402
 
+# The names this module imports only for its users (tools/monitor/store.py, tools/carl-tune.py).
+__all__ = ["REPO", "SCHEMA", "ConfigError", "parse_hf"]
+
 _PATHS_NOW = CarlPaths.from_env(os.environ)
-CATALOG_FILE = _PATHS_NOW.catalog
 CONF_DIR = _PATHS_NOW.conf_dir
 CONFIG_FILE = _PATHS_NOW.config
 LOCAL_FILE = _PATHS_NOW.local
-OLD_LLAMA_ENV = _PATHS_NOW.legacy_llama
 
 
 def _spec_dicts(keys: Mapping[str, SettingSpec]) -> Dict[str, Dict[str, JsonValue]]:
@@ -85,8 +86,6 @@ def _spec_dicts(keys: Mapping[str, SettingSpec]) -> Dict[str, Dict[str, JsonValu
 
 # The settings schema as dicts ({"type", "default", "env", ...} per key), as the monitor reads it.
 MODEL_KEYS = _spec_dicts(_MODEL)
-LLAMA_KEYS = _spec_dicts(_LLAMA)
-PATH_KEYS = _spec_dicts(_PATHS)
 
 _APP: List[Carl] = []
 
@@ -108,12 +107,6 @@ def _models(models: Optional[List[ModelInfo]]) -> List[ModelInfo]:
 
 
 # ---------------------------------------------------------------- config.json
-def validate_config(cfg: object) -> Tuple[JsonObject, List[str]]:
-    """(normalized config, [warnings]). Raises ConfigError on a bad value."""
-    c, warn = _validate(cfg)
-    return c.to_json(), warn
-
-
 def load_config() -> JsonObject:
     return app().load_config().to_json()
 
@@ -143,10 +136,6 @@ def save_local(db: LocalDb) -> None:
 def shape_of(path: str) -> ModelShape:
     """GGUF header shape of a local file (cached by path + mtime: the header read is 64 MB)."""
     return app().shapes.local(path)
-
-
-def gpu_limit_bytes() -> int:
-    return app().gpu.limit()[0]
 
 
 def custom_defaults(path: str) -> Tuple[Settings, CustomInfo]:
@@ -184,6 +173,14 @@ def pick_default(models: Optional[List[ModelInfo]] = None) -> str:
     return app().pick_default(_models(models))
 
 
+def resolve_launch(name: Optional[str] = None, cfg: Optional[Mapping[str, object]] = None
+                   ) -> Tuple[ModelInfo, List[ModelInfo], Optional[str]]:
+    """(model, all models, note) for a llama.cpp start: name, else config llama.model, else
+    auto fit's pick (the best downloaded stock model that fits when the pick isn't downloaded).
+    The dashboard calls it (tools/monitor/store.py: the model "auto" starts)."""
+    return app().resolve_launch(name, _config(cfg))
+
+
 def auto_fit(goal: Optional[str] = None, scope: Optional[str] = None, models: Optional[List[ModelInfo]] = None,
              cfg: Optional[Mapping[str, object]] = None) -> AutoFit:
     """Auto fit for this Mac: the best ranked stock model for the goal (everyday / hard-code)
@@ -191,13 +188,6 @@ def auto_fit(goal: Optional[str] = None, scope: Optional[str] = None, models: Op
     c = _config(cfg)
     g, s = app().auto_settings(c)
     return app().auto_fit(models or app().all_models(c), as_goal(goal) if goal else g, as_scope(scope) if scope else s)
-
-
-def resolve_launch(name: Optional[str] = None, cfg: Optional[Mapping[str, object]] = None
-                   ) -> Tuple[ModelInfo, List[ModelInfo], Optional[str]]:
-    """(model, all models, note) for a llama.cpp start: name, else config llama.model, else
-    auto fit's pick (the best downloaded stock model that fits when the pick isn't downloaded)."""
-    return app().resolve_launch(name, _config(cfg))
 
 
 def client_models(cfg: Optional[Mapping[str, object]] = None) -> JsonObject:
@@ -347,7 +337,7 @@ def cmd_cache(argv: Sequence[str]) -> None:
     print(f"{folder}: {diskcache.gb(diskcache.used(files))} of {conf.disk_gb} GB, {len(files)} file(s) "
           f"(prompts {'on' if conf.prefix else 'off'}, conversations {'on' if conf.sessions else 'off'})")
     if any(f.packed for f in files):
-        print(f"  shared pieces: {sum(f.packed for f in files)} conversation(s) stored as patches against their prompt, "
+        print(f"  patches: {sum(f.packed for f in files)} conversation(s) stored as patches against their prompt, "
               f"{diskcache.gb(diskcache.shared_saving(files))} saved")
     for f in sorted(files, key=lambda f: -f.mtime):
         kind = "prompt" if f.kind == diskcache.PROMPT else "patch" if f.packed else "conversation"
@@ -390,9 +380,6 @@ def cmd_card(argv: Sequence[str]) -> None:
     elif sub != "show" or len(argv) > 2:
         raise ConfigError(f"usage: carl.py {usage}")
     print("\n".join(_cards.describe(_known(name))))
-
-
-GET_FIELDS = ("repo", "rev", "file", "sha256", "bytes", "alias", "spec", "notes", "name")
 
 
 def cmd_get(name: str, field: str) -> None:

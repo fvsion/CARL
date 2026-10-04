@@ -118,6 +118,17 @@ class SyncTest(unittest.TestCase):
         self.assertIn("run", self.installs())
         self.assertTrue(self.sync("status")["service"])
 
+    def test_a_wrong_key_says_what_to_do(self) -> None:
+        with open(os.path.join(self.bundle, "api-key"), "w") as f:
+            f.write("wrong\n")
+        self.assertIn("refused the API key", self.sync("once")["error"])
+        self.assertEqual(self.installs(), [])
+
+    def test_a_config_without_a_version_is_not_applied(self) -> None:
+        self.api.doc = {"models": {"schema": 1, "models": []}, "version": "../x y"}
+        self.assertIn("not a client config", self.sync("once")["error"])
+        self.assertEqual(self.installs(), [])
+
     def test_without_remote_json_it_says_so(self) -> None:
         os.remove(os.path.join(self.bundle, "remote.json"))
         self.assertIn("remote.json", self.sync("once")["error"])

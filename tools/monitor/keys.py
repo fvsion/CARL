@@ -14,6 +14,8 @@ PGUP, PGDN, END, END_ALT = "\x1b[5~", "\x1b[6~", "\x1b[F", "\x1b[4~"
 ENTER = ("\r", "\n")
 ESC = "\x1b"
 BACKSPACE = "\x7f\x08"
+SCROLL_KEYS = {UP: 1, DOWN: -1, PGUP: 10, PGDN: -10}       # scroll steps (> 0: up)
+PANEL_PASSTHROUGH = ("q", "Q", "\x03", "\t")       # keys a Settings panel leaves to the app: quit, Ctrl-C, Tab
 
 
 class Click(NamedTuple):

@@ -36,12 +36,12 @@ else
   case "$(uname -s)" in
     Linux) os=linux ;;
     Darwin) os=darwin ;;
-    *) echo "error: unsupported OS $(uname -s)" >&2; exit 1 ;;
+    *) echo "error: unsupported OS $(uname -s): install Node $NODE_MIN or newer yourself, then run this again" >&2; exit 1 ;;
   esac
   case "$(uname -m)" in
     aarch64|arm64) arch=arm64 ;;
     x86_64|amd64)  arch=x64 ;;
-    *) echo "error: unsupported CPU $(uname -m)" >&2; exit 1 ;;
+    *) echo "error: unsupported CPU $(uname -m): install Node $NODE_MIN or newer yourself, then run this again" >&2; exit 1 ;;
   esac
   base="https://nodejs.org/dist/$NODE_LINE"
   tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
@@ -73,10 +73,15 @@ hash -r
 # --- PATH --------------------------------------------------------------------
 # shellcheck disable=SC2016  # written to the rc file literally; the shell expands it there
 line='export PATH="$HOME/.local/bin:$PATH"  # carl-vm-client'
+# One marked line, appended to a profile that exists (never created), after a backup.
 for rc in "$HOME/.zshrc" "$HOME/.bashrc"; do
   [[ -f "$rc" ]] || continue
   # "# mtplx-vm-client" marked the same line before 1.2.0: no second copy.
-  grep -qE '# (carl|mtplx)-vm-client' "$rc" || printf '\n%s\n' "$line" >> "$rc"
+  grep -qE '# (carl|mtplx)-vm-client' "$rc" && continue
+  bak="$rc.bak.$(date +%Y%m%d-%H%M%S)"
+  cp -p "$rc" "$bak"
+  printf '\n%s\n' "$line" >> "$rc"
+  echo "Added ~/.local/bin to PATH in ~/${rc##*/} (marked # carl-vm-client; backup: ${bak##*/})"
 done
 
 # --- Report ------------------------------------------------------------------

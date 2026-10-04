@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # Block until llama-server has been completely idle for IDLE_S seconds
 # (slot not processing AND prompt/predicted token counters unchanged).
-#   tools/llama-wait-idle.sh [IDLE_S=1200] [BASE=http://192.168.42.1:8080]
+#   tools/llama-wait-idle.sh [IDLE_S=1200] [BASE=http://127.0.0.1:8080]
 # The API key comes from API_KEY_FILE (default ~/.config/carl/api-key; an earlier
 # key file while the new one does not exist yet: carl_core/domain/apikey.py).
 set -uo pipefail        # no -e: a failed poll counts as "busy" and the wait goes on
-IDLE_S="${1:-1200}"; BASE="${2:-http://192.168.42.1:8080}"
+IDLE_S="${1:-1200}"; BASE="${2:-http://127.0.0.1:8080}"
 [[ "$IDLE_S" =~ ^[0-9]{1,7}$ ]] || { echo "error: IDLE_S must be seconds, got '$IDLE_S'" >&2; exit 2; }
 [[ "$BASE" =~ ^https?://[A-Za-z0-9.:-]+(/[A-Za-z0-9._/-]*)?$ ]] || { echo "error: BASE must be http(s)://HOST:PORT, got '$BASE'" >&2; exit 2; }
 KEY_FILE="${API_KEY_FILE:-$HOME/.config/carl/api-key}"

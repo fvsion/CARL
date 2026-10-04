@@ -1,6 +1,6 @@
 # CARL Reference: Performance
 
-[Index](../REFERENCE.md) · measured speeds.
+[Index](README.md) · measured speeds.
 
 ## Performance (measured)
 

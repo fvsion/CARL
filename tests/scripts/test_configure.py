@@ -15,7 +15,7 @@ import tempfile
 import unittest
 from typing import Any
 
-from _paths import CLIENT
+from _paths import CLIENT, load_script
 
 SCRIPT = os.path.join(CLIENT, "configure.py")
 # installed-models.json as tools/carl.py client-models writes it
@@ -675,6 +675,206 @@ class ConfigureTests(unittest.TestCase):
         self.assertFalse(os.path.exists(self.path(".config")))
 
 
+    def test_tui_plugins_carry_the_shared_helpers_and_go_with_their_switch(self) -> None:
+        self.assertEqual(self.run_configure().returncode, 0)
+        plugins = self.path(".config/opencode/plugins")
+        for name in ("session-switcher", "subagents-sidebar"):
+            self.assertTrue(os.path.isfile(os.path.join(plugins, name, "carl-tui.js")), name)
+        p = self.run_configure("--switcher", "0", "--sidebar", "0")        # NO_SWITCHER=1 NO_SIDEBAR=1
+        self.assertEqual(p.returncode, 0, p.stderr)
+        for name in ("session-switcher", "subagents-sidebar"):
+            self.assertFalse(os.path.exists(os.path.join(plugins, name)), name)
+        self.assertEqual(self.read_json(".config/opencode/tui.json")["plugin"], ["file:" + os.path.join(plugins, "carl-panel")])
+        self.assertIn("removed   OpenCode session switcher", p.stdout)
+
+    def test_a_bad_pi_config_stops_the_run_before_any_write(self) -> None:
+        self.write_json(".pi/agent/settings.json", [1])
+        p = self.run_configure()
+        self.assertEqual(p.returncode, 1)
+        self.assertIn("settings.json is not a JSON object", p.stderr)
+        self.assertFalse(os.path.exists(self.path(".config")))                  # OpenCode untouched too
+
+
+cfg = load_script(SCRIPT, "carl_configure")
+
+
+class MergeRuleTests(unittest.TestCase):
+    """The merge rules alone: plain functions on parsed configs, no disk."""
+
+    def test_profile_block_is_appended_once_and_taken_out_again(self) -> None:
+        on = cfg.profile_text("export A=1\n\n", True)
+        self.assertEqual(on, f"export A=1\n\n{cfg.PROFILE_BEGIN}\n{cfg.PROFILE_LINE}\n{cfg.PROFILE_END}\n")
+        self.assertEqual(cfg.profile_text(on, True), on)
+        self.assertEqual(cfg.profile_text(on, False), "export A=1\n")
+        self.assertEqual(cfg.profile_text("", False), "")
+
+    def test_plugin_entry_replaces_ours_and_keeps_the_rest(self) -> None:
+        rep = cfg.Report()
+        conf: dict[str, Any] = {"plugin": ["mine.js", ["file:/p/x", {"old": 1}]]}
+        want = ["file:/p/x", {"provider": "llamacpp"}]
+        self.assertFalse(cfg.merge_plugin_entry(conf, "file:/p/x", want, True, "x (what)", rep))
+        self.assertEqual(conf["plugin"], ["mine.js", want])
+        self.assertEqual(rep.lines(), ["  updated   OpenCode plugin x (what)"])
+        self.assertTrue(cfg.merge_plugin_entry(conf, "file:/p/x", None, False, "x", rep))
+        self.assertEqual(conf["plugin"], ["mine.js"])
+        self.assertFalse(cfg.merge_plugin_entry(conf, "file:/p/x", None, False, "x", rep))  # nothing left to do
+
+    def test_append_system_keeps_the_users_text(self) -> None:
+        old = "<!-- llm-deploy:delegation begin -->\nold\n<!-- llm-deploy:delegation end -->\n\nMine.\n"
+        new = cfg.append_system_text(old, "rule")
+        self.assertEqual(new, "Mine.\n\n<!-- carl:delegation begin -->\nrule\n<!-- carl:delegation end -->\n")
+        self.assertEqual(cfg.append_system_text(new, None), "Mine.\n")
+        self.assertEqual(cfg.append_system_text("", None), "")
+
+    def test_users_web_search_server_stays(self) -> None:
+        rep, st = cfg.Report(), {"web_search": {"url": "ours"}}
+        servers: dict[str, Any] = {cfg.SEARCH_NAME: {"url": "mine"}}
+        self.assertFalse(cfg.merge_pi_web_search(servers, st, "exa", rep))
+        self.assertEqual(servers, {cfg.SEARCH_NAME: {"url": "mine"}})
+        self.assertNotIn("web_search", st)
+
+    def test_env_file_only_with_a_switch_on(self) -> None:
+        self.assertIsNone(cfg.env_file_text("off", False, False))
+        text = cfg.env_file_text("parallel", False, False)
+        self.assertIsNotNone(text)
+        self.assertIn("export OPENCODE_ENABLE_PARALLEL=1", text or "")
+
+    def test_users_default_model_is_kept_with_a_hint(self) -> None:
+        rep, conf, st = cfg.Report(), {"model": "llm-deploy/m"}, {}
+        cfg.merge_oc_default_model(conf, st, "m", "carl", False, {"llm-deploy": "carl"}, rep)
+        self.assertEqual(conf, {"model": "llm-deploy/m"})
+        self.assertEqual(rep.entries["kept"], ["OpenCode model = llm-deploy/m (yours; that provider is now 'carl': "
+                                               "pick carl/m)"])
+
+
+class MemoryFiles:
+    """The Files port in memory: the installer on a fake disk."""
+
+    def __init__(self) -> None:
+        self.files: dict[str, str] = {}
+        self.dirs: set[str] = set()
+        self.writes: list[str] = []
+
+    def _parents(self, path: str) -> None:
+        d = os.path.dirname(path)
+        while d and d not in self.dirs and d != "/":
+            self.dirs.add(d)
+            d = os.path.dirname(d)
+
+    def read(self, path: str) -> str | None:
+        return self.files.get(path)
+
+    def exists(self, path: str) -> bool:
+        return path in self.files or path in self.dirs
+
+    def isfile(self, path: str) -> bool:
+        return path in self.files
+
+    def isdir(self, path: str) -> bool:
+        return path in self.dirs
+
+    def islink(self, path: str) -> bool:
+        return False
+
+    def realpath(self, path: str) -> str:
+        return path
+
+    def listdir(self, path: str) -> list[str]:
+        return sorted({p[len(path) + 1:].split("/")[0] for p in self.files.keys() | self.dirs
+                       if p.startswith(path + "/")})
+
+    def makedirs(self, path: str) -> None:
+        self.dirs.add(path)
+        self._parents(path)
+
+    def write(self, path: str, text: str) -> None:
+        self.files[path] = text
+        self._parents(path)
+        self.writes.append(path)
+
+    def chmod(self, path: str, mode: int) -> None:
+        pass
+
+    def copy(self, src: str, dest: str) -> None:
+        self.write(dest, self.files[src])
+
+    def copy_into(self, src: str, folder: str) -> None:
+        self.write(os.path.join(folder, os.path.basename(src)), self.files[src])
+
+    def copytree(self, src: str, dest: str) -> None:
+        for p in [p for p in self.files if p.startswith(src + "/")]:
+            self.write(dest + p[len(src):], self.files[p])
+
+    def remove(self, path: str) -> None:
+        del self.files[path]
+
+    def rmdir(self, path: str) -> None:
+        self.dirs.discard(path)
+
+    def rmtree(self, path: str, quiet: bool = True) -> None:
+        for p in [p for p in self.files if p.startswith(path + "/")]:
+            del self.files[p]
+        self.dirs -= {d for d in self.dirs if d == path or d.startswith(path + "/")}
+
+
+class InstallerOnFakeFilesTests(unittest.TestCase):
+    """The installer through the Files port only: a fake disk, no real file is read or written."""
+
+    HOME = "/home/u"
+    BUNDLE = "/bundle"
+
+    def setUp(self) -> None:
+        self.fs = MemoryFiles()
+        for root, _, names in os.walk(CLIENT):
+            for n in names:
+                if n.endswith((".js", ".ts", ".json", ".md")) and n not in ("installed-models.json", "remote.json"):
+                    with open(os.path.join(root, n), encoding="utf-8") as f:
+                        self.fs.write(self.BUNDLE + os.path.join(root, n)[len(CLIENT):], f.read())
+        self.fs.writes.clear()
+        self.models = cfg.carl_models.parse_list(MODELS)
+
+    def run_installer(self, **switches: Any) -> Any:
+        opts = cfg.Options(bundle=self.BUNDLE, home=self.HOME, host="127.0.0.1", llama_port="8080", ctx=98304,
+                           models=self.models, running=None, coder=True, sidebar=True, switcher=True,
+                           model_check=True, **switches)
+        inst = cfg.Installer(opts, "20260101-000000", self.fs, chrome=False)
+        inst.check_configs()
+        inst.opencode()
+        inst.pi()
+        return inst
+
+    def config(self, rel: str) -> Any:
+        return json.loads(self.fs.files[os.path.join(self.HOME, rel)])
+
+    def test_fresh_install_then_a_rerun_that_changes_nothing(self) -> None:
+        inst = self.run_installer()
+        self.assertTrue(inst.report.entries["added"])
+        oc = self.config(".config/opencode/opencode.json")
+        self.assertEqual(oc["model"], "llamacpp/qwen3.6-35b-a3b")
+        self.assertIn("--headless", oc["mcp"]["carl-browser"]["command"])
+        self.assertNotIn("chrome", oc["mcp"]["carl-browser"]["command"])
+        self.assertIn(self.HOME + "/.config/opencode/plugins/session-switcher/carl-tui.js", self.fs.files)
+        self.assertEqual(self.config(".pi/agent/settings.json")["defaultTools"], ["+grep", "+find", "+ls"])
+        self.fs.writes.clear()
+        again = self.run_installer()
+        self.assertEqual((again.report.entries["added"], again.report.entries["updated"]), ([], []))
+        self.assertFalse([p for p in self.fs.writes if ".bak." in p])
+
+    def test_all_off_takes_ours_out(self) -> None:
+        self.run_installer()
+        inst = self.run_installer(web_search="off", lsp=False, background=False, browser=False, cache=False)
+        self.assertIn("OpenCode browser (MCP server carl-browser)", inst.report.entries["removed"])
+        self.assertNotIn(self.HOME + "/.config/carl/opencode.env", self.fs.files)
+        self.assertNotIn("mcp", self.config(".config/opencode/opencode.json"))
+
+    def test_a_bad_config_is_found_before_any_write(self) -> None:
+        self.fs.write(self.HOME + "/.pi/agent/mcp.json", "{ // mine\n}")
+        self.fs.writes.clear()
+        with self.assertRaises(cfg.ConfigError):
+            self.run_installer()
+        self.assertEqual(self.fs.writes, [])
+
+
 class InstallScriptTests(unittest.TestCase):
     """client/install.sh in a throw-away home with no server (port closed): the key folder's
     old name is moved, and the configs it writes read the key from the new place."""
@@ -727,6 +927,7 @@ class InstallScriptTests(unittest.TestCase):
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertIn("no installed-models.json here", p.stdout)
         self.assertIn("models for the clients: none yet", p.stdout)
+        self.assertNotIn("Traceback", p.stderr)                  # the server is away: a note, no stack trace
         with open(os.path.join(self.home, ".config/opencode/opencode.json"), encoding="utf-8") as f:
             self.assertEqual(json.load(f)["provider"]["llamacpp"]["models"], {})
 

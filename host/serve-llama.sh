@@ -115,7 +115,7 @@ apply_settings "MODEL|MODEL_NAME|CARL_SOURCES|ALIAS|KV|CTX|SLOTS|SPEC|SPEC_N|TEM
   "MODEL|MODEL_NAME|CARL_SOURCES" <<< "$CARL_ENV"
 LLAMA_MODE="${MODE_FLAG:-${LLAMA_MODE:-single}}"
 case "$LLAMA_MODE" in single|router) ;; *) echo "error: LLAMA_MODE takes single or router, got '$LLAMA_MODE'" >&2; exit 2 ;; esac
-[[ -f "$MODEL" ]] || { echo "error: model file not found: $MODEL" >&2; exit 1; }
+[[ -f "$MODEL" ]] || { echo "error: model file not found: $MODEL (./carl.sh models lists the models; ./carl.sh download NAME gets one)" >&2; exit 1; }
 ALIAS="${ALIAS:-$(basename "$MODEL" .gguf)}"
 # config.json llama.extra_args: more llama-server flags (command-line extras still
 # come last). One string of space-separated words (carl.py allows no quotes or
@@ -132,7 +132,7 @@ is_port "$PORT" || { echo "error: PORT must be a TCP port (1-65535), got '$PORT'
 API_KEY_FILE="${API_KEY_FILE:-$CARL_KEY_FILE}"
 CTX="${CTX_FLAG:-${CTX:-98304}}"   # per slot: --ctx flag > CTX env > 96K. Measured on the 35B (q4_0 KV, 2026-10-01):
                                    # 64K reads a cold prompt at 229 tok/s, decodes 20 tok/s; 128K: 117 / 13.9.
-                                   # Up to 128K-160K works (8/8 recall); REFERENCE.md lists the costs.
+                                   # Up to 128K-160K works (8/8 recall); reference/memory.md lists the costs.
 # Parallel slots (subagents). Default "auto": 2 slots when two full --ctx
 # windows fit the GPU memory (tools/llama-fit.py --plan), else 1. Each
 # conversation (the main OpenCode session, a subagent) keeps its own slot, so the

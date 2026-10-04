@@ -1,12 +1,13 @@
 // client/shared/carl-cache.js: the pure parts, and before() / after() against a fake llama-server.
 // Run: node --test tests/js (tests/scripts/test_js.py runs it with the other suites).
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import {
-  CarlCache, rankSlots, commonPrefix, overBudget, prefixFile, relocate, sessionFile, splitOpenCode, splitPi, thinkingOff,
+  CarlCache, rankSlots, commonPrefix, isStateName, overBudget, prefixFile, relocate, sessionFile, splitOpenCode, splitPi,
+  thinkingOff,
 } from "../../client/shared/carl-cache.js";
 
 const OC_SYSTEM = [
@@ -500,4 +501,95 @@ test("a conversation stored as a patch is made whole before a restore (on this M
   assert.deepEqual(overBudget([{ name: "carl-prefix+m+build+abc.bin", bytes: 10, mtime: 1 },
                                { name, bytes: 5, mtime: 2, base: "carl-prefix+m+build+abc.bin" }], 1, "zzz").sort(),
                    ["carl-prefix+m+build+abc.bin", name].sort());
+});
+
+// ------------------------------------------------------------------ state files, names and the debug log
+
+const mode = (path) => statSync(path).mode & 0o777;
+
+test("the claim, turn and record files are for this user only (0600)", () => withSave("switch", async () => {
+  const h = home();
+  const dir = join(h, ".config", "carl", "slots");
+  const srv = fakeServer();
+  const c = new CarlCache({ baseURL: "http://127.0.0.1:8080/v1", fetch: srv.fetch, split: splitOpenCode, home: h });
+  const r = await c.before(request("hello"), { session: "s1", agent: "build" });    // in flight: the claim is there
+  assert.equal(mode(join(dir, ".claim+m+0")), 0o600);
+  assert.equal(mode(join(dir, ".turn+m+0")), 0o600);
+  r.release();
+  ran(srv, 0, 9000);
+  await c.after({ session: "s1", agent: "build" });                                   // switch: a record
+  assert.equal(mode(join(dir, ".resident+m+0.json")), 0o600);
+}));
+
+test("a saved state's name is never a path", () => {
+  assert.ok(isStateName(sessionFile("q/m", "k", "../../x")));
+  assert.ok(isStateName("carl-prefix+m+build+abc.bin"));
+  for (const bad of ["../carl-session+m+k+s.bin", "carl-session+m+k+s.bin/../../x", "/tmp/carl-session+a.bin", "x.bin", 7, undefined]) {
+    assert.ok(!isStateName(bad), String(bad));
+  }
+});
+
+test("a turn mark being written (.tmp) or one that goes meanwhile does not hide the others", async () => {
+  const h = home();
+  const dir = join(h, ".config", "carl", "slots");
+  writeFileSync(join(dir, ".turn+m+0.tmp"), "{\"model\": \"m\", \"sl");             // half written (read first)
+  writeFileSync(join(dir, ".turn+m+1"), JSON.stringify({ model: "m", slot: 1, session: "other" }));
+  const srv = fakeServer();
+  const c = new CarlCache({ baseURL: "http://127.0.0.1:8080/v1", fetch: srv.fetch, split: splitOpenCode, home: h });
+  const order = await c.rankFree("m", [{ id: 0, busy: false, n: 10, task: -1 }, { id: 1, busy: false, n: 0, task: -1 }], "mine");
+  assert.deepEqual(order.map((s) => s.id), [0, 1]);                       // slot 1: another session's turn runs there
+});
+
+test("a record whose file is not a saved state's name is not saved from", () => withSave("switch", async () => {
+  const h = home();
+  const dir = join(h, ".config", "carl", "slots");
+  const srv = fakeServer({ router: true });
+  srv.st.slots[0].task = 5;
+  writeFileSync(join(dir, ".resident+m+0.json"),
+                JSON.stringify({ model: "m", slot: 0, file: "carl-session+../../../tmp/x.bin", task: 5, base: 0 }));
+  const c = new CarlCache({ baseURL: "http://127.0.0.1:8080/v1", fetch: srv.fetch, split: splitOpenCode, home: h });
+  await c.saveRecorded("m");
+  assert.ok(!srv.st.calls.some((x) => x.path.endsWith("?save")));
+  assert.ok(readdirSync(dir).includes(".resident+m+0.json"));            // left for the dashboard to look at
+}));
+
+test("a patch whose base is a path (outside the slots folder) is not unpacked", async (t) => {
+  const { spawnSync } = await import("node:child_process");
+  if (spawnSync("zstd", ["--version"]).status !== 0) return t.skip("zstd is not installed");
+  const h = home();
+  const dir = join(h, ".config", "carl", "slots");
+  const outside = join(h, ".config", "carl", "outside.bin");             // slots/../outside.bin
+  writeFileSync(outside, Buffer.alloc(1000, 7));
+  const name = "carl-session+m+0123456789+s1.bin";
+  writeFileSync(join(h, "whole.bin"), Buffer.alloc(1200, 7));
+  assert.equal(spawnSync("zstd", ["-q", "--long=31", `--patch-from=${outside}`, join(h, "whole.bin"),
+                                  "-o", join(dir, `${name}.zst`)]).status, 0);
+  writeFileSync(join(dir, `${name}.json`), JSON.stringify({ base: "../outside.bin", size: 1200, packed_at: 1000 }));
+  const c = new CarlCache({ baseURL: "http://127.0.0.1:8080/v1", fetch: fakeServer().fetch, home: h });
+  assert.equal(await c.whole(name), false);
+  assert.ok(!readdirSync(dir).includes(name));
+});
+
+test("CARL_CACHE_LOG: what the cache let go is written there (this user only), never the key", async () => {
+  const h = home();
+  const log = join(h, "cache.log");
+  const was = process.env.CARL_CACHE_LOG;
+  process.env.CARL_CACHE_LOG = log;
+  try {
+    const down = async () => { throw new TypeError("fetch failed"); };
+    const c = new CarlCache({ baseURL: "http://10.0.0.1:8080/v1", apiKey: "sk-secret-123", fetch: down, home: "/nonexistent",
+                              cacheApi: "http://10.0.0.1:8081" });
+    const r = await c.api("POST", "/carl/cache/claim", { model: "m", slot: 0 });
+    assert.equal(r.status, 0);                                           // the request goes on
+    const { payload } = await c.before(request("hello"), { session: "s1", agent: "build" });
+    assert.equal(payload.id_slot, undefined);
+    const text = readFileSync(log, "utf8");
+    assert.match(text, /cache API POST \/carl\/cache\/claim: fetch failed/);
+    assert.match(text, /before: fetch failed/);
+    assert.ok(!text.includes("sk-secret-123"));
+    assert.equal(mode(log), 0o600);
+  } finally {
+    if (was === undefined) delete process.env.CARL_CACHE_LOG;
+    else process.env.CARL_CACHE_LOG = was;
+  }
 });

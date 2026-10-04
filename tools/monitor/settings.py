@@ -101,7 +101,7 @@ UNMARKED = {"slots", "cache", "net", "adv", "model", "goal", "scope"}   # no * w
 NOT_RUNNING = {"adv", "goal", "scope"}                  # rows without a "running now" value
 REINSTALL = {"ctx", "slots"}         # clients need install.sh again when these change
 
-ADV_WARN = "CAUTION: Auto-tune and tests measured these values (REFERENCE.md). A change can make the model " \
+ADV_WARN = "CAUTION: Auto-tune and tests measured these values (reference/performance.md). A change can make the model " \
            "slower or its answers worse. Press x to set the tuned values again."
 _NET_HELP = ("local = this Mac only (the default) · vm = this Mac and a VMware Fusion VM client (192.168.42.1) · "
              "an address = only that interface "
@@ -282,11 +282,6 @@ def _fits(ok: bool) -> str:
     return f"{GRN if ok else RED}{'fits' if ok else 'does not fit'}{R}"
 
 
-def llama_need(weights: int, shape: Shape, kv: str, ctx: int, n: int, swa_full: bool = True) -> float:
-    """GPU bytes for a llama.cpp model with n slots of ctx tokens each (carl_core.domain.fit)."""
-    return need_bytes(shape, weights, ctx, n, kv, swa_full)
-
-
 def llama_fit(name: str, weights: int, shape: Shape, kv: str, ctx: int, slots: str, limit: int,
               swa: str = "auto") -> FitResult:
     """Does the model fit with these settings? Slots and, for a model with sliding-window layers, the
@@ -302,11 +297,6 @@ def llama_fit(name: str, weights: int, shape: Shape, kv: str, ctx: int, slots: s
     if not chk.fits:
         text += (f" · largest window: {ctx_label(chk.largest)}" if chk.largest else " · the weights alone do not fit")
     return chk.fits, text
-
-
-def max_ctx_per_slot(weights: int, shape: Shape, limit: int, swa_full: bool = True) -> int:
-    """Largest window (q4_0, 1 slot, in steps of 4K) that fits limit, at most the trained context."""
-    return max_ctx(shape, weights, limit, 1, "q4_0", swa_full)
 
 
 class SettingsService:
@@ -513,12 +503,12 @@ class SettingsService:
 
     def _max_ctx(self, m: ModelInfo) -> Optional[int]:
         try:
+            full = self.swa_mode() == "full"
             if m["status"] == "downloaded":
-                return max_ctx_per_slot(self.store.file_size(m["path"]), self.store.shape_of(m["path"]), self.gpu_limit(),
-                                        self.swa_mode() == "full")
+                return max_ctx(self.store.shape_of(m["path"]), self.store.file_size(m["path"]), self.gpu_limit(), 1,
+                               "q4_0", full)
             shape = self.store.model_shape(m)
-            return None if shape is None else max_ctx_per_slot(int(m.get("bytes", 0)), shape, self.gpu_limit(),
-                                                               self.swa_mode() == "full")
+            return None if shape is None else max_ctx(shape, int(m.get("bytes", 0)), self.gpu_limit(), 1, "q4_0", full)
         except Exception:           # unreadable GGUF header or file: unknown
             return None
 

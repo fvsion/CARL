@@ -1,6 +1,6 @@
 # CARL Reference: Memory: what fits and what context costs
 
-[Index](../REFERENCE.md) · the GPU limit, context length and context memory, the RAM prompt cache.
+[Index](README.md) · the GPU limit, context length and context memory.
 
 ## GPU memory limit and what fits
 
@@ -17,7 +17,7 @@ macOS sets a maximum for the memory that the GPU can use: the Metal value `recom
 - `./carl.sh fit` (`tools/llama-fit.py`) calculates these values for each model in the catalogue and in the models folder:
   - **Need** = weights (file size) + KV cache (window × slots × bytes per token) + recurrent state for each slot + ~1 GiB for compute buffers and the MTP draft context.
   - The largest window for each slot that keeps the need ≤ the limit. CARL offers windows in 4K steps.
-- A model with sliding-window layers (Gemma 4) needs these layers at full length when the server runs with `--swa-full`. Without it, they need only the window + 512 tokens for each slot ([Sliding-window models](cache.md#sliding-window-models)).
+- A model with sliding-window layers (Gemma 4) needs these layers at full length when the server runs with `--swa-full`. Without it, they need only the window + 512 tokens for each slot ([Sliding-window models](caching.md#sliding-window-models)).
 - `./carl.sh fit --ram 24` shows the values for a 24 GB Mac (the estimated limit).
 
 **Sources of the inputs:**
@@ -133,25 +133,6 @@ Qwen3.8 (`qwen35`) and Qwen3.6-35B-A3B (`qwen35moe`) are **hybrid** models:
 - **35B:** the KV cache costs little memory. At 128K, `--kv q8` costs approximately 0.6 GiB more. A 256K q4 window costs approximately 0.7 GiB more than 128K. With q8 at 96K, the 35B read prompts approximately 4% faster, with the same decode speed (see the next section).
 - **27B:** the KV cache is the largest part of the context cost. For this reason, q4_0 is the default (−2 GiB at 128K against q8_0).
 
-## RAM prompt cache and checkpoints (measured 2026-10-02)
+## The RAM prompt cache
 
-- The server has 2 slots by default. When a third conversation starts, it takes the slot of the conversation that was used least recently.
-- The server keeps the removed prompt in the **RAM prompt cache** (`--cache-ram`).
-- When that conversation continues, the server copies the prompt back from RAM. It does not read the prompt again.
-- **The launcher sets the cache size.** The size is the free memory after the model and a reserve for macOS (10 GiB when the VMware network is up, else 6 GiB). The limits are 1024 MiB and 8192 MiB.
-- **Test:** the 35B, 2 × 96K, M3 Pro. Three conversations of ~20K tokens each, then one follow-up in each conversation. Then a turn with thinking, and the turn after it.
-
-| Configuration | Cold read of each prompt | Follow-up after eviction | Turn after a thinking turn | Swap |
-|---|---|---|---|---|
-| Default: cache 2560 MiB, 8 checkpoints at least 4096 tokens apart | 44–47 s (~450 tok/s) | **0.7–1.2 s** (22 tokens read) | 26 tokens read | 0.90 GB |
-| `--cache-ram 0` | the same | **40–45 s** (~19K tokens read again) | 26 tokens read | 0.90 GB |
-| 16 checkpoints at least 1024 tokens apart | the same | 0.7–1.1 s | 26 tokens read | 0.90 GB |
-| `--kv q8` (cache 1792 MiB) | 42–45 s (~470 tok/s) | 0.8–1.2 s | 26 tokens read | 1.26 GB |
-
-**Results:**
-- **The RAM prompt cache is necessary.** Without it, the server reads a removed conversation again in full: 40–45 s for 20K tokens, and minutes for a long session.
-- **A larger cache gives no gain on the 35B.** 2560 MiB holds approximately 466K tokens of q4_0 KV. This is almost five full 96K windows.
-- **More checkpoints give no gain.** Each turn adds to the end of the conversation. The server keeps earlier reasoning (`preserve_thinking`). Thus, the cached prompt stays the start of the new prompt, and the server reads only the new tokens.
-- **q8_0 fits at 96K on 36 GB.** On the 35B, it reads approximately 4% faster, with the same decode speed and 0.36 GB more swap. q4_0 stays the default, because it uses less memory and has the recall tests.
-- NOTE: **The 27B with `--kv q8` has a small cache.** The automatic size is 1792 MiB. At 34 KiB for each token, this holds only ~54K tokens. Thus, the server reads a removed long 27B conversation again in full. With q4_0, the 27B gets 4864 MiB (~276K tokens), which is sufficient.
-- The RAM cache is lost when the server stops or when router mode changes the model. The disk prompt cache of OpenCode and Pi covers these cases ([The disk prompt cache](cache.md)).
+The RAM prompt cache and its measurements are on the page [Caching](caching.md#llamacpps-own-caches).

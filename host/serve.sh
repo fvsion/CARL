@@ -110,7 +110,7 @@ win; delete the file for the defaults). Quit (q, Ctrl-C or [ Quit ]) asks: stop
 the server, or leave it running. Client setup on this Mac: $CMD install (in a VM: see the Connect tab).
 
 No arguments opens the dashboard (see USAGE); -h prints this page. A first argument starting with "-" means "llama".
-Docs: README.md (overview), USERGUIDE.md (how-to), REFERENCE.md (details).
+Docs: README.md (overview), USERGUIDE.md (how-to), reference/README.md (details).
 EOF
 }
 
@@ -125,7 +125,7 @@ USAGE
 OPTIONS
 $(row "--model NAME|PATH" "a model name (see: models, fit) or a .gguf path. Default: config llama.model, else auto fit's pick (fit)")
 $(row "--kv q4|q8" "KV cache quantization for K and V (default q4 = q4_0). --q4 / --q8 shorthands")
-$(row "--ctx N|Nk" "window per slot, 4k..256k (default 96k; 128k-160k for long sessions, slower: see REFERENCE.md). Re-run client/install.sh after changing it")
+$(row "--ctx N|Nk" "window per slot, 4k..256k (default 96k; 128k-160k for long sessions, slower: see reference/memory.md). Re-run client/install.sh after changing it")
 $(row "--local | --vm" "listen on 127.0.0.1 (default) / on 192.168.42.1 for a VM client (see 'help env')")
 $(row "--slots N|auto" "parallel conversations, 1-4 (default auto = 2 if they fit, else 1). 2 = main session + a subagent; 3-4 = more subagents at once, where they fit. Each has its own cache and the full --ctx window: KV memory x N")
 $(row "--help-adv" "every llama-server flag (anything else you pass goes to llama-server)")
@@ -223,7 +223,7 @@ EOF
 
 help_tuning() {
   cat <<EOF
-Tuning notes (measured on this M3 Pro 36 GB; details in REFERENCE.md)
+Tuning notes (measured on this M3 Pro 36 GB; details in reference/)
 
   Subagents      2 slots: follow-up after a subagent 0.6 s (35B) / 1.9 s (27B), cache kept in place.
                  Both generating at once: 35B +39% combined (40.6 tok/s); 27B time-shares (no gain).

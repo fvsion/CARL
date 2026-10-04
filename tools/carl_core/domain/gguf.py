@@ -9,7 +9,7 @@ keeps a KV cache, the rest have a fixed-size recurrent state.
 from __future__ import annotations
 
 import struct
-from typing import Dict, List, Optional, TypedDict, Union
+from typing import Dict, Iterator, List, Optional, Tuple, TypedDict, Union
 
 MetaValue = Union[int, float, bool, str]
 Meta = Dict[str, MetaValue]
@@ -21,7 +21,9 @@ DEFAULT_CTX_TRAIN = 262144                  # when a header doesn't say
 
 GGUF_TYPES: Dict[int, str] = {0: "<B", 1: "<b", 2: "<H", 3: "<h", 4: "<I", 5: "<i", 6: "<f", 7: "<?",
                               10: "<Q", 11: "<q", 12: "<d"}
-GGUF_STRING, GGUF_ARRAY = 8, 9
+GGUF_U32, GGUF_STRING, GGUF_ARRAY, GGUF_U64 = 4, 8, 9, 10
+CHAT_TEMPLATE_KEY = "tokenizer.chat_template"
+MAX_LAYERS = 4096                           # a per-layer array longer than this is not read
 FILE_TYPES: Dict[int, str] = {
     0: "F32", 1: "F16", 2: "Q4_0", 3: "Q4_1", 7: "Q8_0", 8: "Q5_0", 9: "Q5_1", 10: "Q2_K", 11: "Q3_K_S",
     12: "Q3_K_M", 13: "Q3_K_L", 14: "Q4_K_S", 15: "Q4_K_M", 16: "Q5_K_S", 17: "Q5_K_M", 18: "Q6_K",
@@ -67,32 +69,94 @@ class ModelShape(_Shape, total=False):
     kv_elems_per_token_swa: int
 
 
+class GGUFError(ValueError):
+    """The bytes are not a GGUF header, or the header runs past the bytes read."""
+
+
 class _Reader:
-    """Sequential little-endian reader over a header prefix."""
+    """Sequential little-endian reader over a header prefix. A read past the end of the
+    prefix, or a value type GGUF does not define, raises GGUFError."""
 
-    def __init__(self, data: bytes) -> None:
+    def __init__(self, data: bytes, pos: int = 0) -> None:
         self.data = data
-        self.pos = 0
+        self.pos = pos
 
-    def scalar(self, fmt: str) -> MetaValue:
-        v: MetaValue = struct.unpack_from(fmt, self.data, self.pos)[0]
+    def scalar(self, vtype: int) -> MetaValue:
+        fmt = _fmt(vtype)
+        try:
+            v: MetaValue = struct.unpack_from(fmt, self.data, self.pos)[0]
+        except struct.error:
+            raise GGUFError("metadata runs past the part of the file read") from None
         self.pos += struct.calcsize(fmt)
         return v
 
-    def uint(self, fmt: str) -> int:
-        v = self.scalar(fmt)
-        if not isinstance(v, int):
-            raise struct.error("not an integer")
+    def uint(self, vtype: int) -> int:
+        v = self.scalar(vtype)
+        if not isinstance(v, int) or isinstance(v, bool):
+            raise GGUFError("not an integer")
         return v
 
     def string(self) -> bytes:
-        n = self.uint("<Q")
+        n = self.uint(GGUF_U64)
+        if self.pos + n > len(self.data):
+            raise GGUFError("metadata runs past the part of the file read")
         s = self.data[self.pos:self.pos + n]
         self.pos += n
         return s
 
-    def skip(self, n: int) -> None:
-        self.pos += n
+    def skip_value(self, vtype: int) -> None:
+        """Move past one value of this type (a string, an array or a number)."""
+        if vtype == GGUF_STRING:
+            self.string()
+        elif vtype == GGUF_ARRAY:
+            self.skip_array(self.uint(GGUF_U32), self.uint(GGUF_U64))
+        else:
+            self.pos += struct.calcsize(_fmt(vtype))
+
+    def skip_array(self, atype: int, n: int) -> None:
+        """Move past the n elements of an array (its type and count already read)."""
+        if atype == GGUF_STRING:
+            for _ in range(n):
+                self.string()
+        else:
+            self.pos += struct.calcsize(_fmt(atype)) * n
+
+
+def _fmt(vtype: int) -> str:
+    if vtype not in GGUF_TYPES:
+        raise GGUFError(f"unknown metadata value type {vtype}")
+    return GGUF_TYPES[vtype]
+
+
+def _entries(head: bytes) -> Iterator[Tuple[str, int, _Reader]]:
+    """Each metadata key of a GGUF header with its value type, and the reader placed at its
+    value. The caller may read the value; when it does not, it is skipped. Raises GGUFError
+    when head is not a GGUF header or ends before the metadata does."""
+    if head[:4] != b"GGUF":
+        raise GGUFError("not a GGUF file")
+    r = _Reader(head, 4)
+    r.uint(GGUF_U32)                                 # version
+    r.uint(GGUF_U64)                                 # tensor count
+    for _ in range(r.uint(GGUF_U64)):
+        key = r.string().decode("utf-8", errors="replace")
+        vtype = r.uint(GGUF_U32)
+        start = r.pos
+        yield key, vtype, r
+        if r.pos == start:
+            r.skip_value(vtype)
+
+
+def chat_template(head: bytes) -> Optional[str]:
+    """The tokenizer.chat_template string of a GGUF header, None when it has none. Raises
+    GGUFError when head is not a GGUF header, ends before the template, or the template is
+    not UTF-8 (host/gguf-chat-template.py)."""
+    for key, vtype, r in _entries(head):
+        if key == CHAT_TEMPLATE_KEY and vtype == GGUF_STRING:
+            try:
+                return r.string().decode("utf-8")
+            except UnicodeDecodeError:
+                raise GGUFError("the chat template is not UTF-8") from None
+    return None
 
 
 def parse_meta(head: bytes) -> Meta:
@@ -100,40 +164,32 @@ def parse_meta(head: bytes) -> Meta:
     may cut the header short: a read past its end or an unknown type ends the parse and
     what was read before it is kept."""
     out: Meta = {}
-    if head[:4] != b"GGUF":
-        return out
-    r = _Reader(head)
-    r.skip(4)
     try:
-        r.uint("<I")                                 # version
-        r.uint("<Q")                                 # tensor count
-        for _ in range(r.uint("<Q")):
-            key = r.string().decode(errors="replace")
-            t = r.uint("<I")
+        for key, t, r in _entries(head):
             if t == GGUF_STRING:
                 v = r.string()
-                if key == "tokenizer.chat_template":
+                if key == CHAT_TEMPLATE_KEY:
                     # only what the monitor needs to know about the template
                     out["_has_reasoning_effort"] = b"reasoning_effort" in v
                     out["_has_enable_thinking"] = b"enable_thinking" in v
                 else:
                     out[key] = v.decode(errors="replace")
             elif t == GGUF_ARRAY:
-                at, cnt = r.uint("<I"), r.uint("<Q")
-                if at == GGUF_STRING:
-                    for _ in range(cnt):
-                        r.string()
-                elif key.endswith(".attention.sliding_window_pattern") and cnt <= 4096:
+                pattern = key.endswith(".attention.sliding_window_pattern")
+                if not (pattern or key.endswith(".attention.head_count_kv")):
+                    continue                         # skipped by _entries
+                at, cnt = r.uint(GGUF_U32), r.uint(GGUF_U64)
+                if at == GGUF_STRING or cnt > MAX_LAYERS:
+                    r.skip_array(at, cnt)
+                elif pattern:
                     # which layers use the sliding window, as "1" / "0" per layer (model_shape)
-                    out[key] = "".join("1" if r.scalar(GGUF_TYPES[at]) else "0" for _ in range(cnt))
-                elif key.endswith(".attention.head_count_kv") and cnt <= 4096:
-                    # KV heads per layer (Gemma 4 26B / 31B: fewer on the full-attention layers), "8,8,2,..."
-                    out[key] = ",".join(str(int(r.scalar(GGUF_TYPES[at]))) for _ in range(cnt))
+                    out[key] = "".join("1" if r.scalar(at) else "0" for _ in range(cnt))
                 else:
-                    r.skip(struct.calcsize(GGUF_TYPES[at]) * cnt)
+                    # KV heads per layer (Gemma 4 26B / 31B: fewer on the full-attention layers), "8,8,2,..."
+                    out[key] = ",".join(str(int(r.scalar(at))) for _ in range(cnt))
             else:
-                out[key] = r.scalar(GGUF_TYPES[t])
-    except (struct.error, KeyError):
+                out[key] = r.scalar(t)
+    except GGUFError:
         pass
     return out
 

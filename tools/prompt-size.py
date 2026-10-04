@@ -9,22 +9,23 @@ The server renders it with /apply-template (the chat template llama-server uses,
 included) and counts the result with /tokenize. Reported: the whole prompt, the tool
 definitions (with tools - without), the system prompt (the system messages alone, less an
 empty conversation) and, with --per-tool, each tool's own share. The API key comes from
-API_KEY_FILE or ~/.config/carl/api-key.
+API_KEY_FILE or ~/.config/carl/api-key (tools/carl_bench.py).
 """
 from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
 import urllib.request
 from typing import Any, Dict, List
+
+from carl_bench import DEFAULT_BASE, read_api_key, validate_base
 
 JsonObj = Dict[str, Any]
 
 
 def post(server: str, path: str, body: JsonObj, key: str) -> JsonObj:
-    req = urllib.request.Request(server.rstrip("/") + path, data=json.dumps(body).encode(), method="POST",
+    req = urllib.request.Request(server + path, data=json.dumps(body).encode(), method="POST",
                                  headers={"Content-Type": "application/json", "Authorization": f"Bearer {key}"})
     with urllib.request.urlopen(req, timeout=60) as r:
         out: JsonObj = json.loads(r.read())
@@ -43,14 +44,17 @@ def tokens(server: str, key: str, messages: List[JsonObj], tools: List[JsonObj])
 def main(argv: List[str]) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("body", help="a captured chat request (JSON)")
-    ap.add_argument("--server", default="http://127.0.0.1:8080")
+    ap.add_argument("--server", default=DEFAULT_BASE, help=f"server URL (default {DEFAULT_BASE})")
     ap.add_argument("--per-tool", action="store_true", help="each tool's share")
     a = ap.parse_args(argv)
-    key_file = os.environ.get("API_KEY_FILE") or os.path.expanduser("~/.config/carl/api-key")
-    with open(key_file, encoding="utf-8") as f:
-        key = f.read().strip()
-    with open(a.body, encoding="utf-8") as f:
-        req: JsonObj = json.load(f)
+    a.server, key = validate_base(a.server), read_api_key()
+    try:
+        with open(a.body, encoding="utf-8") as f:
+            req: JsonObj = json.load(f)
+    except (OSError, ValueError) as e:
+        raise SystemExit(f"error: cannot read the request {a.body}: {e}") from None
+    if not isinstance(req, dict):
+        raise SystemExit(f"error: {a.body} is not a chat request (a JSON object)")
     msgs: List[JsonObj] = req.get("messages") or []
     tools: List[JsonObj] = req.get("tools") or []
     system = [m for m in msgs if m.get("role") == "system"]

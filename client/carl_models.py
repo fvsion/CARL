@@ -21,7 +21,6 @@ from typing import Any, Dict, List, Optional
 LIST_FILE = "installed-models.json"
 SCHEMA = 1
 THINKING = ("on-off", "effort")
-DEFAULT_CTX = 98304
 _ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
 _CONTROL = re.compile(r"[\x00-\x1f\x7f-\x9f]")
 # Qwen's non-thinking sampling, sent with the "none" variant.

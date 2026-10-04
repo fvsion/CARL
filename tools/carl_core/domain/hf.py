@@ -114,7 +114,9 @@ def gguf_files(tree: object) -> HfFileList:
         if not isinstance(path, str) or not path.endswith(".gguf") or is_extra_part(posixpath.basename(path)):
             continue
         oid = lfs.get("oid", "") if isinstance(lfs, dict) else ""
-        out.append((validate_file(path), size if isinstance(size, int) else 0, oid if isinstance(oid, str) else ""))
+        # checked here as validate_ref checks them in models.json, where they are stored
+        size_ok = isinstance(size, int) and not isinstance(size, bool) and size >= 0
+        out.append((validate_file(path), size if size_ok else 0, validate_sha256(oid) if isinstance(oid, str) else ""))
     return out
 
 

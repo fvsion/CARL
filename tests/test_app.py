@@ -166,7 +166,7 @@ class LaunchTest(unittest.TestCase):
         w = self.world(gpu=11 * GIB + GIB // 5)
         env, _ = w.carl.launch_env(None, use_config=True)
         self.assertEqual(env["MODEL_NAME"], "small")
-        self.assertLess(int(env["CTX"]), 98304)
+        self.assertLess(int(str(env["CTX"])), 98304)
         self.assertIn("ctx:auto-fit", str(env["CARL_SOURCES"]))
         w = self.world(gpu=11 * GIB + GIB // 5, config={"models": {"small": {"ctx": 98304}}})
         self.assertEqual(w.carl.launch_env(None, use_config=True)[0]["CTX"], 98304)

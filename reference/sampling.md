@@ -1,6 +1,6 @@
 # CARL Reference: Sampling, output limits and context limits
 
-[Index](../REFERENCE.md) · Qwen's sampling values, what runs, context limits.
+[Index](README.md) · Qwen's sampling values, what runs, context limits.
 
 ## Sampling and output limits
 

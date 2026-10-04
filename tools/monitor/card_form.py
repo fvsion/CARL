@@ -4,7 +4,7 @@ checks it with the catalogue's rules) and card_view draws it."""
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Literal, Optional
+from typing import Dict, List, Literal, Optional
 
 from carl_core.domain.cards import FIELDS, CardField
 
@@ -71,7 +71,7 @@ class CardForm:
     def move(self, step: int) -> None:
         self.select(self.row + step)
 
-    def _set(self, key: str, value: Any) -> None:
+    def _set(self, key: str, value: object) -> None:
         """Set a field (None removes it) and mark the card changed."""
         if value is None:
             self.values.pop(key, None)

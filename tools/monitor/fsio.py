@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import tempfile
 from typing import Dict, List, Optional, Tuple
 
 
@@ -42,13 +43,20 @@ def file_size(path: str) -> int:
 
 
 def write_private(path: str, text: str) -> None:
-    """Replace path with text, readable by this user only (settings): a temporary
-    file created 0600, then renamed over path so a reader never sees half of it."""
-    tmp = f"{path}.tmp{os.getpid()}"
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w") as f:
-        f.write(text)
-    os.replace(tmp, path)
+    """Replace path with text, readable by this user only (settings, state): a temporary
+    file of its own (mkstemp: 0600, a unique name, so two threads never share it), then
+    renamed over path so a reader never sees half of it."""
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path) or ".", prefix=os.path.basename(path) + ".", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(text)
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        raise
 
 
 # The state file client/configure.py keeps next to each client's config, and its name

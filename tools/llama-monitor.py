@@ -38,10 +38,16 @@ f errors only | arrows, PgUp/PgDn scroll | space refresh | ? all keys
   ./carl.sh monitor --port 8081          # a server on another port
   ./carl.sh monitor --once --expand      # print one snapshot and exit
 
-Read-only towards the server (/health, /slots, /metrics, /props, /v1/models
-and its log file); the one thing it changes is stopping the server, when you
-choose that. Context memory is computed from the GGUF metadata and the
-server's flags (tools/gguf_shape.py).
+The dashboard reads the server's API (/health, /slots, /metrics, /props,
+/v1/models) and its log file. It changes the server only when you tell it to:
+it stops the server, or it starts the server again with new settings (Apply,
+Auto-tune). Before a stop, it saves the sessions in the slots
+(POST /slots/N?action=save). In router mode, it loads and unloads models
+(POST /models/load and /models/unload). It also serves its own API on the
+server's port + 1 for OpenCode and Pi on other computers (the disk cache and
+the client config). This API uses the same API key as the server. The
+dashboard calculates the context memory from the GGUF metadata and the
+server's flags (tools/carl_core).
 """
 import os
 import sys

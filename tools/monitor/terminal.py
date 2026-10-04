@@ -73,10 +73,10 @@ class Terminal:
     def enter(self, on_interrupt: Callable[[], None]) -> None:
         """cbreak mode, alternate screen, mouse on. Ctrl-C calls on_interrupt; SIGTERM / SIGHUP
         restore the terminal and exit at once."""
-        def interrupted(signum: int, frame: Optional[FrameType]) -> None:
+        def interrupted(_signum: int, _frame: Optional[FrameType]) -> None:
             on_interrupt()
 
-        def terminated(signum: int, frame: Optional[FrameType]) -> None:
+        def terminated(_signum: int, _frame: Optional[FrameType]) -> None:
             self.restore()
             os._exit(0)
 

@@ -61,14 +61,6 @@ class ProcessTest(unittest.TestCase):
         assert info is not None
         self.assertEqual(info.cmd, "evil]0;titlename")
 
-    def test_etime_seconds_adds_a_minute(self) -> None:
-        self.assertEqual(system.etime_seconds("00:10"), 70)
-        self.assertEqual(system.etime_seconds("01:00:00"), 3660)
-        self.assertEqual(system.etime_seconds("2-00:00:01"), 2 * 86400 + 61)
-        self.assertEqual(system.etime_seconds(None), 60)
-
-
-class MemoryPowerTest(unittest.TestCase):
     def test_vm_stat(self) -> None:
         text = ("Mach Virtual Memory Statistics: (page size of 16384 bytes)\nPages free:      3885.\n"
                 "Pages active:    819102.\nPages wired down:   200000.\nPages occupied by compressor: 1000.\n")

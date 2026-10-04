@@ -55,7 +55,7 @@ class CardEditTest(unittest.TestCase):
         return ANSI.sub("", "\n".join(self.app.frame(self.ctl.data)))
 
     def select(self, name: str) -> None:
-        self.ui.mrow = [m["name"] for m in self.ctl.visible()].index(name)
+        self.ui.mrow = [m["name"] for m in self.ctl.settings.visible()].index(name)
 
     def form(self) -> CardForm:
         f = self.ui.card
@@ -99,12 +99,12 @@ class CardEditTest(unittest.TestCase):
                                                     "good_for": ["agent coding"], "rank": 1})
         self.assertIn("card saved for mine", self.ui.toast_msg[0])
         self.assertIn("Fast local coder [agent coding]", self.screen())         # the list's role and tags
-        self.ctl.set_arrangement("filter", FILTERS.index("agent coding"))
-        self.assertEqual([m["name"] for m in self.ctl.visible()], ["mine"])     # the fakes have no tags
-        self.ctl.set_arrangement("filter", 0)
-        self.ctl.set_arrangement("sort", SORTS.index("quality"))
-        self.assertEqual(self.ctl.visible()[0]["name"], "mine")                 # rank 1 first
-        self.assertEqual(self.ctl.visible()[self.ui.mrow]["name"], "mine")      # still selected
+        self.ctl.settings.set_arrangement("filter", FILTERS.index("agent coding"))
+        self.assertEqual([m["name"] for m in self.ctl.settings.visible()], ["mine"])     # the fakes have no tags
+        self.ctl.settings.set_arrangement("filter", 0)
+        self.ctl.settings.set_arrangement("sort", SORTS.index("quality"))
+        self.assertEqual(self.ctl.settings.visible()[0]["name"], "mine")                 # rank 1 first
+        self.assertEqual(self.ctl.settings.visible()[self.ui.mrow]["name"], "mine")      # still selected
         self.keys("\r")                                                          # use it: the Server panel's MODEL card
         text = self.screen()
         self.assertIn("Fast local coder", text)

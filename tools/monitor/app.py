@@ -24,7 +24,9 @@ from .jobs import Paths, ServerJobs
 from .keys import InputBuffer
 from .model import ServerData, jdict
 from .settings import Pending, Schema, SettingsService, net_choices
-from .settings_view import ModelsDir, SettingsView, subpanel_bar
+from .settings_panels.common import subpanel_bar
+from .settings_panels.models import ModelsDir
+from .settings_view import SettingsView
 from .state import SP_CACHE, SP_FIT, SP_MODELS, SP_ROUTER, SP_SERVER, TABS, UIState
 from .store import CarlStore, ModelList
 from .terminal import LOGO_COLS, Terminal, logo_escape, logo_mode, place_lines

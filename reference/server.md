@@ -1,6 +1,6 @@
 # CARL Reference: The llama.cpp server
 
-[Index](../REFERENCE.md) · the server, its settings, Auto-tune and its flags.
+[Index](README.md) · the server, its settings, Auto-tune and its flags.
 
 ## The server: llama.cpp
 
@@ -15,7 +15,7 @@
 | KV cache | Real q4_0 (default) or q8_0, allocated one time with no bf16 copy. `--kv` sets it. |
 | Usable context | 96K for each slot by default, from 4K to 256K (`--ctx`) |
 | Memory | The server allocates the full KV cache at start. The memory stays flat during a session (measured from 56K to 81K tokens). |
-| Prompt reuse | Context checkpoints (8, at least 4K tokens apart) at user-message boundaries. A RAM prompt cache of 1–8 GiB ([RAM prompt cache](memory.md#ram-prompt-cache-and-checkpoints-measured-2026-10-02)). A disk prompt cache for OpenCode and Pi ([The disk prompt cache](cache.md)). |
+| Prompt reuse | Context checkpoints (8, at least 4K tokens apart) at user-message boundaries. A RAM prompt cache of 1–8 GiB ([RAM prompt cache](caching.md#the-ram-prompt-cache-and-checkpoints-measured-2026-10-02)). A disk prompt cache for OpenCode and Pi ([Caching](caching.md)). |
 | Speculation | MTP head + n-gram (`draft-mtp,ngram-mod`). The draft count is set for each model. |
 | Decode (27B, M3 Pro) | 10.5–11 tok/s on new text, 27 tok/s when the model writes text again |
 | Prompt read (27B, cold, M3 Pro) | ~85–90 tok/s at 2–9K, ~56–65 tok/s at 66K |
@@ -57,11 +57,9 @@
 - Two slots that generate at the same time: the 35B gives +39% in total (each slot at 72–77% of its speed alone). The 27B gives 8.8 tok/s vs 9.6 alone (it shares the time). MTP works in both slots.
 - `--slots 3` and `--slots 4` are for more subagents at the same time. The start check refuses them when they do not fit. `auto` never selects more than 2.
 
-### The RAM prompt cache and the disk
+### The caches
 
-- **RAM prompt cache** (`--cache-ram`): the launcher calculates its size from the free RAM after the model and a reserve. The reserve is 10 GiB with the VM network, else 6 GiB (`RESERVE_GB`). The size is 1–8 GiB, in 256 MiB steps. This cache holds conversations that are not in a slot.
-- **Disk:** llama.cpp has no automatic disk tier. It has only a manual function (`--slot-save-path` and `/slots/{id}?action=save|restore`). CARL's clients use this function ([The disk prompt cache](cache.md)).
-- On Apple Silicon, the RAM cache uses the same memory as "VRAM". macOS moves this memory to swap on the SSD when the memory pressure is high.
+The slots, the RAM prompt cache (`--cache-ram`, 1–8 GiB from the free RAM) and the disk prompt cache of OpenCode and Pi (`--slot-save-path`) are on the page [Caching](caching.md).
 
 ### Two models at the same time do not fit
 
@@ -278,7 +276,7 @@ netstat -anv -p tcp | awk '$6=="LISTEN" && $4 ~ /[.]8080$/ {n=split($(NF-8),a,":
 | `llama` | `model`, `auto_goal`, `auto_fit`, `mode`, `net`, `host`, `cache_ram`, `ub`, `batch`, `ckpt`, `ckpt_step`, `think_toggle`, `extra_args` |
 | `models.<name>` | `kv`, `ctx`, `slots`, `spec`, `spec_n`, `temp`, `top_p`, `top_k`, `min_p`, `presence`, `repeat`, `alias` |
 | `paths` | `models_dir` |
-| `cache` | `disk_gb`, `prefix`, `sessions`, `save`, `auto_s`, `share`, `swa` ([The disk prompt cache](cache.md#the-cache-settings)) |
+| `cache` | `disk_gb`, `prefix`, `sessions`, `save`, `auto_s`, `share`, `swa` ([Caching](caching.md#the-cache-settings)) |
 
 - **Validation:** each key has a type, a range or a list of choices. `./carl.sh config show` lists them. A bad value stops the start with an error. An unknown key gets a warning and has no effect.
 - CARL writes the file atomically, with mode 600.
@@ -388,8 +386,8 @@ This table shows the flags that `host/serve-llama.sh` gives to `llama-server` (s
 | Batching | `-b 2048 -ub 512` | `-ub 512` gave the best measured result (90.5 tok/s vs 88.6 and 86.1 for 1024 and 2048). |
 | Slots | `--parallel N`; with 2 or more: `--kv-unified --kv-unified-per-slot CTX --no-cache-idle-slots -sps 0.5` | The main OpenCode session and a subagent each keep their own slot and cache. |
 | Prompt cache | `--ctx-checkpoints 8 --checkpoint-min-step 4096 --cache-ram N` | Checkpoints let follow-up turns use the cache again, because the recurrent layers of Qwen cannot trim it. The RAM cache holds conversations that are not in a slot (each held state is 2–2.5 GiB). N = RAM − the model's need − the reserve, 1–8 GiB. If the size calculation fails, N is 4096. |
-| Disk cache | `--slot-save-path ~/.config/carl/slots` | OpenCode and Pi save and restore prompt states here ([The disk prompt cache](cache.md)). |
-| Sliding window | `--swa-full` (only for a sliding-window model, when `cache.swa` gives full) | A restored state needs every layer at full length ([Sliding-window models](cache.md#sliding-window-models)). |
+| Disk cache | `--slot-save-path ~/.config/carl/slots` | OpenCode and Pi save and restore prompt states here ([Caching](caching.md)). |
+| Sliding window | `--swa-full` (only for a sliding-window model, when `cache.swa` gives full) | A restored state needs every layer at full length ([Sliding-window models](caching.md#sliding-window-models)). |
 | Projector | `--no-mmproj` | CARL uses text only. |
 | Templates | `--jinja --reasoning-format deepseek`, `--chat-template-kwargs '{"preserve_thinking":true}'`, `--chat-template-file` (patched) | The server sends the reasoning to `reasoning_content`. `reasoning_effort: none` turns off thinking ([How thinking works](thinking.md#how-thinking-works)). |
 | Sampling | `--temp 1.0 --top-p 0.95 --top-k 20 --min-p 0 --presence-penalty 0 --repeat-penalty 1.0` | The Qwen values for thinking mode ([Sampling](sampling.md#sampling-and-output-limits)). `TEMP`, `TOP_P`, `TOP_K`, `MIN_P`, `PRESENCE`, `REPEAT` override them. |

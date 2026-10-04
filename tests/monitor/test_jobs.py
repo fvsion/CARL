@@ -76,7 +76,6 @@ class JobsTest(unittest.TestCase):
         self.port = free_port()
         self.store = FileStore()
         self.store.config_file = os.path.join(root, "conf", "config.json")
-        self.store.conf_dir = os.path.join(root, "conf")
         self.ui = UIState()
         self.models = ModelList(self.store, lambda msg: None)
         self.svc = SettingsService(self.models, Schema(net_choices([])), "127.0.0.1", lambda: self.store.limit)
@@ -131,7 +130,7 @@ class JobsTest(unittest.TestCase):
         self.assertIsNone(self.ui.pending)
         self.assertIsNotNone(self.collector.server_pid)
         self.assertNotIn("backend", self.store.saved[-1])
-        self.assertFalse(os.path.exists(os.path.join(self.store.conf_dir, "last-backend")))
+        self.assertFalse(os.path.exists(os.path.join(os.path.dirname(self.store.config_file), "last-backend")))
 
     def test_server_env(self) -> None:
         env = server_env({"CTX": "1", "HOME": "/h", "SETTINGS_FILE": "x"}, 8095, {"MODEL": "/m/a.gguf"})

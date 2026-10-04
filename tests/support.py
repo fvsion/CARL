@@ -29,6 +29,13 @@ def shape(experts: int = 0, nextn: int = 1, kv_elems: int = 8192, rs_bytes: int 
             "vl": 256, "effort_levels": False, "thinking_switch": True}
 
 
+def with_window(base: ModelShape, window: int, swa_elems: int) -> ModelShape:
+    """base with sliding-window layers (Gemma): the window and their KV elements per token."""
+    out = base.copy()
+    out["swa_window"], out["kv_elems_per_token_swa"] = window, swa_elems
+    return out
+
+
 def entry(name: str, file: str, size: int = 10 * GIB, arch: str = "moe", ctx: int = 98304,
           zones: Optional[CtxZones] = None, rank: Optional[int] = None, abliterated: bool = False) -> CatalogEntry:
     e: CatalogEntry = {

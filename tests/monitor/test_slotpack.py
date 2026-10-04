@@ -1,9 +1,10 @@
-"""Shared pieces (tools/monitor/slotpack.py): a conversation is stored as a zstd patch against the
+"""Conversations stored as patches (tools/monitor/slotpack.py): a conversation is stored as a zstd patch against the
 prompt file it starts with, made whole again byte for byte, copies and orphans are tidied, and the
 disk cache counts and removes every form (diskcache.py). Synthetic files in llama.cpp's header format."""
 from __future__ import annotations
 
 import array
+import json
 import os
 import tempfile
 import time
@@ -84,6 +85,13 @@ class PackTest(unittest.TestCase):
         os.remove(os.path.join(self.d, PROMPT))
         self.assertEqual(slotpack.tidy(self.d).orphans, 1)
         self.assertEqual([n for n in os.listdir(self.d) if "ses_1" in n], [])
+
+    def test_a_meta_that_names_a_path_is_not_used(self) -> None:
+        """unpack reads the base from the meta file: only a prompt file in the slots folder counts."""
+        for base in ("../carl-prefix+m+a+b.bin", "/etc/passwd", "carl-session+m+k+s.bin"):
+            with open(os.path.join(self.d, SESSION + slotpack.META), "w") as f:
+                json.dump({"base": base, "size": 1, "packed_at": 1}, f)
+            self.assertIsNone(slotpack.meta(self.d, SESSION), base)
 
 
 if __name__ == "__main__":

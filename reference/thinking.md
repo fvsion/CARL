@@ -1,6 +1,6 @@
 # CARL Reference: Thinking
 
-[Index](../REFERENCE.md) · how thinking works, by model, by client, the full matrix.
+[Index](README.md) · how thinking works, by model, by client, the full matrix.
 
 ## How thinking works
 
@@ -25,7 +25,7 @@ llama.cpp gives these request fields to the template:
 {%- if reasoning_effort is defined and reasoning_effort in ('none', 'minimal', 'off', 'disable', 'disabled') %}{%- set enable_thinking = false %}{%- endif %}
 ```
 
-- The rest of the template does not change, with one exception: a Qwen template without `preserve_thinking` (the 9B) gets it ([Whether a state fits](cache.md#whether-a-state-fits)).
+- The rest of the template does not change, with one exception: a Qwen template without `preserve_thinking` (the 9B) gets it ([Whether a state fits](caching.md#whether-a-state-fits)).
 - The patched copy is cached as `~/models/templates/<model>.thinking-toggle.jinja`.
 - The launcher makes it again when the GGUF or the script is newer than the copy.
 - A model whose template has no `enable_thinking` gets its stock template.

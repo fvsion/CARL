@@ -25,16 +25,19 @@ from __future__ import annotations
 
 import fcntl
 import getpass
+import http.client
 import json
 import os
 import platform
+import re
 import socket
-import uuid
 import subprocess
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
+import uuid
 from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -49,6 +52,11 @@ SWITCHES = ("WEB_SEARCH", "NO_LSP", "LSP", "NO_BROWSER", "BROWSER_HEADED", "NO_S
             "NO_MODEL_CHECK", "NO_BACKGROUND_SUBAGENTS", "NO_CACHE", "LLAMA_CTX")
 READ_TIMEOUT = 75            # the dashboard sends a comment every 25 s: silence this long = reconnect
 BACKOFF = (5, 10, 30, 60)
+MAX_CONFIG = 1 << 20         # the published config (the installed models) is a few KB
+MAX_LINE = 1 << 16           # one line of the event stream
+VERSION_RE = re.compile(r"[A-Za-z0-9._-]{1,64}")    # the config's version: written to the state file and the log
+# What can go wrong when the dashboard is away or answers badly (the service then tries again).
+NET_ERRORS = (OSError, ValueError, http.client.HTTPException)
 
 Json = Dict[str, Any]
 
@@ -87,7 +95,8 @@ def server() -> Tuple[str, str]:
     """(the dashboard's API, the key); ValueError when this folder has no remote.json."""
     r = load(os.path.join(HERE, "remote.json"))
     api = r.get("cache_api")
-    if not isinstance(api, str) or not api.startswith("http"):
+    if not isinstance(api, str) or (url := urllib.parse.urlsplit(api)).scheme not in ("http", "https") \
+            or not url.netloc:
         raise ValueError(f"no remote.json with the server's address next to {sys.argv[0]} (copy the client folder "
                          f"again from the server: the server writes it at every start)")
     for f in (os.path.join(HERE, "api-key"), os.path.join(CONF, "api-key")):
@@ -98,7 +107,17 @@ def server() -> Tuple[str, str]:
                 return api.rstrip("/"), key
         except OSError:
             continue
-    raise ValueError("no API key (api-key next to this file, or ~/.config/carl/api-key)")
+    raise ValueError("no API key (api-key next to this file, or ~/.config/carl/api-key): copy the client folder "
+                     "again from the server")
+
+
+def describe(e: BaseException) -> str:
+    """An error for the state file (the /carl panel shows it): what went wrong and what to do."""
+    if isinstance(e, urllib.error.HTTPError) and e.code in (401, 403):
+        return "the server refused the API key: copy the client folder again from the server (it has the key)"
+    if isinstance(e, urllib.error.URLError) and not isinstance(e, urllib.error.HTTPError):
+        return f"the server's dashboard does not answer ({e.reason}): is the CARL server running?"[:200]
+    return str(e)[:200] or type(e).__name__
 
 
 MODE = "check"               # how this run reaches the dashboard: "service" (watch) or "check" (once)
@@ -126,14 +145,18 @@ def fetch_config(api: str, key: str, etag: str) -> Optional[Json]:
     """The published config when it isn't `etag`; None when it is (304)."""
     try:
         with urllib.request.urlopen(request(api + "/carl/client/config", key, etag), timeout=10) as r:
-            doc = json.loads(r.read())
-            if not isinstance(doc, dict) or not isinstance(doc.get("models"), dict):
-                raise ValueError("not a client config")
-            return doc
+            body = r.read(MAX_CONFIG + 1)
     except urllib.error.HTTPError as e:
         if e.code == 304:
             return None
         raise
+    if len(body) > MAX_CONFIG:
+        raise ValueError("the server's client config is too large")
+    doc = json.loads(body)
+    if not (isinstance(doc, dict) and isinstance(doc.get("models"), dict)
+            and isinstance(doc.get("version"), str) and VERSION_RE.fullmatch(doc["version"])):
+        raise ValueError("the server sent something that is not a client config")
+    return doc
 
 
 def install_env() -> Dict[str, str]:
@@ -164,7 +187,7 @@ def apply(doc: Json) -> None:
         rc = subprocess.run(["bash", os.path.join(HERE, "install.sh")], env=env, stdin=subprocess.DEVNULL,
                             stdout=log, stderr=subprocess.STDOUT, timeout=600).returncode
     if rc != 0:
-        raise RuntimeError(f"the installer failed (exit {rc}): {LOG}")
+        raise RuntimeError(f"the installer failed (exit {rc}): see {LOG}")
 
 
 def once(apply_waiting: bool = False) -> Json:
@@ -176,8 +199,8 @@ def once(apply_waiting: bool = False) -> Json:
         try:
             api, key = server()
             doc = fetch_config(api, key, "" if apply_waiting else str(st.get("applied") or ""))
-        except (OSError, ValueError, urllib.error.URLError) as e:
-            return update(checked=time.time(), error=str(e)[:200])
+        except NET_ERRORS as e:
+            return update(checked=time.time(), error=describe(e))
         if doc is None or doc["version"] == st.get("applied"):
             return update(checked=time.time(), error=None, pending=None)
         if not (st.get("auto_apply", True) or apply_waiting):
@@ -185,12 +208,12 @@ def once(apply_waiting: bool = False) -> Json:
         try:
             apply(doc)
         except (OSError, RuntimeError, subprocess.SubprocessError) as e:
-            return update(checked=time.time(), error=str(e)[:200], pending=doc["version"])
+            return update(checked=time.time(), error=describe(e), pending=doc["version"])
         done = update(checked=time.time(), error=None, pending=None, applied=doc["version"],
                       applied_at=time.strftime("%Y-%m-%d %H:%M:%S"))
         try:                                         # tell the dashboard at once (its Clients list)
             fetch_config(api, key, doc["version"])
-        except (OSError, ValueError, urllib.error.URLError):
+        except NET_ERRORS:
             pass
         return done
 
@@ -199,7 +222,7 @@ def events(api: str, key: str) -> Iterator[str]:
     """The event names the dashboard sends (a blank name for its keep-alive comments)."""
     with urllib.request.urlopen(request(api + "/carl/client/events", key), timeout=READ_TIMEOUT) as r:
         name = ""
-        for raw in r:
+        while raw := r.readline(MAX_LINE):
             line = raw.decode(errors="replace").rstrip("\r\n")
             if line.startswith("event:"):
                 name = line[6:].strip()
@@ -225,8 +248,8 @@ def watch() -> None:
                 if name == "config":
                     once()
             update(connected=False)                  # the dashboard closed the stream (it stopped)
-        except (OSError, ValueError, urllib.error.URLError) as e:
-            update(connected=False, error=str(e)[:200])
+        except NET_ERRORS as e:
+            update(connected=False, error=describe(e))
         time.sleep(BACKOFF[min(fails, len(BACKOFF) - 1)])
         fails += 1
 

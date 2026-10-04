@@ -24,7 +24,7 @@ def clean(text: str) -> str:
     return _CONTROL.sub("", text)
 
 
-def clean_json(v: Any) -> Any:
+def clean_json(v: object) -> object:
     """Parsed JSON with every string (keys too) cleaned."""
     if isinstance(v, str):
         return clean(v)

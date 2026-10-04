@@ -1,6 +1,6 @@
 # CARL Reference: The plugins and extensions
 
-[Index](../REFERENCE.md) · every OpenCode plugin and Pi extension that CARL installs: what it does, how it works, its files and its switch.
+[Index](README.md) · every OpenCode plugin and Pi extension that CARL installs: what it does, how it works, its files and its switch.
 
 `./carl.sh install` (or `client/install.sh` on another computer) copies these pieces and registers them. It keeps your own plugins and extensions. A piece of yours with the same name stays, and CARL does not install its own.
 
@@ -28,12 +28,12 @@ Put a switch in front of the installer, for example `NO_SIDEBAR=1 ./carl.sh inst
 | Pi | `~/.pi/agent/extensions/NAME/` | Pi loads every folder in `extensions/`. |
 
 - The source is in `client/opencode/plugins/` and `client/pi/extensions/`.
-- The code that both clients use is in `client/shared/` (`carl-cache.js`, `carl-panel.js`). The installer copies it into each piece that uses it.
+- The code that more than one piece uses is in `client/shared/`: `carl-cache.js` (the prompt cache), `carl-panel.js` (the /carl panel) and `carl-tui.js` (the TUI helpers of the session switcher and the subagents panel). The installer copies each file into each piece that uses it.
 - OpenCode and Pi load the pieces when they start. After an install, restart OpenCode or Pi.
 
 ## carl-cache: the prompt cache
 
-The prompt cache saves prompt states on the server's disk, through the server. Then a new session, a restart or a router switch does not mean reading everything again. The pages [The disk prompt cache](cache.md) and [How the pieces fit](pieces.md) give the details.
+The prompt cache saves prompt states on the server's disk, through the server. Then a new session, a restart or a router switch does not mean reading everything again. The pages [Caching](caching.md) and [Caching](caching.md#how-a-saved-state-is-built) give the details.
 
 | | OpenCode | Pi |
 |---|---|---|
@@ -49,9 +49,10 @@ For each request, the cache does these steps:
 4. If the slot does not hold the session, it puts back the session's file, else the agent's prompt file. If there is no prompt file, it reads the prompt one time and saves it.
 5. When the turn ends, it saves the session, or it records which session the slot holds (a `.resident+MODEL+SLOT.json` file). The Save setting decides which (Settings > Caching).
 
+- The claim, turn and record files have the mode 0600. A saved-state name from a record or a patch is used only when it is a plain file name.
 - The dashboard's Stop, Apply, Auto-tune and router loads read the turn marks. They can wait for the end of a turn, so that the session is saved whole.
 - A client on another computer does the same through the dashboard's API ([Clients on other computers](client-sync.md)).
-- `CARL_CACHE=0` turns the cache off for one run. `CARL_CACHE_SAVE=turn|auto|switch|stop` sets the save rule for one client. `CARL_CACHE_LOG=FILE` writes what the cache does to a file.
+- `CARL_CACHE=0` turns the cache off for one run. `CARL_CACHE_SAVE=turn|auto|switch|stop` sets the save rule for one client. `CARL_CACHE_LOG=FILE` writes what the cache does to a file, also each failure it lets go (a request never fails because of the cache). The file never holds the key or a request body.
 
 ## carl-model-check: the model warning (OpenCode)
 
@@ -130,7 +131,7 @@ Type `/carl`. The panel shows one section for each CARL piece on this computer, 
 | Config sync | The server, the service, the config that is applied, a config that waits, auto-apply. Actions: auto-apply on or off, Apply now, Check the server now. |
 | Prompt cache, Model check, Session switcher, Subagents sidebar | On or off, and the switch |
 | Coder subagent | On or off, its tools, background on or off |
-| Browser, Web search, LSP | On or off; web search says that its queries leave this computer |
+| Browser, Web search, LSP | On or off; web search shows its provider (Exa or Parallel) and says that its queries leave this computer |
 
 - The panel reads the files that the installer wrote. It changes nothing, except through `client/carl-sync.py` (the actions).
 - Without the sync service, the panel checks the server for a pushed config one time when OpenCode or Pi starts.

@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import unittest
 
+from carl_core.domain.fit import max_ctx
 from mon_support import GIB, FakeStore, model, model_list, shape
 from monitor.fmt import GRN, RED, YEL
 from monitor.model import ServerData
 from monitor.settings import (LLAMA_ADV, MODEL_ROW_KEYS, SET_HELP, Schema, SettingsService, env_from_cmd, fmt_val,
-                              llama_fit, max_ctx_per_slot, net_choices, parse_typed, row_instruction, rows,
+                              llama_fit, net_choices, parse_typed, row_instruction, rows,
                               running_settings, settings_to_config, shown_value, step_choice)
 
 SCHEMA = Schema(net_choices(["192.168.1.5"]))
@@ -142,17 +143,15 @@ class FitMathTest(unittest.TestCase):
         self.assertTrue(ok)
         self.assertIn("window only", text)
         self.assertFalse(llama_fit("g", 10 * GIB, swa, "q4_0", 98304, "2", 16 * GIB, swa="full")[0])
-        self.assertGreater(max_ctx_per_slot(10 * GIB, swa, 16 * GIB, swa_full=False),
-                           max_ctx_per_slot(10 * GIB, swa, 16 * GIB))
+        self.assertGreater(max_ctx(swa, 10 * GIB, 16 * GIB, swa_full=False), max_ctx(swa, 10 * GIB, 16 * GIB))
         self.assertNotIn("sliding-window", llama_fit("m", 10 * GIB, shape(), "q4_0", 65536, "1", 25 * GIB)[1])
 
-    def test_max_ctx_per_slot(self) -> None:
-        shp = shape(kv_elems=10240, rs_bytes=0, ctx_train=40960)
-        self.assertEqual(max_ctx_per_slot(10 * GIB, shp, 25 * GIB), 40960)        # capped at the trained context
-        self.assertEqual(max_ctx_per_slot(30 * GIB, shp, 25 * GIB), 0)
-        room = 12 * GIB - 10 * GIB - GIB
-        self.assertEqual(max_ctx_per_slot(10 * GIB, shape(kv_elems=10240, rs_bytes=0), 12 * GIB),
-                         int(room // (10240 * 18 / 32)) // 4096 * 4096)
+    def test_max_ctx_is_carl_cores_for_one_q4_0_slot(self) -> None:
+        """The lists' "fits" column: carl_core's largest window with 1 slot and a q4_0 KV cache."""
+        store = FakeStore(limit=16 * GIB)
+        svc = SettingsService(model_list(store), SCHEMA, "192.168.42.1", lambda: store.limit)
+        big = store.models[0]
+        self.assertEqual(svc.max_ctx(big), max_ctx(shape(), big["bytes"], 16 * GIB, 1, "q4_0"))
 
 
 class ServiceTest(unittest.TestCase):

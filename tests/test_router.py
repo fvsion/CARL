@@ -4,15 +4,16 @@ with the reason, the start model loads first; the clients list only the installe
 from __future__ import annotations
 
 import unittest
+from typing import Dict, List, cast
 
-from support import GIB, MDIR, FakeShapes, World, catalog, entry, shape
+from support import GIB, MDIR, FakeShapes, World, catalog, entry, shape, with_window
 from carl_core.domain.clientlist import client_entry, client_list
 from carl_core.domain.router import Common, Preset, plan_model, preset_ini
 from carl_core.domain.settings import LLAMA_KEYS
-from carl_core.domain.types import ModelInfo
+from carl_core.domain.types import JsonValue, ModelInfo, Settings
 
 COMMON = Common(batch=2048, ubatch=512, ckpt=8, ckpt_step=4096, cache_ram=None)
-VALS = {"ctx": 98304, "slots": "auto", "kv": "q4_0", "spec": "draft-mtp,ngram-mod", "spec_n": 1, "temp": 1.0,
+VALS: Settings = {"ctx": 98304, "slots": "auto", "kv": "q4_0", "spec": "draft-mtp,ngram-mod", "spec_n": 1, "temp": 1.0,
         "top_p": 0.95, "top_k": 20, "min_p": 0, "presence": 0, "repeat": 1.0}
 SMALL = entry("small", "Small-IQ3.gguf", 10 * GIB, rank=2)
 BIG = entry("big", "Big-Q4.gguf", 30 * GIB, rank=1)
@@ -29,13 +30,13 @@ class PlanTest(unittest.TestCase):
                                     None)[0].cache_mib, 2048)            # type: ignore[union-attr]
 
     def test_a_model_that_does_not_fit_is_left_out_with_the_reason(self) -> None:
-        p, why = plan_model("m", "/m.gguf", dict(VALS, slots="1"), shape(), 30 * GIB, 24 * GIB, 32 * GIB, 6 * GIB,
+        p, why = plan_model("m", "/m.gguf", {**VALS, "slots": "1"}, shape(), 30 * GIB, 24 * GIB, 32 * GIB, 6 * GIB,
                             COMMON, None)
         self.assertIsNone(p)
         self.assertIn("the weights alone don't fit", why)
 
     def test_a_sliding_window_model_gets_swa_full_when_it_fits(self) -> None:
-        swa = {**shape(), "swa_window": 512, "kv_elems_per_token_swa": 32768}       # 18 KiB per token at full length
+        swa = with_window(shape(), 512, 32768)                                    # 18 KiB per token at full length
         p, why = plan_model("m", "/m.gguf", VALS, swa, GIB, 24 * GIB, 32 * GIB, 6 * GIB, COMMON, None)
         assert p is not None, why
         self.assertIn("swa-full = true", preset_ini(Preset(models=[p]), COMMON))
@@ -57,7 +58,7 @@ class PlanTest(unittest.TestCase):
 
     def test_ini(self) -> None:
         two, _ = plan_model("two", "/two.gguf", VALS, shape(), 10 * GIB, 24 * GIB, 32 * GIB, 6 * GIB, COMMON, "/t.jinja")
-        one, _ = plan_model("one", "/one.gguf", dict(VALS, slots="1", spec="none"), shape(), GIB, 24 * GIB, 32 * GIB,
+        one, _ = plan_model("one", "/one.gguf", {**VALS, "slots": "1", "spec": "none"}, shape(), GIB, 24 * GIB, 32 * GIB,
                             6 * GIB, COMMON, None)
         assert two and one
         text = preset_ini(Preset([two, one], [("big", "needs 40.0 GiB")], start="one"), COMMON)
@@ -107,11 +108,11 @@ class AppRouterTest(unittest.TestCase):
 
 class ClientListTest(unittest.TestCase):
     def test_a_custom_models_thinking_comes_from_its_header(self) -> None:
-        sh = dict(shape(), effort_levels=True)
-        w = World(catalog(BIG, SMALL), files={f"{MDIR}/mine.gguf": GIB},
-                  shapes=FakeShapes(local={f"{MDIR}/mine.gguf": sh}))     # type: ignore[dict-item]
+        sh = shape()
+        sh["effort_levels"] = True
+        w = World(catalog(BIG, SMALL), files={f"{MDIR}/mine.gguf": GIB}, shapes=FakeShapes(local={f"{MDIR}/mine.gguf": sh}))
         doc = w.carl.client_models(w.carl.load_config())
-        self.assertEqual([(m["id"], m["thinking"]) for m in doc["models"]], [("mine", "effort")])
+        self.assertEqual([(m["id"], m["thinking"]) for m in cast(List[Dict[str, JsonValue]], doc["models"])], [("mine", "effort")])
 
     def test_only_downloaded_models(self) -> None:
         ms: list[ModelInfo] = [{"name": "a", "label": "A · Q4", "status": "downloaded", "thinking": "effort"},

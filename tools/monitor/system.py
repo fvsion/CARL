@@ -12,9 +12,9 @@ import threading
 import time
 from typing import Callable, List, NamedTuple, Optional, Sequence, Tuple
 
-from .model import ProcInfo, SleepEvent, SlowStats, SystemStats, clean
+from carl_core.adapters.system import NETSTAT
 
-NETSTAT = "/usr/sbin/netstat"
+from .model import ProcInfo, SleepEvent, SlowStats, SystemStats, clean
 
 
 def sh(cmd: Sequence[str], timeout: float = 3) -> str:
@@ -109,14 +109,6 @@ def parse_ps(text: str) -> Optional[ProcInfo]:
 def process_info(pid: int) -> Optional[ProcInfo]:
     """Memory, CPU, run time and command line of pid."""
     return parse_ps(sh(["ps", "-o", "rss=,%cpu=,etime=,command=", "-p", str(pid)]))
-
-
-def etime_seconds(etime: Optional[str]) -> int:
-    """Seconds in a ps etime ([[dd-]hh:]mm:ss), plus a minute of slack."""
-    secs = 0
-    for v, mul in zip(reversed(re.split(r"[-:]", etime or "0")), (1, 60, 3600, 86400)):
-        secs += int(v or 0) * mul
-    return secs + 60
 
 
 def pid_alive(pid: Optional[int]) -> bool:

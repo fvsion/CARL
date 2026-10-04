@@ -1,3 +1,4 @@
+// @ts-check
 // The /carl panel for OpenCode (TUI plugin, installed by CARL's client/install.sh): every CARL piece on this
 // computer with its state (carl-panel.js), one section per piece: the client config sync first (its
 // auto-apply switch, a config that waits, a check now), then the prompt cache, the model check, the session
@@ -35,6 +36,7 @@ function panel(api) {
         if (v === "back") return top();
         if (!v.startsWith("act:")) return;
         const a = s.actions[Number(v.slice(4))];
+        if (!a) return;
         api.ui.toast({ message: `CARL: ${a.label.toLowerCase()}…`, variant: "info" });
         const code = await run(a.args);
         api.ui.toast({ message: code === 0 ? `CARL: done` : `CARL: ${a.label.toLowerCase()} failed (see /carl)`,

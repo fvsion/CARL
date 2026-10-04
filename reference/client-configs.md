@@ -1,6 +1,6 @@
-# CARL Reference: OpenCode config
+# CARL Reference: OpenCode and Pi configs
 
-[Index](../REFERENCE.md) · the OpenCode and Pi configs that CARL writes.
+[Index](README.md) · the OpenCode and Pi configs that CARL writes.
 
 ## OpenCode config
 
@@ -33,7 +33,7 @@ The installer writes these settings into `~/.config/opencode/opencode.json` (tem
 
 | Item | Where | What it does |
 |---|---|---|
-| `carl-cache` | `plugin` in `opencode.json` | The disk prompt cache ([The disk prompt cache](cache.md)). `NO_CACHE=1` leaves it out. |
+| `carl-cache` | `plugin` in `opencode.json` | The disk prompt cache ([Caching](caching.md)). `NO_CACHE=1` leaves it out. |
 | `carl-model-check` | `plugin` in `opencode.json` | Warns when the selected model is not the one that the server runs, is not installed, or loads. `NO_MODEL_CHECK=1` leaves it out. |
 | `subagents-sidebar` | `~/.config/opencode/tui.json` | A live list of the subagents. `NO_SIDEBAR=1` leaves it out. |
 | `session-switcher` | `~/.config/opencode/tui.json` | A session switcher in the prompt box, and `/switch`. `NO_SWITCHER=1` leaves it out. |

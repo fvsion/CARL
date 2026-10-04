@@ -1,6 +1,6 @@
 # CARL Reference: Models and quantization
 
-[Index](../REFERENCE.md) · the catalogue models and why, IQ quants, the coder subagent.
+[Index](README.md) · the catalogue models and why, IQ quants, the coder subagent.
 
 ## Model and quantization choices
 
@@ -46,7 +46,7 @@ Google's Gemma 4 models joined the catalogue on 2026-10-04. Each one is the QAT 
 | `gemma-4-31b` | ggml-org gemma-4-31B-it Q4_0 (QAT), 18.0 GB | Dense 31B: the strongest Gemma, and slow. Its full cache needs ~64 GiB at 2 × 96K, so it runs with the window cache (~22.6 GiB at 2 × 96K) on 32 and 36 GB Macs. |
 
 - **No rank yet.** Auto fit does not pick them. A rank needs a decision and measurements (Auto-tune) on a Mac where they fit.
-- **Sliding-window layers.** Most Gemma layers keep only a window (512 or 1,024 tokens). A saved prompt state restores only when every layer keeps the full context (`--swa-full`). `cache.swa = auto` takes the full cache when it fits ([The disk prompt cache](cache.md)). The memory figures above come from the GGUF headers. llama.cpp's allocation matched them on the E4B (2 × 64K).
+- **Sliding-window layers.** Most Gemma layers keep only a window (512 or 1,024 tokens). A saved prompt state restores only when every layer keeps the full context (`--swa-full`). `cache.swa = auto` takes the full cache when it fits ([Caching](caching.md)). The memory figures above come from the GGUF headers. llama.cpp's allocation matched them on the E4B (2 × 64K).
 - **KV heads per layer.** The 26B and the 31B have fewer KV heads on the full-attention layers. Their headers list the heads per layer, and CARL reads that list (it read none before 2026-10-04, so the KV cache counted as free).
 - **Speculation.** n-gram only (n = 2). Gemma 4's MTP drafter is a separate file that llama-server uses with `-md`. CARL does not pass it yet.
 - **Sampling.** Google's model card: temperature 1.0, top_p 0.95, top_k 64.

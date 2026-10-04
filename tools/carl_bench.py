@@ -20,7 +20,7 @@ from typing import Any, TypedDict
 
 from carl_core.adapters.api_key import key_file
 
-DEFAULT_BASE = "http://192.168.42.1:8080"
+DEFAULT_BASE = "http://127.0.0.1:8080"            # the server's default address (--local)
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CORPUS_DIRS = ("tools", "host", "client")           # the repo's code (not the docs, not the tests)
 CORPUS_SUFFIXES = (".py", ".sh", ".js", ".ts")
@@ -98,7 +98,7 @@ def parse_swap_used(swapusage: str) -> str:
 
 
 def port_of(base: str) -> int:
-    """The TCP port of a base URL such as http://192.168.42.1:8080."""
+    """The TCP port of a base URL such as http://127.0.0.1:8080."""
     u = urllib.parse.urlsplit(base)
     if u.port is not None:
         return u.port

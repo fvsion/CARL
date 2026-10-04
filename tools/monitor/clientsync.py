@@ -16,6 +16,7 @@ import os
 import time
 from typing import Optional
 
+from . import fsio
 from .model import JSONDict, jdict
 
 FILE = "client-config.json"
@@ -31,10 +32,7 @@ def publish(folder: str, models: JSONDict) -> str:
     os.makedirs(folder, exist_ok=True)
     path = os.path.join(folder, FILE)
     doc = {"version": version, "published": time.strftime("%Y-%m-%dT%H:%M:%S"), "models": models}
-    with open(path + ".tmp", "w", encoding="utf-8") as f:
-        json.dump(doc, f, indent=1)
-    os.chmod(path + ".tmp", 0o600)
-    os.replace(path + ".tmp", path)
+    fsio.write_private(path, json.dumps(doc, indent=1))
     return version
 
 

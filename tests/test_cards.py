@@ -4,7 +4,7 @@ read it), refused for catalogue models, and edited field by field from command-l
 from __future__ import annotations
 
 import unittest
-from typing import Dict, List, cast
+from typing import Callable, Dict, List, Tuple, cast
 
 from support import GIB, MDIR, FakeShapes, World, catalog, entry, shape
 from carl_core.domain import cards
@@ -113,7 +113,7 @@ class StoreAndMergeTest(unittest.TestCase):
         w.carl.set_card_field("Mine-Q4.gguf", "role", ["Fast", "coder"])
         self.assertEqual(by_name(w)["mine-q4"]["role"], "Fast coder")
         w.carl.unset_card_field("mine-q4", "role")
-        self.assertNotIn("card", cast(Dict[str, Dict[str, object]], w.local.doc)["models"]["mine-q4"])
+        self.assertNotIn("card", cast(Dict[str, Dict[str, Dict[str, object]]], w.local.doc)["models"]["mine-q4"])
         self.assertNotIn("role", by_name(w)["mine-q4"])
 
     def test_set_field_checks_the_whole_card(self) -> None:
@@ -129,9 +129,10 @@ class StoreAndMergeTest(unittest.TestCase):
 
     def test_catalogue_models_are_read_only(self) -> None:
         w = world()
-        for call in (lambda: w.carl.save_card("big", {"role": "x"}),
-                     lambda: w.carl.set_card_field("big", "role", ["x"]),
-                     lambda: w.carl.unset_card_field("big", "role")):
+        calls: Tuple[Callable[[], object], ...] = (lambda: w.carl.save_card("big", {"role": "x"}),
+                                                    lambda: w.carl.set_card_field("big", "role", ["x"]),
+                                                    lambda: w.carl.unset_card_field("big", "role"))
+        for call in calls:
             with self.assertRaisesRegex(ConfigError, "big is a catalogue model: its card is read-only"):
                 call()
         self.assertEqual(w.local.saved, [])
@@ -146,7 +147,7 @@ class StoreAndMergeTest(unittest.TestCase):
             "role": "x", "pick_instead": [{"model": "gone", "when": "a"}, {"model": "big", "when": "b"}]}}}})
         self.assertEqual(by_name(w)["mine-q4"]["pick_instead"], [{"model": "big", "when": "b"}])
         w.carl.set_card_field("mine-q4", "rank", ["3"])         # an edit is not refused for the stale entry
-        stored = cast(Dict[str, Dict[str, Dict[str, object]]], w.local.doc)["models"]["mine-q4"]["card"]
+        stored = cast(Dict[str, Dict[str, Dict[str, Dict[str, object]]]], w.local.doc)["models"]["mine-q4"]["card"]
         self.assertEqual(stored["pick_instead"], [{"model": "big", "when": "b"}])
 
     def test_describe(self) -> None:

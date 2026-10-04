@@ -90,8 +90,20 @@ def request_record(method: str, path: str, body: bytes | None) -> JsonObj:
     return rec
 
 
+def private_fd(path: str, flags: int) -> int:
+    """A file opened for writing, readable by the user only (also a file that already exists);
+    never through a symbolic link (the default log is in the shared /tmp)."""
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW | flags, 0o600)
+    try:
+        os.fchmod(fd, 0o600)
+    except OSError:
+        os.close(fd)
+        raise
+    return fd
+
+
 def append_log(path: str, rec: JsonObj) -> None:
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+    fd = private_fd(path, os.O_APPEND)
     with os.fdopen(fd, "a", encoding="utf-8") as f:
         f.write(json.dumps(rec) + "\n")
 
@@ -100,7 +112,7 @@ def save_body(folder: str, n: int, body: bytes) -> str:
     """A request body as folder/chat-NNN.json (0600: it holds the conversation)."""
     os.makedirs(folder, mode=0o700, exist_ok=True)
     path = os.path.join(folder, f"chat-{n:03d}.json")
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    fd = private_fd(path, os.O_TRUNC)
     with os.fdopen(fd, "wb") as f:
         f.write(body)
     return path

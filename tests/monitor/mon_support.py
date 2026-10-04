@@ -59,7 +59,6 @@ class FakeStore:
         self.deleted: List[str] = []
         self.limit = limit
         self.config_file = "/home/u/.config/carl/config.json"
-        self.conf_dir = "/home/u/.config/carl"
         self.broken: Optional[str] = None
         self.fit_calls: List[Tuple[str, str]] = []
         # auto fit's answer: (pick, downloaded); None = nothing fits

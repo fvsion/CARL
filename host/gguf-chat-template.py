@@ -15,11 +15,17 @@ Exit 3 if the template has no enable_thinking switch (nothing to patch).
 from __future__ import annotations
 
 import argparse
-import struct
+import os
 import sys
 
-HEAD_BYTES = 64 * 1024 * 1024          # KV metadata sits at the front
-TEMPLATE_KEY = "tokenizer.chat_template"
+sys.dont_write_bytecode = True                    # keep the repo free of __pycache__
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "tools"))
+
+# The one GGUF metadata parser (tools/carl_core/domain/gguf.py): chat_template, GGUFError.
+from carl_core.domain.gguf import LOCAL_HEADER_BYTES, GGUFError, chat_template  # noqa: E402
+
+__all__ = ["GGUFError", "chat_template", "patched", "main"]
+
 EXIT_NOTHING_TO_PATCH = 3
 PATCH = (
     "{#- serve-llama.sh: reasoning_effort none/minimal/off => thinking off (OpenCode) -#}\n"
@@ -27,78 +33,6 @@ PATCH = (
     "('none', 'minimal', 'off', 'disable', 'disabled') %}"
     "{%- set enable_thinking = false %}{%- endif %}\n"
 )
-# GGUF metadata value types: fixed sizes in bytes; 8 = string, 9 = array.
-GGUF_STRING, GGUF_ARRAY = 8, 9
-SIZES: dict[int, int] = {0: 1, 1: 1, 2: 2, 3: 2, 4: 4, 5: 4, 6: 4, 7: 1, 10: 8, 11: 8, 12: 8}
-
-
-class GGUFError(ValueError):
-    pass
-
-
-class MetadataReader:
-    """Sequential reader over the start of a GGUF file (little-endian)."""
-
-    def __init__(self, head: bytes) -> None:
-        self.head = head
-        self.pos = 0
-
-    def u32(self) -> int:
-        return self._unpack("<I")
-
-    def u64(self) -> int:
-        return self._unpack("<Q")
-
-    def string(self) -> bytes:
-        n = self.u64()
-        if self.pos + n > len(self.head):
-            raise GGUFError("metadata runs past the part of the file read")
-        s = self.head[self.pos:self.pos + n]
-        self.pos += n
-        return s
-
-    def skip_value(self, vtype: int) -> None:
-        if vtype == GGUF_STRING:
-            self.string()
-        elif vtype == GGUF_ARRAY:
-            atype, n = self.u32(), self.u64()
-            if atype == GGUF_STRING:
-                for _ in range(n):
-                    self.string()
-            else:
-                self.pos += self._size(atype) * n
-        else:
-            self.pos += self._size(vtype)
-
-    def _size(self, vtype: int) -> int:
-        if vtype not in SIZES:
-            raise GGUFError(f"unknown metadata value type {vtype}")
-        return SIZES[vtype]
-
-    def _unpack(self, fmt: str) -> int:
-        try:
-            (v,) = struct.unpack_from(fmt, self.head, self.pos)
-        except struct.error:
-            raise GGUFError("metadata runs past the part of the file read") from None
-        self.pos += struct.calcsize(fmt)
-        return int(v)
-
-
-def chat_template(head: bytes) -> str | None:
-    """The tokenizer.chat_template string of a GGUF, or None if it has none."""
-    if head[:4] != b"GGUF":
-        raise GGUFError("not a GGUF file")
-    r = MetadataReader(head)
-    r.pos = 4
-    r.u32()                                  # version
-    r.u64()                                  # tensor count
-    for _ in range(r.u64()):                 # metadata key/value count
-        key = r.string().decode("utf-8", errors="replace")
-        vtype = r.u32()
-        if vtype == GGUF_STRING and key == TEMPLATE_KEY:
-            return r.string().decode("utf-8")
-        r.skip_value(vtype)
-    return None
 
 
 KEEP_REASONING = "{%- if loop.index0 > ns.last_query_index %}"
@@ -126,7 +60,7 @@ def main(argv: list[str]) -> int:
     a = ap.parse_args(argv)
     try:
         with open(a.model, "rb") as f:
-            head = f.read(HEAD_BYTES)
+            head = f.read(LOCAL_HEADER_BYTES)  # the metadata sits at the front
         tpl = chat_template(head)
     except OSError as e:
         sys.exit(f"cannot read {a.model}: {e.strerror}")

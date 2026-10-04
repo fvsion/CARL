@@ -1,3 +1,4 @@
+// @ts-check
 // Subagents sidebar for OpenCode (TUI plugin), in the spirit of Claude Code's
 // agent list: for the session on screen it shows its subagents (child sessions).
 //   running  on top, oldest first: agent, task, elapsed time, current tool
@@ -19,16 +20,15 @@
 // Read-only; no network or file access.
 import { createElement, insert, setProp } from "@opentui/solid";
 import { createSignal } from "solid-js";
+import { asElement, cut, nodes, routeSessionID, rows } from "./carl-tui.js";
 
-/** @typedef {import("@opencode-ai/plugin/tui").TuiPluginApi} TuiPluginApi */
 /** @typedef {import("@opencode-ai/plugin/tui").TuiPluginModule} TuiPluginModule */
-/** @typedef {import("@opencode-ai/plugin/tui").TuiThemeCurrent} Theme */
-/** @typedef {Theme["text"]} Color */
+/** @typedef {import("./carl-tui.js").Theme} Theme */
+/** @typedef {import("./carl-tui.js").Color} Color */
+/** @typedef {import("./carl-tui.js").Node} Node */
 /** @typedef {import("@opencode-ai/sdk/v2").Session} Session */
 /** @typedef {import("@opencode-ai/sdk/v2").AssistantMessage} AssistantMessage */
 /** @typedef {import("@opencode-ai/sdk/v2").ToolPart} ToolPart */
-/** @typedef {ReturnType<typeof createElement>} Node */
-/** @typedef {Node | string | null | undefined | false} Child */
 /** @typedef {"busy" | "retry" | "idle"} RunStatus */
 /**
  * One subagent (child session) as the panel shows it.
@@ -54,36 +54,8 @@ const DONE_MAX = 5;                     // finished subagents listed under the r
 const DONE_TTL = 5 * 60 * 1000;         // ...and only for this long after they finish
 const SPIN = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
-/**
- * @param {string} tag
- * @param {Record<string, unknown>} props
- * @param {Child[]} [children]
- * @returns {Node}
- */
-function el(tag, props, children = []) {
-  const node = createElement(tag);
-  for (const [k, v] of Object.entries(props)) if (v !== undefined) setProp(node, k, v);
-  for (const c of children) if (c !== null && c !== undefined && c !== false) insert(node, c);
-  return node;
-}
-/** @param {Record<string, unknown>} props @param {Child[]} children @returns {Node} */
-const box = (props, children) => el("box", props, children);
-/** @param {Color} fg @param {string} value @returns {Node} */
-const text = (fg, value) => el("text", { fg }, [value]);
+const { box, text } = nodes({ createElement, insert, setProp });
 
-/**
- * Slots are typed with solid-js's DOM-based JSX.Element; OpenTUI renders its
- * own nodes there, so this is a type-level conversion only.
- * @param {Node | null} node
- * @returns {import("@opentui/solid").JSX.Element}
- */
-const asElement = (node) => /** @type {import("@opentui/solid").JSX.Element} */ (/** @type {unknown} */ (node));
-
-/** One line of at most n columns, with an ellipsis when cut. @param {unknown} s @param {number} n */
-function cut(s, n) {
-  const line = String(s ?? "").replace(/\s+/g, " ").trim();
-  return line.length > n ? line.slice(0, Math.max(n - 1, 0)) + "…" : line;
-}
 /** @param {number} ms @returns {string} e.g. 42s, 1m08s, 2h05m */
 function dur(ms) {
   const s = Math.max(0, Math.floor(ms / 1000));
@@ -163,25 +135,6 @@ function finish(s, at) {
  */
 function v1Params(id) {
   return /** @type {{ sessionID: string }} */ (/** @type {unknown} */ ({ path: { id } }));
-}
-
-/**
- * The rows of an SDK response. The TUI client returns { data }; a bare array
- * is accepted too (other client configurations).
- * @template T
- * @param {{ data?: T[] } | T[] | undefined} res
- * @returns {T[]}
- */
-function rows(res) {
-  return Array.isArray(res) ? res : (res?.data ?? []);
-}
-
-/** @param {TuiPluginApi} api @returns {string | undefined} */
-function routeSessionID(api) {
-  const route = api.route.current;
-  if (route.name !== "session") return undefined;
-  const id = route.params?.sessionID;
-  return typeof id === "string" ? id : undefined;
 }
 
 /**

@@ -1,5 +1,5 @@
 """The models CARL knows, config.json and GGUF shapes: the ModelStore port, its adapter
-over tools/carl.py and tools/gguf_shape.py, and a short-lived cache of the model list."""
+over tools/carl.py and carl_core's GPU limit, and a short-lived cache of the model list."""
 from __future__ import annotations
 
 import os
@@ -18,7 +18,6 @@ class ModelStore(Protocol):
     """Models, their tunes, config.json and GGUF memory shapes."""
 
     config_file: str
-    conf_dir: str
 
     def all_models(self) -> List[ModelInfo]: ...
     def find(self, name: str, models: List[ModelInfo]) -> Optional[ModelInfo]: ...
@@ -52,7 +51,6 @@ class CarlStore:
         import carl
         self._carl: Any = carl
         self.config_file: str = carl.CONFIG_FILE
-        self.conf_dir: str = carl.CONF_DIR
 
     def all_models(self) -> List[ModelInfo]:
         models: List[ModelInfo] = self._carl.all_models()

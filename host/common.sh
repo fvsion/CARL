@@ -91,9 +91,9 @@ resolve_host() {
     esac
   fi
   case "$HOST" in
-    0.0.0.0|0|::|"[::]"|"*") echo "error: refusing to bind $HOST (would expose the server to the LAN)" >&2; exit 1 ;;
+    0.0.0.0|0|::|"[::]"|"*") echo "error: refusing to bind $HOST (would expose the server to the LAN). Use --local, --vm or --host with one address of this Mac" >&2; exit 1 ;;
     127.0.0.1|localhost|::1) ;;
-    *) has_addr "$HOST" || { echo "error: no interface has $HOST" >&2; exit 1; } ;;
+    *) has_addr "$HOST" || { echo "error: no interface has $HOST (ifconfig shows the addresses of this Mac; or use --local)" >&2; exit 1; } ;;
   esac
 }
 
@@ -170,7 +170,7 @@ write_client_package() {
 }
 
 # ensure_deps: the Homebrew tools CARL needs (llama-server from llama.cpp,
-# aria2c, ansifilter, zstd: the disk cache's shared pieces). Missing ones are installed with Homebrew after asking (in
+# aria2c, ansifilter, zstd: the disk cache's conversations stored as patches). Missing ones are installed with Homebrew after asking (in
 # a terminal), or listed with the command to run. Homebrew itself is not
 # installed automatically (it needs the user's password). SKIP_DEPS=1 skips this.
 ensure_deps() {
@@ -193,9 +193,9 @@ ensure_deps() {
   if [[ -t 0 && -t 1 ]]; then
     read -r -p "Install them now with Homebrew (brew install ${missing[*]})? [Y/n] " a
     if [[ ! "$a" =~ ^[Nn] ]]; then
-      brew install "${missing[@]}" || { echo "error: brew install failed" >&2; exit 1; }
+      brew install "${missing[@]}" || { echo "error: brew install failed (its output is above). Fix the cause, or run: brew install ${missing[*]}" >&2; exit 1; }
       hash -r
-      command -v llama-server >/dev/null || { echo "error: llama-server still not found" >&2; exit 1; }
+      command -v llama-server >/dev/null || { echo "error: llama-server still not found after brew install: open a new terminal, then run this again" >&2; exit 1; }
       return 0
     fi
   fi

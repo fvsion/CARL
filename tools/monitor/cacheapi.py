@@ -22,10 +22,13 @@ and the client config they sync (clientsync.py; client/carl-sync.py):
   POST /carl/cache/save-recorded {model}      save the recorded sessions of a model about to stop
                                               (a router switch a remote client asks for)
 
-It listens next to llama-server (its address, port + 1) and wants the same API key (Bearer).
+It listens next to llama-server (its address, port + 1) and wants the same API key (Bearer); with no
+key known it refuses every call (fail closed).
 Claims and records are the same files the local clients use (client/shared/carl-cache.js:
 .claim+MODEL+SLOT, .resident+MODEL+SLOT.json, .turn+MODEL+SLOT in the slots folder), so every client sees the
-same state. Inputs are checked (names, slot numbers, a small body); nothing else is served.
+same state. Inputs are checked (names, slot numbers, a small body, a time limit per connection);
+nothing else is served, and nothing is logged on the dashboard's terminal. The state files are
+written 0600, each through a temporary file of its own (fsio.write_private).
 """
 from __future__ import annotations
 
@@ -42,11 +45,13 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from dataclasses import dataclass
 from typing import Callable, Dict, List, Optional, Tuple
 
-from . import clientsync, slotpack
+from . import clientsync, fsio, slotpack
 from .diskcache import CacheConfig
 from .model import JSONDict, jdict
 
 MAX_BODY = 4096
+MAX_NAME = 200           # a model or session name
+CONN_TIMEOUT_S = 30      # a connection that sends or reads nothing for this long is closed
 MAX_SLOT = 64
 CLAIM_STALE_S = 120
 TURN_STALE_S = 600       # a turn mark this old is a client that went away (carl-cache.js TURN_STALE_MS)
@@ -77,7 +82,7 @@ class CacheState:
         with self.lock:
             for _ in range(2):
                 try:
-                    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
+                    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
                     os.write(fd, b"api")
                     os.close(fd)
                     return True
@@ -99,10 +104,8 @@ class CacheState:
             pass
 
     def record(self, model: str, slot: int, file: str, task: int, base: int) -> None:
-        path = self._record_path(model, slot)
-        with open(path + ".tmp", "w", encoding="utf-8") as f:
-            json.dump({"model": model, "slot": slot, "file": file, "task": task, "base": base}, f)
-        os.replace(path + ".tmp", path)
+        fsio.write_private(self._record_path(model, slot),
+                           json.dumps({"model": model, "slot": slot, "file": file, "task": task, "base": base}))
 
     def recorded(self, model: str, file: str) -> Optional[JSONDict]:
         head = f".resident+{safe_name(model, 60)}+"
@@ -135,9 +138,7 @@ class CacheState:
         """A turn runs in the slot (each request refreshes it), or it ended (only its own mark goes)."""
         path = self._turn_path(model, slot)
         if running:
-            with open(path + ".tmp", "w", encoding="utf-8") as f:
-                json.dump({"model": model, "slot": slot, "session": session}, f)
-            os.replace(path + ".tmp", path)
+            fsio.write_private(path, json.dumps({"model": model, "slot": slot, "session": session}))
             return
         try:
             with open(path, encoding="utf-8") as f:
@@ -248,9 +249,7 @@ class Registry:
                for cid, c in self.clients.items()}
         try:
             os.makedirs(os.path.dirname(self.path), exist_ok=True)
-            with open(self.path + ".tmp", "w", encoding="utf-8") as f:
-                json.dump(doc, f, indent=1)
-            os.replace(self.path + ".tmp", self.path)
+            fsio.write_private(self.path, json.dumps(doc, indent=1))
             self.saved_at = time.time()
         except OSError:
             pass
@@ -281,7 +280,7 @@ Reply = Tuple[int, JSONDict]
 def check_slot(doc: JSONDict) -> Tuple[str, int]:
     """(model, slot) from a request body; ValueError when they aren't usable."""
     model, slot = doc.get("model"), doc.get("slot")
-    if not isinstance(model, str) or not model or len(model) > 200:
+    if not isinstance(model, str) or not model or len(model) > MAX_NAME:
         raise ValueError("model")
     if not isinstance(slot, int) or isinstance(slot, bool) or not 0 <= slot < MAX_SLOT:
         raise ValueError("slot")
@@ -306,7 +305,7 @@ def handle(state: CacheState, conf: Callable[[], CacheConfig], method: str, path
             return (200, {"ok": True}) if slotpack.unpack(state.folder, ufile) else (404, {"error": "no such state"})
         if method == "POST" and path == "/carl/cache/save-recorded":
             model = body.get("model")
-            if not isinstance(model, str) or not model or len(model) > 200:
+            if not isinstance(model, str) or not model or len(model) > MAX_NAME:
                 return 400, {"error": "model"}
             return 200, {"saved": save_recorded(model)}
         if method == "GET" and path == "/carl/cache/settings":
@@ -315,12 +314,12 @@ def handle(state: CacheState, conf: Callable[[], CacheConfig], method: str, path
                          "disk_gb": c.disk_gb}
         if method == "GET" and path == "/carl/cache/turns":
             tmodel = query.get("model", "")
-            if not tmodel or len(tmodel) > 200:
+            if not tmodel or len(tmodel) > MAX_NAME:
                 return 400, {"error": "model"}
             return 200, {"turns": [{"slot": sl, "session": ses} for sl, ses in sorted(state.turn_marks(tmodel))]}
         if method == "GET" and path == "/carl/cache/record":
             model, file = query.get("model", ""), query.get("file", "")
-            if not model or not SESSION_FILE.fullmatch(file):
+            if not model or len(model) > MAX_NAME or not SESSION_FILE.fullmatch(file):
                 return 400, {"error": "model and a session file name"}
             rec = state.recorded(model, file)
             return (200, rec) if rec else (404, {"error": "no record"})
@@ -344,7 +343,7 @@ def handle(state: CacheState, conf: Callable[[], CacheConfig], method: str, path
             return 200, {"ok": True}
         if path == "/carl/cache/turn":
             session, running = body.get("session"), body.get("running")
-            if not (isinstance(session, str) and 0 < len(session) <= 200 and isinstance(running, bool)):
+            if not (isinstance(session, str) and 0 < len(session) <= MAX_NAME and isinstance(running, bool)):
                 return 400, {"error": "session and running"}
             state.turn(model, slot, session, running)
             return 200, {"ok": True}
@@ -355,6 +354,26 @@ def handle(state: CacheState, conf: Callable[[], CacheConfig], method: str, path
         return 500, {"error": e.strerror or "file error"}
 
 
+def body_length(header: Optional[str]) -> Optional[int]:
+    """The request body's size from its Content-Length (none: 0); None when it is not a number."""
+    text = (header or "0").strip()
+    return int(text) if text.isdigit() else None
+
+
+def authorized(want: str, got: str) -> bool:
+    """The Authorization header carries the key (compared in constant time); no key: nobody is."""
+    return bool(want) and hmac.compare_digest(got.encode(), f"Bearer {want}".encode())
+
+
+class QuietServer(ThreadingHTTPServer):
+    """A threading HTTP server that writes nothing on the terminal: a broken connection or a bad
+    request ends that request only (the dashboard draws on stdout)."""
+    daemon_threads = True
+
+    def handle_error(self, request: object, client_address: object) -> None:
+        pass
+
+
 class CacheApi:
     """The HTTP server (a thread); start() returns why it couldn't start, else None."""
 
@@ -363,14 +382,21 @@ class CacheApi:
         self.host, self.port, self.key, self.conf, self.save_recorded = host, port, key, conf, save_recorded
         self.carl_dir = carl_dir
         self.listeners = 0                       # clients holding /carl/client/events
+        self._listeners_lock = threading.Lock()
         self.registry = Registry(os.path.join(carl_dir, "clients.json") if carl_dir else os.devnull)
         self.state = CacheState(folder)
-        self.server: Optional[ThreadingHTTPServer] = None
+        self.server: Optional[QuietServer] = None
+
+    def _listening(self, step: int) -> None:
+        with self._listeners_lock:
+            self.listeners += step
 
     def start(self) -> Optional[str]:
         api = self
 
         class Handler(BaseHTTPRequestHandler):
+            timeout = CONN_TIMEOUT_S                         # a slow or silent client can't hold a thread
+
             def log_message(self, *args: object) -> None:      # no access log on the dashboard's terminal
                 pass
 
@@ -392,7 +418,7 @@ class CacheApi:
                 self.send_header("Content-Type", "text/event-stream")
                 self.send_header("Cache-Control", "no-cache")
                 self.end_headers()
-                api.listeners += 1
+                api._listening(1)
                 who = parse_client(self.headers.get("X-Carl-Client", ""))
                 if who:
                     api.registry.seen(who, self.client_address[0], connected=1)
@@ -414,14 +440,12 @@ class CacheApi:
                 except OSError:
                     pass                          # the client went away
                 finally:
-                    api.listeners -= 1
+                    api._listening(-1)
                     if who:
                         api.registry.gone(who.id)
 
             def _call(self, method: str) -> None:
-                want = api.key()
-                got = self.headers.get("Authorization", "")
-                if want and not hmac.compare_digest(got.encode(), f"Bearer {want}".encode()):
+                if not authorized(api.key(), self.headers.get("Authorization", "")):
                     self._reply(401, {"error": "unauthorized"})
                     return
                 url = urllib.parse.urlsplit(self.path)
@@ -434,7 +458,10 @@ class CacheApi:
                 query = {k: v[0] for k, v in urllib.parse.parse_qs(url.query).items()}
                 body: JSONDict = {}
                 if method == "POST":
-                    n = int(self.headers.get("Content-Length") or 0)
+                    n = body_length(self.headers.get("Content-Length"))
+                    if n is None:
+                        self._reply(400, {"error": "bad Content-Length"})
+                        return
                     if n > MAX_BODY:
                         self._reply(413, {"error": "too large"})
                         return
@@ -453,10 +480,9 @@ class CacheApi:
                 self._call("POST")
 
         try:
-            self.server = ThreadingHTTPServer((self.host, self.port), Handler)
+            self.server = QuietServer((self.host, self.port), Handler)
         except OSError as e:
             return f"cache API: port {self.port} on {self.host}: {e.strerror or e}"
-        self.server.daemon_threads = True
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
         return None
 

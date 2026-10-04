@@ -155,6 +155,13 @@ def render(screen: pyte.Screen, title: str) -> Image.Image:
     return img
 
 
+def out_name(name: object) -> str:
+    """An output name from the script: a plain file name, so every file stays in OUT_DIR."""
+    if not isinstance(name, str) or not name or name in (".", "..") or os.path.basename(name) != name:
+        raise SystemExit(f"error: not a file name for a screenshot: {name!r}")
+    return name
+
+
 def main() -> None:
     if "--" not in sys.argv or sys.argv.index("--") != 3 or len(sys.argv) < 5 or sys.argv[1] in ("-h", "--help"):
         print(__doc__)
@@ -162,6 +169,9 @@ def main() -> None:
     i = sys.argv.index("--")
     with open(sys.argv[1], encoding="utf-8") as f:
         steps: list[list[Any]] = json.load(f)
+    for step in steps:
+        if len(step) > 2 and step[1] in ("png", "frame", "frames"):
+            out_name(step[2])                   # every name checked before the program starts
     out = sys.argv[2]
     cmd = sys.argv[i + 1:]
     os.makedirs(out, exist_ok=True)

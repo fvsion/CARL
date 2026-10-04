@@ -166,3 +166,52 @@ class UnpackTest(unittest.TestCase):
             self.assertTrue(os.path.exists(os.path.join(d, SESSION)))
             self.assertEqual(call("carl-session+m+0123456789+nope.bin"), 404)
             self.assertEqual(call("../x.bin"), 400)
+
+
+class SecurityTest(unittest.TestCase):
+    """The state files are 0600; no key means nobody gets in; a bad body size is refused."""
+
+    def test_state_files_are_private(self) -> None:
+        import stat
+        with tempfile.TemporaryDirectory() as d:
+            st = CacheState(d)
+            self.assertTrue(st.claim("m", 1))
+            st.record("m", 1, "carl-session+m+0123456789+ses_1.bin", 5, 0)
+            st.turn("m", 1, "ses_1", True)
+            for name in (".claim+m+1", ".resident+m+1.json", ".turn+m+1"):
+                self.assertEqual(stat.S_IMODE(os.stat(os.path.join(d, name)).st_mode), 0o600, name)
+            self.assertEqual(sorted(os.listdir(d)), [".claim+m+1", ".resident+m+1.json", ".turn+m+1"])   # no .tmp left
+
+    def test_no_key_and_bad_bodies_are_refused(self) -> None:
+        import http.client
+        from monitor.cacheapi import authorized, body_length
+        self.assertFalse(authorized("", ""))                   # no key known: fail closed
+        self.assertFalse(authorized("k3y", "Bearer k3"))
+        self.assertTrue(authorized("k3y", "Bearer k3y"))
+        self.assertEqual((body_length(None), body_length("12"), body_length("-1"), body_length("x")), (0, 12, None, None))
+        with tempfile.TemporaryDirectory() as d:
+            s = socket.socket()
+            s.bind(("127.0.0.1", 0))
+            port = s.getsockname()[1]
+            s.close()
+            api = CacheApi("127.0.0.1", port, lambda: "", d, lambda: CONF)
+            self.assertIsNone(api.start())
+            try:
+                with self.assertRaises(urllib.error.HTTPError) as e:
+                    urllib.request.urlopen(f"http://127.0.0.1:{port}/carl/cache/settings", timeout=5)
+                self.assertEqual(e.exception.code, 401)
+            finally:
+                api.stop()
+            api = CacheApi("127.0.0.1", port, lambda: "k3y", d, lambda: CONF)
+            self.assertIsNone(api.start())
+            try:
+                for length, code in (("-1", 400), ("abc", 400), ("99999", 413)):
+                    conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+                    conn.putrequest("POST", "/carl/cache/claim")
+                    conn.putheader("Authorization", "Bearer k3y")
+                    conn.putheader("Content-Length", length)
+                    conn.endheaders()
+                    self.assertEqual(conn.getresponse().status, code, length)
+                    conn.close()
+            finally:
+                api.stop()

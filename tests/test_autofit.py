@@ -8,10 +8,11 @@ import os
 import unittest
 from typing import Dict, List, Optional, Tuple, cast
 
-from support import GIB, shape
+from support import GIB, shape, with_window
 from carl_core.domain.autofit import (GOALS, SCOPES, Budget, Candidate, auto_fit, best_downloaded, candidate,
                                       plan_for, TIERS)
 from carl_core.domain.fit import estimated_limit
+from carl_core.domain.gguf import ModelShape
 from carl_core.domain.settings import LLAMA_KEYS
 from carl_core.domain.types import ModelInfo
 
@@ -19,15 +20,13 @@ CATALOG = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 # Header shapes of the two catalogue families (read from the GGUF headers, 2026-10-03):
 # 35B-A3B: 10 attention layers x 2 KV heads x 512 = 10240 KV elements per token (5.6 KiB at q4_0)
 # 27B:     16 attention layers x 4 KV heads x 512 = 32768 (18.0 KiB at q4_0)
-SHAPES = {"qwen3.6-35b-a3b": shape(experts=256, kv_elems=10240, rs_bytes=65863680),
+SHAPES: Dict[str, ModelShape] = {"qwen3.6-35b-a3b": shape(experts=256, kv_elems=10240, rs_bytes=65863680),
           "qwen3.8-27b": shape(experts=0, kv_elems=32768, rs_bytes=156893184),
           "qwen3.8-9b": shape(experts=0, kv_elems=16384, rs_bytes=52690944),
           # Gemma 4 (2026-10-04): full-attention KV elements + sliding-window ones (window 512 / 1024)
-          "gemma-4-e4b": {**shape(experts=0, kv_elems=8192, rs_bytes=0), "swa_window": 512, "kv_elems_per_token_swa": 20480},
-          "gemma-4-26b-a4b": {**shape(experts=128, kv_elems=10240, rs_bytes=0), "swa_window": 1024,
-                              "kv_elems_per_token_swa": 102400},
-          "gemma-4-31b": {**shape(experts=0, kv_elems=40960, rs_bytes=0), "swa_window": 1024,
-                          "kv_elems_per_token_swa": 409600}}
+          "gemma-4-e4b": with_window(shape(experts=0, kv_elems=8192, rs_bytes=0), 512, 20480),
+          "gemma-4-26b-a4b": with_window(shape(experts=128, kv_elems=10240, rs_bytes=0), 1024, 102400),
+          "gemma-4-31b": with_window(shape(experts=0, kv_elems=40960, rs_bytes=0), 1024, 409600)}
 THIS_MAC_LIMIT = 26800603136                  # an M2 Max 32 GB: Metal's recommendedMaxWorkingSetSize (25.0 GiB)
 RESERVE, RESERVE_VM = 6 * GIB, 10 * GIB
 
@@ -65,7 +64,7 @@ class RealCatalogueTest(unittest.TestCase):
     def test_picks_per_mac(self) -> None:
         cands = real_catalogue()
         for ram, (everyday, hard) in self.EXPECTED.items():
-            for goal, want in (("everyday", everyday), ("hard-code", hard)):
+            for goal, want in zip(GOALS, (everyday, hard)):            # GOALS: everyday, hard-code
                 with self.subTest(ram=ram, goal=goal):
                     fit = auto_fit(cands, mac(ram), goal)
                     self.assertEqual(fit.name, want)

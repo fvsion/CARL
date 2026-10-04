@@ -8,11 +8,12 @@ import os
 from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Optional, Tuple
 
+from carl_core.domain.gguf import KV_BPE, kv_bytes_per_token
+
 from .cacheapi import Client
 
 from .fmt import (B, CYN, DIM, GRN, MAG, NA, R, RED, YEL, Card, CardLine, Ln, Row, bar, buttons, draw_card, dur,
                   home_short, knum, lv, size, wrap)
-from .gguf import KV_BPE, kv_bytes_per_token
 from .logbook import TS, LogBook, RequestRecord, level_of
 from .model import ServerData, SlowStats, flag, flag_int
 

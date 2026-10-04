@@ -1,3 +1,4 @@
+// @ts-check
 // What the CARL server runs against what OpenCode asks for (used by index.js). Pure, except
 // serverModels(), which asks the server. Kept out of index.js: older OpenCode versions call
 // every export of a plugin's entry module as a plugin function.
@@ -22,9 +23,11 @@ export function parseModels(body) {
   /** @type {ServerModel[]} */
   const models = [];
   let router = false;
-  for (const m of data) {
-    if (!m || typeof m !== "object" || typeof m.id !== "string") continue;
-    const st = m.status && typeof m.status === "object" ? m.status.value : undefined;
+  for (const item of data) {
+    if (!item || typeof item !== "object") continue;
+    const m = /** @type {{ id?: unknown, status?: unknown }} */ (item);
+    if (typeof m.id !== "string") continue;
+    const st = m.status && typeof m.status === "object" ? /** @type {{ value?: unknown }} */ (m.status).value : undefined;
     if (typeof st === "string") router = true;
     models.push({ id: m.id, status: typeof st === "string" ? st : undefined });
   }

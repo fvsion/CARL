@@ -14,7 +14,7 @@ import re
 import time
 import urllib.parse
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
 from . import fsio, gguf, system
 from .api import FETCH_ERRORS, Endpoint
@@ -27,7 +27,7 @@ _POSITION = re.compile(r'position="(\d+)"')
 SHAPE_ERRORS = (AttributeError, TypeError, IndexError, KeyError)
 
 
-def get_json(ep: Endpoint, path: str, timeout: float = 2) -> Any:
+def get_json(ep: Endpoint, path: str, timeout: float = 2) -> object:
     """Parsed JSON from the server, its strings cleaned of control characters. Raises one of FETCH_ERRORS."""
     return clean_json(json.loads(ep.get(path, timeout)))
 

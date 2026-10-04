@@ -187,7 +187,7 @@ def over_budget(files: Sequence[CacheFile], limit: int, keep: str = "") -> List[
 
 
 def shared_saving(files: Sequence[CacheFile]) -> int:
-    """Bytes the shared pieces save: the conversations stored as patches against their prompts."""
+    """Bytes the conversations stored as patches against their prompts save."""
     return sum(max(f.whole - f.bytes, 0) for f in files if f.packed)
 
 

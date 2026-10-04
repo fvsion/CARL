@@ -1,6 +1,6 @@
 # CARL Reference: Architecture and repository layout
 
-[Index](../REFERENCE.md) · how the parts fit and every file in the repository.
+[Index](README.md) · how the parts fit and every file in the repository.
 
 ## Architecture
 
@@ -111,7 +111,7 @@ The top-level keys `default` and `default_small` are the offline fallback of aut
 | `client/pi/models.json` | The Pi config template |
 | `client/agents/coder.md`, `client/agents/delegation.md` | The **coder** subagent and the delegation rule for the main agent ([The coder subagent](models.md#the-coder-subagent)) |
 | `client/agents/browser.md` | The **browser** subagent of OpenCode (the Playwright MCP tools) |
-| `client/shared/carl-cache.js` | The prompt cache core ([The disk prompt cache](cache.md)). `configure.py` copies it next to the plugin and the extension. |
+| `client/shared/carl-cache.js` | The prompt cache core ([Caching](caching.md)). `configure.py` copies it next to the plugin and the extension. |
 | `client/shared/carl-panel.js` | The `/carl` panel core |
 | `client/opencode/plugins/carl-cache/`, `client/pi/extensions/carl-cache/` | The prompt cache in OpenCode (it wraps `fetch`; `chat.headers` marks the session and the agent) and in Pi (`before_provider_request`, `message_end`) |
 | `client/opencode/plugins/carl-panel/`, `client/pi/extensions/carl-panel/` | The `/carl` panel: each CARL piece on this computer with its state, and the auto-apply switch of the config sync ([Clients on other computers](client-sync.md)) |
@@ -171,7 +171,7 @@ The `tools/monitor/` package:
 |---|---|
 | Pure: formats, state, settings, views | `fmt`, `model`, `keys`, `state`, `settings`, `cards`, `arrange`, `logbook`, `clients`, `views`, `settings_view`, `card_form`, `card_view` |
 | Adapters | `system` (ps, netstat, sysctl, pmset), `api`, `collector`, `logtail`, `store` (over `carl.py`), `gguf`, `fsio`, `jobs` (restart, Auto-tune, downloads, the disk limit), `terminal` |
-| The disk cache | `diskcache` (the limit), `slotpack` (the shared pieces) |
+| The disk cache | `diskcache` (the limit), `slotpack` (conversations stored as patches) |
 | Other computers | `cacheapi` (the dashboard's API), `clientsync` (the pushed client config) |
 | Wiring | `app`, `controller`, `cli` |
 
@@ -201,7 +201,7 @@ The `tools/monitor/` package:
 
 | Path | What it is |
 |---|---|
-| `reference/` | This reference, one page for each topic. `REFERENCE.md` is the index. |
+| `reference/` | This reference, one page for each topic. `reference/README.md` is the index. |
 | `tests/` | Unit tests. They need no server and no model. |
 
 | Command | What it tests |

@@ -4,7 +4,8 @@
 Usage: python3 tools/llama-spec-bench.py LABEL [BASE_URL]
 Runs three workloads (prose, fresh code, code re-emission/edit) with thinking
 off and prints llama-server's own timings (prompt/predicted tok/s, draft
-acceptance) per workload. BASE_URL defaults to http://192.168.42.1:8080.
+acceptance) per workload. BASE_URL defaults to http://127.0.0.1:8080
+(a server started with --vm: http://192.168.42.1:8080).
 """
 from __future__ import annotations
 

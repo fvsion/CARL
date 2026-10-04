@@ -1,3 +1,4 @@
+// @ts-check
 // Session switcher for OpenCode (TUI plugin). OpenCode 1.18.34 no longer shows
 // open sessions as tabs, so this puts a one-line switcher on the right side of
 // the prompt box:   ‹ 2/3 ● fix the parser ›
@@ -10,14 +11,13 @@
 // Data: api.client.session.list() once, then session.* events. Read-only.
 import { createElement, insert, setProp } from "@opentui/solid";
 import { createSignal } from "solid-js";
+import { asElement, cut, nodes, routeSessionID, rows } from "./carl-tui.js";
 
-/** @typedef {import("@opencode-ai/plugin/tui").TuiPluginApi} TuiPluginApi */
 /** @typedef {import("@opencode-ai/plugin/tui").TuiPluginModule} TuiPluginModule */
-/** @typedef {import("@opencode-ai/plugin/tui").TuiThemeCurrent} Theme */
+/** @typedef {import("./carl-tui.js").Theme} Theme */
+/** @typedef {import("./carl-tui.js").Color} Color */
+/** @typedef {import("./carl-tui.js").Node} Node */
 /** @typedef {import("@opencode-ai/sdk/v2").Session} Session */
-/** @typedef {Theme["text"]} Color */
-/** @typedef {ReturnType<typeof createElement>} Node */
-/** @typedef {Node | string | null | undefined | false} Child */
 /** @typedef {{ id: string, title: string, updated: number }} SessionEntry */
 /** @typedef {"busy" | "wait" | "idle"} SessionState */
 
@@ -25,59 +25,12 @@ const MAX = 9;                          // sessions in the cycle and the picker
 const RECENT_H = 72;                    // older sessions stay in OpenCode's own /sessions list
 const TITLE_W = 22;                     // columns for the title in the prompt box
 
-/**
- * @param {string} tag
- * @param {Record<string, unknown>} props
- * @param {Child[]} [children]
- * @returns {Node}
- */
-function el(tag, props, children = []) {
-  const node = createElement(tag);
-  for (const [k, v] of Object.entries(props)) if (v !== undefined) setProp(node, k, v);
-  for (const c of children) if (c !== null && c !== undefined && c !== false) insert(node, c);
-  return node;
-}
-/** @param {Record<string, unknown>} props @param {Child[]} children @returns {Node} */
-const box = (props, children) => el("box", props, children);
-/** @param {Color} fg @param {string} value @returns {Node} */
-const text = (fg, value) => el("text", { fg }, [value]);
+const { box, text } = nodes({ createElement, insert, setProp });
 
-/**
- * Slots are typed with solid-js's DOM-based JSX.Element; OpenTUI renders its
- * own nodes there, so this is a type-level conversion only.
- * @param {Node | null} node
- * @returns {import("@opentui/solid").JSX.Element}
- */
-const asElement = (node) => /** @type {import("@opentui/solid").JSX.Element} */ (/** @type {unknown} */ (node));
-
-/** One line of at most n columns, with an ellipsis when cut. @param {unknown} s @param {number} n */
-function cut(s, n) {
-  const line = String(s ?? "").replace(/\s+/g, " ").trim();
-  return line.length > n ? line.slice(0, Math.max(n - 1, 0)) + "…" : line;
-}
 /** @param {number} ms @param {number} now @returns {string} */
 function ago(ms, now) {
   const m = Math.max(0, Math.floor((now - ms) / 60000));
   return m < 1 ? "now" : m < 60 ? `${m}m ago` : m < 1440 ? `${Math.floor(m / 60)}h ago` : `${Math.floor(m / 1440)}d ago`;
-}
-
-/**
- * The rows of an SDK response. The TUI client returns { data }; a bare array
- * is accepted too (other client configurations).
- * @template T
- * @param {{ data?: T[] } | T[] | undefined} res
- * @returns {T[]}
- */
-function rows(res) {
-  return Array.isArray(res) ? res : (res?.data ?? []);
-}
-
-/** @param {TuiPluginApi} api @returns {string | undefined} */
-function routeSessionID(api) {
-  const route = api.route.current;
-  if (route.name !== "session") return undefined;
-  const id = route.params?.sessionID;
-  return typeof id === "string" ? id : undefined;
 }
 
 /** @param {SessionState} st @param {Theme} theme @returns {[string, Color]} */

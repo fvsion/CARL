@@ -1,11 +1,11 @@
-"""Shared pieces for the disk cache (Settings > Caching): a saved conversation is stored as a patch
+"""Conversations stored as patches, for the disk cache (Settings > Caching): a saved conversation is stored as a patch
 against the agent's prompt file it starts with (zstd --patch-from), so the prompt's part is kept
 once, in the prompt file, and each session file holds only what is its own.
 
 Measured (35B IQ3, 2026-10-04): a build session of 8.6K tokens, 115 MB whole, shares ~45 MB with the
 build prompt; the rest is the recurrent state (~59 MB per conversation, never shared) and the
 session's own tokens. A hybrid model's state can't be split by llama.cpp (it saves whole
-sequences), so the pieces are made after the save, on the files:
+sequences), so the patches are made after the save, on the files:
 
   name.bin            llama.cpp's file (--slot-save-path): written by a save, read by a restore
   name.bin.zst        the patch against the base (zstd, --long=31, its own checksum)
@@ -91,7 +91,10 @@ def meta(folder: str, name: str) -> Optional[JSONDict]:
             doc = jdict(json.load(f))
     except (OSError, ValueError):
         return None
-    return doc if isinstance(doc.get("base"), str) and isinstance(doc.get("packed_at"), (int, float)) else None
+    base = doc.get("base")
+    if not (isinstance(base, str) and base.startswith("carl-prefix+") and os.path.basename(base) == base):
+        return None                          # the base is a prompt file in this folder, never a path elsewhere
+    return doc if isinstance(doc.get("packed_at"), (int, float)) else None
 
 
 def _zstd(args: List[str]) -> bool:

@@ -14,8 +14,8 @@
 #                                    Parallels / other VM network address)
 #   --key-file FILE                  read the API key from FILE (copy it from the
 #                                    dashboard: Connect tab, k shows the key)
-#   --key KEY                        the API key itself (stays in your shell
-#                                    history: prefer --key-file or the prompt)
+#   --key KEY                        the API key itself (it stays in your shell history
+#                                    and shows in the process list: use --key-file or the prompt)
 #   --port N                         the llama.cpp server's port (default 8080)
 #   ./install.sh HOST                same as --host HOST
 #   (the pre-1.2.0 form HOST MTPLX_PORT LLAMA_PORT still works; the second value
@@ -37,17 +37,18 @@ set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 OS="$(uname -s)"
 tilde() { local t='~'; printf '%s' "${1/#"$HOME"/$t}"; }   # a path as ~/... (bash 3.2 keeps a quoted \~)
-MODE=""; HOST=""; pos=(); ARG_KEY=""; LLAMA_PORT=""
+MODE=""; HOST=""; pos=(); ARG_KEY=""; KEY_IN_ARGS=0; LLAMA_PORT=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --local) MODE=local ;;
     --vm) MODE=vm; if [[ "${2:-}" =~ ^[0-9.]+$ ]]; then HOST="$2"; shift; fi ;;
     --host) MODE=host; HOST="${2:?--host needs an address}"; shift ;;
-    --key) ARG_KEY="${2:?--key needs the key}"; shift ;;
+    --key) ARG_KEY="${2:?--key needs the key}"; KEY_IN_ARGS=1; shift ;;
     --port) LLAMA_PORT="${2:?--port needs a port}"; shift ;;
-    --key-file) f="${2:?--key-file needs a file}"; [[ -r "$f" ]] || { echo "error: cannot read $f" >&2; exit 1; }
-                ARG_KEY="$(tr -d '[:space:]' < "$f")"; shift ;;
-    -h|--help) sed -n '2,32p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    --key-file) f="${2:?--key-file needs a file}"
+                [[ -r "$f" ]] || { echo "error: cannot read the key file $f (check the path and that you can read it)" >&2; exit 1; }
+                ARG_KEY="$(tr -d '[:space:]' < "$f")"; KEY_IN_ARGS=0; shift ;;
+    -h|--help) awk 'NR > 1 && /^set -euo/ { exit } NR > 1' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) pos+=("$1") ;;
   esac
   shift
@@ -127,9 +128,13 @@ OLD_KEY_FILE="$HOME/.config/mtplx/api-key"
 # --- API key -----------------------------------------------------------------
 if [[ -n "$ARG_KEY" ]]; then
   key="$ARG_KEY"
+  if (( KEY_IN_ARGS )); then
+    echo "note: --key puts the key in your shell history and in the process list. Next time, use --key-file FILE or the prompt." >&2
+  fi
 elif [[ -n "${CARL_API_KEY:-}" ]]; then
   key="$CARL_API_KEY"
 elif [[ -f "$HERE/api-key" ]]; then
+  chmod 600 "$HERE/api-key" 2>/dev/null || true      # a copied client folder can lose the mode
   key="$(tr -d '[:space:]' < "$HERE/api-key")"
 elif [[ -s "$KEY_FILE" ]]; then
   key="$(tr -d '[:space:]' < "$KEY_FILE")"
@@ -147,9 +152,9 @@ else
   read -rsp "API key (on the server Mac: cat ~/.config/carl/api-key, or the monitor's CONNECT section): " key; echo
 fi
 key="${key#"${key%%[![:space:]]*}"}"; key="${key%"${key##*[![:space:]]}"}"   # trim (a pasted newline)
-[[ -n "$key" ]] || { echo "error: empty API key" >&2; exit 1; }
+[[ -n "$key" ]] || { echo "error: empty API key. Copy it from the server Mac (dashboard: Connect tab, k) and give it with --key-file FILE or at the prompt" >&2; exit 1; }
 # It goes into an HTTP header: printable characters, no spaces (never echoed back).
-[[ "$key" =~ ^[[:graph:]]+$ ]] || { echo "error: the API key contains spaces or control characters" >&2; exit 1; }
+[[ "$key" =~ ^[[:graph:]]+$ ]] || { echo "error: the API key contains spaces or control characters. Copy it again from the server Mac (dashboard: Connect tab, k)" >&2; exit 1; }
 mkdir -p "$KEY_DIR"; chmod 700 "$KEY_DIR"
 # Rewritten only when it changes. On the server Mac this is the server's own key
 # file: a different key replaces it for the next server start, so the old one is kept.
@@ -237,7 +242,8 @@ sys.path.insert(0, sys.argv[1])
 import carl_models
 ids = [m.get("id") for m in json.load(sys.stdin).get("data", [])]
 ml = carl_models.from_server_ids(ids, int(sys.argv[2]))
-json.dump({"schema": 1, "default": ml.default, "models": [m.__dict__ for m in ml.models]}, sys.stdout)' "$HERE" "$ctx" > "$models_arg"; then
+json.dump({"schema": 1, "default": ml.default, "models": [m.__dict__ for m in ml.models]}, sys.stdout)' "$HERE" "$ctx" \
+       > "$models_arg" 2>/dev/null; then
     echo '{"schema": 1, "default": null, "models": []}' > "$models_arg"
   fi
   echo "note: no installed-models.json here: the model entries come from the server (/v1/models). Copy the"
@@ -303,6 +309,7 @@ python3 "$HERE/configure.py" --bundle "$HERE" --home "$HOME" --host "$HOST" \
 # connection to the dashboard's API (no port opens here) that applies a pushed config with this
 # installer. launchd (macOS) or systemd --user (Linux) keeps it running. Off: NO_SYNC_SERVICE=1.
 SYNC_LABEL=dev.carl.sync
+xml() { printf '%s' "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'; }   # text in the launchd plist
 sync_service() {   # sync_service on|off: install / remove the service; "on" fails without a service manager
   local py plist unit
   py="$(command -v python3)"
@@ -320,10 +327,10 @@ sync_service() {   # sync_service on|off: install / remove the service; "on" fai
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
   <key>Label</key><string>$SYNC_LABEL</string>
-  <key>ProgramArguments</key><array><string>$py</string><string>$HERE/carl-sync.py</string><string>watch</string></array>
+  <key>ProgramArguments</key><array><string>$(xml "$py")</string><string>$(xml "$HERE/carl-sync.py")</string><string>watch</string></array>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
-  <key>StandardErrorPath</key><string>$HOME/.config/carl/client-sync.err</string>
+  <key>StandardErrorPath</key><string>$(xml "$HOME/.config/carl/client-sync.err")</string>
 </dict></plist>
 PLIST
     launchctl bootout "gui/$(id -u)" "$plist" 2>/dev/null || true
@@ -336,7 +343,7 @@ Description=CARL client config sync (applies the config pushed from the CARL das
 After=network-online.target
 
 [Service]
-ExecStart="$py" "$HERE/carl-sync.py" watch
+ExecStart="${py//%/%%}" "${HERE//%/%%}/carl-sync.py" watch
 Restart=always
 RestartSec=30
 
@@ -372,7 +379,8 @@ if [[ "${CARL_SYNC:-0}" != 1 ]]; then
     fi
   else
     python3 "$HERE/carl-sync.py" register off 2>/dev/null || true
-    echo "client sync: no service manager here: OpenCode and Pi check for a pushed config when they start"
+    echo "client sync: no background service (no service manager here, or it did not start): OpenCode and Pi"
+    echo "             check for a pushed config when they start"
   fi
 fi
 
