@@ -13,7 +13,7 @@ from .card_actions import CardActions
 from .fmt import R, RED, home_short, size
 from .jobs import ServerJobs
 from .keys import BACKSPACE, DOWN, ENTER, ESC, LEFTKEY, PANEL_PASSTHROUGH, PGDN, PGUP, RIGHT, SCROLL_KEYS, UP
-from .model import ModelInfo, ServerData
+from .model import ModelInfo, ServerData, draft_bytes
 from .settings import Pending, SettingsService, parse_typed, step_choice
 from .settings_panels.caching import AUTO_CHOICES, DISK_CHOICES
 from .settings_view import SettingsView
@@ -167,8 +167,10 @@ class SettingsActions:
             if d.cmd and m["path"] in d.cmd:
                 ui.toast("that model is loaded: stop the server first", 6)
                 return
-            ui.confirm2 = Confirm("DELETE?", [f"Delete {m['name']} ({size(m['bytes'])})?", home_short(m["path"], self.home)],
-                                  "mdelyes", m["name"])
+            lines = [f"Delete {m['name']} ({size(m['bytes'])})?", home_short(m["path"], self.home)]
+            if m.get("draft"):
+                lines.append(f"and its MTP drafter ({size(draft_bytes(m))}): {home_short(str(m.get('draft_path', '')), self.home)}")
+            ui.confirm2 = Confirm("DELETE?", lines, "mdelyes", m["name"])
         elif act == "mtune":
             ui.tune_model, ui.sp = m["name"], SP_TUNE
         elif act == "medit":

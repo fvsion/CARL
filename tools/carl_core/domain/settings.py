@@ -96,7 +96,7 @@ MODEL_KEYS: Dict[str, SettingSpec] = {
 # Server-wide llama.cpp settings (config.json "llama").
 LLAMA_KEYS: Dict[str, SettingSpec] = {
     "model": _str("auto"),                                  # auto = auto fit's pick for this Mac
-    "auto_goal": _choice("everyday", ("everyday", "hard-code")),        # auto fit: MoE first, or dense first
+    "auto_goal": _choice("everyday", ("everyday", "hard-code")),        # auto fit: fast first (MoE, small dense), or dense first
     "auto_fit": _choice("catalogue", ("catalogue", "downloaded")),      # auto fit picks from these models
     "mode": _choice("single", ("single", "router"), "LLAMA_MODE"),   # router: clients switch models (opt-in)
     "net": _choice("local", NET_CHOICES, "NET"),

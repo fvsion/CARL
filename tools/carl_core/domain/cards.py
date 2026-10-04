@@ -48,7 +48,7 @@ FIELDS: Tuple[CardField, ...] = (
     CardField("arch", "arch", "choice", "dense: all parameters work on each token (slower, stronger). MoE: a "
               "few experts work on each token (fast). The dense / MoE filters and the auto fit goals use it.", choices=ARCHS),
     CardField("quant", "quant", "text", "The quantization label, for example Q4_K_M or UD-IQ3_XXS.", limit=QUANT_MAX),
-    CardField("rank", "quality rank", "number", "The quality order: 1 is the best. The catalogue uses ranks 1-5. "
+    CardField("rank", "quality rank", "number", "The quality order: 1 is the best. The catalogue uses ranks 1-10. "
               "Sort by quality uses it. Type a whole number, or leave it empty."),
     CardField("thinking", "thinking", "choice", "How the model thinks: on / off only, or effort levels. OpenCode and "
               "Pi show the related options.", choices=THINKING),

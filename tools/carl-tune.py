@@ -7,7 +7,8 @@
 Steps (the model loads once per speculation mode, ~5-10 min in all):
   1. memory: the largest window that fits with 1 and 2 slots (tools/llama-fit.py's model)
   2. speculation: none, n-gram, and (when the file has an MTP head) MTP and MTP + n-gram
-     at n = 1 and 2. Each runs prose, fresh code and a code re-emit, twice. Score =
+     at n = 1 and 2, or (with a separate MTP drafter, Gemma 4: passed with -md) at n = 1 to 4
+     (--quick: 1 and 2). Each runs prose, fresh code and a code re-emit, twice. Score =
      weighted geometric mean (prose 0.4, code 0.4, re-emit 0.2); a mode with drafting
      must beat a simpler one by 3% to win.
   3. prompt reading: a cold read at 8K, 32K and 64K tokens (--quick: 8K and 32K; --long: also
@@ -42,6 +43,7 @@ from carl_core.adapters.console import StepPrinter  # noqa: E402
 from carl_core.adapters.system import (listening_ports, llama_server_version, processes, sysctl_int,  # noqa: E402
                                        sysctl_text)
 from carl_core.domain.errors import ConfigError  # noqa: E402
+from carl_core.domain.models import mtp_source  # noqa: E402
 from carl_core.domain.settings import Config  # noqa: E402
 from carl_core.domain.tuning import AutoTuner, TunePlan, blocking_processes  # noqa: E402
 from carl_core.domain.types import ModelInfo, TuneRecord  # noqa: E402
@@ -55,7 +57,8 @@ def parse_args(argv: List[str]) -> argparse.Namespace:
     ap.add_argument("model", help="a downloaded model, or all (every downloaded model in turn)")
     ap.add_argument("--port", type=int, default=8093)
     depth = ap.add_mutually_exclusive_group()
-    depth.add_argument("--quick", action="store_true", help="skip the MTP modes at n=2 and the 64K read (~4 min)")
+    depth.add_argument("--quick", action="store_true",
+                       help="skip the MTP modes at n=2 (n=3 and 4 with an MTP drafter) and the 64K read (~4 min)")
     depth.add_argument("--long", action="store_true", help="also read 128K and 192K cold and measure the decode speed "
                                                             "at each depth (+10-40 min)")
     ap.add_argument("--dry-run", action="store_true", help="measure and print the result, don't save it")
@@ -106,9 +109,11 @@ def run(args: argparse.Namespace, server: llama_server.LlamaServerControl, m: Mo
     shape = app.shapes.local(path)
     machine = sysctl_text("machdep.cpu.brand_string")
     ram_gb = sysctl_int("hw.memsize") // 2 ** 30
-    has_mtp = bool(shape["nextn"])
+    source = mtp_source(m, shape)
+    mtp = {"head": "head in the file", "drafter": f"drafter {os.path.basename(m.get('draft_path', ''))}",
+           "none": "drafter not downloaded" if m.get("draft") else "none"}[source]
     print(f"Auto-tune {m.get('name')} on {machine} {ram_gb} GB ({os.path.basename(path)}, {shape['ftype']}, "
-          f"{'MoE' if shape['experts'] else 'dense'}, MTP head: {'yes' if has_mtp else 'no'})", flush=True)
+          f"{'MoE' if shape['experts'] else 'dense'}, MTP: {mtp})", flush=True)
     guard_gpu(args.port)
     # the re-emit workload copies this code back (it has a `call` method the prompt renames)
     with open(llama_server.__file__, encoding="utf-8") as f:
@@ -116,10 +121,12 @@ def run(args: argparse.Namespace, server: llama_server.LlamaServerControl, m: Mo
     base_ctx = app.effective_tune(m, Config())[0]["ctx"]       # catalogue / header window, no config.json
     if not isinstance(base_ctx, int):
         raise ConfigError(f"{m.get('name')}: the tuned ctx is not a token count")
-    plan = TunePlan(shape=shape, weights=os.path.getsize(path), limit=app.gpu.limit()[0], base_ctx=base_ctx,
+    drafter = source == "drafter"           # the launcher passes it with -md for the MTP modes
+    weights = os.path.getsize(path) + (os.path.getsize(m.get("draft_path", "")) if drafter else 0)
+    plan = TunePlan(shape=shape, weights=weights, limit=app.gpu.limit()[0], base_ctx=base_ctx,
                     depth="quick" if args.quick else "long" if args.long else "default",
                     date=app.clock.today(), machine=f"{machine} {ram_gb} GB", llama_cpp=llama_server_version(),
-                    edit_source=edit_source)
+                    edit_source=edit_source, drafter=drafter)
     progress = StepPrinter()
     record = AutoTuner(server, progress).run(plan)
     if not args.dry_run:

@@ -126,15 +126,16 @@ def commit_sha(info: object, fallback: str) -> str:
     return validate_revision(sha) if isinstance(sha, str) and sha else fallback
 
 
-def validate_ref(ref: object, where: str) -> HfRef:
-    """An "hf" object from the catalogue or models.json, checked field by field."""
+def validate_ref(ref: object, where: str, key: str = "hf") -> HfRef:
+    """An "hf" object from the catalogue or models.json (or a catalogue drafter's "draft": key),
+    checked field by field."""
     if not isinstance(ref, dict):
-        raise ConfigError(f"{where}: hf must be an object")
+        raise ConfigError(f"{where}: {key} must be an object")
 
-    def text(key: str) -> Optional[str]:
-        v = ref.get(key)
+    def text(name: str) -> Optional[str]:
+        v = ref.get(name)
         if v is not None and not isinstance(v, str):
-            raise ConfigError(f"{where}: hf.{key} must be a string")
+            raise ConfigError(f"{where}: {key}.{name} must be a string")
         return v
 
     out: HfRef = {}
@@ -150,6 +151,6 @@ def validate_ref(ref: object, where: str) -> HfRef:
     if "bytes" in ref:
         b = ref["bytes"]
         if not isinstance(b, int) or isinstance(b, bool) or b < 0:
-            raise ConfigError(f"{where}: hf.bytes must be a byte count")
+            raise ConfigError(f"{where}: {key}.bytes must be a byte count")
         out["bytes"] = b
     return out

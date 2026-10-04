@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import os
 import unittest
+from dataclasses import replace
 from typing import Dict, List, Optional, Tuple, cast
 
 from support import GIB, shape, with_window
@@ -25,6 +26,7 @@ SHAPES: Dict[str, ModelShape] = {"qwen3.6-35b-a3b": shape(experts=256, kv_elems=
           "qwen3.8-9b": shape(experts=0, kv_elems=16384, rs_bytes=52690944),
           # Gemma 4 (2026-10-04): full-attention KV elements + sliding-window ones (window 512 / 1024)
           "gemma-4-e4b": with_window(shape(experts=0, kv_elems=8192, rs_bytes=0), 512, 20480),
+          "gemma-4-12b": with_window(shape(experts=0, kv_elems=8192, rs_bytes=0), 1024, 163840),
           "gemma-4-26b-a4b": with_window(shape(experts=128, kv_elems=10240, rs_bytes=0), 1024, 102400),
           "gemma-4-31b": with_window(shape(experts=0, kv_elems=40960, rs_bytes=0), 1024, 409600)}
 THIS_MAC_LIMIT = 26800603136                  # an M2 Max 32 GB: Metal's recommendedMaxWorkingSetSize (25.0 GiB)
@@ -53,6 +55,7 @@ class RealCatalogueTest(unittest.TestCase):
 
     # RAM GB -> (everyday pick, hard-code pick); None = nothing fits. All at 2 x 96K (q4_0).
     EXPECTED: Dict[int, Tuple[Optional[str], Optional[str]]] = {
+        16: ("gemma-4-e4b", "gemma-4-12b"),                    # 10.0 GiB: the E4B is fast (everyday), the 12B better
         24: ("qwen3.6-35b-a3b-iq3", "qwen3.8-27b-iq3"),        # 16.0 GiB
         32: ("qwen3.6-35b-a3b", "qwen3.8-27b"),                # 24.0 GiB (estimate, 3/4 like a real M2 Max): Q4 needs 23.3
         36: ("qwen3.6-35b-a3b", "qwen3.8-27b"),                # 27.0 GiB
@@ -88,6 +91,17 @@ class RealCatalogueTest(unittest.TestCase):
         self.assertIn("qwen3.6-35b-a3b (rank 3): the weights and buffers alone use 22.2 GiB (the limit on this Mac is 22.0 GiB)",
                       [r.line() for r in vm.rejected])
 
+    def test_a_fast_small_dense_model_joins_the_everyday_family(self) -> None:
+        """Without the fast mark the E4B is only a dense fallback, and the better-ranked 12B wins everyday too."""
+        cands = real_catalogue()
+        self.assertTrue(next(c for c in cands if c.name == "gemma-4-e4b").fast)
+        slow = [replace(c, fast=False) for c in cands]
+        self.assertEqual(auto_fit(slow, mac(16), "everyday").name, "gemma-4-12b")
+        fit = auto_fit(cands, mac(16), "everyday")
+        self.assertFalse(fit.fallback)
+        self.assertIn("best-ranked stock small dense build", fit.because())
+        self.assertIn("gemma-4-12b (rank 8): dense: for the hard-code goal (slower)", [r.line() for r in fit.rejected])
+
     def test_never_an_abliterated_model(self) -> None:
         cands = real_catalogue(downloaded=("orcarouter-27b-iq3", "heretic-35b-a3b-iq3"))
         for ram in self.EXPECTED:
@@ -116,19 +130,21 @@ class RealCatalogueTest(unittest.TestCase):
         self.assertIn("qwen3.6-35b-a3b (rank 3): not downloaded", [r.line() for r in start.rejected])
         self.assertIs(best_downloaded(start, cands), start)            # downloaded already: itself
 
-    def test_16gb_gets_the_9b_as_the_fallback(self) -> None:
+    def test_16gb_the_9b_only_when_it_is_the_one_downloaded(self) -> None:
         fit = auto_fit(real_catalogue(), mac(16), "everyday")
-        self.assertEqual((fit.name, fit.fallback), ("qwen3.8-9b", True))     # no MoE build fits 16 GB
+        self.assertEqual((fit.name, fit.fallback), ("gemma-4-e4b", False))   # fast family: the E4B fits
         self.assertEqual((fit.plan.slots, fit.plan.ctx) if fit.plan else None, (2, 98304))
-        hard = auto_fit(real_catalogue(), mac(16), "hard-code")            # 10.0 GiB: the one dense build that fits
-        self.assertEqual((hard.name, hard.fallback), ("qwen3.8-9b", False))
+        only_9b = [replace(c, downloaded=c.name == "qwen3.8-9b") for c in real_catalogue()]
+        start = auto_fit(only_9b, mac(16), "everyday", "downloaded")
+        self.assertEqual((start.name, start.fallback), ("qwen3.8-9b", True))    # no fast build downloaded
+        self.assertIn("gemma-4-e4b (rank 9): not downloaded", [r.line() for r in start.rejected])
 
     def test_nothing_fits_lists_every_candidate(self) -> None:
         fit = auto_fit(real_catalogue(), mac(8), "everyday")
         self.assertIsNone(fit.pick)
         self.assertEqual([r.name for r in fit.rejected],
                          ["qwen3.8-27b", "qwen3.8-27b-q3", "qwen3.6-35b-a3b", "qwen3.8-27b-iq3", "qwen3.6-35b-a3b-iq3",
-                          "qwen3.8-9b"])
+                          "gemma-4-31b", "gemma-4-26b-a4b", "gemma-4-12b", "gemma-4-e4b", "qwen3.8-9b"])
         self.assertIn("no ranked stock model fits", fit.because())
         self.assertIn("nothing fits", fit.summary())
 
@@ -178,7 +194,7 @@ class PassesTest(unittest.TestCase):
         moe = cand("moe", "moe", 2, 30.0)
         fit = auto_fit([dense, moe], Budget(20 * GIB, 0, 0), "everyday")
         self.assertEqual((fit.name, fit.fallback), ("dense", True))
-        self.assertIn("no MoE build fits", fit.because())
+        self.assertIn("no fast (MoE or small dense) build fits", fit.because())
         self.assertEqual([r.name for r in fit.rejected], ["moe"])
         hard = auto_fit([dense, moe], Budget(40 * GIB, 0, 0), "hard-code")
         self.assertEqual((hard.name, hard.fallback), ("dense", False))

@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "_comment": "CARL built-in model catalogue. Downloaded and custom models are tracked separately in ~/.config/carl/models.json. Fields: hf (download source, pinned revision, sha256, bytes), tune (recommended server settings), why (the reason for each tuned value), ctx_zones (context per slot: <= good is fast (never below 96K, the floor), <= slow is usable, above very_slow is very slow; Auto-tune replaces these with measured values for this Mac), measured (reference measurements). Card fields: role (headline), good_for (tags: agent coding, hard code, chat & writing, uncensored), why_use, trade_offs, pick_instead (model + when), hardware, uncensored (what it means; abliterated models only), rank (quality order, 1 = best: parameters and density first, then quantization).",
+  "_comment": "CARL built-in model catalogue. Downloaded and custom models are tracked separately in ~/.config/carl/models.json. Fields: hf (download source, pinned revision, sha256, bytes), tune (recommended server settings), why (the reason for each tuned value), ctx_zones (context per slot: <= good is fast (never below 96K, the floor), <= slow is usable, above very_slow is very slow; Auto-tune replaces these with measured values for this Mac), measured (reference measurements). Card fields: role (headline), good_for (tags: agent coding, hard code, chat & writing, uncensored), why_use, trade_offs, pick_instead (model + when), hardware, uncensored (what it means; abliterated models only), rank (quality order, 1 = best: published benchmarks and CARL's code test first, then quantization). draft (a separate MTP drafter, llama-server -md), speed (measured tok/s: prose, code, edit), fast (a small dense model auto fit's everyday goal takes with the MoE builds).",
   "default": "qwen3.6-35b-a3b",
   "default_small": "qwen3.6-35b-a3b-iq3",
   "models": [
@@ -811,7 +811,7 @@
         "sha256": "df13d66021cef676f82be74053220fd75af6bf2a6a7fb77f5222ab9e50744a7a",
         "bytes": 5780090176
       },
-      "rank": 6,
+      "rank": 10,
       "role": "The small one: 16 GB Macs and more subagents at once",
       "good_for": [
         "chat & writing"
@@ -839,10 +839,13 @@
       "params": "8B with embeddings, 4.5B effective",
       "quant": "Q4_0 (QAT)",
       "abliterated": false,
-      "mtp": false,
+      "mtp": true,
       "min_ram_gb": 16,
+      "rank": 9,
+      "fast": true,
       "tested": false,
-      "summary": "Google's small Gemma 4 (4.6 GB): fast on any Mac, Google's QAT Q4_0; weaker than the 9B and up on hard code.",
+      "speed": {"prose": 56.8, "code": 59.1, "edit": 240.8, "machine": "M2 Max 32 GB", "date": "2026-10-04", "mode": "draft-mtp,ngram-mod n=2"},
+      "summary": "Google's small Gemma 4 (4.6 GB): fast on any Mac, Google's QAT Q4_0; auto fit's everyday pick on 16 GB Macs; weaker than the 12B and up on hard code.",
       "description": "Stock Gemma 4 E4B instruction-tuned (Apache-2.0), Google's quantization-aware-trained (QAT) weights quantized to Q4_0 by ggml-org (token embedding at Q8_0): Google says QAT keeps quality close to bfloat16, and Q4_0 is the fastest 4-bit format on Metal. 42 layers, 18 of which reuse earlier layers' KV; 4 full-attention layers (4.5 KiB/token at q4_0) and 20 sliding-window layers (window 512; 11.2 KiB/token at q4_0 when kept at full length with --swa-full, which a restored prompt state needs). 2 x 96K with the full cache needs ~8.2 GiB: it fits a 16 GB Mac. Trained context 128K. Thinking is on / off only (no effort levels); llama-server turns it on by default, reasoning_effort none turns it off. Its per-layer embeddings (2.1 GiB of the file) stay in CPU memory, so it uses less GPU memory than the estimate. Text and images in the model; CARL starts it text-only (--no-mmproj).",
       "tune": {
         "kv": "q4_0",
@@ -853,13 +856,13 @@
         "top_k": 64,
         "min_p": 0,
         "presence": 0,
-        "spec": "ngram-mod",
+        "spec": "draft-mtp,ngram-mod",
         "spec_n": 2
       },
       "why": {
         "kv": "q4_0 K and V like every catalogue model (measured on the Qwen builds: faster cold reads, less memory, same recall). Checked on this M2 Max with llama.cpp 0.5.0: flash attention works with q4_0 K/V at Gemma's 512-wide global heads, and the KV sizes llama.cpp allocates match CARL's estimate (2 x 64K: 576 MiB full-attention + 1440 MiB sliding-window with --swa-full, 16.9 MiB window-only). Never mix K and V types.",
         "temp": "Google's model card: temperature 1.0, top_p 0.95, top_k 64 for all uses (the GGUF's general.sampling says the same); min_p not given, 0.",
-        "spec": "n-gram only (n=2): the MTP drafter (ggml-org mtp-gemma-4-E4B-it-Q4_0.gguf, 60 MB, QAT, shares the target's KV cache) needs llama-server -md, which CARL does not pass yet. Re-emitted code still drafts almost for free.",
+        "spec": "MTP + n-gram, 2 draft tokens. Measured 2026-10-04 (llama.cpp 0.5.0 on the M2 Max, 0.4.1 on the M3 Pro; temperature 0, thinking off; 700 tokens of new code, ~600 of prose, a 110-line file re-emitted with one rename; tok/s, then Auto-tune's weighted score): M2 Max, Auto-tune: none 48.9 / 50.4 / 48.3 (score 49.4); n-gram n=2 49.8 / 48.7 / 275.9 (69.5); MTP n=2 54.2 / 56.7 / 72.2 (58.4); MTP + n-gram n=2 56.8 / 59.1 / 240.8 (77.0, the best). MTP speeds new text (66-80% of its drafts accepted); n-gram speeds re-emitted code (it drafts nothing on new text). The drafter is ggml-org mtp-gemma-4-E4B-it-Q4_0.gguf (60 MB, QAT): llama-server loads it with -md and it shares the target's KV cache, so only its weights add memory. Without the drafter downloaded, a start uses n-gram.",
         "ctx": "96K per slot, the floor CARL keeps; the trained length is 128K, the most it can take. llama-bench on an M2 Max (q4_0 KV, window cache): 894 tok/s at 512, 581 tok/s at 8K, so long cold reads are quick.",
         "slots": "auto: 2 x 96K with the full sliding-window cache (~8.2 GiB) fits every Mac from 16 GB up; on larger Macs 3-4 slots fit for subagents."
       },
@@ -875,12 +878,19 @@
         "sha256": "a555b900214b477d8880e7832e0b8925e139b0159640036b09fe472b6f2097f2",
         "bytes": 4590807392
       },
+      "draft": {
+        "repo": "ggml-org/gemma-4-E4B-it-GGUF",
+        "revision": "b8093469224f83f5c38f691eb906c380e9e63114",
+        "file": "mtp-gemma-4-E4B-it-Q4_0.gguf",
+        "sha256": "d19a11e4fd5019967d9296f77f4d3e139c8903909f70c3a9cf009c9af4b9b88d",
+        "bytes": 59678240
+      },
       "role": "Small and fast: Google's Gemma 4 for any Mac",
       "good_for": [
         "chat & writing"
       ],
       "why_use": "About twice the decode speed of the Qwen3.8 9B on the same Mac (llama-bench, M2 Max: 46 vs 24 tok/s, no speculation) at a smaller size (4.6 GB): 2 x 96K slots fit a 16 GB Mac, and larger Macs have room for 3-4 slots. Google's QAT weights keep Q4_0 close to full precision.",
-      "trade_offs": "Only 4.5B effective parameters: well below the 26B-A4B and the Qwen models on code and agent tasks (Google: LiveCodeBench 52% vs 77% for the 26B-A4B, Tau2 42% vs 68%). Trained context 128K, not 256K. No MTP speculation in CARL yet. Not tested at length for agent coding.",
+      "trade_offs": "Only 4.5B effective parameters: well below the 26B-A4B and the Qwen models on code and agent tasks (Google: LiveCodeBench 52% vs 77% for the 26B-A4B, Tau2 42% vs 68%). Trained context 128K, not 256K. Not tested at length for agent coding.",
       "pick_instead": [
         {
           "model": "qwen3.8-9b",
@@ -898,6 +908,83 @@
       "hardware": "16 GB Macs and up (2 x 96K with the full cache ~8.2 GiB); larger Macs for 3-4 slots"
     },
     {
+      "name": "gemma-4-12b",
+      "label": "Gemma 4 12B · Q4_0 QAT",
+      "family": "gemma-4-12b",
+      "arch": "dense",
+      "thinking": "on-off",
+      "params": "12B dense",
+      "quant": "Q4_0 (QAT)",
+      "abliterated": false,
+      "mtp": true,
+      "min_ram_gb": 16,
+      "rank": 8,
+      "tested": false,
+      "speed": {"prose": 28.2, "code": 34.3, "edit": 129.4, "machine": "M2 Max 32 GB", "date": "2026-10-04", "mode": "draft-mtp,ngram-mod n=2"},
+      "summary": "Google's dense Gemma 4 12B (7.2 GB): strong code for its size; 2 x 96K fits a 16 GB Mac with the window-only cache.",
+      "description": "Stock Gemma 4 12B instruction-tuned (Apache-2.0), Google's quantization-aware-trained (QAT) weights quantized to Q4_0 by ggml-org; Q4_0 is the fastest 4-bit format on Metal. 48 layers, none sharing KV: 8 full-attention (1 KV head x 512: 4.5 KiB/token at q4_0) and 40 sliding-window (window 1024, 8 KV heads x 256: 90 KiB/token at q4_0 when kept at full length with --swa-full, which a restored prompt state needs). With its MTP drafter, 2 x 96K needs ~9.1 GiB with the window-only cache (fits a 16 GB Mac) and ~25.7 GiB with the full cache. Trained context 256K. Thinking is on / off only; llama-server turns it on by default. Text and images in the model; CARL starts it text-only (--no-mmproj).",
+      "tune": {
+        "kv": "q4_0",
+        "ctx": 98304,
+        "slots": "auto",
+        "temp": 1.0,
+        "top_p": 0.95,
+        "top_k": 64,
+        "min_p": 0,
+        "presence": 0,
+        "spec": "draft-mtp,ngram-mod",
+        "spec_n": 2
+      },
+      "why": {
+        "kv": "q4_0 K and V like every catalogue model: the sliding-window layers cost 90 KiB/token at full length even at q4_0, so q8_0 would double the largest cost. Never mix K and V types.",
+        "temp": "Google's model card: temperature 1.0, top_p 0.95, top_k 64 for all uses; min_p not given, 0.",
+        "spec": "MTP + n-gram, 2 draft tokens. Measured 2026-10-04 (llama.cpp 0.5.0 on the M2 Max, 0.4.1 on the M3 Pro; temperature 0, thinking off; 700 tokens of new code, ~600 of prose, a 110-line file re-emitted with one rename; tok/s, then Auto-tune's weighted score): M2 Max 32 GB, prose / code / re-emit: none 26.7 / 27.2 / 25.6 (score 26.7); n-gram n=2 26.7 / 27.2 / 132.7 (37.1); MTP n=2 29.9 / 36.8 / 36.1 (33.7); MTP n=3-4 lose on prose (28.1, 26.3); MTP + n-gram n=2 28.2 / 34.3 / 129.4 (41.4, the best); n=3 40.8. The drafter is ggml-org mtp-gemma-4-12B-it-Q4_0.gguf (0.25 GB, QAT): llama-server loads it with -md and it shares the target's KV cache. Without the drafter downloaded, a start uses n-gram.",
+        "ctx": "96K per slot, the floor CARL keeps; the trained length is 256K. With the window-only cache long windows cost little (4.5 KiB/token); with the full cache the largest 2-slot window is 8K on a 16 GB Mac, 40K on 24 GB, 84K on 32 GB and 100K on 36 GB.",
+        "slots": "auto: 2 x 96K with the window-only cache (~9.1 GiB with the drafter) fits every Mac from 16 GB up (cache.swa auto picks the window when the full cache does not fit: a second slot wins over restorable states); the full cache (~25.7 GiB at 2 x 96K) needs a 36 GB Mac."
+      },
+      "ctx_zones": {
+        "good": 98304,
+        "slow": 131072,
+        "very_slow": 163840
+      },
+      "hf": {
+        "repo": "ggml-org/gemma-4-12B-it-GGUF",
+        "revision": "e3e681731089efaa3f0917336944ac64752db8ba",
+        "file": "gemma-4-12B-it-Q4_0.gguf",
+        "sha256": "3712b9bd32cae83a22f67ee7a4466d8d7a4f21646ac8a07d19bf9418e8767a70",
+        "bytes": 7219673216
+      },
+      "draft": {
+        "repo": "ggml-org/gemma-4-12B-it-GGUF",
+        "revision": "e3e681731089efaa3f0917336944ac64752db8ba",
+        "file": "mtp-gemma-4-12B-it-Q4_0.gguf",
+        "sha256": "b894e614824dfc2746b26d3c3ba78c50000a464382682502392b4325257b7602",
+        "bytes": 253708960
+      },
+      "role": "Dense Gemma 4 12B: strong coding for its size, 16 GB+ Macs",
+      "good_for": [
+        "agent coding",
+        "chat & writing"
+      ],
+      "why_use": "Much stronger than the E4B on Google's benchmarks and close to the 26B-A4B (LiveCodeBench v6 72.0% vs 52.0% for the E4B and 77.1% for the 26B-A4B; Codeforces ELO 1659 vs 940 and 1718; GPQA Diamond 78.8%, Tau2 69.0%, MMLU Pro 77.2%) at 7.2 GB: 2 x 96K with the window-only cache fits a 16 GB Mac. Google's QAT weights keep Q4_0 close to full precision.",
+      "trade_offs": "Not measured in CARL yet (speed, recall, agent coding). Dense, so each generated token reads all 7.2 GB: slower than the MoE models. Its full-length sliding-window cache is large (90 KiB/token), so on most Macs it runs with the window-only cache, and saved prompt states restore only with the full cache (25.7 GiB at 2 x 96K). Thinking is on/off only.",
+      "pick_instead": [
+        {
+          "model": "qwen3.8-9b",
+          "when": "a 16 GB Mac and you want a model measured in CARL"
+        },
+        {
+          "model": "gemma-4-26b-a4b",
+          "when": "a 36 GB Mac: the faster MoE"
+        },
+        {
+          "model": "gemma-4-e4b",
+          "when": "you want the fastest small model"
+        }
+      ],
+      "hardware": "16 GB Macs and up (2 x 96K with the window-only cache, 9.1 GiB); the full cache needs a 32 GB Mac or more for long windows"
+    },
+    {
       "name": "gemma-4-26b-a4b",
       "label": "Gemma 4 26B-A4B · Q4_0 QAT",
       "family": "gemma-4-26b-a4b",
@@ -906,9 +993,11 @@
       "params": "25B total, 3.8B active per token",
       "quant": "Q4_0 (QAT)",
       "abliterated": false,
-      "mtp": false,
+      "mtp": true,
       "min_ram_gb": 32,
+      "rank": 7,
       "tested": false,
+      "speed": {"prose": 53.0, "code": 60.1, "edit": 232.9, "machine": "M3 Pro 36 GB", "date": "2026-10-04", "mode": "draft-mtp,ngram-mod n=2"},
       "summary": "Google's Gemma 4 MoE (14.6 GB): 3.8B active per token; 2 x 96K with the full cache fits a 36 GB Mac.",
       "description": "Stock Gemma 4 26B-A4B instruction-tuned (Apache-2.0): 128 experts, 8 active + 1 shared, 3.8B parameters per token. Google's QAT weights quantized to Q4_0 by ggml-org (token embedding Q8_0); Q4_0 is the fastest 4-bit format on Metal. 30 layers: 5 full-attention (2 KV heads x 512: 5.6 KiB/token at q4_0) and 25 sliding-window (window 1024, 8 KV heads x 256: 56 KiB/token at q4_0 at full length). With --swa-full (needed to restore a saved prompt state) 2 x 96K needs ~26.2 GiB: it fits a 36 GB Mac (28.1 GiB GPU limit), not a 32 GB one, where CARL keeps 2 slots and the window-only cache (~15.8 GiB; saved states don't restore). Trained context 256K. Thinking is on / off only; llama-server turns it on by default. Text and images in the model; CARL starts it text-only.",
       "tune": {
@@ -920,13 +1009,13 @@
         "top_k": 64,
         "min_p": 0,
         "presence": 0,
-        "spec": "ngram-mod",
+        "spec": "draft-mtp,ngram-mod",
         "spec_n": 2
       },
       "why": {
         "kv": "q4_0 K and V: at q8_0 the sliding-window layers alone cost 106 KiB/token at full length, and 2 x 96K with --swa-full no longer fits a 36 GB Mac (36.5 GiB). Never mix K and V types.",
         "temp": "Google's model card: temperature 1.0, top_p 0.95, top_k 64 for all uses; min_p not given, 0.",
-        "spec": "n-gram only (n=2) until CARL can pass the MTP drafter (ggml-org mtp-gemma-4-26B-A4B-it-Q4_0.gguf, 0.25 GB, QAT; it shares the target's KV cache) with -md.",
+        "spec": "MTP + n-gram, 2 draft tokens. Measured 2026-10-04 (llama.cpp 0.5.0 on the M2 Max, 0.4.1 on the M3 Pro; temperature 0, thinking off; 700 tokens of new code, ~600 of prose, a 110-line file re-emitted with one rename; tok/s, then Auto-tune's weighted score): M3 Pro 36 GB, prose / code / re-emit: none 41.5 / 41.4 / 38.6 (score 40.9); n-gram n=2 41.4 / 41.3 / 222.0 (57.9); MTP n=2 53.8 / 61.1 / 62.0 (58.2); MTP n=4 loses (prose 40.1); MTP + n-gram n=2 53.0 / 60.1 / 232.9 (74.9, the best); n=3 70.8. The drafter is ggml-org mtp-gemma-4-26B-A4B-it-Q4_0.gguf (0.25 GB, QAT): llama-server loads it with -md and it shares the target's KV cache. Without the drafter downloaded, a start uses n-gram.",
         "ctx": "96K per slot, the floor CARL keeps. With --swa-full the largest window is ~108K per slot on a 36 GB Mac (2 slots), 220K with one; the window-only cache takes the full 256K.",
         "slots": "auto: 2 x 96K with the full cache on a 36 GB Mac (26.2 GiB of 28.1); on a 32 GB Mac (25.0 GiB limit) 2 slots fit only with the window cache (cache.swa auto picks it: a second slot wins over restorable states), or 1 x 96K with the full cache (20.4 GiB)."
       },
@@ -942,13 +1031,20 @@
         "sha256": "d208665ab1cd3a69f7a9a4bc59430e8448c8093d9b06334f566ac59d6d504a03",
         "bytes": 14618145824
       },
+      "draft": {
+        "repo": "ggml-org/gemma-4-26B-A4B-it-GGUF",
+        "revision": "bb4531cda34d1ea09d9814959ed4d5833cf2a4c8",
+        "file": "mtp-gemma-4-26B-A4B-it-Q4_0.gguf",
+        "sha256": "e00b0ce326d03d8f6f6972ad2320fe90b6ff25a3da5fc51bec15efe283052aa2",
+        "bytes": 251939520
+      },
       "role": "Gemma 4 MoE: fast everyday coding on 36 GB Macs",
       "good_for": [
         "agent coding",
         "chat & writing"
       ],
       "why_use": "Google's MoE alternative to the Qwen 35B-A3B: 3.8B parameters per token keep decode fast, the QAT Q4_0 weights are 8 GB smaller than the Qwen build (14.6 vs 22.7 GB), and on a 36 GB Mac two 96K slots fit with the full sliding-window cache, so saved prompt states restore. Strong for its size on Google's benchmarks (LiveCodeBench 77%, GPQA 82%).",
-      "trade_offs": "Not measured in CARL yet (speed, recall, agent coding). Its full-length sliding-window cache is 10x the Qwen 35B-A3B's KV (62 vs 5.6 KiB/token), so above 2 x 108K or on a 32 GB Mac it runs with the window-only cache (saved prompt states don't restore). No MTP speculation in CARL yet. Thinking is on/off only.",
+      "trade_offs": "Not measured in CARL yet (speed, recall, agent coding). Its full-length sliding-window cache is 10x the Qwen 35B-A3B's KV (62 vs 5.6 KiB/token), so above 2 x 108K or on a 32 GB Mac it runs with the window-only cache (saved prompt states don't restore). Thinking is on/off only.",
       "pick_instead": [
         {
           "model": "qwen3.6-35b-a3b",
@@ -974,8 +1070,9 @@
       "params": "31B dense",
       "quant": "Q4_0 (QAT)",
       "abliterated": false,
-      "mtp": false,
+      "mtp": true,
       "min_ram_gb": 32,
+      "rank": 6,
       "tested": false,
       "summary": "Google's dense Gemma 4 31B (18 GB): the strongest Gemma; slow, and only the window-only cache fits.",
       "description": "Stock Gemma 4 31B instruction-tuned (Apache-2.0), Google's QAT weights quantized to Q4_0 by ggml-org (token embedding Q8_0). Dense: all 31B parameters are read for every token (~18 GB per token), so decode is bandwidth-bound and slow. 60 layers: 10 full-attention (4 KV heads x 512: 22.5 KiB/token at q4_0) and 50 sliding-window (window 1024, 16 KV heads x 256: 225 KiB/token at q4_0 at full length). The full-length cache (--swa-full) is out of reach below ~96 GB of RAM (2 x 96K: 64 GiB), so CARL runs it with the window-only cache: 2 x 96K needs ~22.6 GiB (36 GB and 32 GB Macs), but saved prompt states don't restore. Trained context 256K. Thinking is on / off only; llama-server turns it on by default. Text and images in the model; CARL starts it text-only.",
@@ -988,13 +1085,13 @@
         "top_k": 64,
         "min_p": 0,
         "presence": 0,
-        "spec": "ngram-mod",
+        "spec": "draft-mtp,ngram-mod",
         "spec_n": 2
       },
       "why": {
         "kv": "q4_0 K and V: with the window-only cache 2 x 96K needs 22.6 GiB at q4_0 and 27.0 GiB at q8_0 (only just under a 36 GB Mac's 28.1). Never mix K and V types.",
         "temp": "Google's model card: temperature 1.0, top_p 0.95, top_k 64 for all uses; min_p not given, 0.",
-        "spec": "n-gram only (n=2) until CARL can pass the MTP drafter (ggml-org mtp-gemma-4-31B-it-Q4_0.gguf, 0.28 GB, QAT; shares the target's KV cache) with -md. On the dense Qwen 27B, MTP took decode from 7.4 to ~11 tok/s on an M3 Pro: expect the drafter to matter most here.",
+        "spec": "MTP + n-gram, 2 draft tokens: not measured on this model (not downloaded); the best on the E4B, the 12B and the 26B-A4B (2026-10-04) (Auto-tune measures none, n-gram, MTP and MTP + n-gram at 1-4 drafts on each Mac). The drafter is ggml-org mtp-gemma-4-31B-it-Q4_0.gguf (0.28 GB, QAT): llama-server loads it with -md and it shares the target's KV cache. On the E4B, MTP with 2 drafts was the best (76.0 vs 61.1 tok/s without speculation, 600 tokens of code); n-gram is added for re-emitted code. On the dense Qwen 27B, MTP took decode from 7.4 to ~11 tok/s on an M3 Pro: expect the drafter to matter most here. Without the drafter downloaded, a start uses n-gram.",
         "ctx": "96K per slot, the floor CARL keeps. With the window-only cache the largest window is ~220K per slot on a 36 GB Mac (2 slots), ~148K on a 32 GB Mac; with --swa-full it would be 20K (2 slots) / 40K (1 slot) on a 36 GB Mac.",
         "slots": "auto: 2 x 96K with the window-only cache (cache.swa auto picks it: the full cache does not fit) on 36 and 32 GB Macs; 1 slot on a 32 GB Mac with the VM up (22 GiB allowed)."
       },
@@ -1010,13 +1107,20 @@
         "sha256": "031dc1c5fa9c5a0abbf3c39c5173fb2af65f5ac2dc2a090268561d3c72dcd834",
         "bytes": 17992313088
       },
+      "draft": {
+        "repo": "ggml-org/gemma-4-31B-it-GGUF",
+        "revision": "4fa4fdf38bee237b5c9e8a5b4e72cf39404c9dcc",
+        "file": "mtp-gemma-4-31B-it-Q4_0.gguf",
+        "sha256": "f8f1b8c89b72da2b7391d6fe29d26dd373efe9624a3d5b3f0e99e62579b12c08",
+        "bytes": 279956160
+      },
       "role": "Gemma 4 dense 31B: hard code when you can wait",
       "good_for": [
         "hard code",
         "agent coding"
       ],
       "why_use": "The strongest Gemma 4 and the largest stock dense model that fits a 32-36 GB Mac: Google reports LiveCodeBench 80%, Codeforces 2150, Tau2 77% (26B-A4B: 77% / 1718 / 68%), and the QAT Q4_0 weights keep it close to full precision.",
-      "trade_offs": "Slow: dense, ~18 GB read per generated token, and no MTP speculation in CARL yet (expect below the Qwen 27B's ~11 tok/s on an M3 Pro). Runs only with the window-only sliding-window cache on these Macs, so saved prompt states don't restore after a restart or eviction. Not measured in CARL yet.",
+      "trade_offs": "Slow: dense, ~18 GB read per generated token (MTP speculation with its drafter is not measured yet; expect below the Qwen 27B's ~11 tok/s on an M3 Pro). Runs only with the window-only sliding-window cache on these Macs, so saved prompt states don't restore after a restart or eviction. Not measured in CARL yet.",
       "pick_instead": [
         {
           "model": "qwen3.8-27b",

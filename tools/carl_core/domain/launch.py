@@ -6,9 +6,10 @@ also restricted to a safe character set, so a config value can't inject shell sy
 from __future__ import annotations
 
 import re
-from typing import Dict, Mapping
+from typing import Dict, Mapping, Optional
 
 from .errors import ConfigError
+from .models import MtpSource
 from .settings import LLAMA_KEYS, MODEL_KEYS, Config
 from .types import ModelInfo, SettingSource, SettingValue, Settings
 
@@ -35,12 +36,19 @@ def shell_lines(env: Mapping[str, SettingValue]) -> str:
 
 
 def launch_env(m: ModelInfo, vals: Settings, src: Mapping[str, SettingSource], cfg: Config,
-               swa: bool = False) -> Dict[str, SettingValue]:
+               swa: bool = False, mtp: Optional[MtpSource] = None) -> Dict[str, SettingValue]:
     """Settings for serve-llama.sh: the model, its effective tune and the server-wide
     config values that are set (the script applies flags and environment on top). swa: the
     model has sliding-window layers: SWA_MODE (cache.swa: auto, full, window; llama-fit --plan
-    decides auto, and the launcher adds --swa-full for full)."""
+    decides auto, and the launcher adds --swa-full for full). mtp: where its MTP speculation
+    comes from (None: unknown): MTP_SOURCE, and DRAFT = the drafter's file when that is the
+    source (the launcher passes -md DRAFT when SPEC uses draft-mtp, also a SPEC from the
+    environment)."""
     env: Dict[str, SettingValue] = {"MODEL": m.get("path", ""), "MODEL_NAME": m.get("name", ""), "ALIAS": vals["alias"]}
+    if mtp is not None:
+        env["MTP_SOURCE"] = mtp
+    if mtp == "drafter":
+        env["DRAFT"] = m.get("draft_path", "")
     for k, s in MODEL_KEYS.items():
         if k != "alias" and s.env:
             env[s.env] = vals[k]

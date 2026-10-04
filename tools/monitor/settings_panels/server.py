@@ -15,7 +15,7 @@ from .model_lines import ModelLines
 
 LIST_W = 40                                            # the Server panel's model list
 COLOURS = (f"{GRN}green{R} = tuned / fast · {YEL}yellow{R} = changed / slower · "
-           f"{RED}red{R} = very slow / no MTP head")
+           f"{RED}red{R} = very slow / no MTP head or drafter")
 
 
 def arrange_lines(sort: int, filt: int, w: int) -> List[CardLine]:

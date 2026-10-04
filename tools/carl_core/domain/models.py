@@ -8,7 +8,7 @@ for a custom model, defaults from its GGUF header) > built-in defaults.
 from __future__ import annotations
 
 import os
-from typing import Dict, List, Mapping, Optional, Set, Tuple, cast
+from typing import Dict, List, Literal, Mapping, Optional, Set, Tuple, cast
 
 from .cards import apply_card
 from .errors import ConfigError
@@ -25,6 +25,10 @@ CTX_FLOOR = 98304
 DEFAULT_ZONES: CtxZones = {"good": 98304, "slow": 131072, "very_slow": 163840}
 CUSTOM_CTX = 98304
 PART_SUFFIX, BAD_SUFFIX = ".aria2", ".bad"      # aria2c's resume file; a file that failed its checksum
+# Where a model's MTP speculation (llama.cpp draft-mtp) comes from: a head in the model file
+# (Qwen: GGUF nextn_predict_layers > 0), a separate drafter file (Gemma 4: catalogue "draft",
+# llama-server -md), or nowhere.
+MtpSource = Literal["head", "drafter", "none"]
 
 
 def status_of(path: str, want_bytes: Optional[int], files: ModelFolder) -> Status:
@@ -87,8 +91,9 @@ def adopt(db: LocalDb, renames: Mapping[str, str]) -> List[str]:
 
 def build_models(catalog: Catalog, db: LocalDb, models_dir: str, files: ModelFolder, home: str) -> List[ModelInfo]:
     """Every model CARL knows: the catalogue, each custom download, then each other .gguf
-    in the models folder (split parts and vision projectors left out). A custom model's
-    card from models.json is joined into its record."""
+    in the models folder (split parts, vision projectors and the catalogue's MTP drafters left
+    out). A catalogue model with a drafter knows its file and status (draft_path, draft_status).
+    A custom model's card from models.json is joined into its record."""
     out: List[ModelInfo] = []
     seen_files: Set[str] = set()
     for m in catalog.get("models", []):
@@ -99,6 +104,12 @@ def build_models(catalog: Catalog, db: LocalDb, models_dir: str, files: ModelFol
         info = cast(ModelInfo, dict(m))          # a catalogue entry plus where it is
         info.update({"source": "catalog", "path": path, "bytes": hf.get("bytes", 0),
                      "status": status_of(path, hf.get("bytes"), files), "local": db["models"].get(m.get("name", ""), {})})
+        draft = m.get("draft")
+        if draft:
+            dfile = local_file_name(draft.get("file", ""))
+            dpath = os.path.join(models_dir, dfile)
+            seen_files.add(dfile)                # a drafter is not a model of its own
+            info.update({"draft_path": dpath, "draft_status": status_of(dpath, draft.get("bytes"), files)})
         out.append(info)
     names = {m["name"] for m in out}
     catalogue_files = set(seen_files)
@@ -120,6 +131,42 @@ def build_models(catalog: Catalog, db: LocalDb, models_dir: str, files: ModelFol
         if card:
             apply_card(m, card, names)
     return out
+
+
+def draft_bytes(m: ModelInfo) -> int:
+    """The weights of a model's MTP drafter (0 without one). Fit counts them with the model's
+    whenever the catalogue names a drafter: a start with MTP loads it, and a download fetches it."""
+    return int((m.get("draft") or {}).get("bytes", 0)) if m.get("draft") else 0
+
+
+def has_drafter(m: ModelInfo) -> bool:
+    """The model's drafter is downloaded (a start can pass it with -md)."""
+    return bool(m.get("draft")) and m.get("draft_status") == "downloaded"
+
+
+def mtp_source(m: ModelInfo, shape: Optional[ModelShape]) -> MtpSource:
+    """Where this model's MTP speculation comes from: the head in its file wins over a drafter
+    (llama.cpp needs no -md then)."""
+    if shape is not None and shape["nextn"] > 0:
+        return "head"
+    return "drafter" if has_drafter(m) else "none"
+
+
+def spec_without_mtp(spec: str) -> str:
+    """The speculation a start falls back to when MTP is not available: n-gram (MTP + n-gram
+    keeps its n-gram part; MTP alone becomes n-gram)."""
+    return "ngram-mod" if "draft-mtp" in spec.split(",") else spec
+
+
+def mtp_fallback(m: ModelInfo, spec: str, source: MtpSource) -> Tuple[str, Optional[str]]:
+    """(the speculation a start uses, a note when it differs): MTP needs a head in the file or
+    a downloaded drafter; without either the start uses n-gram and says so once."""
+    if source != "none" or "draft-mtp" not in spec.split(","):
+        return spec, None
+    name = m.get("name", "")
+    why = (f"its MTP drafter is not downloaded (./carl.sh download {name} gets it)" if m.get("draft")
+           else "its file has no MTP head")
+    return spec_without_mtp(spec), f"{name}: speculation {spec} needs MTP, but {why}: this start uses n-gram."
 
 
 def find_model(models: List[ModelInfo], name: str, as_path: str) -> Optional[ModelInfo]:

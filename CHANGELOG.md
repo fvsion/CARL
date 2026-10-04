@@ -3,6 +3,28 @@
 All notable changes to CARL. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Dates are local dates on the development Mac (M3 Pro, 36 GB).
 
+## 1.4.0 - 2026-10-04
+
+Gemma 4 done properly: MTP speculation with Google's separate drafters (measured: MTP + n-gram is 55-83% faster), the Gemma 4 12B, ranks from benchmarks and CARL's own code test, and auto fit for 16 GB Macs (the E4B for everyday work, the 12B for hard code).
+
+### Added
+- **Catalogue: `gemma-4-12b`**, Google's dense Gemma 4 12B (ggml-org Q4_0 QAT, 7.2 GB, with its MTP drafter, 0.25 GB). 2 × 96K fits a 16 GB Mac with the window-only cache (~9.1 GiB); the full cache needs ~25.7 GiB. Google's model card: LiveCodeBench v6 72.0%, Codeforces ELO 1659. Rank 8. Auto fit selects it for hard code on 16 GB Macs.
+- **MTP speculation for Gemma 4 with its separate drafter.** Google gives an MTP drafter file for each Gemma 4 model (`mtp-gemma-4-*-Q4_0.gguf` in the ggml-org repos: 60 MB to 0.28 GB). The catalogue names it in a new optional field, `draft` (repo, revision, file, sha256, bytes, checked as `hf` is).
+  - `./carl.sh download NAME` gets the model and then its drafter (resumable, SHA-256 checked). If only the drafter is missing, it gets only the drafter. `verify` checks both files. `delete` removes both. `./carl.sh models` marks a model whose drafter is missing. The drafter is not listed as a model.
+  - A start gives the drafter to llama-server with `-md` when the speculation uses MTP (`tools/carl.py launch-env` writes `DRAFT` and `MTP_SOURCE`). Router presets get `spec-draft-model`. If the drafter is not downloaded, the start uses n-gram and tells you one time. This also applies to a model file without an MTP head.
+  - The drafter's weights count in every fit check: the launcher's check (`llama-fit.py --draft`), the dashboard's fit line and largest window, auto fit, `./carl.sh fit` and Auto-tune.
+  - Auto-tune measures none, n-gram, MTP and MTP + n-gram with 1 to 4 drafts for a model with a downloaded drafter (`--quick`: 1 and 2). Its test server gets the drafter.
+  - Dashboard: the Models panel shows the drafter line, Download (`d`) gets a missing drafter, and the delete question names the drafter. The download progress counts both files. The MODEL card shows the drafter. Red for MTP speculation now means "no MTP head and no downloaded drafter".
+- Catalogue: the Gemma 4 entries have `mtp: true` (meaning: MTP speculation is available, from the model file or from its drafter). All four use `draft-mtp,ngram-mod` with 2 drafts: measured the best on the E4B, the 12B and the 26B-A4B (prose, new code and re-emit together: 77.0, 41.4 and 74.9 against 49.4, 26.7 and 40.9 without speculation). The 31B is not measured. The entries have a `speed` field from these runs.
+
+### Changed
+- **Ranks for the Gemma 4 models** (temporary, from published benchmarks and CARL's code test, 2026-10-04): 31B 6, 26B-A4B 7, 12B 8, E4B 9. The Qwen3.8-9B distill moves from rank 6 to 10. The Qwen 27B and 35B-A3B builds keep ranks 1–5, because Qwen is better at agent coding in the published benchmarks (SWE-bench Verified: Qwen3.6-35B-A3B 73.4, Gemma 4 31B 52.0, 26B-A4B 17.4).
+  - CARL's code test: 6 small Python tasks with hidden tests, 3 runs. Every answer that the 26B-A4B, the 35B-A3B and the 12B finished was correct. Their failures were answers that stopped at the 8,000-token limit during thinking. The E4B passed 13 of 18 tasks at about 66 tok/s. The 9B passed 5 of 18 at about 29 tok/s.
+  - At Google's sampling (temperature 1.0, top_k 64) the 12B thought less and passed 17 of 18 (12 of 18 at temperature 0.6). The Gemma entries keep Google's values.
+- **Auto fit on 16 GB Macs:** the `everyday` goal now takes the fast builds first: the MoE builds and a small dense model with the new catalogue field `fast: true` (the Gemma 4 E4B). A 16 GB Mac gets the E4B for `everyday` and the 12B for `hard-code` (both 2 × 96K). Before, it got the 9B for both.
+- **Sort by quality:** models with no rank (custom models without a card rank) sort last, the larger file first.
+- **`./carl.sh fit`** also shows the largest window with the window-only cache for a model with sliding-window layers (for example the 12B on 16 GB: 28K with the full cache, 256K with the window cache).
+
 ## 1.3.0 - 2026-10-04
 
 Auto fit: the best stock model for this Mac, and a start that doesn't fit is refused. Custom models get a card you write. The server serves this Mac only unless asked, and the dashboard installs the clients. OpenCode and Pi list the models really installed, under their own names, and router mode (opt-in) lets them switch models.

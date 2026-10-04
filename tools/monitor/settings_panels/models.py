@@ -8,7 +8,7 @@ from typing import List, Tuple
 from ..arrange import FILTERS, SORTS, label as arrange_label
 from ..fmt import (B, CYN, DIM, GRN, R, YEL, CardLine, Ln, Row, Section, button_rows, ctx_label, cwrap, draw_card,
                    home_short, indent, lv, side_lines, size, with_side)
-from ..model import jdict
+from ..model import ModelInfo, draft_bytes, drafter_missing, jdict
 from ..settings import SettingsService
 from ..state import UIState
 from .common import download_status, selectable
@@ -56,6 +56,15 @@ def best_tune(t: object) -> str:
             f"slots {DIM}({tune.get('date', '?')}, {tune.get('machine', '?')}){R}")
 
 
+def drafter_line(m: ModelInfo, home: str) -> str:
+    """A model's separate MTP drafter (Gemma 4): its file and whether it is downloaded."""
+    st = str(m.get("draft_status", "missing"))
+    state = (f"{GRN}downloaded{R}" if st == "downloaded" else
+             f"{YEL}{'partial' if st == 'partial' else 'not downloaded'}{R} ({size(draft_bytes(m))}; "
+             f"without it, a start uses n-gram)")
+    return f"{home_short(str(m.get('draft_path', '')), home)} · {state}"
+
+
 class ModelsPanel:
     """Draws the Models panel."""
 
@@ -97,7 +106,7 @@ class ModelsPanel:
             return L
 
         acts = [("Use it (Enter)", "museit")]
-        if m and m["status"] != "downloaded" and jdict(m.get("hf")).get("repo"):
+        if m and (m["status"] != "downloaded" or drafter_missing(m)) and jdict(m.get("hf")).get("repo"):
             acts.append(("Download (d)", "mdl"))
         if m and m["status"] == "downloaded":
             acts += [("Verify (v)", "mverify"), ("Auto-tune (u)", "mtune"), ("Delete (x)", "mdelete")]
@@ -116,6 +125,8 @@ class ModelsPanel:
                 about.append(lv("source", f"huggingface.co/{hf['repo']} · {hf.get('file')}"
                                 + (f" @ {hf['revision'][:8]}" if hf.get("revision") else ""), 8))
             about.append(lv("file", home_short(m["path"], self.home), 8))
+            if m.get("draft"):
+                about.append(lv("drafter", drafter_line(m, self.home), 8))
             if m.get("custom"):
                 has = bool(jdict(jdict(m.get("local")).get("card")))
                 about.append(lv("card", f"{GRN}your card{R}" if has else f"{YEL}none yet{R}", 8))
@@ -124,6 +135,9 @@ class ModelsPanel:
                    else "Press d to download it. You can resume the download, and CARL checks its SHA-256."
                    if hf.get("repo")
                    else "Press Enter to use it in the Server panel.")
+            if m["status"] == "downloaded" and drafter_missing(m):
+                tip = ("Press d to download its MTP drafter: until then, a start uses n-gram speculation, which is "
+                       "slower on new text.")
             if m.get("custom") and not jdict(jdict(m.get("local")).get("card")):
                 tip = "Press e to write the card of this model: its role, tags and rank."
         secs: List[Section] = [

@@ -95,10 +95,15 @@ The catalogue (`tune.spec`, `tune.spec_n`) or the Auto-tune result sets the spec
 | 9B Distill | MTP + n-gram | 1 |
 | Heretic 35B IQ3 (no MTP head) | n-gram only | 1 |
 | orcarouter 27B IQ3 | n-gram only | 2 (a tie with MTP + n-gram) |
+| Gemma 4 E4B (MTP drafter) | MTP | 2 (measured: [Gemma 4](models.md#gemma-4)) |
+| Gemma 4 12B, 26B-A4B, 31B (MTP drafter) | MTP + n-gram | 2 (a default, not measured) |
 
 - More drafts help a MoE: with 3B active parameters, it costs little to verify more tokens.
 - 2 drafts lose on IQ quants ([IQ3 speculation](models.md#iq3-speculation-measured-2026-10-03)).
 - A custom model gets MTP + n-gram with 1 draft when its GGUF has an MTP head, else n-gram with 2 drafts.
+- **A separate MTP drafter (Gemma 4).** The model file has no MTP head. The catalogue entry names a drafter file (`draft`). `tools/carl.py launch-env` gives `MTP_SOURCE=drafter` and `DRAFT=<the drafter's path>` when the drafter is downloaded. The launcher adds `-md "$DRAFT"` when `SPEC` contains `draft-mtp`, also when `SPEC` comes from the environment. The drafter uses the KV cache of the model, so only its weights add memory: `llama-fit.py --plan` and `--check` get `--draft "$DRAFT"` and count them.
+- **No MTP available.** `MTP_SOURCE=none` means that the file has no MTP head and that no drafter is downloaded. If the speculation uses MTP, the start uses `ngram-mod` instead and tells you one time (`launch-env` for a configured `SPEC`, the launcher for a `SPEC` from the environment).
+- `DRAFT` and `MTP_SOURCE` always come from `tools/carl.py`. The launcher ignores them in the environment.
 
 ### The dashboard and the launch model
 
@@ -161,6 +166,7 @@ The presets INI:
 |---|---|
 | `[*]` | CARL's shared flags: jinja, the reasoning format, `preserve_thinking`, `-ngl 999`, `-fa on`, batch, ubatch, checkpoints, metrics, no mmproj, `slot-save-path` |
 | One section for each downloaded model | Its effective settings: `ctx-size` (slots × window), `parallel`, KV types, `cache-ram`, sampling, `spec-type` and `spec-draft-n-max`, the thinking-toggle `chat-template-file` |
+| A model with a downloaded MTP drafter, speculation with MTP | `spec-draft-model = <the drafter's path>` (the `-md` of a single start) |
 | With 2 or more slots | `kv-unified`, `kv-unified-per-slot`, `cache-idle-slots = false`, `slot-prompt-similarity = 0.5` |
 | A sliding-window model with a full cache | `swa-full = true` |
 | The start model | `load-on-startup = true` |
@@ -237,7 +243,7 @@ The installer takes the API key from the first of these sources:
 
 **Auto fit** (`carl_core/domain/autofit.py`, pure, with unit tests):
 - The candidates are the ranked stock models: a rank, and not abliterated. A custom model is a candidate only when its card says `auto_fit: true`.
-- The goal selects the family first: `everyday` = `arch: moe`, `hard-code` = `arch: dense`. The other family is the fallback.
+- The goal selects the family first: `everyday` = the fast builds (`arch: moe`, and a dense build with `fast: true`, the Gemma 4 E4B), `hard-code` = `arch: dense`. The other builds are the fallback.
 - The passes, in this order: 2 × 96K, then 1 × 96K, then 1 × the largest window ≥ 32K. The first pass that a candidate of the family meets wins, best rank first.
 - The memory allowed is min(GPU limit, RAM − reserve). The reserve is as for the RAM cache: 6 GiB, 10 GiB with the VM network, or `RESERVE_GB`.
 - The result gives each better-ranked candidate that was not selected, and why. Examples: "needs X GiB for 2 × 96K, this Mac allows Y", "not downloaded", "for the other goal", "header unreadable".
@@ -354,8 +360,9 @@ The steps:
 |---|---|
 | none, `ngram-mod` n=2 | Always |
 | `ngram-mod` n=1 | When the GGUF has no MTP head |
-| `draft-mtp` n=1, `draft-mtp,ngram-mod` n=1 | When the GGUF has an MTP head |
-| `draft-mtp` n=2, `draft-mtp,ngram-mod` n=2 | With an MTP head, not with `--quick` |
+| `draft-mtp` n=1, `draft-mtp,ngram-mod` n=1 | When the GGUF has an MTP head, or the model has a downloaded MTP drafter |
+| `draft-mtp` n=2, `draft-mtp,ngram-mod` n=2 | With an MTP head, not with `--quick`. With an MTP drafter, always |
+| `draft-mtp` n=3 and 4, `draft-mtp,ngram-mod` n=3 and 4 | With an MTP drafter, not with `--quick` |
 
 | Context zone | A full cold read takes |
 |---|---|
@@ -392,6 +399,7 @@ This table shows the flags that `host/serve-llama.sh` gives to `llama-server` (s
 | Templates | `--jinja --reasoning-format deepseek`, `--chat-template-kwargs '{"preserve_thinking":true}'`, `--chat-template-file` (patched) | The server sends the reasoning to `reasoning_content`. `reasoning_effort: none` turns off thinking ([How thinking works](thinking.md#how-thinking-works)). |
 | Sampling | `--temp 1.0 --top-p 0.95 --top-k 20 --min-p 0 --presence-penalty 0 --repeat-penalty 1.0` | The Qwen values for thinking mode ([Sampling](sampling.md#sampling-and-output-limits)). `TEMP`, `TOP_P`, `TOP_K`, `MIN_P`, `PRESENCE`, `REPEAT` override them. |
 | Speculation | `--spec-type TYPE --spec-draft-n-max N` (from the tune of each model; none with `SPEC=none`) | The best of the modes that were measured on each model ([Performance](performance.md#performance-measured), [IQ3 speculation](models.md#iq3-speculation-measured-2026-10-03)). |
+| MTP drafter | `-md DRAFT` (only a model with a separate drafter, Gemma 4, when `--spec-type` contains `draft-mtp`) | The drafter gives MTP speculation to a model file without an MTP head. On the Gemma 4 E4B: 76.0 tok/s with 2 drafts, 61.1 without speculation. |
 | Logging | `--log-file ~/models/logs/llama-server-<ts>.log --log-timestamps --log-prefix` | `llama-server-latest.log` points to the newest log. Use `tools/llama-log.sh` to read it. `LOG_FILE=none` turns the file off. |
 | Metrics | `--metrics` | A Prometheus endpoint at `/metrics` |
 | Keep awake | `caffeinate -i -w <server pid>` | If the Mac goes to sleep, requests stop in the middle of the prompt. |

@@ -8,6 +8,7 @@ import os
 import shutil
 import socket
 import stat
+import struct
 import subprocess
 import tempfile
 import textwrap
@@ -263,7 +264,7 @@ class ServeDispatch(unittest.TestCase):
         self.assertIn("unknown command 'nope'", p.stderr)
 
 
-class ServeLlamaArgs(unittest.TestCase):
+class ServeLlama(unittest.TestCase):
     """serve-llama.sh with MONITOR=0 execs llama-server: a fake one records argv."""
 
     def run_serve(self, *args: str, env: dict[str, str] | None = None, extra_args: list[str] | None = None,
@@ -299,6 +300,10 @@ class ServeLlamaArgs(unittest.TestCase):
                     argv = f.read().splitlines()
             key_mode = oct(stat.S_IMODE(os.stat(key).st_mode)) if os.path.exists(key) else ""
             return p, argv, key_mode
+
+
+class ServeLlamaArgs(ServeLlama):
+    """The flags, the settings and the key file."""
 
     def test_extra_args_split_into_words_before_command_line_extras(self) -> None:
         p, argv, key_mode = self.run_serve("--ctx", "16k", "--foo", "a b",
@@ -386,6 +391,79 @@ class ServeLlamaArgs(unittest.TestCase):
         p, argv, _ = self.run_serve(env={"PORT": "80;x"})
         self.assertEqual(p.returncode, 2)
         self.assertEqual(argv, [])
+
+
+def gguf_header(arch: str, nextn: int = 0) -> bytes:
+    """A minimal GGUF header CARL can size (no tensors)."""
+    def s(x: bytes) -> bytes:
+        return struct.pack("<Q", len(x)) + x
+
+    def u32(v: int) -> bytes:
+        return struct.pack("<I", v)
+    kvs = [("general.architecture", 8, s(arch.encode())), ("general.file_type", 4, u32(2)),
+           (f"{arch}.block_count", 4, u32(4 + nextn)), (f"{arch}.nextn_predict_layers", 4, u32(nextn)),
+           (f"{arch}.attention.head_count_kv", 4, u32(2)), (f"{arch}.attention.key_length", 4, u32(256)),
+           (f"{arch}.attention.value_length", 4, u32(256)), (f"{arch}.context_length", 4, u32(131072))]
+    out = b"GGUF" + struct.pack("<IQQ", 3, 0, len(kvs))
+    for key, kind, payload in kvs:
+        out += s(key.encode()) + struct.pack("<I", kind) + payload
+    return out
+
+
+class ServeLlamaDrafter(ServeLlama):
+    """A catalogue model with a separate MTP drafter (Gemma 4): -md when SPEC uses MTP, n-gram
+    without the drafter (said once), the drafter's path never from the environment."""
+
+    def run_gem(self, *args: str, drafter: bool = True, env: dict[str, str] | None = None
+                ) -> tuple[subprocess.CompletedProcess[str], list[str], str]:
+        with tempfile.TemporaryDirectory() as d:
+            mdir = os.path.join(d, "models")
+            os.makedirs(mdir)
+            files = {"Gem-Q4_0.gguf": gguf_header("gemma4"), "mtp-Gem-Q4_0.gguf": b"GGUF" + b"\0" * 60}
+            if not drafter:
+                files.pop("mtp-Gem-Q4_0.gguf")
+            for name, data in files.items():
+                with open(os.path.join(mdir, name), "wb") as f:
+                    f.write(data)
+            ref = {"repo": "ggml-org/gem-GGUF", "revision": "1" * 40, "sha256": "a" * 64}
+            cat = {"schema": 1, "default": "gem", "models": [{
+                "name": "gem", "label": "Gem", "summary": "s", "arch": "dense", "mtp": True,
+                "hf": dict(ref, file="Gem-Q4_0.gguf", bytes=len(files["Gem-Q4_0.gguf"])),
+                "draft": dict(ref, file="mtp-Gem-Q4_0.gguf", bytes=64),
+                "tune": {"kv": "q4_0", "ctx": 32768, "slots": "1", "spec": "draft-mtp", "spec_n": 2}}]}
+            path = os.path.join(d, "catalog.json")
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(cat, f)
+            run = self.run_serve("--model", "gem", *args,
+                                 env={"CARL_CATALOG": path, "MODELS_DIR": mdir, **(env or {})})
+            return run[0], run[1], mdir
+
+    def test_the_drafter_goes_with_mtp(self) -> None:
+        p, argv, mdir = self.run_gem()
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(argv[argv.index("--spec-type") + 1], "draft-mtp")
+        self.assertEqual(argv[argv.index("-md") + 1], os.path.join(mdir, "mtp-Gem-Q4_0.gguf"))
+        self.assertIn("drafter=mtp-Gem-Q4_0.gguf", p.stdout)
+
+    def test_ngram_from_the_environment_leaves_the_drafter_out(self) -> None:
+        p, argv, _ = self.run_gem(env={"SPEC": "ngram-mod"})
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(argv[argv.index("--spec-type") + 1], "ngram-mod")
+        self.assertNotIn("-md", argv)
+
+    def test_no_drafter_falls_back_to_ngram_once(self) -> None:
+        p, argv, _ = self.run_gem(drafter=False)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(argv[argv.index("--spec-type") + 1], "ngram-mod")
+        self.assertNotIn("-md", argv)
+        self.assertEqual(p.stderr.count("n-gram"), 1, p.stderr)
+
+    def test_mtp_from_the_environment_without_a_drafter(self) -> None:
+        p, argv, _ = self.run_gem(drafter=False, env={"SPEC": "draft-mtp,ngram-mod", "DRAFT": "/etc/passwd"})
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(argv[argv.index("--spec-type") + 1], "ngram-mod")
+        self.assertNotIn("-md", argv)                           # DRAFT comes from carl.py only
+        self.assertIn("no downloaded MTP drafter", p.stderr)
 
 
 if __name__ == "__main__":

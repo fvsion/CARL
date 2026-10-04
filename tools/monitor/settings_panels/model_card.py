@@ -111,11 +111,11 @@ class ModelCard:
                 L += [x for a in alts for x in cwrap(f"  {CYN}{a.get('model')}{R} {DIM}when{R} {a.get('when')}", tw, "    ")]
             if m.get("rank") and m.get("custom"):
                 L += cwrap(f"{B}{'Quality':<11}{R}rank {m['rank']} {DIM}(from your card, not measured: 1 = best, the "
-                           f"catalogue uses 1-5; auto fit {'can pick it' if m.get('auto_fit') else 'does not use it'}){R}",
+                           f"catalogue uses 1-10; auto fit {'can pick it' if m.get('auto_fit') else 'does not use it'}){R}",
                            tw, " " * 11)
             elif m.get("rank"):
-                L += cwrap(f"{B}{'Quality':<11}{R}rank {m['rank']} {DIM}(1 = best: parameters and density first, then "
-                           f"quantization. Speed has the opposite order.){R}", tw, " " * 11)
+                L += cwrap(f"{B}{'Quality':<11}{R}rank {m['rank']} {DIM}(1 = best: published benchmarks and CARL's code "
+                           f"test first, then the quantization){R}", tw, " " * 11)
             desc = wwrap(m.get("description", ""), tw)
             if desc:
                 L += ["", *[f"{DIM}{x}{R}" for x in desc]]

@@ -108,11 +108,11 @@ model_arg="${MODEL_FLAG:-${MODEL:-}}"
 carl_args=(launch-env); [[ -n "$model_arg" ]] && carl_args+=(--model "$model_arg")
 [[ "${SETTINGS_FILE:-}" == none ]] && carl_args+=(--no-config)
 CARL_ENV="$(python3 "$HERE/../tools/carl.py" "${carl_args[@]}")" || exit 1
-CARL_SOURCES=""
-# MODEL, MODEL_NAME and CARL_SOURCES: carl.py resolved them (flag/env included);
-# for the other keys the environment wins.
-apply_settings "MODEL|MODEL_NAME|CARL_SOURCES|ALIAS|KV|CTX|SLOTS|SPEC|SPEC_N|TEMP|TOP_P|TOP_K|MIN_P|PRESENCE|REPEAT|NET|HOST|CACHE_RAM|UB|BATCH|CKPT|CKPT_STEP|THINK_TOGGLE|EXTRA_ARGS|LLAMA_MODE|SWA_MODE" \
-  "MODEL|MODEL_NAME|CARL_SOURCES" <<< "$CARL_ENV"
+CARL_SOURCES=""; DRAFT=""; MTP_SOURCE=""
+# MODEL, MODEL_NAME, CARL_SOURCES, DRAFT and MTP_SOURCE: carl.py resolved them for the model
+# (flag/env included); for the other keys the environment wins.
+apply_settings "MODEL|MODEL_NAME|CARL_SOURCES|DRAFT|MTP_SOURCE|ALIAS|KV|CTX|SLOTS|SPEC|SPEC_N|TEMP|TOP_P|TOP_K|MIN_P|PRESENCE|REPEAT|NET|HOST|CACHE_RAM|UB|BATCH|CKPT|CKPT_STEP|THINK_TOGGLE|EXTRA_ARGS|LLAMA_MODE|SWA_MODE" \
+  "MODEL|MODEL_NAME|CARL_SOURCES|DRAFT|MTP_SOURCE" <<< "$CARL_ENV"
 LLAMA_MODE="${MODE_FLAG:-${LLAMA_MODE:-single}}"
 case "$LLAMA_MODE" in single|router) ;; *) echo "error: LLAMA_MODE takes single or router, got '$LLAMA_MODE'" >&2; exit 2 ;; esac
 [[ -f "$MODEL" ]] || { echo "error: model file not found: $MODEL (./carl.sh models lists the models; ./carl.sh download NAME gets one)" >&2; exit 1; }
@@ -161,6 +161,19 @@ UB="${UB:-512}"                 # -ub physical batch; 512 measured best (90.5 vs
 SPEC="${SPEC:-draft-mtp,ngram-mod}"   # per model: catalogue / Auto-tune / config.json, "spec[:n]" accepted
 if [[ "$SPEC" == *:* ]]; then SPEC_N="${SPEC_N:-${SPEC##*:}}"; SPEC="${SPEC%%:*}"; fi
 SPEC_N="${SPEC_N:-1}"           # --spec-draft-n-max; 27B dense: MTP n>1 loses on Metal
+# MTP speculation (draft-mtp) needs an MTP head in the model file (Qwen) or a separate drafter
+# (Gemma 4: DRAFT = its mtp-*.gguf, passed with -md; it shares the target's KV cache). carl.py
+# already falls back to n-gram for a configured SPEC; this covers a SPEC from the environment.
+draft_args=()
+if [[ ",$SPEC," == *,draft-mtp,* ]]; then
+  if [[ "${MTP_SOURCE:-}" == none ]]; then
+    echo "note: ${MODEL_NAME:-$MODEL} has no MTP head and no downloaded MTP drafter: speculation n-gram instead of $SPEC" >&2
+    SPEC=ngram-mod
+  elif [[ -n "$DRAFT" ]]; then
+    [[ -f "$DRAFT" ]] || { echo "error: MTP drafter not found: $DRAFT (./carl.sh download ${MODEL_NAME:-NAME})" >&2; exit 1; }
+    draft_args=(-md "$DRAFT")
+  fi
+fi
 # Sampling: Qwen's thinking-mode recommendation (Qwen3.8 and Qwen3.6 model cards):
 # temperature 1.0, top_p 0.95, top_k 20, min_p 0, presence 0, repetition 1.0.
 # Set explicitly (the GGUFs embed the same values, but a file without them would
@@ -254,14 +267,16 @@ fi
 # second subagent). Its size is what RAM allows after weights + KV + a reserve
 # for macOS and apps (10 GiB with the VMware network up, else 6; RESERVE_GB=N),
 # clamped to 1-8 GiB. Parked states measured 2.1-2.3 GiB at 40-60K tokens (35B).
-reserve_args=()
-[[ -n "${RESERVE_GB:-}" ]] && reserve_args=(--reserve-gb "$RESERVE_GB")
+fit_args=()
+[[ -n "${RESERVE_GB:-}" ]] && fit_args=(--reserve-gb "$RESERVE_GB")
+# The MTP drafter's weights count with the model's (it shares the model's KV cache).
+[[ ${#draft_args[@]} -gt 0 ]] && fit_args+=(--draft "$DRAFT")
 # A model with sliding-window layers (Gemma): SWA is full (every layer at full length: the prompt
 # states OpenCode and Pi save can be restored) or window (less memory, no restores); cache.swa =
 # auto picks full when it fits with these slots.
 SWA=-
 if plan=$(python3 "$HERE/../tools/llama-fit.py" --plan "$MODEL" --ctx "$CTX" --kv "$KV_K" \
-            --want-slots "$SLOTS" --swa "${SWA_MODE:-auto}" ${reserve_args[@]+"${reserve_args[@]}"} 2>/dev/null) \
+            --want-slots "$SLOTS" --swa "${SWA_MODE:-auto}" ${fit_args[@]+"${fit_args[@]}"} 2>/dev/null) \
    && [[ "$plan" =~ ^([1-9])\ ([0-9]+)\ (full|window|-)$ ]]; then
   if [[ "$SLOTS" == auto ]]; then SLOTS_NOTE="auto"; else SLOTS_NOTE="set"; fi
   SLOTS="${BASH_REMATCH[1]}"; CACHE_RAM="${CACHE_RAM:-${BASH_REMATCH[2]}}"; SWA="${BASH_REMATCH[3]}"
@@ -278,7 +293,7 @@ fi
 if [[ "${FIT_CHECK:-1}" != 0 ]]; then
   fit_rc=0
   python3 "$HERE/../tools/llama-fit.py" --check "$MODEL" --ctx "$CTX" --slots "$SLOTS" --kv "$KV_K" \
-    --swa "$([[ "$SWA" == window ]] && echo window || echo full)" ${reserve_args[@]+"${reserve_args[@]}"} || fit_rc=$?
+    --swa "$([[ "$SWA" == window ]] && echo window || echo full)" ${fit_args[@]+"${fit_args[@]}"} || fit_rc=$?
   if (( fit_rc == 3 )); then
     exit 1
   elif (( fit_rc != 0 )); then
@@ -315,7 +330,9 @@ slot_args=()
 (( SLOTS > 1 )) && slot_args=(--kv-unified --kv-unified-per-slot "$CTX" --no-cache-idle-slots -sps 0.5)
 echo "slots: $SLOTS ($SLOTS_NOTE) x ${CTX} tokens, KV $KV_K/$KV_V, RAM prompt cache ${CACHE_RAM} MiB"
 echo "settings from: $CARL_SOURCES (./carl.sh config show)"
-echo "model=$(basename "$MODEL") alias=$ALIAS ctx=$CTX slots=$SLOTS kv=$KV_K/$KV_V ub=$UB spec=$SPEC n=$SPEC_N log=$LOG_FILE"
+draft_note=""
+[[ ${#draft_args[@]} -gt 0 ]] && draft_note=" drafter=$(basename "$DRAFT")"
+echo "model=$(basename "$MODEL") alias=$ALIAS ctx=$CTX slots=$SLOTS kv=$KV_K/$KV_V ub=$UB spec=$SPEC n=$SPEC_N$draft_note log=$LOG_FILE"
 # Starts the server and the live monitor in this terminal (host/common.sh);
 # also keeps the Mac awake while it runs: a sleeping Mac freezes requests
 # mid-prompt (10:13-10:46 on 2026-09-25, sleep = 1 min on battery).
@@ -332,6 +349,6 @@ run_server "$PORT" "$LOG_FILE" llama-server \
   --metrics --slot-save-path "$SLOT_DIR" \
   ${log_args[@]+"${log_args[@]}"} \
   ${tmpl_args[@]+"${tmpl_args[@]}"} \
-  ${spec_args[@]+"${spec_args[@]}"} \
+  ${spec_args[@]+"${spec_args[@]}"} ${draft_args[@]+"${draft_args[@]}"} \
   ${swa_args[@]+"${swa_args[@]}"} \
   "$@"

@@ -89,12 +89,14 @@ class HFLookup:
 
 @dataclass
 class Download:
-    """A model download (tools/carl.py download): progress from the file's size."""
+    """A model download (tools/carl.py download): progress from the file's size (and the other files it
+    writes: a model's MTP drafter)."""
     name: str
     path: Optional[str]
     total: int
     proc: Process
     log: str
+    more: List[str] = field(default_factory=list)                   # other files it writes (counted in have)
     hist: List[Tuple[float, int]] = field(default_factory=list)     # (time, bytes) of the last samples
     have: int = 0
     rate: float = 0.0               # bytes per second

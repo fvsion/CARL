@@ -2,8 +2,8 @@
 
 Steps (the model loads once per speculation mode):
   1. memory: the largest window that fits with 1 and 2 slots
-  2. speculation: none, n-gram (n = 2; without an MTP head also n = 1), and (with an MTP head)
-     MTP and MTP + n-gram at n = 1 and 2.
+  2. speculation: none, n-gram (n = 2; without MTP also n = 1), and (with an MTP head) MTP and
+     MTP + n-gram at n = 1 and 2, or (with a separate MTP drafter, Gemma 4) at n = 1 to 4.
      Each runs prose, fresh code and a code re-emit, twice. Score = weighted geometric mean
      (prose 0.4, code 0.4, re-emit 0.2); a mode with drafting must beat a simpler one by 3%.
   3. prompt reading: cold reads at 8K, 32K and 64K tokens (quick: 8K and 32K; long: also
@@ -36,7 +36,8 @@ Read = Tuple[int, float]                   # (prompt tokens, cold read tok/s)
 Depth = Literal["quick", "default", "long"]
 DEPTHS: Tuple[Depth, ...] = ("quick", "default", "long")
 DEPTH_TEXT: Dict[Depth, str] = {
-    "quick": "quick: measures the MTP modes with 1 draft token and reads at 8K and 32K (about 4 min).",
+    "quick": "quick: measures the MTP modes with 1 draft token (1 and 2 with an MTP drafter) and reads at 8K and 32K "
+             "(about 4 min).",
     "default": "default: measures all speculation modes and reads at 8K, 32K and 64K (about 5-10 min).",
     "long": "long: does the default steps, then reads at 128K and 192K and measures the decode speed at each "
             "depth (10-40 min more)."}
@@ -67,17 +68,20 @@ def as_depth(v: object) -> Depth:
     return "quick" if v == "quick" else "long" if v == "long" else "default"
 
 
-def speculation_modes(has_mtp: bool, quick: bool) -> List[Mode]:
-    """The modes to measure, simplest first (best_mode prefers earlier ones)."""
+def speculation_modes(has_mtp: bool, quick: bool, drafter: bool = False) -> List[Mode]:
+    """The modes to measure, simplest first (best_mode prefers earlier ones). drafter: the MTP
+    speculation comes from a separate drafter file (Gemma 4), which accepts more draft tokens than
+    a Qwen MTP head: n = 1 to 4 (quick: 1 and 2; on the E4B n = 2 was best, 76.0 tok/s vs 69.0 at
+    n = 1 and 72.1 at n = 4)."""
     modes: List[Mode] = [("none", 1), ("ngram-mod", 2)]
-    if not has_mtp:
+    if not has_mtp and not drafter:
         # n-gram is the only speculation here: 1 draft too (it won on the Heretic IQ3, which has no
         # MTP head: 51.5 / 48.5 / 96.1 tok/s prose / code / re-emit on an M2 Max)
         modes.append(("ngram-mod", 1))
-    if has_mtp:
-        modes += [("draft-mtp", 1), ("draft-mtp,ngram-mod", 1)]
-        if not quick:
-            modes += [("draft-mtp", 2), ("draft-mtp,ngram-mod", 2)]
+        return modes
+    top = (2 if quick else 4) if drafter else (1 if quick else 2)
+    for n in range(1, top + 1):
+        modes += [("draft-mtp", n), ("draft-mtp,ngram-mod", n)]
     return modes
 
 
@@ -236,6 +240,7 @@ class TunePlan:
     machine: str
     llama_cpp: str
     edit_source: str
+    drafter: bool = False  # MTP from a separate drafter file (downloaded; its weights are in `weights`)
 
     @property
     def has_mtp(self) -> bool:
@@ -246,7 +251,7 @@ class TunePlan:
         return self.depth == "quick"
 
     def modes(self) -> List[Mode]:
-        return speculation_modes(self.has_mtp, self.quick)
+        return speculation_modes(self.has_mtp, self.quick, self.drafter and not self.has_mtp)
 
     def steps(self) -> int:
         return 1 + len(self.modes()) + 2 + (0 if self.quick else 1)    # memory, modes, reading, [parallel], result

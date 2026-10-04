@@ -136,12 +136,14 @@ class CatalogEntry(TypedDict, total=False):
     description: str
     arch: str
     quant: str
-    mtp: bool
+    mtp: bool                   # MTP speculation available: a head in the model file, or the drafter
+    fast: bool                  # a small dense model auto fit's everyday goal takes with the MoE builds
     abliterated: bool
     params: str
     min_ram_gb: int
     tested: bool
     hf: HfRef
+    draft: HfRef                # a separate MTP drafter (Gemma 4: mtp-*.gguf, llama-server -md)
     tune: Settings
     why: Dict[str, str]
     ctx_zones: Optional[CtxZones]
@@ -174,6 +176,8 @@ class ModelInfo(CatalogEntry, total=False):
     custom: bool
     thinking: str           # custom models: from the user's card
     auto_fit: bool
+    draft_path: str         # the drafter's file (a catalogue model with "draft")
+    draft_status: Status
 
 
 class CustomInfo(TypedDict, total=False):

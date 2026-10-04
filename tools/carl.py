@@ -18,13 +18,14 @@ Settings precedence for a llama.cpp start: command-line flags > environment >
 config.json (llama section, then models.<name>) > Auto-tune result for this Mac >
 catalogue tune > built-in defaults. 96K per slot is the smallest "fast" window: only
 larger windows are flagged as slow. llama.model = auto starts auto fit's pick: the best
-ranked stock model for the goal (llama.auto_goal: everyday = MoE first, hard-code = dense
-first) that fits this Mac, from llama.auto_fit (catalogue or downloaded); when the pick is
+ranked stock model for the goal (llama.auto_goal: everyday = fast first: MoE and small dense,
+hard-code = dense first) that fits this Mac, from llama.auto_fit (catalogue or downloaded); when the pick is
 not downloaded, the best downloaded one that fits (./carl.sh fit shows the reasons).
 
 CLI (./carl.sh models | download | verify use it through host/models.sh)
   carl.py list                         models: catalogue + models folder + custom
-  carl.py download NAME|default|all    a catalogue model (pinned, verified); default = auto fit's pick
+  carl.py download NAME|default|all    a catalogue model (pinned, verified; with its MTP drafter when it has
+                                       one); default = auto fit's pick
   carl.py download hf:REPO/FILE.gguf   any GGUF from Hugging Face (also a huggingface.co URL)
   carl.py hf-files REPO                the GGUF files of a Hugging Face repo
   carl.py verify NAME... | delete NAME | path NAME | get NAME FIELD | default | downloaded
@@ -263,6 +264,8 @@ def cmd_list(models: List[ModelInfo]) -> None:
     for m in models:
         tuned = " [auto-tuned]" if (m.get("local") or {}).get("tune") else ""
         mark = " [default]" if m.get("name") == default else ""
+        if m.get("draft") and m.get("status") == "downloaded" and m.get("draft_status") != "downloaded":
+            mark += " [MTP drafter missing: download it]"
         about = (f"{m.get('role')} (your card)" if m.get("custom") and m.get("role") else m.get("summary", ""))
         print(f"{m.get('name', ''):28} {human(m.get('bytes', 0)):>8}  {m.get('status', ''):11} "
               f"{m.get('source', ''):8} {about}{mark}{tuned}")
@@ -414,7 +417,7 @@ def main(argv: List[str]) -> int:
         if not m:
             raise ConfigError(f"unknown model '{a[0]}'")
         delete(m)
-        print(f"deleted {m.get('path')}")
+        print(f"deleted {m.get('path')}" + (f" and its MTP drafter {m.get('draft_path')}" if m.get("draft_path") else ""))
     elif cmd == "path":
         name = _arg(a, 0, "path NAME")
         m = _known(name)

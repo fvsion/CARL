@@ -187,6 +187,8 @@ USAGE
              $CMD download hf:OWNER/REPO lists the repo's files. Or drop a .gguf into ~/models/gguf.
   Built-in models: host/catalog.json. Custom models and Auto-tune results: ~/.config/carl/models.json.
   $CMD delete NAME               delete a downloaded model file
+  A Gemma 4 model has a separate MTP drafter file (mtp-*.gguf): download, verify and delete
+  include it. Without it, a start uses n-gram speculation.
 
 MODEL CARDS (what a model is good for)
   $CMD card NAME                 show its card: catalogue models (read-only) or your card for a custom model

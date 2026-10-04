@@ -10,7 +10,8 @@ GPU limit is left out, with the reason: the router would otherwise load it and f
 
 Keys are llama-server's long option names without the dashes ("cache-idle-slots = false" is
 --no-cache-idle-slots); the router passes them to the child server it starts for the model,
-and sets host, port, the API key and the alias (= the section name) itself. Pure.
+and sets host, port, the API key and the alias (= the section name) itself. A model whose MTP
+speculation comes from a separate drafter (Gemma 4) gets it as spec-draft-model (-md). Pure.
 """
 from __future__ import annotations
 
@@ -54,6 +55,7 @@ class ModelPlan:
     template: Optional[str]
     need: float
     swa: bool = False           # sliding-window layers at full length: swa-full (saved prompt states restore)
+    draft: Optional[str] = None  # the MTP drafter (spec-draft-model, the -md of a single start)
 
     def label(self) -> str:
         return f"{self.slots} × {window_label(self.ctx)} {self.kv}"
@@ -72,9 +74,11 @@ SAMPLING_KEYS = (("temp", "temp"), ("top_p", "top-p"), ("top_k", "top-k"), ("min
 
 
 def plan_model(name: str, path: str, vals: Settings, shape: ModelShape, weights: int, limit: float, ram: int,
-               reserve: float, common: Common, template: Optional[str]) -> Tuple[Optional[ModelPlan], str]:
+               reserve: float, common: Common, template: Optional[str],
+               draft: Optional[str] = None) -> Tuple[Optional[ModelPlan], str]:
     """(the model's section, "") or (None, why it is left out): its effective settings, slots
-    auto = 2 when two windows fit, the same memory check a start makes."""
+    auto = 2 when two windows fit, the same memory check a start makes. draft: the MTP drafter
+    file its speculation loads (its weights are in `weights`)."""
     ctx, kv = int(str(vals["ctx"])), str(vals["kv"])
     slots, swa_full = swa_plan(common.swa_mode, shape, weights, ctx, str(vals["slots"]), kv, limit)
     chk = check_start(shape, weights, ctx, slots, kv, limit, swa_full=swa_full is not False)
@@ -82,12 +86,12 @@ def plan_model(name: str, path: str, vals: Settings, shape: ModelShape, weights:
         largest = f"largest window {window_label(chk.largest)}" if chk.largest else "the weights alone don't fit"
         return None, f"needs {chk.need / 2**30:.1f} GiB for {slots} × {window_label(ctx)} {kv} ({largest})"
     for ch in "\r\n":
-        if ch in path or (template and ch in template):
+        if ch in path or (template and ch in template) or (draft and ch in draft):
             raise ConfigError(f"{name}: a file path with a line break can't go into the presets file")
     cache = common.cache_ram if common.cache_ram is not None else prompt_cache_mib(ram, chk.need, reserve)
     sampling = tuple((key, float(str(vals[k]))) for k, key in SAMPLING_KEYS)
     return ModelPlan(name, path, ctx, slots, kv, str(vals["spec"]), int(str(vals["spec_n"])), sampling, cache,
-                     template, chk.need, bool(swa_full)), ""
+                     template, chk.need, bool(swa_full), draft), ""
 
 
 def _num(v: float) -> str:
@@ -114,6 +118,8 @@ def preset_ini(preset: Preset, common: Common) -> str:
         out += [f"{k} = {_num(v)}" for k, v in m.sampling]
         if m.spec != "none":
             out += [f"spec-type = {m.spec}", f"spec-draft-n-max = {m.spec_n}"]
+            if m.draft and "draft-mtp" in m.spec:
+                out.append(f"spec-draft-model = {m.draft}")
         if m.template:
             out.append(f"chat-template-file = {m.template}")
         if m.swa:

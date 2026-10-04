@@ -342,9 +342,13 @@ class Carl:
                 preset.skipped.append((name, "its GGUF header can't be read"))
                 continue
             tmpl = os.path.join(templates_dir, os.path.basename(path)[:-len(".gguf")] + ".thinking-toggle.jinja")
-            plan, why = plan_model(name, path, self.effective_tune(m, cfg)[0], shape, self.files.size(path), limit,
-                                   ram, reserve_bytes(None, vm), common,
-                                   tmpl if ll["think_toggle"] and self.files.exists(tmpl) else None)
+            vals = self.effective_tune(m, cfg)[0]
+            source = dm.mtp_source(m, shape)
+            vals["spec"] = dm.mtp_fallback(m, str(vals["spec"]), source)[0]
+            draft = m.get("draft_path") if source == "drafter" and "draft-mtp" in str(vals["spec"]) else None
+            weights = self.files.size(path) + (self.files.size(draft) if draft else 0)
+            plan, why = plan_model(name, path, vals, shape, weights, limit, ram, reserve_bytes(None, vm), common,
+                                   tmpl if ll["think_toggle"] and self.files.exists(tmpl) else None, draft)
             if plan:
                 preset.models.append(plan)
             else:
@@ -382,17 +386,35 @@ class Carl:
         if plan and plan.ctx < dm.CTX_FLOOR and src.get("ctx") != "config" and isinstance(ctx, int) and plan.ctx < ctx:
             vals["ctx"], src["ctx"] = plan.ctx, "auto-fit"      # no 96K window fits: auto fit's largest
         advice = dm.tune_advice(m, vals, src)
-        note = "\n".join(n for n in (note, advice) if n) or None
         shape = self.shape_of(m)
-        return build_launch_env(m, vals, src, cfg, swa=bool(shape and shape.get("swa_window"))), note
+        source = dm.mtp_source(m, shape) if shape is not None else None
+        fallback = None
+        if source is not None:                # header unreadable: llama-server reports the file itself
+            vals["spec"], fallback = dm.mtp_fallback(m, str(vals["spec"]), source)
+        note = "\n".join(n for n in (note, advice, fallback) if n) or None
+        return build_launch_env(m, vals, src, cfg, swa=bool(shape and shape.get("swa_window")), mtp=source), note
 
     # ------------------------------------------------------------ Hugging Face + downloads
     def hf_files(self, repo: str, revision: str = "main") -> HfFileList:
         """[(file, bytes, sha256)] of the GGUF files in a Hugging Face repo (first parts only)."""
         return gguf_files(self.hub.get(tree_api_path(validate_repo(repo), revision)))
 
+    def _check_sha(self, label: str, path: str, want: str) -> bool:
+        """A file against its pinned SHA-256 (progress and the result on the console)."""
+        self.console.info(f"  {label}: verifying sha256 ({human_gb(self.files.size(path))})...")
+        got = self.files.sha256(path)
+        if got != want:
+            self.console.error(f"  {label}: MISMATCH got {got} want {want}")
+            return False
+        self.console.info(f"  {label}: OK {got}")
+        return True
+
     def verify(self, m: ModelInfo) -> bool:
-        """Check a downloaded file against its pinned SHA-256."""
+        """Check a downloaded file against its pinned SHA-256, and its MTP drafter's when it has one
+        (a drafter that is not downloaded is reported, not an error: starts use n-gram)."""
+        return self._verify_model(m) and self._verify_draft(m)
+
+    def _verify_model(self, m: ModelInfo) -> bool:
         name, path = m.get("name", ""), m.get("path", "")
         want = (m.get("hf") or {}).get("sha256")
         if m.get("status") != "downloaded" and not (path and self.files.exists(path)):
@@ -401,47 +423,88 @@ class Carl:
         if not want:
             self.console.info(f"  {name}: no checksum known (a local file): skipped")
             return True
-        self.console.info(f"  {name}: verifying sha256 ({human_gb(self.files.size(path))})...")
-        got = self.files.sha256(path)
-        if got != want:
-            self.console.error(f"  {name}: MISMATCH got {got} want {want}")
+        if not self._check_sha(name, path, want):
             return False
         if m.get("custom"):                   # catalogue models are pinned in the repo already
             db = self.load_local()
             db["models"].setdefault(name, {})["verified"] = self.clock.today()
             self.save_local(db)
-        self.console.info(f"  {name}: OK {got}")
         return True
 
-    def download(self, m: ModelInfo, models_dir: str) -> bool:
-        """Download a pinned file into the models folder (resumable), then verify it."""
-        hf: HfRef = m.get("hf") or {}
-        name, size = m.get("name", ""), hf.get("bytes", 0)
-        file = local_file_name(hf.get("file", ""))
+    def _verify_draft(self, m: ModelInfo) -> bool:
+        draft = m.get("draft")
+        dpath = m.get("draft_path", "")
+        if not draft or not dpath:
+            return True
+        name = m.get("name", "")
+        if dm.status_of(dpath, draft.get("bytes"), self.files) != "downloaded":
+            self.console.info(f"  {name}: its MTP drafter is not downloaded (./carl.sh download {name} gets it; "
+                              f"until then a start uses n-gram speculation)")
+            return True
+        want = draft.get("sha256")
+        return self._check_sha(f"{name} MTP drafter", dpath, want) if want else True
+
+    def _fetch(self, label: str, ref: HfRef, models_dir: str) -> Optional[str]:
+        """Download one pinned file into the models folder (resumable) and check its size; its
+        path, or None after an error (reported)."""
+        size = ref.get("bytes", 0)
+        file = local_file_name(ref.get("file", ""))
         path = os.path.join(models_dir, file)
-        self.files.make_dir(models_dir)
-        done: ModelInfo = {**m, "path": path, "status": "downloaded"}
-        if dm.status_of(path, size, self.files) == "downloaded":
-            self.console.info(f"== {name} already downloaded: {path}")
-            return self.verify(done)
         free = self.files.free_bytes(models_dir) or 0
         have = self.files.size(path) if self.files.exists(path) else 0
         if free < size + DOWNLOAD_HEADROOM - have:
-            self.console.error(f"error: {name} needs {human_gb(size)} + 5 GB headroom; only {human_gb(free)} free")
-            return False
-        self.console.info(f"== {name}: {human_gb(size)} -> {path}")
-        rc = self.downloader.fetch(download_url(hf), models_dir, file)
+            self.console.error(f"error: {label} needs {human_gb(size)} + 5 GB headroom; only {human_gb(free)} free")
+            return None
+        self.console.info(f"== {label}: {human_gb(size)} -> {path}")
+        rc = self.downloader.fetch(download_url(ref), models_dir, file)
         if rc != 0 or not self.files.exists(path):
             self.console.error(f"error: download failed (exit {rc}); run it again to resume")
-            return False
+            return None
         if size and self.files.size(path) != size:
             self.console.error(f"error: size mismatch for {path}")
+            return None
+        return path
+
+    def _bad_checksum(self, path: str) -> None:
+        self.files.rename(path, path + dm.BAD_SUFFIX)
+        self.console.error(f"error: bad checksum; moved to {path}{dm.BAD_SUFFIX}")
+
+    def download(self, m: ModelInfo, models_dir: str) -> bool:
+        """Download a pinned file into the models folder (resumable), then verify it; then its MTP
+        drafter, when the catalogue names one. When only the drafter is missing, only the drafter
+        is fetched (./carl.sh verify NAME checks the model)."""
+        hf: HfRef = m.get("hf") or {}
+        name, size = m.get("name", ""), hf.get("bytes", 0)
+        path = os.path.join(models_dir, local_file_name(hf.get("file", "")))
+        self.files.make_dir(models_dir)
+        draft: HfRef = m.get("draft") or {}
+        dpath = os.path.join(models_dir, local_file_name(draft.get("file", ""))) if draft else ""
+        need_draft = bool(draft) and dm.status_of(dpath, draft.get("bytes"), self.files) != "downloaded"
+        done: ModelInfo = {**m, "path": path, "status": "downloaded"}
+        if draft:
+            done["draft_path"] = dpath
+        if dm.status_of(path, size, self.files) == "downloaded":
+            self.console.info(f"== {name} already downloaded: {path}")
+            if not need_draft:
+                return self.verify(done)
+        else:
+            got = self._fetch(name, hf, models_dir)
+            if got is None:
+                return False
+            if not self._verify_model(done):                    # its drafter comes next
+                self._bad_checksum(path)
+                return False
+        if not need_draft:
+            return True
+        dlabel = f"{name} MTP drafter"
+        got = self._fetch(dlabel, draft, models_dir)
+        if got is None:
             return False
-        ok = self.verify(done)
-        if not ok:
-            self.files.rename(path, path + dm.BAD_SUFFIX)
-            self.console.error(f"error: bad checksum; moved to {path}{dm.BAD_SUFFIX}")
-        return ok
+        want = draft.get("sha256")
+        if want and not self._check_sha(dlabel, got, want):
+            self._bad_checksum(got)
+            return False
+        return True
 
     def download_hf(self, spec: str, name: Optional[str] = None) -> bool:
         """Any GGUF from Hugging Face: pin the revision, size and sha256, record it in
@@ -468,12 +531,15 @@ class Carl:
         return self.download({"name": name, "hf": ref}, mdir)
 
     def delete(self, m: ModelInfo) -> None:
-        """Delete a model's file (and its part/bad copies) and forget its verification."""
-        path = m.get("path", "")
-        if not path.endswith(".gguf"):
-            raise ConfigError(f"{m.get('name')}: refusing to delete {path!r} (not a .gguf file)")
-        for p in (path, path + dm.PART_SUFFIX, path + dm.BAD_SUFFIX):
-            self.files.remove(p)
+        """Delete a model's file and its MTP drafter's (and their part/bad copies), and forget its
+        verification."""
+        paths = [m.get("path", "")] + ([m.get("draft_path", "")] if m.get("draft_path") else [])
+        for path in paths:
+            if not path.endswith(".gguf"):
+                raise ConfigError(f"{m.get('name')}: refusing to delete {path!r} (not a .gguf file)")
+        for path in paths:
+            for p in (path, path + dm.PART_SUFFIX, path + dm.BAD_SUFFIX):
+                self.files.remove(p)
         db = self.load_local()
         name = m.get("name", "")
         if m.get("custom"):

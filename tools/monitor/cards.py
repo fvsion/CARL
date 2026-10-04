@@ -260,11 +260,13 @@ def card_model(v: View, d: ServerData) -> Card:
     """The GGUF file, its quant and size, speculation, architecture."""
     shp, cmd = d.shape, d.cmd
     lvl = v.level("model")
+    drafter = flag(cmd, "-md")                  # a separate MTP drafter (Gemma 4)
     if shp:
         L: List[CardLine] = [
             lv("file", os.path.basename(v.model_path or "")),
             lv("weights", f"{shp['ftype']} · {size(v.model_size)}"),
-            lv("spec", f"{flag(cmd, '--spec-type', default='none')} · {flag(cmd, '--spec-draft-n-max', default='0')} draft tokens")]
+            lv("spec", f"{flag(cmd, '--spec-type', default='none')} · {flag(cmd, '--spec-draft-n-max', default='0')} draft tokens"
+                       + (f" · drafter {os.path.basename(drafter)}" if drafter else ""))]
         if lvl >= 2:
             L.append(lv("arch", f"{shp['arch']} · {shp['blocks']} layers ({shp['attn_layers']} attention, "
                                 f"{shp['rec_layers']} recurrent, {shp['nextn']} MTP)"))

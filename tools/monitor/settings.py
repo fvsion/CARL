@@ -16,7 +16,7 @@ from carl_core.domain.autofit import AutoFit
 from carl_core.domain.fit import check_start, max_ctx, need_bytes, swa_plan
 
 from .fmt import GRN, R, RED, YEL, ctx_label, size
-from .model import JSONDict, ModelInfo, ServerData, Shape, flag, flag_int, jdict
+from .model import JSONDict, ModelInfo, ServerData, Shape, draft_bytes, drafter_missing, flag, flag_int, jdict
 from .store import ModelList
 
 Value = Union[str, int]
@@ -334,7 +334,7 @@ class SettingsService:
         try:
             if not m or m["status"] != "downloaded":
                 return 2
-            shape, w = self.store.shape_of(m["path"]), self.store.file_size(m["path"])
+            shape, w = self.store.shape_of(m["path"]), self.weights(m)
             ctx, kv, limit = int(str(p["ctx"])), str(p["kv"]), self.gpu_limit()
             full = self.swa_mode() == "full"            # auto and window: the window when it has to
             return max([n for n in (1, 2, 3, 4) if need_bytes(shape, w, ctx, n, kv, full) <= limit] or [1])
@@ -460,8 +460,9 @@ class SettingsService:
             info = (self.store.header_info(m["path"]) if m["status"] == "downloaded"
                     else {"mtp": m.get("mtp"), "quant": m.get("quant", "")})
             spec = str(p["spec"])
-            if "draft-mtp" in spec and not info.get("mtp"):
-                return RED                                      # no MTP head in this file
+            drafter = bool(m.get("draft")) and not drafter_missing(m)       # a separate drafter, downloaded
+            if "draft-mtp" in spec and not info.get("mtp") and not drafter:
+                return RED                                      # no MTP head in this file, no drafter for it
             if ("draft-mtp" in spec and str(p.get("specn")) != "1"
                     and str(info.get("quant", "")).upper().replace("UD-", "").startswith("IQ")):
                 return RED                                      # MTP n>1 loses ~15% on IQ quants (measured 2026-10-03)
@@ -480,7 +481,7 @@ class SettingsService:
             return False, (f"{RED}{name} is not downloaded{R}. To download it, press ] for the Models panel, then d "
                            f"(or run ./carl.sh download {name}).")
         try:
-            return llama_fit(name, self.store.file_size(m["path"]), self.store.shape_of(m["path"]), str(p["kv"]),
+            return llama_fit(name, self.weights(m), self.store.shape_of(m["path"]), str(p["kv"]),
                              int(p["ctx"]), str(p["slots"]), self.gpu_limit(), self.swa_mode())
         except Exception as e:      # a GGUF that can't be read, a value that is not a number, ...: say so
             return False, f"{RED}fit check failed: {e}{R}"
@@ -491,6 +492,10 @@ class SettingsService:
         if self._fit_key != key:
             self._fit_key, self._fit = key, self.fit_line(p)
         return self._fit
+
+    def weights(self, m: ModelInfo) -> int:
+        """A downloaded model's weights: its file and its MTP drafter's (a start with MTP loads both)."""
+        return self.store.file_size(m["path"]) + draft_bytes(m)
 
     def max_ctx(self, m: ModelInfo) -> Optional[int]:
         """Largest window per slot (q4_0, 1 slot) that fits this Mac, None if unknown. A catalogue
@@ -505,10 +510,10 @@ class SettingsService:
         try:
             full = self.swa_mode() == "full"
             if m["status"] == "downloaded":
-                return max_ctx(self.store.shape_of(m["path"]), self.store.file_size(m["path"]), self.gpu_limit(), 1,
-                               "q4_0", full)
+                return max_ctx(self.store.shape_of(m["path"]), self.weights(m), self.gpu_limit(), 1, "q4_0", full)
             shape = self.store.model_shape(m)
-            return None if shape is None else max_ctx(shape, int(m.get("bytes", 0)), self.gpu_limit(), 1, "q4_0", full)
+            return None if shape is None else max_ctx(shape, int(m.get("bytes", 0)) + draft_bytes(m), self.gpu_limit(),
+                                                      1, "q4_0", full)
         except Exception:           # unreadable GGUF header or file: unknown
             return None
 

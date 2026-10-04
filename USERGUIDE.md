@@ -36,7 +36,7 @@ Commands with the label **Mac** run in the CARL folder on the Mac. Commands with
 
 | Item | Requirement |
 |---|---|
-| Mac | An **Apple Silicon** Mac. A 36 GB Mac runs all Qwen models of the catalogue. A 24 GB Mac runs the IQ3 and Q3 builds ([Sharing with a friend](#sharing-with-a-friend)). A 16 GB Mac runs `qwen3.8-9b` and `gemma-4-e4b`. |
+| Mac | An **Apple Silicon** Mac. A 36 GB Mac runs all Qwen models of the catalogue. A 24 GB Mac runs the IQ3 and Q3 builds ([Sharing with a friend](#sharing-with-a-friend)). A 16 GB Mac runs `gemma-4-e4b`, `gemma-4-12b` and `qwen3.8-9b`. |
 | Homebrew tools | [Homebrew](https://brew.sh), for `llama.cpp` (tested with 0.4.1 and 0.5.0), `aria2`, `ansifilter` and `zstd` |
 | Python | `python3`. The first time that you use it, macOS offers to install it with the command-line developer tools. |
 | Swift | The `fit` command uses `swift` to read the exact GPU limit. It comes with the command-line developer tools (`xcode-select --install`). |
@@ -69,7 +69,7 @@ Commands with the label **Mac** run in the CARL folder on the Mac. Commands with
    ./carl.sh download default
    ```
    - `default` is auto fit's pick from the whole catalogue for the everyday goal ([Auto fit](#auto-fit-the-best-model-for-this-mac)).
-   - On a Mac with 32 GB or more, the pick is `qwen3.6-35b-a3b`. On a 24 GB Mac, it is `qwen3.6-35b-a3b-iq3`. On a 16 GB Mac, it is `qwen3.8-9b`.
+   - On a Mac with 32 GB or more, the pick is `qwen3.6-35b-a3b`. On a 24 GB Mac, it is `qwen3.6-35b-a3b-iq3`. On a 16 GB Mac, it is `gemma-4-e4b`.
    - If you forget this step, `./carl.sh` tells you that no model is downloaded. It shows auto fit's pick and its size, and asks to download it. If you answer no, the dashboard opens without a server.
    - If the pick is not downloaded but a different model is, the server starts with the best downloaded stock model that fits. The start-up output tells you this, and how to download the pick.
 4. Start the server:
@@ -346,8 +346,10 @@ Each model has its own name on the server, and the clients list it under the sam
 | A 24 GB Mac (or any Mac), uncensored and fast | `./carl.sh llama --model heretic-35b-a3b-iq3` | `heretic-35b-a3b-iq3` |
 | A 24 GB Mac, uncensored 27B with subagents (2 × 96K) | `./carl.sh llama --model orcarouter-27b-iq3` | `orcarouter-27b-iq3` |
 | A 24 GB Mac, uncensored 27B, better quality (1 slot) | `./carl.sh llama --model orcarouter-27b-q3` | `orcarouter-27b-q3` |
-| **A 16 GB Mac** (auto fit's pick there), or 3–4 subagents at the same time on a small model | `./carl.sh llama --model qwen3.8-9b` | `qwen3.8-9b` |
-| Google's Gemma 4 ([Gemma 4](#gemma-4)) | `./carl.sh llama --model gemma-4-e4b` (or `gemma-4-26b-a4b`, `gemma-4-31b`) | the same name |
+| **A 16 GB Mac**, fast (auto fit's everyday pick there) | `./carl.sh llama --model gemma-4-e4b` | `gemma-4-e4b` |
+| **A 16 GB Mac**, better code, slower (auto fit's hard-code pick there) | `./carl.sh llama --model gemma-4-12b` | `gemma-4-12b` |
+| 3–4 subagents at the same time on a small model | `./carl.sh llama --model qwen3.8-9b` | `qwen3.8-9b` |
+| Google's larger Gemma 4 ([Gemma 4](#gemma-4)) | `./carl.sh llama --model gemma-4-26b-a4b` (or `gemma-4-31b`) | the same name |
 
 **Key points:**
 - CAUTION: **Only one model can run at a time.** Stop the server before you start a different model. Two models do not fit in 36 GB, and the second model breaks the model that runs.
@@ -369,17 +371,20 @@ Each model has its own name on the server, and the clients list it under the sam
 
 ### Gemma 4
 
-The catalogue has three Gemma 4 models from Google. Each one is Google's QAT build in Q4_0 (ggml-org).
+The catalogue has four Gemma 4 models from Google. Each one is Google's QAT build in Q4_0 (ggml-org).
 
 | Model | Size | For |
 |---|---|---|
 | `gemma-4-e4b` | 4.6 GB | Small and fast, for any Mac from 16 GB. 2 × 96K with the full cache needs ~8.2 GiB. Weaker on hard code. |
+| `gemma-4-12b` | 7.2 GB | The dense 12B: much stronger than the E4B on code (Google: LiveCodeBench 72% vs 52%), for any Mac from 16 GB. 2 × 96K with the window-only cache needs ~9.1 GiB. The full cache needs ~25.7 GiB. |
 | `gemma-4-26b-a4b` | 14.6 GB | The MoE (3.8B active), for fast everyday coding. 2 × 96K with the full cache fits a 36 GB Mac. On a 32 GB Mac it gets 2 slots with the window cache only. |
 | `gemma-4-31b` | 18.0 GB | The dense 31B, for hard code when you can wait. It runs with the window cache on 32 and 36 GB Macs. |
 
-- **They have no rank.** Auto fit does not pick them. Select them by name.
+- **Ranks 6–9**, below the Qwen 27B and 35B-A3B builds: Qwen is better at agent coding in the published benchmarks. On 16 GB Macs auto fit selects the E4B (everyday) or the 12B (hard code).
 - **Sliding-window layers.** Most Gemma layers keep only a window of tokens. A saved prompt state goes back only when every layer keeps the full context. The setting `cache.swa` decides this ([Fast starts: the disk cache](#7-fast-starts-the-disk-cache)).
-- **Speculation:** n-gram only. Gemma's MTP drafter is a separate file, and CARL does not use it yet.
+- **Speculation: MTP with a drafter.** Gemma 4 has no MTP head in the model file. Google gives a separate drafter file for each model (`mtp-gemma-4-*.gguf`, 60–280 MB). `./carl.sh download NAME` gets the model and its drafter. A start gives the drafter to llama.cpp (`-md`).
+  - The catalogue uses MTP + n-gram with 2 draft tokens. MTP makes new text faster, and n-gram makes re-emitted text faster. Measured on the E4B, the 12B and the 26B-A4B: 55% to 83% faster than no speculation ([the numbers](reference/models.md#gemma-4)).
+  - If the drafter is not downloaded, the start uses n-gram speculation and tells you. Run `./carl.sh download NAME` again to get the drafter.
 - **Sampling:** Google's values: temperature 1.0, top_p 0.95, top_k 64.
 - **Thinking:** on or off only.
 - **Images:** the models can read images, but CARL starts them text-only.
@@ -848,25 +853,28 @@ CAUTION: Do not mix KV types (`KV_K=q8_0 KV_V=q4_0`). With mixed types, the serv
 ./carl.sh download hf:OWNER/REPO/FILE.gguf   # any GGUF from Hugging Face (verified too)
 ./carl.sh download hf:OWNER/REPO    # list the GGUF files of that repo
 ./carl.sh verify [NAME...]          # check the size and SHA-256 again (no names: every downloaded model)
-./carl.sh delete NAME               # delete a model file (and its partial download)
+./carl.sh delete NAME               # delete a model file (and its partial download, and its MTP drafter)
 ./carl.sh card NAME                 # a model's card; custom models: card NAME set FIELD VALUE (see below)
 ```
 
 - The files go to `~/models/gguf/`. To use a different folder, set `MODELS_DIR`, or `paths.models_dir` in the settings file ([The settings file](#the-settings-file)).
 - If a download stops, run the command again. The download continues from where it stopped.
 - If a file fails its checksum, its name changes to `*.bad`.
+- **MTP drafters (Gemma 4).** A Gemma 4 model has a second file: its MTP drafter (`mtp-…gguf`, in the same folder). `download`, `verify` and `delete` include it. If only the drafter is missing, `download` gets only the drafter. `./carl.sh models` shows `[MTP drafter missing: download it]` for such a model. The drafter is not a model, so the list does not show it.
 - The dashboard can do the same: Settings tab, **Models** panel ([Models panel](#models-panel)).
 
 ### The catalogue
 
-The catalogue is [host/catalog.json](host/catalog.json). It holds the built-in models: 11 Qwen models and 3 Gemma 4 models. For each model, it has these fields:
+The catalogue is [host/catalog.json](host/catalog.json). It holds the built-in models: 11 Qwen models and 4 Gemma 4 models. For each model, it has these fields:
 
 | Field | Contents |
 |---|---|
 | `hf` | The download source: the Hugging Face repo, a pinned revision, the file, its SHA-256 and its size |
+| `draft` | Optional: a separate MTP drafter file (Gemma 4), with the same fields as `hf`. Downloads, verify, delete, the start (`-md`) and the fit checks include it. |
+| `mtp` | `true` if MTP speculation is available: from an MTP head in the model file, or from the `draft` file |
 | `summary`, `description` | What the model is (technical) |
 | The model card | `role` (a short headline), `good_for` (tags: `agent coding`, `hard code`, `chat & writing`, `uncensored`), `why_use`, `trade_offs`, `pick_instead` (another catalogue model, and when it is the better pick), `hardware`, `uncensored` (what it means; abliterated models only) and `rank` |
-| `rank` | The quality order, 1 = best: parameters and density first, then quantization. Speed is the reverse. The Qwen models have ranks 1–6. The Gemma 4 models have no rank. |
+| `rank` | The quality order, 1 = best: published benchmarks and CARL's code test first, then the quantization. Ranks 1–10: the Qwen 27B and 35B-A3B builds 1–5, Gemma 4 31B 6, 26B-A4B 7, 12B 8, E4B 9, the Qwen 9B 10. |
 | `tune` | The recommended server settings: KV cache, context, slots, speculation, draft tokens, sampling |
 | `why` | The reason for each tuned value |
 | `ctx_zones` | The context windows that read fast, slow and very slow |
@@ -987,8 +995,9 @@ It does these steps. The model loads one time for each speculation mode.
 1. **Memory:** it finds the largest context window that fits, with 1 slot and with 2 slots.
 2. **Speculation:** it measures these modes:
    - none, and n-gram with 2 drafts;
-   - n-gram with 1 draft, when the file has no MTP head (n-gram is then its only speculation);
-   - MTP, and MTP + n-gram, with 1 and 2 drafts, when the file has an MTP head (`--quick`: 1 draft only).
+   - n-gram with 1 draft, when the file has no MTP head and the model has no drafter (n-gram is then its only speculation);
+   - MTP, and MTP + n-gram, with 1 and 2 drafts, when the file has an MTP head (`--quick`: 1 draft only);
+   - MTP, and MTP + n-gram, with 1 to 4 drafts, when the model has a downloaded MTP drafter (Gemma 4; `--quick`: 1 and 2 drafts). The test server gets the drafter (`-md`).
 
    Each mode writes prose, new code and a code re-emit, two times. The score is a weighted geometric mean (prose 0.4, code 0.4, re-emit 0.2). A mode with drafting must be 3% better than a simpler mode to win.
 3. **Prompt reading:** a cold read at 8K, 32K and 64K tokens.
@@ -1163,7 +1172,7 @@ The Settings tab (tab 5) has six panels: **Server**, **Models**, **Auto fit**, *
    |---|---|
    | Green | The tuned value for this model, or a fast setting |
    | Yellow | Changed from the tuned value, or slower |
-   | Red | Very slow, or does not work on this model. For example: a context in the very slow zone, MTP speculation on a file without an MTP head, or MTP with more than 1 draft on an IQ quant. |
+   | Red | Very slow, or does not work on this model. For example: a context in the very slow zone, MTP speculation on a file without an MTP head and without a downloaded MTP drafter, or MTP with more than 1 draft on an IQ quant. |
 
    A context of 96K or less is never yellow or red: 96K for each slot is the floor of the default window. Only larger windows get a warning. You can still select them.
 5. Read the **MODEL** card below the settings. It tells you what the model is for, and why to select it.
@@ -1245,16 +1254,16 @@ For a model with sliding-window layers (Gemma), the fit line tells you which cac
 
 #### Models panel
 
-The Models panel lists the catalogue models and each `.gguf` in the models folder. For each model: the size, the status (downloaded, partial, missing), if it fits this Mac, the speed, the role and the "good for" tags.
+The Models panel lists the catalogue models and each `.gguf` in the models folder. For each model: the size, the status (downloaded, partial, missing), if it fits this Mac, the speed, the role and the "good for" tags. For a Gemma 4 model, the **drafter** line tells you if its MTP drafter is downloaded.
 
 | Key | Does |
 |---|---|
 | ↑ ↓ | Select a model |
 | Enter | Use this model. The Server panel opens with it. Push `a` there to start it. |
-| `d` | Download (only a model with a Hugging Face source). A progress bar shows the speed and the ETA, then the checksum check. |
+| `d` | Download (only a model with a Hugging Face source). A progress bar shows the speed and the ETA, then the checksum check. For a Gemma 4 model, it also gets the MTP drafter. If only the drafter is missing, it gets only the drafter. |
 | `c` | Cancel the download. The partial file stays, and a new download continues it. |
 | `v` | Verify the SHA-256 (about 1 min) |
-| `x` | Delete the file (a downloaded or partial file). It asks first. It refuses the loaded model. |
+| `x` | Delete the file (a downloaded or partial file), and its MTP drafter. It asks first. It refuses the loaded model. |
 | `u` | Open the Auto-tune panel for this model |
 | `h` | Add a model from Hugging Face. Type `OWNER/REPO` (or a URL to a `.gguf`). A list of the GGUF files of the repo opens. Select one and push Enter to download it. |
 | `e` | Edit the card of a custom model ([Cards for custom models](#cards-for-custom-models)). On a catalogue model, `e` tells you that its card is read-only. |
@@ -1369,15 +1378,15 @@ Auto fit picks the best **stock** model that fits this Mac, for a goal:
 
 | Goal (`llama.auto_goal`) | Family first | Why |
 |---|---|---|
-| `everyday` (default) | The MoE builds (35B-A3B) | Fast, and usually sufficient. CARL gives priority to speed. |
-| `hard-code` | The dense builds (27B) | Better at code and hard tasks, but slower |
+| `everyday` (default) | The fast builds: MoE (35B-A3B), and the Gemma 4 E4B on 16 GB Macs | Fast, and usually sufficient. CARL gives priority to speed. |
+| `hard-code` | The dense builds (27B; the Gemma 4 12B on 16 GB Macs) | Better at code and hard tasks, but slower |
 
-- **Quality** is the catalogue `rank` (1 = best): parameters and density first, then the quantization.
+- **Quality** is the catalogue `rank` (1 = best): published benchmarks and CARL's code test first, then the quantization. These ranks are temporary. A later CARL version measures quality on your Mac.
 - **The rule:** in the goal's family, the best rank that holds **two 96K windows** (the main session and a coder subagent). If none does, one 96K window. If none does, the largest window of at least 32K. If no build of the family fits, the best of the other family (it tells you).
 - **Memory:** the smaller of the GPU limit and the RAM less a reserve for macOS and apps (6 GiB; 10 GiB while VMware's network is up; `RESERVE_GB` or `--reserve-gb`).
 - **Stock only:** auto fit and each automatic default never pick an abliterated model. You select those by hand.
 - **Custom models** (Hugging Face, the models folder) are candidates only when their [card](#cards-for-custom-models) switches `auto_fit` on (with a rank and an arch, and not abliterated). Your rank is not measured.
-- **Gemma 4 models** have no rank, so auto fit does not pick them.
+- **16 GB Macs:** no MoE build fits. `everyday` selects the Gemma 4 E4B (fast). `hard-code` selects the Gemma 4 12B (it writes correct code, but it thinks for a long time).
 - `./carl.sh download default` and the download offer name only catalogue models.
 - **Candidates (`llama.auto_fit`):**
   - `catalogue` (default): every catalogue model. Auto fit offers the download of the pick. Until then, a start with `model auto` uses the best downloaded model that fits.
@@ -1388,7 +1397,7 @@ Auto fit picks the best **stock** model that fits this Mac, for a goal:
 
 | RAM | everyday | hard code |
 |---|---|---|
-| 16 GB | `qwen3.8-9b` (no MoE build fits, so the everyday goal falls back to it) | `qwen3.8-9b` |
+| 16 GB | `gemma-4-e4b` (no MoE build fits; the E4B is the fast small dense build) | `gemma-4-12b` |
 | 24 GB | `qwen3.6-35b-a3b-iq3` | `qwen3.8-27b-iq3` |
 | 32 GB and more | `qwen3.6-35b-a3b` | `qwen3.8-27b` |
 
@@ -1659,7 +1668,7 @@ CARL_DOCKER_TESTS=1 python3 -m unittest tests/integration/test_sync_docker.py
 | Command | Does |
 |---|---|
 | `./carl.sh` | Opens the dashboard: attaches to a server on 8080, else starts llama.cpp with the saved settings. It first checks for `llama-server`, `aria2c`, `ansifilter` and `zstd` (offers `brew install`), and offers to download a model if none is downloaded. |
-| `./carl.sh llama` | llama.cpp with auto fit's model (`qwen3.6-35b-a3b`; the IQ3 build on 24 GB; the 9B on 16 GB), q4 KV, 2 slots |
+| `./carl.sh llama` | llama.cpp with auto fit's model (`qwen3.6-35b-a3b`; the IQ3 build on 24 GB; the Gemma 4 E4B on 16 GB), q4 KV, 2 slots |
 | `./carl.sh monitor` | Attaches the live dashboard (a server start shows it in the same terminal) |
 | `./carl.sh --no-start` (or `dashboard`) | The dashboard only: attaches to a server, or opens it offline (no model loads) |
 | `./carl.sh llama --local` / `--vm` | Serves only this Mac (the default) / the VM address too |

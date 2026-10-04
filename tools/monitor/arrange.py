@@ -52,6 +52,10 @@ def speed_of(m: ModelInfo) -> Optional[Tuple[float, bool]]:
 
 def sort_key(sort: str) -> Callable[[ModelInfo], Tuple[object, ...]]:
     """The key function for one of SORTS (the name breaks ties, so the order is stable)."""
+    def quality(m: ModelInfo) -> Tuple[object, ...]:
+        # with no rank (a custom model whose card has none), the larger file first (more weights: a rough guess)
+        r = _rank(m)
+        return (r, not _is_moe(m), -m.get("bytes", 0) if r == UNRANKED else 0, m["name"])
     if sort == "speed":
         def speed(m: ModelInfo) -> Tuple[object, ...]:
             s = speed_of(m)
@@ -62,8 +66,8 @@ def sort_key(sort: str) -> Callable[[ModelInfo], Tuple[object, ...]]:
     if sort == "name":
         return lambda m: (m["name"],)
     if sort == "downloaded first":
-        return lambda m: (m.get("status") != "downloaded", _rank(m), m["name"])
-    return lambda m: (_rank(m), not _is_moe(m), m["name"])         # quality
+        return lambda m: (m.get("status") != "downloaded", *quality(m))
+    return quality
 
 
 def keep(filt: str, m: ModelInfo, max_ctx: Callable[[ModelInfo], Optional[int]]) -> bool:

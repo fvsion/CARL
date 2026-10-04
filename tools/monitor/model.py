@@ -64,7 +64,7 @@ def jtask(v: object) -> TaskId:
 # Long names of the short flags looked up: a router's model servers get the long forms
 # (the router writes its presets' keys as --long-name).
 FLAG_SYNONYMS = {"-ub": "--ubatch-size", "-b": "--batch-size", "-fa": "--flash-attn", "--temp": "--temperature",
-                 "-ngl": "--n-gpu-layers", "-sps": "--slot-prompt-similarity"}
+                 "-ngl": "--n-gpu-layers", "-sps": "--slot-prompt-similarity", "-md": "--spec-draft-model"}
 
 
 def flag(cmd: str, *names: str, default: Optional[str] = None) -> Optional[str]:
@@ -109,6 +109,9 @@ class ModelInfo(TypedDict, total=False):
     custom: bool
     alias: str
     hf: JSONDict            # repo, file, revision, bytes
+    draft: JSONDict         # a separate MTP drafter (Gemma 4): repo, file, revision, bytes
+    draft_path: str
+    draft_status: str       # downloaded | partial | missing
     local: JSONDict         # this Mac's record: tune (date, machine, settings, results, ctx_zones), ...
     tune: JSONDict
     why: JSONDict
@@ -126,6 +129,17 @@ class ModelInfo(TypedDict, total=False):
     # a custom model's card from models.json (the user's), joined in by carl.py
     thinking: str           # on-off | effort
     auto_fit: bool          # auto fit may pick it
+
+
+def draft_bytes(m: ModelInfo) -> int:
+    """The weights of a model's MTP drafter (0 without one): the dashboard counts them with the model's
+    wherever it checks a fit, as auto fit does."""
+    return jint(jdict(m.get("draft")).get("bytes"))
+
+
+def drafter_missing(m: ModelInfo) -> bool:
+    """The model has a separate MTP drafter that is not downloaded (a start uses n-gram until it is)."""
+    return bool(m.get("draft")) and m.get("draft_status") != "downloaded"
 
 
 @dataclass

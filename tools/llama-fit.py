@@ -8,17 +8,17 @@ it needs and the largest context window that fits, per KV cache type.
   ./carl.sh fit --ctx 64k        # check one window size for every model
   ./carl.sh fit --goal hard-code --scope downloaded   # auto fit's reasons for that goal / scope
 
-Auto fit picks the best ranked stock model (rank 1 = best: parameters and density, then
-quantization; abliterated models are only picked by hand; a custom model only when its card
-says auto_fit: ./carl.sh card NAME) for a goal: everyday = the MoE
-builds first (fast, usually sufficient), hard-code = the dense builds first (better at
-code and hard tasks, slower). It wants two 96K windows (main session + a subagent), else
+Auto fit picks the best ranked stock model (rank 1 = best: published benchmarks and CARL's
+code test, then quantization; abliterated models are only picked by hand; a custom model only
+when its card says auto_fit: ./carl.sh card NAME) for a goal: everyday = the fast builds
+first (MoE, and small dense models such as the Gemma 4 E4B: fast, usually sufficient),
+hard-code = the dense builds first (better at code and hard tasks, slower). It wants two 96K windows (main session + a subagent), else
 one, else the largest window of at least 32K, within the GPU limit and RAM less a reserve
 for macOS and apps (6 GiB, 10 with the VM up; --reserve-gb N). llama.model = auto starts it;
 config.json llama.auto_goal / llama.auto_fit (catalogue | downloaded) set goal and scope.
 
-Need = weights + KV cache (window x bytes/token) + recurrent state + ~1 GiB of
-compute buffers. The limit is what macOS lets the GPU use (Metal's
+Need = weights (with a separate MTP drafter's, Gemma 4) + KV cache (window x bytes/token)
++ recurrent state + ~1 GiB of compute buffers. The limit is what macOS lets the GPU use (Metal's
 recommendedMaxWorkingSetSize, ~2/3 of RAM on 24-32 GB Macs, ~3/4 above), or an
 `sudo sysctl iogpu.wired_limit_mb=N` override. Estimates: leave some margin.
 The launcher (--check) refuses a start that needs more than the limit (FIT_CHECK=0 skips it).
@@ -42,6 +42,7 @@ from carl_core.domain.errors import ConfigError  # noqa: E402
 from carl_core.domain.fit import (DEFAULT_CTX, check_start, estimated_limit, max_ctx, need_bytes,  # noqa: E402
                                   prompt_cache_mib, reserve_bytes, swa_plan, window_label)
 from carl_core.domain.gguf import GIB, OVERHEAD, ModelShape, kv_bytes_per_token, model_shape  # noqa: E402
+from carl_core.domain.models import draft_bytes  # noqa: E402
 from carl_core.domain.types import ModelInfo  # noqa: E402
 from carl_core.wiring import GPU  # noqa: E402
 
@@ -77,6 +78,7 @@ def parse_args(argv: List[str]) -> argparse.Namespace:
     ap.add_argument("--want-slots", default="auto", help=argparse.SUPPRESS)
     ap.add_argument("--kv", default="q4_0", help=argparse.SUPPRESS)
     ap.add_argument("--swa", default="auto", choices=("auto", "full", "window"), help=argparse.SUPPRESS)
+    ap.add_argument("--draft", metavar="GGUF", help=argparse.SUPPRESS)     # the MTP drafter the start loads (-md)
     return ap.parse_args(argv)
 
 
@@ -88,15 +90,17 @@ def gpu_limit(ram_gb: Optional[float]) -> Tuple[int, str]:
     return GPU.limit()
 
 
-def local_shape(path: str) -> Tuple[ModelShape, int]:
-    return model_shape(local_meta(path)), os.path.getsize(path)
+def local_shape(path: str, draft: Optional[str] = None) -> Tuple[ModelShape, int]:
+    """The model's header shape and its weights: the file, plus the MTP drafter a start loads with it
+    (-md; it shares the model's KV cache, so only its weights add memory)."""
+    return model_shape(local_meta(path)), os.path.getsize(path) + (os.path.getsize(draft) if draft else 0)
 
 
 def cmd_plan(args: argparse.Namespace, limit: int) -> None:
     """Launcher plan, as "SLOTS CACHE_MIB SWA": slots (auto = 2 when two full windows fit the GPU
     limit, else 1), a RAM prompt cache from what is left after a reserve for macOS + apps (+ the
     VM), and for a model with sliding-window layers full or window (--swa; "-" for other models)."""
-    shape, w = local_shape(args.plan)
+    shape, w = local_shape(args.plan, args.draft)
     ctx = args.ctx or DEFAULT_CTX
     slots, full = swa_plan(args.swa, shape, w, ctx, args.want_slots, args.kv, limit)
     reserve = reserve_bytes(args.reserve_gb, vm_network_up())
@@ -143,7 +147,7 @@ def model_label(path: str) -> str:
 def cmd_check(args: argparse.Namespace, limit: int, how: str) -> int:
     """Refuse (exit 3, the reasons on stderr) a start that needs more than the GPU limit: it
     would fail to load or swap the Mac to a crawl."""
-    shape, w = local_shape(args.check)
+    shape, w = local_shape(args.check, args.draft)
     chk = check_start(shape, w, args.ctx or DEFAULT_CTX, args.slots, args.kv, limit, swa_full=args.swa != "window")
     if chk.fits:
         return 0
@@ -189,7 +193,7 @@ def model_rows(models: List[ModelInfo]) -> List[Row]:
             shape, status = None, str(e)[:40]
         note = (f" · your card's rank (auto fit: {'on' if m.get('auto_fit') else 'off'})"
                 if m.get("custom") and isinstance(rank, int) else "")
-        rows.append(Row(m.get("name", ""), m.get("bytes", 0), rank if isinstance(rank, int) else None,
+        rows.append(Row(m.get("name", ""), m.get("bytes", 0) + draft_bytes(m), rank if isinstance(rank, int) else None,
                         bool(m.get("abliterated")), shape, status, note))
     rows.sort(key=lambda r: (r.rank is None, r.rank or 0, r.name))
     return rows
@@ -236,8 +240,9 @@ def cmd_table(args: argparse.Namespace, limit: int, how: str) -> None:
           + (f"   {B}slots:{R} {slots} (windows are per slot)" if slots > 1 else ""))
     print(f"{B}Auto fit allows:{R} {budget.describe()}\n")
     print("\n".join(auto_lines(fits, shown, mine, here)) + "\n")
-    print(f"{DIM}need = weights + KV cache + recurrent state + ~{OVERHEAD / GIB:.0f} GiB buffers; "
-          f"max window per KV type; rank 1 = best quality{R}\n")
+    print(f"{DIM}need = weights (+ MTP drafter) + KV cache + recurrent state + ~{OVERHEAD / GIB:.0f} GiB buffers; "
+          f"max window per KV type (full cache; a sliding-window model also shows its window-only cache); "
+          f"rank 1 = best quality{R}\n")
     hdr = f"{'model':22} {'rank':>4} {'weights':>8} {'KV/token q4':>11}  {'max ctx q4':>10} {'max ctx q8':>10}"
     if args.ctx:
         hdr += f"  {'need @' + window_label(args.ctx):>10}"
@@ -257,7 +262,10 @@ def cmd_table(args: argparse.Namespace, limit: int, how: str) -> None:
         if args.ctx:
             nd = need_bytes(row.shape, row.size, args.ctx, slots, "q4_0")
             line += f"  {(GRN if nd <= limit else RED)}{nd / GIB:9.1f}G{R}"
-        print(line + f"  {DIM}{row.status}{' · abliterated' if row.abliterated else ''}{row.note}{R}")
+        win = ""
+        if row.shape.get("swa_window"):              # sliding-window layers: the window-only cache holds more
+            win = f" · window cache: {window_label(max_ctx(row.shape, row.size, limit, slots, 'q4_0', swa_full=False))} q4"
+        print(line + f"  {DIM}{row.status}{' · abliterated' if row.abliterated else ''}{win}{row.note}{R}")
     print(f"\n{DIM}★ = an auto-fit pick · Raise the limit (resets at reboot; leave >= 6 GB for macOS):  "
           f"sudo sysctl iogpu.wired_limit_mb=<MB>{R}")
 

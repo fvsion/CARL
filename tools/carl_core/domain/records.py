@@ -14,7 +14,7 @@ from typing import AbstractSet, Dict, Optional, cast
 from .errors import ConfigError
 from .hf import local_file_name, validate_ref
 from .settings import MODEL_KEYS, SCHEMA, coerce
-from .types import Catalog, CustomCard, JsonValue, LocalDb
+from .types import Catalog, CustomCard, HfRef, JsonValue, LocalDb
 
 _NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
 # The "good for" tags a model card may carry; "uncensored" only on abliterated models.
@@ -87,6 +87,9 @@ def _card(entry: Dict[str, JsonValue], names: Optional[AbstractSet[str]], at: st
     rank = entry.get("rank")
     if rank is not None and (not isinstance(rank, int) or isinstance(rank, bool) or rank < 1):
         raise ConfigError(f"{at}: rank must be a whole number >= 1 (1 = best quality)")
+    if "fast" in entry and not (entry["fast"] is True and entry.get("arch") == "dense"):
+        raise ConfigError(f"{at}: fast is true or absent, and only on a dense model (auto fit's everyday goal "
+                          "takes it with the MoE builds)")
     if "thinking" in entry and entry["thinking"] not in THINKING:
         raise ConfigError(f"{at}: thinking must be one of: {', '.join(THINKING)}")
     alts = entry.get("pick_instead", [])
@@ -144,6 +147,16 @@ def parse_custom_card(raw: object, names: Optional[AbstractSet[str]], at: str,
     return cast(CustomCard, card)
 
 
+def _pinned_file(raw: object, at: str, key: str) -> HfRef:
+    """A catalogue file reference (the model's "hf", its drafter's "draft"): checked as models.json's
+    hf is, and it needs a repo, a GGUF file and its size."""
+    ref = validate_ref(raw, at, key)
+    if "repo" not in ref or "file" not in ref or "bytes" not in ref:
+        raise ConfigError(f"{at}: {key} needs repo, file and bytes")
+    local_file_name(ref["file"])
+    return ref
+
+
 def parse_catalog(raw: object, where: str) -> Catalog:
     """The catalogue, checked. Raises ConfigError naming the bad entry."""
     if not isinstance(raw, dict) or raw.get("schema") != SCHEMA:
@@ -156,10 +169,11 @@ def parse_catalog(raw: object, where: str) -> Catalog:
         entry = _object(m, f"{where}: models[{i}]")
         name = validate_name(entry.get("name"), f"{where}: models[{i}].name")
         at = f"{where}: {name}"
-        ref = validate_ref(entry.get("hf"), at)
-        if "repo" not in ref or "file" not in ref or "bytes" not in ref:
-            raise ConfigError(f"{at}: hf needs repo, file and bytes")
-        local_file_name(ref["file"])
+        ref = _pinned_file(entry.get("hf"), at, "hf")
+        if "draft" in entry:
+            draft = _pinned_file(entry["draft"], at, "draft")
+            if local_file_name(draft["file"]) == local_file_name(ref["file"]):
+                raise ConfigError(f"{at}: draft names the model file itself")
         _settings(entry.get("tune", {}), f"{at}: tune")
         _zones(entry.get("ctx_zones"), f"{at}: ctx_zones")
         _speed(entry.get("speed"), f"{at}: speed")

@@ -20,7 +20,7 @@ from . import api, clientsync, diskcache, fsio, slotpack, system
 from .cacheapi import CacheState, Registry
 from .collector import Collector
 from .fmt import DIM, R, RED, size
-from .model import ServerData, SlotInfo, clean, jlist
+from .model import ServerData, SlotInfo, clean, draft_bytes, jlist
 from .settings import REINSTALL, Pending, SettingsService, env_from_cmd
 from .state import TUNE_ALL, Confirm, Download, Drain, HFLookup, InstallRun, Picker, TuneRun, UIState
 from .store import ModelList
@@ -259,11 +259,13 @@ class ServerJobs:
 
     # ------------------------------------------------------------ models
     def start_download(self, spec: str) -> None:
-        """Download a catalogue model by name, or hf:REPO/FILE.gguf (resumable)."""
+        """Download a catalogue model by name (with its MTP drafter, when it has one), or
+        hf:REPO/FILE.gguf (resumable)."""
         ui = self.ui
         if ui.dl and ui.dl.proc.poll() is None:
             ui.toast("a download runs already (to cancel it, press c in the Models panel)", 6)
             return
+        more: List[str] = []
         if spec.startswith("hf:"):
             _, file, _ = self.svc.store.parse_hf(spec)
             base = os.path.basename(file or "")
@@ -277,10 +279,14 @@ class ServerJobs:
                 ui.toast(f"{RED}unknown model {spec}{R}", 6)
                 return
             name, path, total = spec, m["path"], m["bytes"]
+            if m.get("draft") and m["status"] == "downloaded":     # carl.py fetches only the missing drafter
+                name, path, total = f"{spec} MTP drafter", m.get("draft_path"), draft_bytes(m)
+            elif m.get("draft"):                                    # the model, then its drafter
+                more, total = [str(m.get("draft_path", ""))], total + draft_bytes(m)
         log = os.path.join(self.paths.logs, ".download.out")
         os.makedirs(os.path.dirname(log), exist_ok=True)
         proc = start_tool([os.path.join(self.paths.repo, "tools", "carl.py"), "download", spec], log)
-        ui.dl = Download(name=name, path=path, total=total, proc=proc, log=log)
+        ui.dl = Download(name=name, path=path, total=total, proc=proc, log=log, more=more)
         ui.toast(f"download of {name} started (you can resume it: a cancel keeps the part)", 6)
 
     def cancel_download(self) -> None:
@@ -497,7 +503,7 @@ class ServerJobs:
 
     def _poll_download(self, dl: Download) -> None:
         now = time.time()
-        dl.have = fsio.file_size(dl.path) if dl.path else 0
+        dl.have = (fsio.file_size(dl.path) if dl.path else 0) + sum(fsio.file_size(p) for p in dl.more)
         dl.hist.append((now, dl.have))
         del dl.hist[:-20]
         h = dl.hist

@@ -1,10 +1,11 @@
 """Auto fit: the best stock model for this Mac and a goal, with the reasons every
 better-ranked model was passed over.
 
-Quality is the catalogue rank (1 = best: parameters and density first, then quantization).
+Quality is the catalogue rank (1 = best: published benchmarks and CARL's code test first, then the quantization).
 CARL prioritises speed, so the goal decides the family first:
-  everyday   the MoE builds (35B-A3B: fast, usually sufficient); a dense build only when
-             no MoE build fits (said so in the result)
+  everyday   the fast builds: MoE (35B-A3B: fast, usually sufficient) and the small dense
+             builds the catalogue marks fast (Gemma 4 E4B); another build only when no fast
+             build fits (said so in the result)
   hard-code  the dense builds (27B: better at code and hard tasks, slower); MoE as the fallback
 Only ranked stock models are candidates: abliterated models are picked by hand. A custom
 model takes part only when the user's card opts it in (auto_fit: a rank, an arch, stock):
@@ -26,18 +27,18 @@ from typing import Dict, List, Literal, Optional, Sequence, Tuple
 
 from .fit import max_ctx, need_bytes, window_label
 from .gguf import GIB, OVERHEAD, ModelShape, ctx_train
-from .models import CTX_FLOOR
+from .models import CTX_FLOOR, draft_bytes
 from .types import ModelInfo
 
 Goal = Literal["everyday", "hard-code"]
 Scope = Literal["catalogue", "downloaded"]
 GOALS: Tuple[Goal, ...] = ("everyday", "hard-code")
 SCOPES: Tuple[Scope, ...] = ("catalogue", "downloaded")
-GOAL_ARCH: Dict[Goal, str] = {"everyday": "moe", "hard-code": "dense"}
-GOAL_TEXT: Dict[Goal, str] = {"everyday": "everyday (MoE first: fast)",
+GOAL_TEXT: Dict[Goal, str] = {"everyday": "everyday (fast first: MoE, small dense)",
                                "hard-code": "hard code (dense first: better, slower)"}
 SCOPE_TEXT: Dict[Scope, str] = {"catalogue": "all catalogue models", "downloaded": "downloaded models only"}
 ARCH_TEXT: Dict[str, str] = {"moe": "MoE", "dense": "dense"}
+FAMILY_TEXT: Dict[Goal, str] = {"everyday": "fast (MoE or small dense)", "hard-code": "dense"}
 MIN_WINDOW = 32768                  # below this a window is not worth starting
 
 
@@ -67,6 +68,11 @@ class Candidate:
     shape: Optional[ModelShape]
     kv: str = "q4_0"
     opted_in: bool = True           # a custom model: its card's auto_fit (catalogue models: always)
+    fast: bool = False              # a small dense build the everyday goal takes with the MoE builds
+
+    def kind(self) -> str:
+        """MoE, small dense or dense: what the result calls the build."""
+        return "small dense" if self.fast and self.arch != "moe" else ARCH_TEXT.get(self.arch, self.arch or "?")
 
     @property
     def eligible(self) -> bool:
@@ -76,14 +82,15 @@ class Candidate:
 
 
 def candidate(m: ModelInfo, shape: Optional[ModelShape]) -> Candidate:
-    """A model record (catalogue or custom) and its header shape as a candidate."""
+    """A model record (catalogue or custom) and its header shape as a candidate (its weights
+    include its MTP drafter's, when it has one)."""
     rank = m.get("rank")
     kv = (m.get("tune") or {}).get("kv", "q4_0")
     return Candidate(name=m.get("name", ""), arch=str(m.get("arch") or "").lower(),
                      rank=rank if isinstance(rank, int) and not isinstance(rank, bool) else None,
                      abliterated=bool(m.get("abliterated")), downloaded=m.get("status") == "downloaded",
-                     weights=int(m.get("bytes", 0)), shape=shape, kv=kv if isinstance(kv, str) else "q4_0",
-                     opted_in=not m.get("custom") or m.get("auto_fit") is True)
+                     weights=int(m.get("bytes", 0)) + draft_bytes(m), shape=shape, kv=kv if isinstance(kv, str) else "q4_0",
+                     opted_in=not m.get("custom") or m.get("auto_fit") is True, fast=m.get("fast") is True)
 
 
 @dataclass(frozen=True)
@@ -204,12 +211,12 @@ class AutoFit:
         if not self.pick or not self.plan:
             return (f"no ranked stock model fits this Mac ({SCOPE_TEXT[self.scope]}). "
                     f"The limit is {self.budget.describe()}")
-        arch = ARCH_TEXT.get(self.pick.arch, self.pick.arch or "?")
+        arch = self.pick.kind()
         holds = ("two 96K windows (main session + a subagent)" if self.tier == 0 else
                  "one 96K window (two do not fit)" if self.tier == 1 else
                  f"a {window_label(self.plan.ctx)} window, the largest that fits (no build holds 96K)")
         here = "downloaded " if self.scope == "downloaded" else ""
-        lead = (f"no {here}{ARCH_TEXT[GOAL_ARCH[self.goal]]} build fits, so this is the best {arch} build that fits. "
+        lead = (f"no {here}{FAMILY_TEXT[self.goal]} build fits, so this is the best {arch} build that fits. "
                 f"It holds " if self.fallback else f"the best-ranked stock {arch} build that holds ")
         return f"{lead}{holds}. It uses {gib(self.plan.need)} of {self.budget.describe()}"
 
@@ -219,8 +226,15 @@ class AutoFit:
         return f"{head}  [{GOAL_TEXT[self.goal]} · {SCOPE_TEXT[self.scope]}]"
 
 
-def _order(cands: Sequence[Candidate], arch: str) -> List[Candidate]:
-    return sorted((c for c in cands if c.arch == arch), key=lambda c: (c.rank or 0, c.name))
+def in_family(c: Candidate, goal: Goal) -> bool:
+    """Is c in the goal's own family (module docstring)?"""
+    if goal == "everyday":
+        return c.arch == "moe" or (c.fast and c.arch == "dense")
+    return c.arch == "dense"
+
+
+def _order(cands: Sequence[Candidate], keep: bool, goal: Goal) -> List[Candidate]:
+    return sorted((c for c in cands if in_family(c, goal) == keep), key=lambda c: (c.rank or 0, c.name))
 
 
 def auto_fit(candidates: Sequence[Candidate], budget: Budget, goal: Goal = "everyday",
@@ -229,26 +243,24 @@ def auto_fit(candidates: Sequence[Candidate], budget: Budget, goal: Goal = "ever
     allowed = budget.allowed
     eligible = [c for c in candidates if c.eligible]
     in_scope = [c for c in eligible if scope == "catalogue" or c.downloaded]
-    first = GOAL_ARCH[goal]
-    other = next(a for a in GOAL_ARCH.values() if a != first)
-    groups = [_order(in_scope, first), _order(in_scope, other)]
+    groups = [_order(in_scope, True, goal), _order(in_scope, False, goal)]
     for g, group in enumerate(groups):
         for t, tier in enumerate(TIERS):
             for c in group:
                 plan = plan_for(c, tier, allowed, budget.swa_full)
                 if plan:
                     return AutoFit(goal, scope, budget, c, plan, t, g == 1,
-                                   tuple(_rejections(eligible, c, t, g == 1, scope, first, allowed, budget.swa_full)))
+                                   tuple(_rejections(eligible, c, t, g == 1, scope, goal, allowed, budget.swa_full)))
     return AutoFit(goal, scope, budget, None, None, len(TIERS) - 1, False,
-                   tuple(_rejections(eligible, None, len(TIERS) - 1, False, scope, first, allowed, budget.swa_full)))
+                   tuple(_rejections(eligible, None, len(TIERS) - 1, False, scope, goal, allowed, budget.swa_full)))
 
 
 def _rejections(eligible: Sequence[Candidate], pick: Optional[Candidate], tier: int, fallback: bool, scope: Scope,
-                first: str, allowed: float, swa_full: bool = True) -> List[Rejection]:
+                goal: Goal, allowed: float, swa_full: bool = True) -> List[Rejection]:
     """Every eligible candidate ranked above the pick (and, after a fallback, the whole goal
     family), best rank first, with the reason it lost."""
     def better(c: Candidate) -> bool:
-        if pick is None or (fallback and c.arch == first):
+        if pick is None or (fallback and in_family(c, goal)):
             return True
         return (c.rank or 0, c.name) < (pick.rank or 0, pick.name)
 
@@ -258,11 +270,11 @@ def _rejections(eligible: Sequence[Candidate], pick: Optional[Candidate], tier: 
             continue
         if scope == "downloaded" and not c.downloaded:
             reason = "not downloaded"
-        elif pick is not None and not fallback and c.arch != pick.arch:
-            reason = (f"{ARCH_TEXT.get(c.arch, c.arch or '?')}: for the "
-                      f"{'everyday goal (faster)' if c.arch == GOAL_ARCH['everyday'] else 'hard-code goal (slower)'}")
+        elif pick is not None and not fallback and not in_family(c, goal):
+            reason = (f"{c.kind()}: for the "
+                      f"{'everyday goal (faster)' if goal == 'hard-code' else 'hard-code goal (slower)'}")
         else:
-            failed = tier if pick is not None and not (fallback and c.arch == first) else len(TIERS) - 1
+            failed = tier if pick is not None and not (fallback and in_family(c, goal)) else len(TIERS) - 1
             reason = why_not(c, TIERS[failed], allowed, swa_full)
         out.append(Rejection(c.name, c.rank or 0, reason))
     return out

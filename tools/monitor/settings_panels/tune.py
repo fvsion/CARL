@@ -19,7 +19,8 @@ STEPS: List[CardLine] = [
     "Auto-tune measures this model on this Mac and saves the best settings for it. This takes about 5-10 min. "
     "The model loads once for each mode:",
     "1 memory: the largest window with 1 and 2 slots",
-    "2 speculation: none, n-gram, MTP, MTP + n-gram (n = 1, 2) on prose, code and a code re-emit",
+    "2 speculation: none, n-gram, MTP, MTP + n-gram (n = 1, 2; with an MTP drafter n = 1-4) on prose, code and a "
+    "code re-emit",
     "3 prompt read speed at 8K/32K/64K → the context zones of this Mac", "4 the result",
     "After that, each start of the model uses these settings. A value that you change in the Server panel "
     "overrides them (config.json wins)."]

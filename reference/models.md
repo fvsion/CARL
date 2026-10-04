@@ -20,9 +20,9 @@ The catalogue is `host/catalog.json`. Each model is served under its CARL name (
 | `qwen3.8-27b-iq3` | unsloth Qwen3.8-27B UD-IQ3_XXS, 10.9 GB | The smallest stock 27B. For 24 GB Macs that need the dense 27B with 2 slots (2 × 96K fit), or a long window with 1 slot. It does not fit a 16 GB Mac under the default GPU limit (catalogue `min_ram_gb` 24). IQ3 loses more quality than Q3_K and Q4 in tool calls and edits: use it only when no larger build fits. ~10 tok/s on new text, 31 tok/s on a re-emit (M2 Max). |
 | `orcarouter-27b-iq3` | orcarouter Qwen3.8-27B IQ3_XXS imatrix (bartowski), 12.6 GB | Abliterated 27B: two 96K slots fit a 24 GB Mac |
 | `heretic-35b-a3b-iq3` | mradermacher i1-IQ3_XXS of llmfan46's Heretic 35B-A3B, 13.6 GB | Abliterated 35B-A3B for 24 GB Macs. **No MTP head**: n-gram speculation only. |
-| `qwen3.8-9b` | empero-ai Qwen3.8-9B Distill Q4_K_M, 5.8 GB | The small model: for 16 GB Macs, or for more subagents at the same time. Thinking on and off only. |
+| `qwen3.8-9b` | empero-ai Qwen3.8-9B Distill Q4_K_M, 5.8 GB | A small model for 16 GB Macs, or for more subagents at the same time. Thinking on and off only. In CARL's code test (2026-10-04) it was less accurate than the Gemma 4 E4B, and half as fast, so auto fit now selects the E4B or the 12B on 16 GB Macs. |
 
-Auto fit uses the catalogue `rank` (1 = best: parameters and density first, then quantization) and the `arch` (`moe` or `dense`). It never selects an abliterated model ([Auto fit](server.md#auto-fit-and-the-start-model)).
+Auto fit uses the catalogue `rank` (1 = best: published benchmarks and CARL's code test first, then the quantization), the `arch` (`moe` or `dense`) and `fast` (a small dense model that the everyday goal takes with the MoE builds: the E4B). It never selects an abliterated model ([Auto fit](server.md#auto-fit-and-the-start-model)).
 
 | `rank` | MoE | Dense |
 |---|---|---|
@@ -41,24 +41,47 @@ Google's Gemma 4 models joined the catalogue on 2026-10-04. Each one is the QAT 
 
 | Model | Build, size | Why it is here |
 |---|---|---|
-| `gemma-4-e4b` | ggml-org gemma-4-E4B-it Q4_0 (QAT), 4.6 GB | Small and fast: 2 × 96K with the full cache needs ~8.2 GiB, so it fits a 16 GB Mac. ~46 tok/s on an M2 Max (no speculation), about 2× the 9B. Weaker on hard code. Trained context 128K. |
+| `gemma-4-e4b` | ggml-org gemma-4-E4B-it Q4_0 (QAT), 4.6 GB | Small and fast: 2 × 96K with the full cache needs ~8.2 GiB, so it fits a 16 GB Mac. ~46 tok/s on an M2 Max (no speculation), about 2× the 9B. More accurate than the 9B in CARL's code test, weaker than the 12B on hard code. Auto fit's everyday pick on 16 GB Macs (`fast: true`). Trained context 128K. |
+| `gemma-4-12b` | ggml-org gemma-4-12B-it Q4_0 (QAT), 7.2 GB | Dense 12B, added on 2026-10-04. 48 layers: 8 full-attention (4.5 KiB/token at q4_0) and 40 sliding-window (window 1,024, 90 KiB/token at full length). With its drafter, 2 × 96K needs ~9.1 GiB with the window-only cache (it fits a 16 GB Mac) and ~25.7 GiB with the full cache. Google's model card: LiveCodeBench v6 72.0%, Codeforces ELO 1659, GPQA Diamond 78.8%, Tau2 69.0%. Not measured in CARL yet. |
 | `gemma-4-26b-a4b` | ggml-org gemma-4-26B-A4B-it Q4_0 (QAT), 14.6 GB | MoE, 3.8B active. 2 × 96K with the full cache needs ~26.2 GiB: it fits a 36 GB Mac (28.1 GiB GPU limit). On a 32 GB Mac it gets 2 slots with the window cache only. |
 | `gemma-4-31b` | ggml-org gemma-4-31B-it Q4_0 (QAT), 18.0 GB | Dense 31B: the strongest Gemma, and slow. Its full cache needs ~64 GiB at 2 × 96K, so it runs with the window cache (~22.6 GiB at 2 × 96K) on 32 and 36 GB Macs. |
 
 - **No rank yet.** Auto fit does not pick them. A rank needs a decision and measurements (Auto-tune) on a Mac where they fit.
-- **Sliding-window layers.** Most Gemma layers keep only a window (512 or 1,024 tokens). A saved prompt state restores only when every layer keeps the full context (`--swa-full`). `cache.swa = auto` takes the full cache when it fits ([Caching](caching.md)). The memory figures above come from the GGUF headers. llama.cpp's allocation matched them on the E4B (2 × 64K).
-- **KV heads per layer.** The 26B and the 31B have fewer KV heads on the full-attention layers. Their headers list the heads per layer, and CARL reads that list (it read none before 2026-10-04, so the KV cache counted as free).
-- **Speculation.** n-gram only (n = 2). Gemma 4's MTP drafter is a separate file that llama-server uses with `-md`. CARL does not pass it yet.
+- **Sliding-window layers.** Most Gemma layers keep only a window (the E4B: 512 tokens; the 12B, the 26B and the 31B: 1,024 tokens). A saved prompt state restores only when every layer keeps the full context (`--swa-full`). `cache.swa = auto` takes the full cache when it fits ([Caching](caching.md)). The memory figures above come from the GGUF headers. llama.cpp's allocation matched them on the E4B (2 × 64K). On the 26B-A4B (M3 Pro, 2 × 96K, q4_0, with the drafter), the server used 1.6 GiB more than the weights with the window cache, and approximately 11 GiB more with the full cache. CARL plans 2.2 GiB and 12.6 GiB (each includes 1 GiB for buffers). Thus, the estimate is safe. The full cache is also slower. It read a prompt of 14.5K tokens at 300 tok/s (the window cache: 472 tok/s), and it wrote at 31 tok/s (the window cache: 34 tok/s). `cache.swa = auto` still uses the full cache when it fits, because CARL can then restore a saved state and does not read the prompt again.
+- **KV heads per layer.** The 12B, the 26B and the 31B have fewer KV heads on the full-attention layers. Their headers list the heads per layer, and CARL reads that list (it read none before 2026-10-04, so the KV cache counted as free).
+- **Speculation: the MTP drafter.** Gemma 4 has no MTP head in the model file. Google ships a separate drafter for each model: `mtp-gemma-4-*-Q4_0.gguf` in the same ggml-org repo (QAT, 60 MB for the E4B, 0.25 GB for the 12B and the 26B-A4B, 0.28 GB for the 31B). The catalogue names it in the `draft` field of each entry.
+  - `./carl.sh download NAME` gets the model and its drafter. `verify` checks both files, and `delete` removes both.
+  - A start gives the drafter to llama-server with `-md` when the speculation uses MTP (`--spec-type draft-mtp`). The drafter uses the KV cache of the model, so only its weights add memory. The fit checks count these weights.
+  - If the drafter is not downloaded, the start uses n-gram speculation and tells you one time. `./carl.sh download NAME` then gets only the drafter.
+  - The drafter file is not a model. The model list does not show it.
+- **Speculation, measured 2026-10-04.** Three tasks for each mode: about 600 tokens of prose, 700 tokens of new code, and a 110-line file that the model writes again with one change (re-emit). Temperature 0, thinking off. The score is Auto-tune's weighted mean of the three speeds (tok/s).
+
+  | Mode | Drafts | E4B (M2 Max) | 12B (M2 Max) | 26B-A4B (M3 Pro) |
+  |---|---|---|---|---|
+  | none | – | 49.4 | 26.7 | 40.9 |
+  | `ngram-mod` | 2 | 69.5 | 37.1 | 57.9 |
+  | `draft-mtp` | 2 | 58.4 | 33.7 | 58.2 |
+  | `draft-mtp` | 3 / 4 | – | 33.2 / 32.9 | 55.5 / 48.8 |
+  | `draft-mtp,ngram-mod` | 2 | **77.0** | **41.4** | **74.9** |
+  | `draft-mtp,ngram-mod` | 3 | – | 40.8 | 70.8 |
+
+  - MTP + n-gram with 2 draft tokens is the best on each model: 55% to 83% faster than no speculation. The catalogue uses it for all four Gemma models. The 31B is not measured.
+  - MTP makes new text faster: 63% to 84% of its drafted tokens are correct. On the 26B-A4B, new code goes from 41.4 to 61.1 tok/s.
+  - n-gram makes re-emitted text faster: 130 tok/s on the 12B, 233 tok/s on the 26B-A4B. On new text it finds nothing to copy and does nothing.
+  - More than 2 MTP drafts makes prose slower, because fewer drafts are correct.
+  - The E4B column comes from `./carl.sh tune gemma-4-e4b --quick`, the others from the same three tasks run directly. Auto-tune measures the modes on your Mac.
 - **Sampling.** Google's model card: temperature 1.0, top_p 0.95, top_k 64.
 - **Thinking.** On or off only. llama-server turns it on by default.
 - **Images.** The models also take images. CARL starts them text-only (`--no-mmproj`).
 
 ### Notes on the catalogue
 
-- **The MTP head.** The catalogue marks 10 of the 11 Qwen entries with an MTP head (`mtp`). `heretic-35b-a3b-iq3` has none. The Gemma 4 entries have none in the model file (their drafter is a separate file).
+- **MTP speculation (`mtp`, `draft`).** `mtp: true` in the catalogue means that MTP speculation is available for the model: from an MTP head in the model file, or from a separate drafter file. `draft` names that drafter file (repo, revision, file, sha256, bytes, as `hf` does). CARL checks it as it checks `hf`.
+  - The catalogue marks 10 of the 11 Qwen entries with an MTP head. `heretic-35b-a3b-iq3` has none. The Gemma 4 entries have no head in the model file, but each one has a drafter (`draft`).
+  - When a speculation setting uses MTP and the model has no head and no downloaded drafter, a start uses n-gram and tells you one time.
   - For five Q4 and Q3 entries, the GGUF headers were checked: `nextn_predict_layers = 1` and the four `nextn` tensors in block 64.
   - For the two stock IQ3 builds, `nextn_predict_layers = 1` was checked on 2026-10-03, and MTP drafts ran on the 35B IQ3.
-  - Auto-tune reads the header, and tests MTP only if the head is there.
+  - Auto-tune reads the header, and tests MTP only if the head is there or the drafter is downloaded.
   - unsloth also publishes the head as a separate file (`MTP/mtp-Qwen3.8-27B-Q4_0.gguf`). The main unsloth files include the head, so you do not need that file.
 - **The model names.** Each build has its own name, also in the client configs (since 1.3.0). Before 1.3.0, a Q3 build used the name of its Q4 build.
 - **The default model.** With `llama.model = auto`, a start uses auto fit's pick for this Mac. If the pick is not downloaded, the start uses the best downloaded stock model that fits. `./carl.sh fit` shows which model this Mac gets, and why.

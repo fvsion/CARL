@@ -56,6 +56,11 @@ class SortTest(unittest.TestCase):
         self.assertAlmostEqual(s[0], 13.0, delta=0.5)                           # the weighted mean
         self.assertIsNone(speed_of(cast(ModelInfo, by["orca-iq3"])))
 
+    def test_unranked_models_last_the_larger_file_first(self) -> None:
+        ms = list(MODELS) + [model("z-big", None, "dense", 30)]
+        order = [m["name"] for m in arrange(ms, SORTS.index("quality"), 0, lambda m: None)]
+        self.assertEqual(order[-2:], ["z-big", "custom"])
+
     def test_downloaded_first_then_quality(self) -> None:
         self.assertEqual(names("downloaded first"), ["orca-iq3", "a3b-iq3", "custom", "27b-q4", "a3b-q4"])
 

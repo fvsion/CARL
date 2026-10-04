@@ -51,9 +51,10 @@ opencode
 | `qwen3.6-35b-a3b` | The default: fast MoE, everyday agent coding (32 GB+) |
 | `qwen3.8-27b` | The dense 27B: hard code, slower (32 GB+) |
 | IQ3 and Q3 builds | 24 GB Macs |
-| `qwen3.8-9b` | 16 GB Macs, or more subagents at the same time |
+| `gemma-4-e4b`, `gemma-4-12b` | 16 GB Macs: the E4B is fast, the 12B is better at code |
 | `orcarouter-27b…`, `heretic-35b-a3b…` | Abliterated (uncensored) builds |
-| `gemma-4-e4b`, `gemma-4-26b-a4b`, `gemma-4-31b` | Google's Gemma 4 |
+| `gemma-4-26b-a4b`, `gemma-4-31b` | Google's larger Gemma 4 models (32 GB+) |
+| `qwen3.8-9b` | A small distilled Qwen, for more subagents at the same time |
 
 - `./carl.sh models` lists the catalogue and each `.gguf` in `~/models/gguf`.
 - `./carl.sh download hf:OWNER/REPO/FILE.gguf` gets any GGUF from Hugging Face.
