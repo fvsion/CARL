@@ -40,15 +40,15 @@ MODEL_KEYS = {"\r": "museit", "\n": "museit", "d": "mdl", "v": "mverify", "x": "
               "S": "msort-", "F": "mfilter-"}
 ARRANGE_KEYS = {"s": "msort", "S": "msort-", "f": "mfilter", "F": "mfilter-"}   # every model list
 FIT_KEYS = {"\r": "fuse", "\n": "fuse", "d": "fdl", "g": "fgoal", "f": "fscope"}
-TUNE_ALL_LABEL = "all downloaded models, one after another"
+TUNE_ALL_LABEL = "all downloaded models, one after the other"
 CACHE_KEYS = {"d": "cache:disk", "p": "cache:prefix", "s": "cache:sessions", "o": "cache:save", "t": "cache:auto",
               "w": "cache:swa", "h": "cache:share",
               "c": "cache:clear"}
 TUNE_KEYS = {"\r": "trun", "\n": "trun", RIGHT: "tnext", LEFTKEY: "tprev", "c": "tcancel", " ": "tquick"}
 SCROLL_KEYS = {UP: 1, DOWN: -1, PGUP: 10, PGDN: -10}
 PANEL_PASSTHROUGH = ("q", "Q", "\x03", "\t")       # keys the Models / Auto-tune panels leave to the app
-READ_ONLY = ("catalogue models are read-only: only custom models (Hugging Face downloads and files in the models "
-             "folder) have a card you can edit")
+READ_ONLY = ("You cannot edit a catalogue card. Only custom models (Hugging Face downloads and files in the models "
+             "folder) have a card to edit.")
 
 
 class Region(NamedTuple):
@@ -91,7 +91,7 @@ class Controller:
     def preview_text(self, kind: str, d: ServerData, mask: bool = False) -> str:
         """Config text for the running server. mask=True hides the key (on-screen preview)."""
         if not d.up:
-            return "(the server isn't reachable yet: the config appears once the model has loaded)"
+            return "(no connection to the server yet: the config shows after the model loads)"
         ep = self.endpoint
         rel = TEMPLATES.get(kind)
         templates = {}
@@ -114,11 +114,11 @@ class Controller:
         ui.preview, ui.prev_scroll, ui.tab = kind, 0, 1
         ui.install_shown = False                # the preview takes the installer's place
         if not self.data.up:
-            ui.toast("server not reachable yet: nothing copied")
+            ui.toast("no connection to the server: nothing copied")
             return
         ok = system.copy_to_clipboard(self.preview_text(kind, self.data))
         ui.copied = kind if ok else None
-        ui.toast(LABELS[kind] + (" copied to the clipboard" if ok else ": clipboard unavailable, select it on screen"))
+        ui.toast(LABELS[kind] + (" copied to the clipboard" if ok else ": no clipboard. Select the text on the screen."))
 
     def install_action(self, act: str) -> None:
         """The Connect tab's installer: insall / insconfig ask first, insyes runs it, insno cancels
@@ -132,7 +132,7 @@ class Controller:
         if act in ("insall", "insconfig"):
             if running:
                 ui.install_shown = True
-                ui.toast("the installer is already running: its output is below", 5)
+                ui.toast("the installer runs already: its output is below", 5)
             else:
                 ui.install_ask = "all" if act == "insall" else "config"
         elif act == "insyes" and ui.install_ask:
@@ -146,7 +146,7 @@ class Controller:
             ui.install_shown = False
         elif act == "inscancel" and running:
             self.jobs.cancel_install()
-            ui.toast("installer stopped: running it again is safe (backups stay)", 8)
+            ui.toast("installer stopped: you can safely run it again (the backups stay)", 8)
 
     # ------------------------------------------------------------ actions
     def do(self, action: str) -> None:
@@ -187,7 +187,7 @@ class Controller:
         elif action == "detach":
             pid = d.target_pid
             if pid and not d.exited:
-                ui.exit_msg = (f"Monitor closed; the server is still running (pid {pid}) at {self.endpoint.base}.\n"
+                ui.exit_msg = (f"Monitor closed. The server still runs (pid {pid}) at {self.endpoint.base}.\n"
                                f"  re-attach: ./carl.sh monitor --port {self.endpoint.port}\n  stop:      kill {pid}")
             raise SystemExit
         elif action == "stop":
@@ -257,7 +257,7 @@ class Controller:
             chosen["model"] = m["name"]
             svc.load_profile(chosen, m["name"])
             ui.sp, ui.set_row = SP_SERVER, 0            # the model row
-            ui.toast(f"{m['name']} selected: press a to start it" + ("" if m["status"] == "downloaded" else " once it is downloaded"), 6)
+            ui.toast(f"{m['name']} selected: press a to start it" + ("" if m["status"] == "downloaded" else " after the download"), 6)
             return
         if act == "mdl" and m:
             self.jobs.start_download(m["name"])
@@ -364,7 +364,7 @@ class Controller:
                 ui.toast(f"{RED}config.json: {e}{R}", 10)
                 return
             ui.pending = None
-            ui.toast(f"{ui.tune_model}: the tuned values apply (config.json overrides cleared)", 8)
+            ui.toast(f"{ui.tune_model}: the tuned values apply (the config.json overrides are cleared)", 8)
             return
         # ---- server panel
         p = ui.pending
@@ -419,15 +419,16 @@ class Controller:
             what = ("OpenCode / Pi switch models (router mode)" if mode == "router" else
                     "the dashboard picks the model (single model)")
             ui.confirm2 = Confirm("MODEL SWITCHING?", [
-                f"Switch to: {what}. Saved as llama.mode = {mode} in config.json.",
-                "The OpenCode / Pi configs on this Mac are updated with it (when CARL set them up here).",
-                ("The server restarts in this mode now (requests in progress stop; the model loads again)."
+                f"Switch to: {what}. CARL saves llama.mode = {mode} in config.json.",
+                "CARL also updates the OpenCode / Pi configs on this Mac (if CARL set them up here).",
+                ("The server restarts in this mode now. Requests in progress stop, and the model loads again."
                  if running and running != mode else "The next server start uses it."),
-                *(["Router mode: every downloaded model that fits is offered; the clients' configs list them all "
-                   "(Connect tab: update them).",
-                   "WARNING: every switch empties the prompt cache: the model that loads starts cold. OpenCode and Pi "
-                   "put a session back from the disk cache (about a second after the load, Settings > Caching); other "
-                   "clients re-read the whole conversation (minutes for a long one). Switch with this in consideration."]
+                *(["Router mode: the router offers all downloaded models that fit. The client configs must list them "
+                   "all (update them in the Connect tab).",
+                   "WARNING: Each switch empties the prompt cache. The model that loads starts cold. OpenCode and Pi "
+                   "restore a session from the disk cache about one second after the load (Settings > Caching). Other "
+                   "clients read the full conversation again. For a long conversation, this takes minutes. Switch with "
+                   "this in consideration."]
                   if mode == "router" else [])],
                 "rmodeyes", mode)
             return
@@ -478,9 +479,10 @@ class Controller:
                 ui.toast("the disk cache is empty", 5)
                 return
             ui.confirm2 = Confirm("CLEAR THE DISK CACHE?", [
-                f"Removes {len(files)} saved prompt states ({diskcache.gb(diskcache.used(files))}) from "
-                f"{home_short(folder, self.home)}: OpenCode's pre-read prompts and the saved conversations.",
-                "The server keeps what it holds now; after the next start, each one is read again on first use."],
+                f"This removes {len(files)} saved prompt states ({diskcache.gb(diskcache.used(files))}) from "
+                f"{home_short(folder, self.home)}: the pre-read prompts of OpenCode and the saved conversations.",
+                "The server keeps the states that it holds now. After the next start, the server reads each prompt "
+                "again when a client uses it first."],
                 "cache:clearyes")
             return
         if act == "clearyes":
@@ -502,7 +504,7 @@ class Controller:
         elif key == "auto":
             autos = sorted({*AUTO_CHOICES, conf.auto_s})
             new = int(value) if value.isdigit() else autos[(autos.index(conf.auto_s) + 1) % len(autos)]
-            text = f"auto saves after {new} s of unsaved reading"
+            text = f"auto: CARL saves after {new} s of unsaved read time"
         elif key in ("save", "swa"):
             opts = diskcache.SAVES if key == "save" else diskcache.SWAS
             mode = conf.save if key == "save" else conf.swa
@@ -559,8 +561,9 @@ class Controller:
             ui.confirm2 = Confirm("DOWNLOAD?", [
                 f"Auto fit picked {fit.pick.name} ({size(m['bytes']) if m else '?'}) for this Mac: {fit.plan.label()}.",
                 f"Why: {fit.because()}.", "",
-                "Download it now? The Models panel shows the progress; press a to start it once it is here.",
-                "No: the settings stay chosen (a start needs the download first)."], "mautodl", fit.pick.name)
+                "Download it now? The Models panel shows the progress. After the download, press a to start it.",
+                "No: the settings stay as they are. A start is possible only after the download."], "mautodl",
+                fit.pick.name)
         else:
             ui.toast(f"auto fit: {fit.pick.name}, {fit.plan.label()} chosen: press a to start it", 8)
 
@@ -612,7 +615,7 @@ class Controller:
         self.svc.load_profile(ui.pending, name)
         m = self.models.by_name(self.svc.resolved_model(ui.pending))
         if m and m["status"] != "downloaded":
-            ui.toast(f"{m['name']} is not downloaded: press ] for the Models panel, then d to download it", 8)
+            ui.toast(f"{m['name']} is not downloaded. To download it, press ] for the Models panel, then d.", 8)
 
     def picker_choose(self) -> None:
         """Use the picker's selection: a model for the Server panel, a file to download, a model to tune."""
@@ -795,7 +798,7 @@ class Controller:
         elif rest == "s":
             self.save_card(f)
         elif rest in ("[", "]"):
-            ui.toast("press s to save the card or Esc to cancel it first", 5)
+            ui.toast("first press s to save the card, or Esc to cancel it", 5)
         else:
             return rest not in PANEL_PASSTHROUGH and not rest.isdigit()
         return True
@@ -828,8 +831,8 @@ class Controller:
         """The model drop-down for a new pick-instead entry (every model but this one)."""
         items: List[PickItem] = [(m["name"], m) for m in self.visible_all() if m["name"] != f.model]
         self.ui.picker = Picker("PICK INSTEAD: WHICH MODEL?", items, "pickcard",
-                                foot="Press ↑ ↓ to select the alternative and Enter to choose it (then type when it "
-                                     "is the better pick), Esc to go back to the card.")
+                                foot="Press ↑ ↓ to select the alternative. Press Enter to choose it, then type when "
+                                     "it is the better pick. Press Esc to go back to the card.")
 
     def visible_all(self) -> List[ModelInfo]:
         """Every model, in the lists' sort order (no filter)."""

@@ -86,7 +86,7 @@ class RealCatalogueTest(unittest.TestCase):
         self.assertEqual(auto_fit(cands, here, "hard-code").name, "qwen3.8-27b")
         vm = auto_fit(cands, Budget(THIS_MAC_LIMIT, 32 * GIB, RESERVE_VM), "everyday")
         self.assertEqual(vm.name, "qwen3.6-35b-a3b-iq3")
-        self.assertIn("qwen3.6-35b-a3b (rank 3): the weights and buffers alone need 22.2 GiB, this Mac allows 22.0 GiB",
+        self.assertIn("qwen3.6-35b-a3b (rank 3): the weights and buffers alone use 22.2 GiB (the limit on this Mac is 22.0 GiB)",
                       [r.line() for r in vm.rejected])
 
     def test_never_an_abliterated_model(self) -> None:
@@ -102,8 +102,8 @@ class RealCatalogueTest(unittest.TestCase):
     def test_reasons_name_the_numbers(self) -> None:
         fit = auto_fit(real_catalogue(), mac(24), "hard-code")
         self.assertEqual([r.line() for r in fit.rejected], [
-            "qwen3.8-27b (rank 1): the weights and buffers alone need 16.5 GiB, this Mac allows 16.0 GiB",
-            "qwen3.8-27b-q3 (rank 2): needs 16.9 GiB for 2 × 96K, this Mac allows 16.0 GiB",
+            "qwen3.8-27b (rank 1): the weights and buffers alone use 16.5 GiB (the limit on this Mac is 16.0 GiB)",
+            "qwen3.8-27b-q3 (rank 2): 2 × 96K uses 16.9 GiB (the limit on this Mac is 16.0 GiB)",
             "qwen3.6-35b-a3b (rank 3): MoE: for the everyday goal (faster)"])
         self.assertIn("two 96K windows", fit.because())
 
@@ -149,7 +149,7 @@ class PassesTest(unittest.TestCase):
         small = cand("small", "moe", 2, 8.0, kv_elems=65536)
         fit = auto_fit([big, small], Budget(18 * GIB, 0, 0), "everyday")
         self.assertEqual((fit.name, fit.plan.slots if fit.plan else 0, fit.tier), ("small", 2, 0))
-        self.assertEqual(fit.rejected[0].reason, "needs 20.8 GiB for 2 × 96K, this Mac allows 18.0 GiB")
+        self.assertEqual(fit.rejected[0].reason, "2 × 96K uses 20.8 GiB (the limit on this Mac is 18.0 GiB)")
 
     def test_sliding_window_models_plan_as_cache_swa_says(self) -> None:
         """A sliding-window model: planned with the window cache (auto, window), with every layer at full
@@ -202,7 +202,7 @@ class PassesTest(unittest.TestCase):
         b, c = cand("b", "moe", 2, 5.0), cand("c", "moe", 2, 5.0)
         fit = auto_fit([c, unknown, b], Budget(20 * GIB, 0, 0))
         self.assertEqual(fit.name, "b")                              # same rank: by name
-        self.assertEqual(fit.rejected[0].reason, "size unknown: its GGUF header could not be read (offline?)")
+        self.assertEqual(fit.rejected[0].reason, "size unknown: CARL cannot read its GGUF header (no network?)")
         self.assertIsNone(plan_for(unknown, TIERS[0], 20 * GIB))
 
     def test_window_beyond_the_trained_length(self) -> None:
@@ -215,7 +215,7 @@ class PassesTest(unittest.TestCase):
         self.assertEqual(Budget(25 * GIB, 32 * GIB, 6 * GIB).allowed, 25 * GIB)
         self.assertEqual(Budget(25 * GIB, 32 * GIB, 10 * GIB).allowed, 22 * GIB)
         self.assertEqual(Budget(25 * GIB, 0, 10 * GIB).allowed, 25 * GIB)      # RAM unknown: the GPU limit
-        self.assertIn("kept for macOS and apps", Budget(25 * GIB, 32 * GIB, 10 * GIB).describe())
+        self.assertIn("minus 10.0 GiB for macOS and apps", Budget(25 * GIB, 32 * GIB, 10 * GIB).describe())
         self.assertEqual(Budget(25 * GIB, 32 * GIB, 6 * GIB).describe(), "25.0 GiB (the GPU limit)")
 
     def test_candidate_from_a_record(self) -> None:

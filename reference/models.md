@@ -201,7 +201,7 @@ IQ3_M is a good choice only where no larger file fits, for example on a 24 GB Ma
 - Pi uses its official `subagent` example extension. A vendored copy is in `client/pi/extensions/subagent` (MIT, pi-coding-agent 1.0.0).
 - The copy has a patch: the tool description lists the installed agents and their descriptions. The upstream version lists no agents, so the model could not select one itself.
 - The coder runs as a separate `pi --mode json -p --no-session` process with the same model.
-- The coder gets each tool except `subagent` (`exclude-tools: subagent`; MCP tools stay). Thus, it cannot start nested subagents.
+- The coder gets each tool except `subagent` and `tool_search` (`exclude-tools: subagent, tool_search`). It keeps web search (an MCP server that is always loaded). It cannot start nested subagents, and it cannot load the browser tools (`tool_search` loads them).
 - The rule is a marked block in `~/.pi/agent/APPEND_SYSTEM.md`.
 
 **When `install.sh` installs it:** if the server has 2 or more slots (`/props` `total_slots`). `CODER=1` and `NO_CODER=1` override this. If the server is not reachable, the installer keeps the earlier choice.

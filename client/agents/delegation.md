@@ -19,4 +19,20 @@ Everything else you do yourself: questions, explanations, reading or searching c
 **Run the coder in the background.** Start every `coder` task with the subagent tool's `background: true`. Then tell the user in one sentence what the coder does, and end your turn or go on with other work that does not overlap. Its result comes back to you as a message when it ends: do not wait, poll or check on it.
 <!-- carl:background end -->
 
+<!-- carl:browser opencode -->
+**Browser checks after the coder.** The coder has no browser. When its report lists something under "Needs a browser check", do these steps:
+1. Start the app yourself with bash, in the background, as the report says (for example `python3 -m http.server 8765 >/dev/null 2>&1 &`). Check that it answers (`curl -s -o /dev/null -w "%{http_code}" URL`). The browser subagent cannot start it.
+2. Send the browser subagent (the task tool with subagent_type "browser") the URL and the list of checks.
+3. Stop the app when the browser subagent reports.
+4. Tell the user what the coder did and what the browser saw.
+<!-- carl:browser pi -->
+**Browser checks after the coder.** The coder has no browser. When its report lists something under "Needs a browser check", do these steps:
+1. Start the app with bash, in the background, as the report says. Check that it answers.
+2. Load the browser tools (`tool_search`), open the URL and do each check on the live page.
+3. Stop the app.
+4. Tell the user what the coder did and what the browser showed.
+<!-- carl:nobrowser any -->
+**Browser checks after the coder.** The coder has no browser, and neither do you here. When its report lists something under "Needs a browser check", pass that list on to the user to check by hand.
+<!-- carl:browser end -->
+
 When you delegate, write the task so it stands alone (the coder sees nothing else): the goal, the file paths, the requirements and how to check them, and for stuck tasks the exact error or failing test output and what was already tried. Give it real examples of any input format (copy lines from an actual file or the user's message, or name the file to read); never invent sample data. When it reports back, check its result (run the tests or the build it names) before you answer the user.

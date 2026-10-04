@@ -142,7 +142,7 @@ class ServerJobs:
         """Save the settings, stop the server, start it with them (in a thread); while a reply is
         being written, ask first (when_idle)."""
         def go() -> None:
-            self.ui.restart = "saving the settings…"
+            self.ui.restart = "CARL saves the settings…"
             threading.Thread(target=self._restart, args=(dict(p), d), daemon=True).start()
         self.when_idle(d, "apply the settings (the server restarts)", go)
 
@@ -156,23 +156,23 @@ class ServerJobs:
         try:
             old_text = fsio.read_text(path) if os.path.exists(path) else None   # the rollback puts it back
             if old_text is None and os.path.exists(path):
-                raise OSError(f"can't read {path}")
+                raise OSError(f"cannot read {path}")
             os.makedirs(os.path.dirname(console), exist_ok=True)
             self.svc.save(p)
-            ui.restart = "saving the sessions in the slots…"
+            ui.restart = "CARL saves the sessions in the slots…"
             self.save_before_stop(d)
-            ui.restart = f"stopping the server (pid {old_pid})…"
+            ui.restart = f"CARL stops the server (pid {old_pid})…"
             self.collector.server_pid = None
             system.stop_pid(old_pid)
-            ui.restart = "starting llama.cpp with the new settings (the model loads)…"
+            ui.restart = "llama.cpp starts with the new settings (the model loads)…"
             proc = start_server(self.paths, port, {}, console)
             self.collector.follow(port, proc.pid, console)
             chosen = str(p.get("net"))
             if self._wait_up(proc, port, host=chosen if chosen.count(".") == 3 else None):
                 changed = [r.label for r in self.svc.rows(p)
                            if r.key in REINSTALL and str(p[r.key]) != str(ui.set_run.get(r.key))]
-                ui.toast("restarted with the new settings"
-                         + (f"; {' and '.join(changed)} changed: update the clients (Connect tab ⚠)" if changed else ""), 12)
+                ui.toast("the server restarted with the new settings"
+                         + (f". {' and '.join(changed)} changed: update the clients (Connect tab ⚠)" if changed else ""), 12)
                 ui.restart = None
                 ui.pending = None
                 if ui.install_after_restart:
@@ -187,7 +187,7 @@ class ServerJobs:
                 fsio.write_private(path, old_text)
             back = False
             if old_pid and "llama-server" in old_cmd:
-                ui.restart = "the new settings failed: starting the old server again…"
+                ui.restart = "the new settings failed: the old server starts again…"
                 proc = start_server(self.paths, port, env_from_cmd(old_cmd), console, append=True)
                 self.collector.follow(port, proc.pid, console)
                 back = self._wait_up(proc, port)
@@ -203,16 +203,17 @@ class ServerJobs:
         """Tune ui.tune_model; asks first when it has to stop a running server."""
         ui = self.ui
         if ui.tune and ui.tune.proc.poll() is None:
-            ui.toast("auto-tune is already running", 5)
+            ui.toast("auto-tune runs already", 5)
             return
         pid = d.target_pid if not d.exited else None
         model = ui.tune_model or ""
         n = len(self.models.downloaded())
-        what = f"every downloaded model, one after another ({n} × ~5-10 min)" if model == TUNE_ALL else f"{model} (~5-10 min)"
+        what = (f"all downloaded models, one after the other ({n} × about 5-10 min)" if model == TUNE_ALL
+                else f"{model} (about 5-10 min)")
         if pid and system.pid_alive(pid) and not confirmed:
             ui.confirm2 = Confirm("AUTO-TUNE?", [
-                f"Auto-tune needs the GPU to itself: it stops the running server (pid {pid}),",
-                f"tunes {what}, then starts the server again with the saved settings.",
+                f"Auto-tune must have the GPU for itself. It stops the running server (pid {pid}).",
+                f"Then it tunes {what} and starts the server again with the saved settings.",
                 "Requests in progress stop."], "tyes")
             return
         restart = bool(pid and system.pid_alive(pid))
@@ -220,9 +221,9 @@ class ServerJobs:
 
         def work() -> None:
             if restart:
-                ui.restart = "saving the sessions in the slots…"
+                ui.restart = "CARL saves the sessions in the slots…"
                 self.save_before_stop(d)
-                ui.restart = f"stopping the server (pid {pid}) for auto-tune…"
+                ui.restart = f"CARL stops the server (pid {pid}) for auto-tune…"
                 self.collector.server_pid = None
                 system.stop_pid(pid)
                 ui.restart = None
@@ -247,13 +248,13 @@ class ServerJobs:
         def work() -> None:
             port = self.collector.endpoint.port          # where the server ran before the tune stopped it
             console = self.paths.console(port)
-            self.ui.restart = "starting the server again with the saved (and newly tuned) settings…"
+            self.ui.restart = "the server starts again with the saved (and newly tuned) settings…"
             proc = start_server(self.paths, port, {}, console)
             self.collector.follow(port, proc.pid, console)
             ok = self._wait_up(proc, port)
             self.ui.restart = None
             self.ui.pending = None
-            self.ui.toast("server running again" if ok else f"{RED}the server did not start again{R}: see the Log tab", 12)
+            self.ui.toast("the server runs again" if ok else f"{RED}the server did not start again{R}: see the Log tab", 12)
         threading.Thread(target=work, daemon=True).start()
 
     # ------------------------------------------------------------ models
@@ -261,7 +262,7 @@ class ServerJobs:
         """Download a catalogue model by name, or hf:REPO/FILE.gguf (resumable)."""
         ui = self.ui
         if ui.dl and ui.dl.proc.poll() is None:
-            ui.toast("a download is already running (press c in the Models panel to cancel it)", 6)
+            ui.toast("a download runs already (to cancel it, press c in the Models panel)", 6)
             return
         if spec.startswith("hf:"):
             _, file, _ = self.svc.store.parse_hf(spec)
@@ -280,7 +281,7 @@ class ServerJobs:
         os.makedirs(os.path.dirname(log), exist_ok=True)
         proc = start_tool([os.path.join(self.paths.repo, "tools", "carl.py"), "download", spec], log)
         ui.dl = Download(name=name, path=path, total=total, proc=proc, log=log)
-        ui.toast(f"downloading {name} (resumable: cancelling keeps the part)", 6)
+        ui.toast(f"download of {name} started (you can resume it: a cancel keeps the part)", 6)
 
     def cancel_download(self) -> None:
         """Stop the download; the partial file stays for a resume."""
@@ -295,7 +296,7 @@ class ServerJobs:
                                 capture_output=True).returncode == 0
             self.ui.toast(f"{name}: checksum OK" if ok else f"{RED}{name}: checksum mismatch{R}", 10)
         threading.Thread(target=work, daemon=True).start()
-        self.ui.toast(f"verifying {name} (sha256, ~1 min)…", 60)
+        self.ui.toast(f"CARL checks the SHA-256 of {name} (about 1 min)…", 60)
 
     def hf_lookup(self, repo: str) -> None:
         """Look up the GGUF files of a Hugging Face repo (in a thread) -> a picker."""
@@ -303,7 +304,7 @@ class ServerJobs:
 
     def _hf_lookup(self, repo: str) -> None:
         ui = self.ui
-        ui.hf = HFLookup(repo, f"looking up {repo} on Hugging Face…")
+        ui.hf = HFLookup(repo, f"CARL looks for {repo} on Hugging Face…")
         try:
             r, file, _ = self.svc.store.parse_hf(repo if repo.startswith(("hf:", "http")) else "hf:" + repo)
             if not HF_REPO.fullmatch(r):
@@ -318,11 +319,12 @@ class ServerJobs:
             ui.hf = HFLookup(r, "", files)
             ui.picker = Picker(title=f"HUGGING FACE · {r}", on_pick="pickhf", noun="GGUF files",
                                header=f"{DIM}{'':2}{'file':<60} {'size':>9}{R}",
-                               foot="↑↓ select · Enter downloads it to the models folder (resumable, checked against its SHA-256)",
+                               foot="↑↓ select · Enter downloads it to the models folder (you can resume it; CARL checks "
+                                    "its SHA-256)",
                                items=[(f, f"{f:<60} {size(b):>9}  {DIM}sha256 {clean(sha[:12]) if sha else '?'}{R}")
                                       for f, b, sha in files])
         except Exception as e:      # bad name, no network, rate limit, unexpected answer: show it
-            ui.hf = HFLookup(repo, f"Hugging Face lookup failed: {e}")
+            ui.hf = HFLookup(repo, f"Hugging Face search failed: {e}")
 
     # ------------------------------------------------------------ router mode
     def router_load(self, name: str, d: ServerData, unload: bool = False) -> None:
@@ -333,12 +335,12 @@ class ServerJobs:
             self.save_before_stop(d)            # the loaded model stops
             try:
                 self.collector.endpoint.post(f"/models/{what}", {"model": name}, timeout=600)
-                self.ui.toast(f"{name}: " + ("unloaded" if unload else "loading (30 s to 2 min: the Router panel shows "
-                                                                       "when it is loaded)"), 10)
+                self.ui.toast(f"{name}: " + ("unloaded" if unload else "the load started (30 s to 2 min: the Router "
+                                                                       "panel shows when it is loaded)"), 10)
             except api.FETCH_ERRORS as e:
                 self.ui.toast(f"{RED}{name}: {what} failed: {e}{R}", 10)
         def go() -> None:
-            self.ui.toast(f"{'unloading' if unload else 'loading'} {name}…", 120 if not unload else 10)
+            self.ui.toast(f"{name} {'unloads' if unload else 'loads'}…", 120 if not unload else 10)
             threading.Thread(target=work, daemon=True).start()
         self.when_idle(d, f"{'unload' if unload else 'load'} {name} (the loaded model stops)", go)
 
@@ -435,8 +437,8 @@ class ServerJobs:
         except (OSError, ValueError) as e:
             self.ui.toast(f"{RED}push failed: {e}{R}", 10)
             return
-        self.ui.toast(f"client config {version} pushed: the clients' sync service applies it within seconds; "
-                      f"OpenCode and Pi use it at their next start", 12)
+        self.ui.toast(f"client config {version} pushed. The sync service of each client applies it in a few seconds. "
+                      f"OpenCode and Pi use it at their next start.", 12)
 
     def forget_clients(self, older: float) -> int:
         """Drop the clients the API hasn't seen for `older` seconds (and not connected now)."""
@@ -459,7 +461,7 @@ class ServerJobs:
         configs pointed at this server), or only the configs; output in the Connect tab."""
         ui = self.ui
         if ui.install and not ui.install.done:
-            ui.toast("the installer is already running: its output is in the Connect tab", 6)
+            ui.toast("the installer runs already: its output is in the Connect tab", 6)
             return
         port = self.collector.endpoint.port
         log = os.path.join(self.paths.logs, ".install.out")
@@ -507,7 +509,7 @@ class ServerJobs:
         dl.done = True
         ok = dl.proc.returncode == 0
         self.models.get(refresh=True)
-        self.ui.toast(f"{dl.name}: " + ("downloaded and verified · OpenCode / Pi don't list it yet: Connect tab, u" if ok
+        self.ui.toast(f"{dl.name}: " + ("downloaded and verified · OpenCode / Pi do not list it yet: Connect tab, u" if ok
                                         else f"{RED}download failed{R}: " + " ".join(dl.tail)[-120:]), 12)
 
     def _poll_tune(self, tn: TuneRun) -> None:
@@ -531,6 +533,6 @@ class ServerJobs:
             return
         ins.done = True
         if ins.proc.returncode == 0:
-            self.ui.toast("OpenCode and Pi point at this server: open a new terminal, then run opencode or pi", 15)
+            self.ui.toast("OpenCode and Pi now use this server. Open a new terminal, then run opencode or pi.", 15)
         else:
             self.ui.toast(f"{RED}the installer failed{R}: see its output in the Connect tab", 15)

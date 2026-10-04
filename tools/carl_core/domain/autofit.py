@@ -110,7 +110,7 @@ class Budget:
 
     def describe(self) -> str:
         if self.ram > 0 and self.ram - self.reserve < self.gpu_limit:
-            return (f"{gib(self.allowed)} ({gib(self.ram)} RAM less {gib(self.reserve)} kept for macOS and apps; "
+            return (f"{gib(self.allowed)} ({gib(self.ram)} RAM minus {gib(self.reserve)} for macOS and apps; "
                     f"GPU limit {gib(self.gpu_limit)})")
         return f"{gib(self.allowed)} (the GPU limit)"
 
@@ -159,15 +159,15 @@ def plan_for(c: Candidate, tier: Tier, allowed: float, swa_full: bool = True) ->
 def why_not(c: Candidate, tier: Tier, allowed: float, swa_full: bool = True) -> str:
     """Why a candidate fails a pass, with the numbers."""
     if c.shape is None:
-        return "size unknown: its GGUF header could not be read (offline?)"
+        return "size unknown: CARL cannot read its GGUF header (no network?)"
     alone = c.weights + c.shape["rs_bytes"] + OVERHEAD
     if alone > allowed:
-        return f"the weights and buffers alone need {gib(alone)}, this Mac allows {gib(allowed)}"
+        return f"the weights and buffers alone use {gib(alone)} (the limit on this Mac is {gib(allowed)})"
     if tier.ctx is None:
         mx = max_ctx(c.shape, c.weights, allowed, 1, c.kv, swa_full)
         return f"the largest window that fits is {window_label(mx)} (less than {window_label(MIN_WINDOW)})"
     need = need_bytes(c.shape, c.weights, tier.ctx, tier.slots, c.kv, swa_full)
-    return f"needs {gib(need)} for {tier.label()}, this Mac allows {gib(allowed)}"
+    return f"{tier.label()} uses {gib(need)} (the limit on this Mac is {gib(allowed)})"
 
 
 @dataclass(frozen=True)
@@ -200,19 +200,18 @@ class AutoFit:
         return self.pick.name if self.pick else None
 
     def because(self) -> str:
-        """One sentence: why the pick (or that nothing fits)."""
+        """Why the pick (or that nothing fits), in short sentences without the last full stop."""
         if not self.pick or not self.plan:
-            return (f"no ranked stock model fits this Mac ({SCOPE_TEXT[self.scope]}); "
-                    f"it allows {self.budget.describe()}")
+            return (f"no ranked stock model fits this Mac ({SCOPE_TEXT[self.scope]}). "
+                    f"The limit is {self.budget.describe()}")
         arch = ARCH_TEXT.get(self.pick.arch, self.pick.arch or "?")
         holds = ("two 96K windows (main session + a subagent)" if self.tier == 0 else
-                 "one 96K window (two don't fit)" if self.tier == 1 else
+                 "one 96K window (two do not fit)" if self.tier == 1 else
                  f"a {window_label(self.plan.ctx)} window, the largest that fits (no build holds 96K)")
         here = "downloaded " if self.scope == "downloaded" else ""
-        lead = (f"no {here}{ARCH_TEXT[GOAL_ARCH[self.goal]]} build fits, so the best {arch} build that does: "
-                if self.fallback else f"the best-ranked stock {arch} build that holds ")
-        tail = f"it holds {holds}" if self.fallback else holds
-        return (f"{lead}{tail}; needs {gib(self.plan.need)} of {self.budget.describe()}")
+        lead = (f"no {here}{ARCH_TEXT[GOAL_ARCH[self.goal]]} build fits, so this is the best {arch} build that fits. "
+                f"It holds " if self.fallback else f"the best-ranked stock {arch} build that holds ")
+        return f"{lead}{holds}. It uses {gib(self.plan.need)} of {self.budget.describe()}"
 
     def summary(self) -> str:
         """The pick in one line: name, plan, goal and scope."""

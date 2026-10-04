@@ -33,29 +33,30 @@ class CardField:
 
 
 FIELDS: Tuple[CardField, ...] = (
-    CardField("label", "label", "text", "The name lists and the MODEL card show (empty: the file name).",
+    CardField("label", "label", "text", "The name that the lists and the MODEL card show. Empty: the file name.",
               limit=LABEL_MAX),
-    CardField("role", "role", "text", f"A headline: what this model is, at most {ROLE_MAX} characters.",
+    CardField("role", "role", "text", f"A short headline that tells what this model is ({ROLE_MAX} characters maximum).",
               limit=ROLE_MAX),
-    CardField("good_for", "good for", "tags", "The jobs it does best: the use-case filters of the model lists. "
-              "uncensored only on an abliterated model.", choices=GOOD_FOR),
-    CardField("why_use", "why use it", "text", "The reason to choose it over the other models."),
-    CardField("trade_offs", "trade-offs", "text", "When to pick something else: speed, quality, memory, refusals."),
-    CardField("hardware", "hardware", "text", "Which Macs it is meant for (RAM), what fits there."),
-    CardField("abliterated", "abliterated", "bool", "Refusals removed: the stock filter hides it and auto fit "
-              "never picks it."),
+    CardField("good_for", "good for", "tags", "The tasks that the model does best. The use-case filters of the model lists "
+              "use these tags. Use uncensored only on an abliterated model.", choices=GOOD_FOR),
+    CardField("why_use", "why use it", "text", "The reason to use this model and not a different model."),
+    CardField("trade_offs", "trade-offs", "text", "When to use a different model: speed, quality, memory, refusals."),
+    CardField("hardware", "hardware", "text", "The Macs (RAM) that the model is for, and what fits on them."),
+    CardField("abliterated", "abliterated", "bool", "The model has no refusals. The stock filter hides it, and auto "
+              "fit never picks it."),
     CardField("uncensored", "uncensored", "text", "What uncensored means for this model (abliterated models only)."),
-    CardField("arch", "arch", "choice", "dense (every parameter per token: slower, stronger) or MoE (a few "
-              "experts per token: fast). The dense / MoE filters and auto fit's goals use it.", choices=ARCHS),
-    CardField("quant", "quant", "text", "The quantization label, e.g. Q4_K_M or UD-IQ3_XXS.", limit=QUANT_MAX),
-    CardField("rank", "quality rank", "number", "Quality order, 1 = best (the catalogue's ranks are 1-5): sort by "
-              "quality uses it. A whole number, empty to unset."),
-    CardField("thinking", "thinking", "choice", "How the model thinks: on / off only, or effort levels "
-              "(OpenCode and Pi offer the matching options).", choices=THINKING),
-    CardField("auto_fit", "auto fit", "bool", "Let auto fit pick this model for this Mac. It needs a rank and an "
-              "arch, and a stock model (not abliterated): your rank is not measured, so it is off by default."),
-    CardField("pick_instead", "pick instead", "picks", "Nearby alternatives: another model and when it is the "
-              "better pick."),
+    CardField("arch", "arch", "choice", "dense: all parameters work on each token (slower, stronger). MoE: a "
+              "few experts work on each token (fast). The dense / MoE filters and the auto fit goals use it.", choices=ARCHS),
+    CardField("quant", "quant", "text", "The quantization label, for example Q4_K_M or UD-IQ3_XXS.", limit=QUANT_MAX),
+    CardField("rank", "quality rank", "number", "The quality order: 1 is the best. The catalogue uses ranks 1-5. "
+              "Sort by quality uses it. Type a whole number, or leave it empty."),
+    CardField("thinking", "thinking", "choice", "How the model thinks: on / off only, or effort levels. OpenCode and "
+              "Pi show the related options.", choices=THINKING),
+    CardField("auto_fit", "auto fit", "bool", "Lets auto fit pick this model for this Mac. The model must have a "
+              "rank and an arch, and it must not be abliterated. CARL does not measure your rank, so the default is "
+              "off."),
+    CardField("pick_instead", "pick instead", "picks", "Similar models: a different model, and when it is the better "
+              "pick."),
 )
 FIELD: Dict[str, CardField] = {f.key: f for f in FIELDS}            # the same keys as CUSTOM_CARD_KEYS (tested)
 CHOICE_TEXT: Dict[str, str] = {"dense": "dense", "moe": "MoE", "on-off": "on / off only",

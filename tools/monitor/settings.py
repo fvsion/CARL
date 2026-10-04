@@ -101,50 +101,61 @@ UNMARKED = {"slots", "cache", "net", "adv", "model", "goal", "scope"}   # no * w
 NOT_RUNNING = {"adv", "goal", "scope"}                  # rows without a "running now" value
 REINSTALL = {"ctx", "slots"}         # clients need install.sh again when these change
 
-ADV_WARN = "Caution: these values are tuned and measured (REFERENCE.md). A change can make the model slower, " \
-           "or its answers worse. The tuned values (x) set them back."
-_NET_HELP = ("local = this Mac only (the default) · vm = also a VMware Fusion VM client (192.168.42.1) · "
-             "an address = that interface "
-             "(LAN: other computers can reach it)")
+ADV_WARN = "CAUTION: Auto-tune and tests measured these values (REFERENCE.md). A change can make the model " \
+           "slower or its answers worse. Press x to set the tuned values again."
+_NET_HELP = ("local = this Mac only (the default) · vm = this Mac and a VMware Fusion VM client (192.168.42.1) · "
+             "an address = only that interface "
+             "(LAN: other computers can connect)")
 SET_HELP = {
-    "model": "Every model: the catalogue, the models folder and Hugging Face downloads. auto = auto fit's pick for this "
-             "Mac (★). The Auto fit panel says why it picks that model, takes the goal (everyday / hard code), and "
-             "sets the model, context, slots and KV cache in one step (Use this). More models: the Models panel adds "
-             "any GGUF from Hugging Face.",
-    "goal": "What auto fit optimises for: everyday = the MoE builds first (fast, usually sufficient) · hard-code = "
-            "the dense builds first (better at code and hard tasks, slower). Stock models only.",
-    "scope": "Which models auto fit picks from: catalogue = every catalogue model (it offers the download; a start "
-             "uses the best downloaded one until then) · downloaded = only the models on this Mac.",
-    "kv": "q4_0: less memory, the tested default · q8_0: more exact long-range recall, about 2x the KV memory",
-    "ctx": "tokens per slot; green = fast cold reads on this Mac, yellow = slow, red = very slow (see the context zones)",
-    "slots": "auto = 2 when two full windows fit (main session + coder subagent), else 1 · 3-4: more subagents at "
-             "once, offered only when they fit this Mac with this model, window and KV cache; together they decode "
-             "faster, each one slower (Auto-tune's parallel step measures it)",
-    "spec": "speculative decoding: n-gram copies repeated text, MTP drafts with the model's own head; Auto-tune measures which wins",
-    "specn": "draft tokens per speculation step; more is not faster on Metal for dense models",
-    "cache": "RAM prompt cache in MiB: keeps evicted prompts so a session comes back without a full re-read",
+    "model": "The list shows all models: the catalogue, the models folder and the Hugging Face downloads. auto is "
+             "auto fit's pick for this Mac (★). The Auto fit panel tells why it picks that model and lets you set the "
+             "goal (everyday / hard code). Its Use this button sets the model, context, slots and KV cache in one "
+             "step. To add more models, use the Models panel: it downloads any GGUF from Hugging Face.",
+    "goal": "The goal of auto fit. everyday: the MoE builds first (fast, usually good enough). hard-code: the dense "
+            "builds first (better at code and hard tasks, but slower). Auto fit uses stock models only.",
+    "scope": "The models that auto fit picks from. catalogue: all catalogue models. Auto fit then offers the "
+             "download, and until the download is complete, a start uses the best downloaded model. downloaded: "
+             "only the models on this Mac.",
+    "kv": "q4_0 uses less memory and is the tested default. q8_0 recalls text far back more accurately, but uses "
+          "about 2x the KV memory.",
+    "ctx": "The number of tokens per slot. The colour shows how fast this Mac reads a full window cold: green = "
+           "fast, yellow = slow, red = very slow (see the context zones).",
+    "slots": "auto: 2 slots when two full windows fit (main session + coder subagent), else 1. 3-4: more subagents "
+             "at the same time. The row shows 3-4 only when they fit this Mac with this model, window and KV cache. "
+             "More slots give more tokens per second in total, but each slot is slower. The parallel step of "
+             "Auto-tune measures this.",
+    "spec": "Speculative decoding. n-gram copies repeated text. MTP makes drafts with the model's own head. "
+            "Auto-tune measures which mode is faster.",
+    "specn": "The number of draft tokens per speculation step. On Metal, more draft tokens do not make dense "
+             "models faster.",
+    "cache": "The RAM prompt cache in MiB. It keeps the prompts that leave the slots. When a session comes back, "
+             "the server does not read it again in full.",
     "net": _NET_HELP,
-    "temp": "1.0 = Qwen's thinking-mode value (default) · 0.6 = more precise coding (35B card)",
-    "presence": "0 = default · 1.5 = fewer repetition loops (35B card, general use)",
-    "adv": "more server settings: sampling, batch and checkpoints",
-    "top_k": "sample from the k most likely tokens; Qwen: 20 · 0 = off",
-    "top_p": "nucleus sampling; Qwen: 0.95 (thinking), 0.8 (no thinking: the client sends it)",
-    "min_p": "drop tokens below min_p × the top probability; Qwen: 0",
-    "repeat": "repetition penalty; Qwen: 1.0 (off) · use presence instead",
-    "ub": "-ub physical batch; 512 measured best on Metal (90.5 vs 88.6 / 86.1 tok/s for 1024 / 2048)",
-    "ckpt": "context checkpoints per slot (each ~63 MiB on the 35B, ~150 MiB on the 27B); more did not help (Phase 6)",
-    "ckstep": "minimum tokens between checkpoints; 1024 vs 4096 made no difference in the Phase 6 test",
+    "temp": "1.0 = the Qwen value for thinking mode (the default) · 0.6 = more precise code (35B card)",
+    "presence": "0 = the default · 1.5 = fewer repeat loops (35B card, general use)",
+    "adv": "Shows more server settings: sampling, batch and checkpoints.",
+    "top_k": "The model samples from the k most likely tokens. Qwen: 20 · 0 = off.",
+    "top_p": "Nucleus sampling. Qwen: 0.95 with thinking, 0.8 without thinking (the client sends this value).",
+    "min_p": "The model ignores the tokens below min_p × the top probability. Qwen: 0.",
+    "repeat": "The repeat penalty. Qwen: 1.0 (off). Use presence instead.",
+    "ub": "The -ub physical batch. On Metal, 512 is the fastest: 90.5 tok/s, against 88.6 / 86.1 tok/s for "
+          "1024 / 2048.",
+    "ckpt": "The context checkpoints per slot. Each one uses about 63 MiB on the 35B and 150 MiB on the 27B. More "
+            "checkpoints did not help in the Phase 6 test.",
+    "ckstep": "The minimum number of tokens between checkpoints. In the Phase 6 test, 1024 and 4096 gave the same "
+              "result.",
 }
 
 
 def row_instruction(key: str) -> str:
     """How to change a Settings row, for someone new to the dashboard."""
     if key == "model":
-        return "Press Enter to pick a model from the list (or click one); A shows auto fit's pick and why."
+        return ("Press Enter to choose a model from the list, or click a model. Press A to see auto fit's pick "
+                "and the reason.")
     if key == "adv":
         return "Press ← → to show or hide the advanced settings."
     if key in NUMERIC:
-        return "Type a number and press Enter, or press ← → to step through common values."
+        return "Type a number, then press Enter. To go through the usual values, press ← →."
     return "Press ← → to change the value."
 
 
@@ -285,10 +296,11 @@ def llama_fit(name: str, weights: int, shape: Shape, kv: str, ctx: int, slots: s
     chk = check_start(shape, weights, ctx, n, kv, limit, full is not False)
     text = f"{_fits(chk.fits)}: {name} needs {size(chk.need)} for {n} × {ctx_label(ctx)} ({kv}) of {size(limit)} GPU memory"
     if full is not None:
-        text += (" · sliding-window layers: full cache (saved prompts restore)" if full
-                 else f" · sliding-window layers: {YEL}window only{R} (saved prompts don't restore: Settings > Caching)")
+        text += (" · sliding-window layers: full cache (CARL can restore saved prompts)" if full
+                 else f" · sliding-window layers: {YEL}window only{R} (CARL cannot restore saved prompts: Settings > "
+                      f"Caching)")
     if not chk.fits:
-        text += (f" · largest window: {ctx_label(chk.largest)}" if chk.largest else " · the weights alone don't fit")
+        text += (f" · largest window: {ctx_label(chk.largest)}" if chk.largest else " · the weights alone do not fit")
     return chk.fits, text
 
 
@@ -475,8 +487,8 @@ class SettingsService:
         if not m:
             return False, f"{RED}unknown model {name}{R}"
         if m["status"] != "downloaded":
-            return False, (f"{RED}{name} is not downloaded{R}: press ] for the Models panel, then d to download it "
-                           f"(or ./carl.sh download {name})")
+            return False, (f"{RED}{name} is not downloaded{R}. To download it, press ] for the Models panel, then d "
+                           f"(or run ./carl.sh download {name}).")
         try:
             return llama_fit(name, self.store.file_size(m["path"]), self.store.shape_of(m["path"]), str(p["kv"]),
                              int(p["ctx"]), str(p["slots"]), self.gpu_limit(), self.swa_mode())

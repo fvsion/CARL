@@ -259,15 +259,19 @@ class CoderPlan:
     kept: tuple[str, ...]       # report lines about the user's own agents
 
 
-BACKGROUND_BLOCK = re.compile(r"<!-- carl:background (\w+) -->\n(.*?)(?=<!-- carl:background )", re.S)
-BACKGROUND_END = re.compile(r"<!-- carl:background end -->\n\n?")
+CLIENT_BLOCK = re.compile(r"<!-- carl:(\w+) (\w+) -->\n(.*?)(?=<!-- carl:)", re.S)
+CLIENT_END = re.compile(r"<!-- carl:\w+ end -->\n\n?")
 
 
-def delegation_for(text: str, client: str, background: bool) -> str:
-    """The delegation rule for one client: its own "run the coder in the background" paragraph when
-    background subagents are on, none otherwise (the markers go)."""
-    out = BACKGROUND_BLOCK.sub(lambda m: m.group(2) if background and m.group(1) == client else "", text)
-    out = BACKGROUND_END.sub("\n" if background else "", out)
+def delegation_for(text: str, client: str, background: bool, browser: bool = True) -> str:
+    """The delegation rule for one client: the paragraphs marked for it whose switch is on ("background"
+    when background subagents are on, "browser" with the browser, "nobrowser" without it; "any" = every
+    client), the others and the markers out."""
+    on = {"background": background, "browser": browser, "nobrowser": not browser}
+
+    def keep(m: "re.Match[str]") -> str:
+        return m.group(3).rstrip("\n") + "\n\n" if on.get(m.group(1), False) and m.group(2) in (client, "any") else ""
+    out = CLIENT_END.sub("\n", CLIENT_BLOCK.sub(keep, text))
     return re.sub(r"\n{3,}", "\n\n", out)
 
 
@@ -792,7 +796,7 @@ class Installer:
         prompt_path = os.path.join(ddir, "coder.md")
         os.makedirs(ddir, exist_ok=True)
         for p, t, what in ((prompt_path, name_agent(body, name), "coder prompt"),
-                           (rule_path, name_agent(delegation_for(self.delegation_text(), "opencode", self.o.background),
+                           (rule_path, name_agent(delegation_for(self.delegation_text(), "opencode", self.o.background, self.o.browser),
                                                   name), "delegation rule")):
             old = read_or_none(p)
             if old is not None and old != t:
@@ -1047,7 +1051,7 @@ class Installer:
             if existing != new_text:
                 rep.add("updated" if existing is not None else "added", f"Pi agent '{name}' + delegation rule")
             write_text(cpath, new_text)
-            rule = name_agent(delegation_for(self.delegation_text(), "pi", self.o.background).strip(), name)
+            rule = name_agent(delegation_for(self.delegation_text(), "pi", self.o.background, self.o.browser).strip(), name)
             cur = (cur + "\n\n" if cur else "") + f"{begin}\n{rule}\n{end}"
             st["coder_agent"] = name
             st["background_subagents"] = self.o.background     # the subagent extension reads it

@@ -17,7 +17,7 @@ from .logbook import TS, LogBook, RequestRecord, level_of
 from .model import ServerData, SlowStats, flag, flag_int
 
 LEVEL_NAMES = ("connect", "context", "memory", "activity", "model", "health", "system", "requests", "log", "modelinfo")
-NOLOG_TEXT = "no log file: the server writes to the terminal that started it (start it with ./carl.sh to see it here)"
+NOLOG_TEXT = "no log file: the server writes to its terminal. Start it with ./carl.sh to see the log here."
 REQ_HEAD = (f"{'started':8}  {'context':>8}  {'new':>7}  {'read/s':>6}  {'output':>6}  {'gen/s':>5}  {'took':>6}  "
             f"{'drafts':>6}")
 
@@ -60,13 +60,13 @@ class View:
 def status_of(d: ServerData, server_pid: Optional[int]) -> Tuple[str, str, str]:
     """(label, pill background, words) for the header and the ACTIVITY card."""
     if d.exited:
-        return "EXITED", "41", f"{RED}server process {server_pid} has exited{R}"
+        return "EXITED", "41", f"{RED}server process {server_pid} stopped{R}"
     if not d.up:
-        return ("LOADING", "43", f"{YEL}loading the model…{R}") if d.pid else ("OFFLINE", "41", f"{RED}not reachable{R}")
+        return ("LOADING", "43", f"{YEL}the model loads…{R}") if d.pid else ("OFFLINE", "41", f"{RED}no connection{R}")
     if not d.slots:
         return "UP", "42", "running (unknown server: limited stats)"
     if not d.busy:
-        return "IDLE", "42", "idle, waiting for requests"
+        return "IDLE", "42", "idle: no requests"
     nbusy = sum(1 for x in d.slot_list if x.busy)
     if nbusy > 1:
         return f"BUSY ×{nbusy}", "46", f"{nbusy} requests at once (slots in parallel)"

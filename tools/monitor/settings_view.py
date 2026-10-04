@@ -10,7 +10,8 @@ from dataclasses import dataclass
 from typing import List, Mapping, Optional, Sequence, Tuple
 
 from .fmt import (B, CYN, DIM, GRN, R, RED, YEL, CardLine, Ln, Row, bar, button_rows, buttons, ctx_label, cwrap,
-                  draw_card, dur, fit, heading, home_short, indent, lv, merge_columns, Section, size, vlen, with_side, wwrap)
+                  draw_card, dur, fit, heading, home_short, indent, lv, merge_columns, Section, side_lines, size, vlen, with_side,
+                  wwrap)
 from carl_core.domain.autofit import GOAL_TEXT, GOALS, SCOPE_TEXT, SCOPES, AutoFit, as_goal, as_scope, gib
 from carl_core.domain.cards import CHOICE_TEXT
 from carl_core.domain.tuning import DEPTH_TEXT, DEPTHS, as_depth
@@ -26,31 +27,35 @@ DISK_CHOICES = (2, 5, 10, 20, 50)                      # the Caching panel's dis
 AUTO_CHOICES = (30, 120, 300, 600)                    # save = auto: seconds of unsaved reading (default 120)
 SAVE_TEXT = (("auto", "auto"), ("turn", "every turn"), ("switch", "on a switch"), ("stop", "before a stop"))
 SAVE_HELP = (
-    ("auto", "auto: when the part not saved yet would take AUTO to read again (this model's measured read speed; "
-             "the Auto after row), and before a session leaves the server (its slot is needed, a router switch, a "
-             "stop). Few writes; a crash loses at most AUTO of reading per session."),
-    ("turn", "every turn: after each reply. Nothing is ever lost; the most disk writes (a long session: up to ~1 GB per "
-             "turn on the 35B)."),
-    ("switch", "on a switch: before a session leaves the server (its slot is needed, a router switch, a dashboard stop "
-               "or restart). A crash or a stop outside the dashboard (Ctrl-C) loses what wasn't saved."),
-    ("stop", "before a stop: only before the dashboard stops or restarts the server, or a router switch. Sessions moved "
-             "to the RAM cache meanwhile are lost at the stop."),
+    ("auto", "auto: CARL saves a session when its unsaved part would take AUTO to read again. The Auto after row "
+             "sets AUTO, and the measured read speed of this model gives the time. CARL also saves before a session "
+             "leaves the server: a different session needs its slot, a router switch, or a stop. This mode writes "
+             "little. After a crash, each session loses at most AUTO of read time."),
+    ("turn", "every turn: CARL saves after each reply. A crash loses nothing. This mode writes the most to the disk: "
+             "up to about 1 GB per turn for a long session on the 35B."),
+    ("switch", "on a switch: CARL saves before a session leaves the server: a different session needs its slot, a "
+               "router switch, or a stop or restart from the dashboard. A crash or a stop outside the dashboard "
+               "(Ctrl-C) loses the unsaved part."),
+    ("stop", "before a stop: CARL saves only before the dashboard stops or restarts the server, and before a router "
+             "switch. The stop loses the sessions that moved to the RAM cache before it."),
 )
 SWA_TEXT = (("auto", "auto"), ("full", "full cache"), ("window", "window only"))
 SWA_HELP = (
-    ("auto", "auto: models with sliding-window layers (Gemma) keep every layer at full length when that fits this Mac "
-             "(saved states can be restored), else only the window (less memory, no restores). Applies at the next start."),
-    ("full", "full cache: restores work; more memory (Gemma 4 E4B at 2 × 96K: +2.3 GB). Applies at the next start."),
-    ("window", "window only: the least memory; this model's saved states can't be restored (llama.cpp re-reads "
-               "them). Applies at the next start."),
+    ("auto", "auto: models with sliding-window layers (Gemma) keep all layers at full length when that fits this "
+             "Mac. Then CARL can restore saved states. If not, the model keeps only the window: it uses less memory, "
+             "but CARL cannot restore states. The change applies at the next start."),
+    ("full", "full cache: CARL can restore saved states, but the model uses more memory (Gemma 4 E4B at 2 × 96K: "
+             "+2.3 GB). The change applies at the next start."),
+    ("window", "window only: the model uses the least memory. CARL cannot restore its saved states, so llama.cpp "
+               "reads them again. The change applies at the next start."),
 )
 LIST_W = 40                                            # the Server panel's model list
 COLOURS = (f"{GRN}green{R} = tuned / fast · {YEL}yellow{R} = changed / slower · "
            f"{RED}red{R} = very slow / no MTP head")
 MODEL_HEADER = f"{DIM}{'':2}{'model':<26} {'size':>8}  {'status':<10} {'fits':>5} {'speed':>7} role and good for{R}"
-PICKER_FOOT = ("Press ↑ ↓ to select a model and Enter to choose it, Esc to cancel. ★ = auto fit's pick · fits = the "
-               "largest window per slot that fits this Mac (q4_0, 1 slot; red = too big). To download or add any GGUF "
-               "from Hugging Face: press ] for the Models panel, then h.")
+PICKER_FOOT = ("Press ↑ ↓ to select a model. Press Enter to choose it. Press Esc to cancel. ★ = auto fit's pick · "
+               "fits = the largest window per slot that fits this Mac (q4_0, 1 slot; red = too big). To download any "
+               "GGUF from Hugging Face, press ] for the Models panel, then h.")
 WHY_KEY = {"specn": "spec", "presence": "temp", "top_k": "temp", "top_p": "temp", "min_p": "temp", "repeat": "temp"}
 
 
@@ -69,7 +74,7 @@ def subpanel_bar(sp: int) -> Row:
         text += (f"\x1b[1;7m{lab}{R}" if i == sp else f"{DIM}{lab}{R}") + " "
         spans.append((col, col + len(lab), f"sp:{i}"))
         col += len(lab) + 1
-    text += f"{DIM}  press [ or ] to switch panels{R}"
+    text += f"{DIM}  press [ or ] to change panels{R}"
     return " " + text, [(1 + a, 1 + b, act) for a, b, act in spans]
 
 
@@ -100,19 +105,19 @@ def speed_line(m: ModelInfo, tune: object) -> str:
     st = jdict(t.get("settings"))
     best = jdict(jdict(jdict(t.get("results")).get("speculation")).get(f"{st.get('spec')}:{st.get('spec_n')}"))
     if best:
-        return (f"{GRN}{best.get('prose')} tok/s prose · {best.get('code')} code · {best.get('edit')} re-emitting{R} "
-                f"{DIM}(measured here, {t.get('date')}){R}")
+        return (f"{GRN}{best.get('prose')} tok/s prose · {best.get('code')} code · {best.get('edit')} re-emit{R} "
+                f"{DIM}(measured on this Mac, {t.get('date')}){R}")
     measured = m.get("measured") or []
     ref = jdict(measured[0]) if measured else {}
     if ref.get("decode"):
         return f"{ref['decode']} {DIM}(on an {ref.get('machine', '?')}; run Auto-tune for this Mac){R}"
-    return f"{DIM}not measured yet: run Auto-tune{R}"
+    return f"{DIM}not measured: run Auto-tune{R}"
 
 
 def parallel_text(par: object) -> str:
     """Auto-tune's parallel step: total decode speed with n requests at once, and each one's."""
     rows = [r for r in (par if isinstance(par, list) else []) if isinstance(r, list) and len(r) >= 2]
-    return "decoding in total: " + " · ".join(f"{int(r[0])} at once {float(r[1]):.0f} tok/s ({float(r[1]) / r[0]:.0f} each)"
+    return "total decode speed: " + " · ".join(f"{int(r[0])} at once {float(r[1]):.0f} tok/s ({float(r[1]) / r[0]:.0f} each)"
                                               for r in rows if r[0])
 
 
@@ -170,8 +175,8 @@ class SettingsView:
             L: List[CardLine] = []
             if svc.models.error:                            # a broken catalogue / models.json: say so here
                 L += [f"{RED}{x}{R}" for x in wwrap(f"model list unavailable: {svc.models.error}", mw)[:3]]
-                L += cwrap(f"{DIM}Fix the file (./carl.sh models shows the same error); the list is read again every "
-                           f"10 s.{R}", mw) + [""]
+                L += cwrap(f"{DIM}Correct the file. ./carl.sh models shows the same error. CARL reads the list again "
+                           f"every 10 s.{R}", mw) + [""]
             L.append(f"{DIM}{'':2}{'setting':<14}{'new':<{vw + 8}}{'running now':<18}{R}")
             for i, (k, label, _, _, _) in enumerate(rws):
                 L.append(self._row(ui, p, run, i, k, label, vw))
@@ -217,20 +222,22 @@ class SettingsView:
         af = svc.auto_fit(p)
         if af and af.pick and af.plan:
             where = "" if af.pick.downloaded else f" · {YEL}not downloaded{R}"
-            text = f"{CYN}{af.pick.name}{R}, {af.plan.label()}{where} · {DIM}why and Use this: the Auto fit panel (A){R}"
+            text = f"{CYN}{af.pick.name}{R}, {af.plan.label()}{where} · {DIM}the reason and Use this: Auto fit panel (A){R}"
         else:
             text = f"{RED}{af.because() if af else svc.models.fit_error or 'unavailable'}{R} {DIM}(Auto fit panel: A){R}"
         L.append(Ln(lv("auto fit", text), act=f"sp:{SP_FIT}"))
-        L.append(lv("file", home_short(self.config_file, self.home) + f"{DIM} · ./carl.sh config show lists every key{R}"))
+        L.append(lv("file", home_short(self.config_file, self.home) + f"{DIM} · ./carl.sh config show lists all keys{R}"))
         return L
 
     @staticmethod
     def keys_more(running: bool) -> List[str]:
         """What the ? card adds for the Server panel."""
-        return ["* marks a value that differs from the running server. Scroll with the mouse wheel or PgUp / PgDn.",
-                "Type a number and press Enter on the context and the other number rows.",
-                "More models: press ] for the Models panel, then h to add one from Hugging Face.",
-                "After changing the context or slots, run install.sh again on the clients (the Connect tab says when)."]
+        return ["* shows a value that is different from the running server. To scroll, use the mouse wheel or "
+                "PgUp / PgDn.",
+                "On the context row and the other number rows, type a number, then press Enter.",
+                "To add a model from Hugging Face, press ] for the Models panel, then press h.",
+                "After a change to the context or slots, run install.sh again on the clients. The Connect tab tells "
+                "you when."]
 
     def model_list(self, ui: UIState, p: Pending, w: int, height: int) -> List[CardLine]:
         """The model selector in the settings card (w columns, height lines): click a model (or m,
@@ -301,7 +308,7 @@ class SettingsView:
         return draw_card("confirm", "START?" if not run else "RESTART?", "", [
             "", first,
             "Requests in progress stop. The model loads again (about 30 s to 2 min)." if run else "The model loads (about 30 s to 2 min).",
-            "If the new server does not start, the old one starts again." if run else "", "",
+            "If the new server does not start, CARL starts the old server again." if run else "", "",
             buttons("  ", [("Yes, restart (y)" if run else "Yes, start (y)", "setyes"), ("Cancel (n)", "setno")])], w, 2)
 
     def model_info(self, p: Pending, key: str, w: int, lvl: int = 1) -> List[Row]:
@@ -342,7 +349,8 @@ class SettingsView:
         L += cwrap(f"{B}{'Speed':<11}{R}{speed_line(m, tune)}", tw, " " * 11)
         par = jdict(jdict(tune).get("results")).get("parallel") or []
         if par:
-            L += cwrap(f"{B}{'Parallel':<11}{R}{parallel_text(par)} {DIM}(measured here; more slots: Server panel){R}",
+            L += cwrap(f"{B}{'Parallel':<11}{R}{parallel_text(par)} {DIM}(measured on this Mac; set more slots in the "
+                       f"Server panel){R}",
                        tw, " " * 11)
         if lvl == 2:
             if m.get("uncensored"):
@@ -352,21 +360,22 @@ class SettingsView:
                 L += ["", f"{B}Pick instead{R}"]
                 L += [x for a in alts for x in cwrap(f"  {CYN}{a.get('model')}{R} {DIM}when{R} {a.get('when')}", tw, "    ")]
             if m.get("rank") and m.get("custom"):
-                L += cwrap(f"{B}{'Quality':<11}{R}rank {m['rank']} {DIM}(your card, not measured: 1 = best, the catalogue "
-                           f"ranks 1-5; auto fit {'may pick it' if m.get('auto_fit') else 'leaves it out'}){R}",
+                L += cwrap(f"{B}{'Quality':<11}{R}rank {m['rank']} {DIM}(from your card, not measured: 1 = best, the "
+                           f"catalogue uses 1-5; auto fit {'can pick it' if m.get('auto_fit') else 'does not use it'}){R}",
                            tw, " " * 11)
             elif m.get("rank"):
                 L += cwrap(f"{B}{'Quality':<11}{R}rank {m['rank']} {DIM}(1 = best: parameters and density first, then "
-                           f"quantization; speed is the reverse){R}", tw, " " * 11)
+                           f"quantization. Speed has the opposite order.){R}", tw, " " * 11)
             desc = wwrap(m.get("description", ""), tw)
             if desc:
                 L += ["", *[f"{DIM}{x}{R}" for x in desc]]
         elif not good and m.get("summary"):                 # custom models: no card text, the summary
             L += [f"{CYN}{x}{R}" for x in wwrap(m["summary"], tw)]
         if m.get("custom") and not jdict(m.get("local")).get("card"):
-            L += cwrap(f"{DIM}No card yet: press ] for the Models panel, select it and press e to say what it is good "
-                       f"for (or ./carl.sh card {name}).{R}", tw)
-        L += ["", *cwrap(f"{B}Recommended for this model{R} {DIM}(Auto-tune > catalogue; yellow = yours differs){R}", tw)]
+            L += cwrap(f"{DIM}This model has no card. To write one, select the model in the Models panel (]) and "
+                       f"press e. You can also run ./carl.sh card {name}.{R}", tw)
+        L += ["", *cwrap(f"{B}Recommended for this model{R} {DIM}(Auto-tune > catalogue; yellow = your value is "
+                         f"different){R}", tw)]
         cells = []
         for pk, lab in (("kv", "KV cache"), ("ctx", "context"), ("slots", "slots"), ("spec", "speculation"),
                         ("spec_n", "draft tokens"), ("temp", "temperature")):
@@ -382,7 +391,7 @@ class SettingsView:
             L += [x for c in cells for x in cwrap("  " + c, tw, " " * 15)]
         zg, zs, _ = svc.store.ctx_zones(m)
         L += cwrap(f"  {'zones':<13}{GRN}≤{ctx_label(zg)} fast{R} · {YEL}≤{ctx_label(zs)} slow{R} · {RED}>{ctx_label(zs)} very "
-                   f"slow{R} {DIM}(cold re-read of a full window; "
+                   f"slow{R} {DIM}(cold read of a full window; "
                    f"{'measured here' if tune and tune.get('ctx_zones') else 'catalogue'}){R}", tw, " " * 15)
         labels = {r.key: r.label for r in svc.schema.llama + LLAMA_ADV}
         why_all = jdict(m.get("why"))
@@ -394,8 +403,8 @@ class SettingsView:
                 L += ["", f"{B}Why{R} {DIM}({labels.get(wk if wk != sel_wk else key, wk)}){R}"]
                 L += wwrap(why, tw)[: (12 if lvl == 2 else 6)]
         if lvl == 1:
-            L += ["", *cwrap(f"{DIM}Click the MODEL title for the full card: alternatives, what uncensored means, every "
-                             f"reason, measurements.{R}", tw)]
+            L += ["", *cwrap(f"{DIM}Click the MODEL title to see the full card: alternatives, what uncensored means, "
+                             f"all reasons and the measurements.{R}", tw)]
         if lvl == 2:
             L += self._tune_table(tune)
             hf = jdict(m.get("hf"))
@@ -412,17 +421,17 @@ class SettingsView:
         pad = " " * 11
         if af is None:
             return label_wrap("Auto fit", f"unavailable: {self.svc.models.fit_error or 'no model list'}", tw, YEL) + [""]
-        head = (f"picked {af.pick.name}, {af.plan.label()}: {af.because()}" if af.pick and af.plan
-                else f"nothing fits: {af.because()}")
+        head = (f"picked {af.pick.name}, {af.plan.label()}: {af.because()}." if af.pick and af.plan
+                else f"nothing fits: {af.because()}.")
         L = label_wrap("Auto fit", head, tw, CYN if af.pick else RED)
         L += [f"{pad}{x}" for x in cwrap(f"{DIM}goal: {GOAL_TEXT[as_goal(p.get('goal'))]} · from: "
-                                          f"{SCOPE_TEXT[as_scope(p.get('scope'))]} (change them in the Auto fit panel: "
-                                          f"A) · stock models only{R}", tw - 11)]
+                                          f"{SCOPE_TEXT[as_scope(p.get('scope'))]} (to change them, press A for the Auto "
+                                          f"fit panel) · stock models only{R}", tw - 11)]
         if af.pick and not af.pick.downloaded:
-            meanwhile = (f"model auto starts {start} (the best downloaded model that fits) until then"
-                         if p.get("model") == "auto" else "it must be downloaded before a start")
-            L += [f"{pad}{YEL}{x}{R}" for x in wwrap(f"{af.pick.name} is not downloaded: {meanwhile}. The Auto fit "
-                                                      f"panel (A) downloads it (or ] for the Models panel, then d).",
+            meanwhile = (f"Until then, model auto starts {start} (the best downloaded model that fits)"
+                         if p.get("model") == "auto" else "A start is possible only after the download")
+            L += [f"{pad}{YEL}{x}{R}" for x in wwrap(f"{af.pick.name} is not downloaded. {meanwhile}. To download it, "
+                                                      f"use the Auto fit panel (A), or the Models panel (]) and d.",
                                                       tw - 11)]
         shown = af.rejected if lvl == 2 else af.rejected[:4]
         for i, r in enumerate(shown):
@@ -440,7 +449,7 @@ class SettingsView:
         if t and wk == "spec":
             res = jdict(jdict(t.get("results")).get("speculation"))
             if res:
-                return "Measured here (" + str(t.get("date")) + "): " + " · ".join(
+                return "Measured on this Mac (" + str(t.get("date")) + "): " + " · ".join(
                     f"{mode.replace('draft-mtp', 'MTP').replace('ngram-mod', 'n-gram').replace(',', '+')} "
                     f"{jdict(r).get('prose')}/{jdict(r).get('code')}/{jdict(r).get('edit')}"
                     for mode, r in res.items()) + " tok/s (prose/code/re-emit)."
@@ -518,8 +527,8 @@ class SettingsView:
         items: List[PickItem] = [(str(i), f"{i + 1:>2}. {o}") for i, o in enumerate(opts)]
         return Picker(title="SORT MODELS BY" if kind == "sort" else "SHOW MODELS", items=items,
                       on_pick="picksort" if kind == "sort" else "pickfilter", sel=cur % len(opts),
-                      noun="options", header=f"{DIM}  press ↑ ↓ to select, Enter to choose{R}",
-                      foot="Press ↑ ↓ to select an option, Enter to choose it, Esc to cancel.", reopen=reopen)
+                      noun="options", header=f"{DIM}  press ↑ ↓ to select, then Enter{R}",
+                      foot="Press ↑ ↓ to select an option. Press Enter to choose it. Press Esc to cancel.", reopen=reopen)
 
     def model_picker(self, cur: str, sort: int = 0, filt: int = 0, p: Optional[Pending] = None) -> Picker:
         """A drop-down of the models ("auto" on top) in the chosen order and filter; s / f change them.
@@ -533,21 +542,21 @@ class SettingsView:
         note = (f"auto = auto fit's pick for this Mac: {af.summary()}." if af and af.pick else
                 f"auto fit: {af.because() if af else self.svc.models.fit_error or 'unavailable'}.")
         if pick and pick != start:
-            note += f" {pick} is not downloaded: a start uses {start} until then."
+            note += f" {pick} is not downloaded. Until then, a start uses {start}."
         items += [(m["name"], m) for m in ms]
         so, fi = arrange_label(sort, filt)
         return Picker(title="CHOOSE A MODEL", items=items, on_pick="pickmodel",
                       sel=next((i for i, it in enumerate(items) if it[0] == cur), 0),
                       noun=f"models · sort: {so} · show: {fi}", mark=pick, note=note,
-                      foot=PICKER_FOOT + " Press s / S for the next / previous sort and f / F for the next / previous "
-                           "filter (use case, stock, dense / MoE, downloaded, fits).")
+                      foot=PICKER_FOOT + " Press s / S for the next / previous sort. Press f / F for the next / "
+                           "previous filter (use case, stock, dense / MoE, downloaded, fits).")
 
     def confirm(self, c: Confirm, cols: int) -> List[Row]:
         """A yes / no question."""
         w = min(cols - 2, 96)
         L: List[CardLine] = ["", *[x for line in c.lines for x in cwrap(line, w - 4)], "",
                              buttons("  ", [("Yes (y)", c.yes), ("Cancel (n)", "c2no")]),
-                             f"{DIM}  Press y for yes, n or Esc to cancel.{R}"]
+                             f"{DIM}  Press y for yes. Press n or Esc to cancel.{R}"]
         return indent(draw_card("confirm2", c.title, "", L, w, 2))
 
     # ------------------------------------------------------------ panel 2: models + downloads
@@ -565,8 +574,8 @@ class SettingsView:
             L: List[CardLine] = [*arrange_chips(ui.msort, ui.mfilter, mw), f"{DIM}{len(ms)} of {len(self.svc.models.get())} models{R}",
                                  MODEL_HEADER]
             if not ms:
-                L.append(f"{DIM}  no model matches \"{fi}\": pick another filter above{R}")
-            vis = max(height - 14, 4)
+                L.append(f"{DIM}  no model matches \"{fi}\": select a different filter above{R}")
+            vis = max(height - 11 - below, 4)                # the sections under the list stay on the screen
             top = min(max(ui.mrow - vis // 2, 0), max(len(ms) - vis, 0))
             for i in range(top, min(top + vis, len(ms))):
                 L.append(selectable(self.model_line(ms[i], pick), i == ui.mrow, mw, f"mrow:{i}"))
@@ -578,7 +587,7 @@ class SettingsView:
             L += button_rows("", acts, mw)
             if ui.text:
                 L += ["", *cwrap(f"{B}{ui.text.prompt}{R} {CYN}{ui.text.value}▏{R}  "
-                                 f"{DIM}(Enter looks it up, Esc cancels){R}", mw)]
+                                 f"{DIM}(Enter: find it · Esc: cancel){R}", mw)]
             if ui.hf and ui.hf.status:
                 L += ["", *cwrap(f"{YEL}{ui.hf.status}{R}", mw)]
             return L
@@ -606,26 +615,26 @@ class SettingsView:
             if m.get("custom"):
                 has = bool(jdict(jdict(m.get("local")).get("card")))
                 about.append(lv("card", f"{GRN}your card{R}" if has else f"{YEL}none yet{R}", 8))
-            tune = jdict(m.get("local")).get("tune")
-            if tune:
-                st = tune["settings"]
-                about.append(lv("tuned", f"{GRN}{tune['date']}{R} on {tune.get('machine', '?')}: {st['spec']} "
-                                         f"n={st['spec_n']}, {ctx_label(st['ctx'])} x {st['slots']} slot(s)", 8))
+            about.append(lv("tuned", best_tune(jdict(m.get("local")).get("tune")), 8))
             tip = ("Press Enter to use it in the Server panel." if m["status"] == "downloaded"
-                   else "Press d to download it (resumable, checked against its SHA-256)." if hf.get("repo")
+                   else "Press d to download it. You can resume the download, and CARL checks its SHA-256."
+                   if hf.get("repo")
                    else "Press Enter to use it in the Server panel.")
             if m.get("custom") and not jdict(jdict(m.get("local")).get("card")):
-                tip = "Press e to say what this model is good for (role, tags, rank): its card."
-        L = with_side(main, tip, [
+                tip = "Press e to write the card of this model: its role, tags and rank."
+        secs: List[Section] = [
             ("Selected model", about),
-            ("The list", [f"speed: {GRN}measured here{R} (Auto-tune) or from another Mac (the catalogue); "
+            ("The list", [f"speed: {GRN}measured on this Mac{R} (Auto-tune) or on a different Mac (the catalogue) · "
                           f"? = not measured · fits: the largest window per slot on this Mac"]),
-            ("Models folder", [f"Any .gguf in {home_short(mdir.path, self.home)} shows up here · free disk "
-                               f"{size(mdir.free)}"])], w - 4)
+            ("Models folder", [f"The list shows all .gguf files in {home_short(mdir.path, self.home)} · free disk "
+                               f"{size(mdir.free)}"])]
+        below = len(side_lines(tip, secs, w - 4)) + 1
+        L = with_side(main, tip, secs, w - 4, beside=False)
         ui.keys = [("↑↓", "select"), ("Enter", "use"), ("d", "download"), ("v", "verify"), ("u", "auto-tune"),
                    ("x", "delete"), ("e", "edit card"), ("h", "add from HF"), ("s f", "sort / filter"), ("[ ]", "panels")]
-        ui.keys_more = ["S / F: the previous sort / filter; or click an option.", "c cancels a download.",
-                        "e edits the card of a custom model (one you added): what it is good for, its rank, thinking."]
+        ui.keys_more = ["S / F: the previous sort / filter. You can also click an option.", "c cancels a download.",
+                        "e edits the card of a custom model (a model that you added): what it is good for, its rank and "
+                        "its thinking."]
         return indent(draw_card("models", "MODELS", f"{DIM}catalogue + models folder + Hugging Face downloads{R}", L, w, 2))
 
     # ------------------------------------------------------------ panel 3: auto fit
@@ -639,12 +648,13 @@ class SettingsView:
         af = svc.auto_fit(p)
         ui.keys = [("g", "the other goal"), ("f", "the other model set"), ("Enter", "use this"), ("d", "download it"),
                    ("↑↓ PgUp PgDn", "scroll"), ("[ ]", "panels")]
-        ui.keys_more = ["The goal and the model set are saved at once: model auto starts the new pick.",
-                        "Use this sets the Server panel's model, context, slots and KV cache; a there starts it."]
-        how: List[CardLine] = ["Auto fit picks the best stock model that fits this Mac. Quality: parameters and density "
-                               "first, then quantization (rank 1 = best). Speed comes first, so the goal picks the family. "
-                               "Abliterated models are only picked by hand; a custom model takes part only when its card "
-                               "opts in."]
+        ui.keys_more = ["CARL saves the goal and the model set immediately. Then model auto starts the new pick.",
+                        "Use this sets the model, context, slots and KV cache in the Server panel. Press a there to "
+                        "start it."]
+        how: List[CardLine] = ["Auto fit picks the best stock model that fits this Mac. For quality, parameters and "
+                               "density count first, then quantization (rank 1 = best). Speed is more important, so the "
+                               "goal selects the model family first. Auto fit never picks an abliterated model: you "
+                               "must select it yourself. Auto fit uses a custom model only when its card lets it."]
         sections: List[Section] = [("How auto fit picks", how), ("Goal", [SET_HELP["goal"]]), ("From", [SET_HELP["scope"]])]
 
         def choices(mw: int) -> List[CardLine]:
@@ -657,35 +667,37 @@ class SettingsView:
         if af is None:
             L = with_side(lambda mw: [*choices(mw), "", *cwrap(f"{RED}auto fit unavailable: "
                                                               f"{svc.models.fit_error or 'no model list'}{R}", mw)],
-                          "Press g or f to change what auto fit looks for.", sections, w - 4)
+                          "Press g or f to change the goal or the model set.", sections, w - 4)
             return indent(draw_card("autofit", "AUTO FIT", f"{DIM}the best stock model for this Mac{R}", L, w, 2))
         b = af.budget
-        mem = (f"GPU limit {gib(b.gpu_limit)}" + (f" · RAM {gib(b.ram)} less {gib(b.reserve)} kept for macOS and apps"
+        mem = (f"GPU limit {gib(b.gpu_limit)}" + (f" · RAM {gib(b.ram)} minus {gib(b.reserve)} for macOS and apps"
                                                    if b.ram > 0 else ""))
-        vm = (f"{YEL}(more kept while VMware's network is up){R}" if b.vm_up
-              else f"{DIM}(VMware's network is down; with it up, 10 GiB are kept){R}")
+        vm = (f"{YEL}(CARL keeps more while the VMware network is up){R}" if b.vm_up
+              else f"{DIM}(the VMware network is down. When it is up, CARL keeps 10 GiB){R}")
         sections.insert(1, ("This Mac", [f"{mem} → {B}{gib(b.allowed)} for a model{R} {vm}"]))
         sections.append(("The ranking", [f"max ctx = the largest window per slot that fits this Mac (1 slot, q4_0 KV) · "
                                          f"speed = Auto-tune's score, {GRN}measured here{R} or on another Mac (the "
-                                         f"catalogue) · ./carl.sh fit prints the ranking too"]))
+                                         f"catalogue) · ./carl.sh fit also shows the ranking"]))
         other = as_goal("everyday" if goal == "hard-code" else "hard-code")
         oaf = svc.models.auto_fit(other, scope)
         if oaf:
             sections.append((f"The other goal: {GOAL_TEXT[other]}",
                              [(f"{oaf.pick.name}, {oaf.plan.label()}" if oaf.pick and oaf.plan else "nothing fits")]))
-        tip = ("Press Enter to set the Server panel to this plan; a there starts it." if af.pick and af.pick.downloaded
-               else "Press d to download the pick, then Enter to use it." if af.pick else "Press g or f to look wider.")
+        tip = ("Press Enter to set this plan in the Server panel. Then press a there to start it."
+               if af.pick and af.pick.downloaded
+               else "Press d to download the pick. Then press Enter to use it." if af.pick
+               else "Press g or f to change the goal or the model set.")
 
         def main(mw: int) -> List[CardLine]:
             L = [*choices(mw), "", heading("The pick", mw)]
             if af.pick and af.plan:
                 where = f"{GRN}downloaded{R}" if af.pick.downloaded else f"{YEL}not downloaded{R}"
                 L += cwrap(f"{B}{CYN}★ {af.pick.name}{R}  {af.plan.label()} · needs {gib(af.plan.need)} · {where}", mw, "    ")
-                L += label_wrap("Why", af.because(), mw)
+                L += label_wrap("Why", af.because() + ".", mw)
                 if not af.pick.downloaded:
                     start = svc.resolved_model(dict(p, model="auto"))
-                    L += label_wrap("Meanwhile", f"model auto starts {start} (the best downloaded model that fits) until "
-                                                 f"{af.pick.name} is downloaded.", mw, YEL)
+                    L += label_wrap("Meanwhile", f"until {af.pick.name} is downloaded, model auto starts {start} (the "
+                                                 f"best downloaded model that fits).", mw, YEL)
                 for i, r in enumerate(af.rejected):
                     lines = wwrap(r.line(), mw - 14)
                     L.append(f"{B}{'Passed over' if i == 0 else '':<11}{R} {DIM}· {lines[0]}{R}")
@@ -697,7 +709,7 @@ class SettingsView:
                 if ui.dl:
                     L += download_status(ui.dl)
             else:
-                L += cwrap(f"{RED}nothing fits: {af.because()}{R}", mw)
+                L += cwrap(f"{RED}nothing fits: {af.because()}.{R}", mw)
             return [*L, "", heading("Ranking", mw), *self.fit_ranking(af, mw)]
 
         L = with_side(main, tip, sections, w - 4, main_w=112)
@@ -763,8 +775,8 @@ class SettingsView:
         w = cols - 2
         if not ms:
             self._tune_keys(ui)
-            return indent(draw_card("tune", "AUTO-TUNE", "", cwrap("No model is downloaded yet: the Models panel ([) "
-                                                                   "downloads one.", w - 4), w, 2))
+            return indent(draw_card("tune", "AUTO-TUNE", "", cwrap("No model is downloaded. Use the Models panel ([) "
+                                                                   "to download one.", w - 4), w, 2))
         names = [m["name"] for m in ms]
         if ui.tune_model not in names and ui.tune_model != TUNE_ALL:
             cur = self.svc.resolved_model(ui.pending) if ui.pending else names[0]
@@ -800,14 +812,14 @@ class SettingsView:
                     L.append(f"  {hi}{mode:<24}{r['prose']:>7}{r['code']:>7}{r['edit']:>9}{r['score']:>8}{R}")
                 pr = jdict(t.get("results")).get("prompt_read") or []
                 if pr:
-                    L += cwrap("  prompt reading: " + " · ".join(f"{int(n) // 1024}K at {tps:.0f} tok/s" for n, tps in pr),
+                    L += cwrap("  prompt read speed: " + " · ".join(f"{int(n) // 1024}K at {tps:.0f} tok/s" for n, tps in pr),
                                mw, "  ")
                 par = jdict(t.get("results")).get("parallel") or []
                 if par:
                     L += cwrap(f"  {parallel_text(par)}", mw, "  ")
                 dd = jdict(t.get("results")).get("decode_at_depth") or []
                 if dd:
-                    L += cwrap("  decoding after a read of: " + " · ".join(f"{int(n) // 1024}K {tps:.1f} tok/s"
+                    L += cwrap("  decode speed after a read of: " + " · ".join(f"{int(n) // 1024}K {tps:.1f} tok/s"
                                                                           for n, tps in dd), mw, "  ")
                 z = t.get("ctx_zones")
                 if z:
@@ -815,19 +827,22 @@ class SettingsView:
                              f"slow{R} · {RED}>{ctx_label(z['slow'])} very slow{R}")
                 L += button_rows("  ", [("Use these values (clear my overrides)", "tclear")], mw)
             else:
-                L += cwrap(f"{DIM}Not tuned on this Mac yet: the catalogue's values apply"
-                           f"{' (measured on another Mac)' if not m.get('custom') else ' (from the GGUF header: a guess)'}.{R}",
+                L += cwrap(f"{DIM}Auto-tune did not measure this model on this Mac. The catalogue values apply"
+                           f"{' (measured on a different Mac)' if not m.get('custom') else ' (from the GGUF header: an estimate)'}"
+                           f".{R}",
                            mw)
             return L
 
         steps: List[CardLine] = [
-            "Measures this model on this Mac and saves the best settings for it (~5-10 min; the model loads once per mode):",
+            "Auto-tune measures this model on this Mac and saves the best settings for it. This takes about 5-10 min. "
+            "The model loads once for each mode:",
             "1 memory: the largest window with 1 and 2 slots",
             "2 speculation: none, n-gram, MTP, MTP + n-gram (n = 1, 2) on prose, code and a code re-emit",
-            "3 prompt reading at 8K/32K/64K → this Mac's context zones", "4 the result",
-            "Every start of the model then uses it, unless you change a value in the Server panel (config.json wins)."]
+            "3 prompt read speed at 8K/32K/64K → the context zones of this Mac", "4 the result",
+            "After that, each start of the model uses these settings. A value that you change in the Server panel "
+            "overrides them (config.json wins)."]
         tip = ("Press c to cancel the run." if tn and not tn.done
-               else "Press Enter to run it; ← → choose another model (or all of them).")
+               else "Press Enter to start the run. Press ← → to select a different model, or all models.")
         L = with_side(main, tip, [("This model", [m["summary"]] if m.get("summary") else []),
                                   (f"Mode: {depth}", [DEPTH_TEXT[depth]]), ("What it measures", steps)], w - 4, main_w=80)
         return indent(draw_card("tune", "AUTO-TUNE", f"{DIM}per model, per Mac{R}", L, w, 2))
@@ -835,8 +850,10 @@ class SettingsView:
     @staticmethod
     def _tune_keys(ui: UIState) -> None:
         ui.keys = [("← →", "model"), ("space", "mode"), ("Enter", "run"), ("c", "cancel a run"), ("[ ]", "panels")]
-        ui.keys_more = ["Click the model's name for a list of the downloaded models (and all of them at once).",
-                        "Auto-tune needs the GPU to itself: it stops the running server and starts it again after."]
+        ui.keys_more = ["Click the model name to see the downloaded models. The list also has an option for all "
+                        "models.",
+                        "Auto-tune must have the GPU for itself. It stops the running server and starts it again after "
+                        "the run."]
 
     @staticmethod
     def _depth_line(depth: str) -> Ln:
@@ -873,10 +890,10 @@ class SettingsView:
                 L.append(f"  {m['name']:<28} {res}")
             return L
 
-        L = with_side(main, "Press c to cancel the run." if tn and not tn.done else "Press Enter to tune every downloaded model.",
-                      [("All models", ["Tunes every downloaded model, one after another (~5-10 min each, the chosen mode "
-                                       "for all); a model that fails doesn't stop the rest. Each one's result is saved "
-                                       "as when it is tuned alone."]),
+        L = with_side(main, "Press c to cancel the run." if tn and not tn.done else "Press Enter to tune all downloaded models.",
+                      [("All models", ["Auto-tune tunes all downloaded models, one after the other, in the selected "
+                                       "mode. Each model takes about 5-10 min. If a model fails, the run continues with "
+                                       "the next model. CARL saves each result as for a single run."]),
                        (f"Mode: {depth}", [DEPTH_TEXT[depth]])], w - 4, main_w=96)
         return indent(draw_card("tune", "AUTO-TUNE", f"{DIM}all models, per Mac{R}", L, w, 2))
 
@@ -889,10 +906,10 @@ class SettingsView:
         w = cols - 2
         running = "router" if d.router is not None else "single" if d.up else ""
         ui.keys = [("click", "a mode, Load / Unload"), ("[ ]", "panels")]
-        ui.keys_more = ["A change of mode applies at the next start; with a server running it asks to restart now."]
+        ui.keys_more = ["A change of mode applies at the next start. If a server runs, CARL asks to restart it now."]
         now = (f"{GRN}running as {running}{R}" if running == saved else
-               f"{YEL}running as {running}: the change applies at the next start (it asks to restart now){R}"
-               if running else f"{DIM}no server running{R}")
+               f"{YEL}running as {running}: the change applies at the next start (CARL asks to restart now){R}"
+               if running else f"{DIM}no server runs{R}")
 
         def main(mw: int) -> List[CardLine]:
             L: List[CardLine] = self._choice_line("Mode", [("single", "Dashboard only (single model)", "rmode:single"),
@@ -912,29 +929,31 @@ class SettingsView:
             if stale:
                 L += [x for line in stale for x in cwrap(f"{YEL}⚠ {line}{R}", mw, "  ")]
             else:
-                L += cwrap(f"{GRN}✓{R} {DIM}the configs on this Mac list the installed models (or are not installed: "
-                           f"Connect tab){R}", mw)
+                L += cwrap(f"{GRN}✓{R} {DIM}the configs on this Mac list the installed models (or OpenCode and Pi are "
+                           f"not installed: see the Connect tab){R}", mw)
             return L + button_rows("", [("Update the OpenCode / Pi configs", "insconfig")], mw)
 
-        tip = ("Click Load to start a model now; OpenCode and Pi load the model they ask for themselves."
-               if d.router is not None else "Click a mode: the dashboard picks the model, or OpenCode / Pi switch models.")
+        tip = ("Click Load to start a model now. OpenCode and Pi load the model that they ask for."
+               if d.router is not None else "Click a mode: dashboard only (you pick the model here) or router "
+                                            "(OpenCode / Pi change the model).")
         L = with_side(main, tip, [
-            ("Who switches the model", [
-                f"{B}Dashboard only{R} (the default): one model runs, picked here or by auto fit; OpenCode / Pi use "
-                f"whichever runs. {B}Router{R}: every downloaded model that fits is offered; the model you pick in "
-                f"OpenCode (/models) or Pi (/model) is loaded, one at a time (a switch takes 30 s to 2 min while the old "
-                f"model stops and the new one loads). For users who prefer to choose models on the fly; auto fit then "
-                f"only picks the model loaded first."]),
-            ("Warning", [f"{YEL}WARNING: every switch empties the prompt cache. The model that loads starts cold: OpenCode "
-                         f"and Pi put a session back from the disk cache (about a second after the load, Caching panel); "
-                         f"other clients re-read the whole conversation (a long one: minutes, see the context zones). "
-                         f"Switch with this in consideration.{R}"]),
+            ("Who changes the model", [
+                f"{B}Dashboard only{R} (the default): one model runs. You or auto fit select it here, and OpenCode / Pi "
+                f"use the model that runs. {B}Router{R}: the router offers all downloaded models that fit. It loads the "
+                f"model that you select in OpenCode (/models) or Pi (/model), one model at a time. A switch takes 30 s "
+                f"to 2 min: the old model stops and the new model loads. Router mode is for users who change models "
+                f"during their work. Auto fit then selects only the first model that loads."]),
+            ("Warning", [f"{YEL}WARNING: Each switch empties the prompt cache. The model that loads starts cold. OpenCode "
+                         f"and Pi restore a session from the disk cache about one second after the load (Caching "
+                         f"panel). Other clients read the full conversation again. For a long conversation, this takes "
+                         f"minutes (see the context zones). Switch with this in consideration.{R}"]),
             ("Settings per model", [
-                "Router mode gives each model the settings a single start of it would use (config.json > Auto-tune > "
-                "catalogue) and leaves out a model that doesn't fit. A model a client asks for that isn't installed gets "
-                "an error (HTTP 400, nothing loads); the OpenCode plugin says so. Custom models: set their card's "
-                "thinking (Models panel) so OpenCode offers the right levels."]),
-            ("Load and Unload", ["Load starts a model now (the loaded one stops first); Unload frees the memory."]
+                "Router mode gives each model the same settings as a single start of that model (config.json > "
+                "Auto-tune > catalogue). It does not offer a model that does not fit. If a client asks for a model "
+                "that is not installed, the client gets an error (HTTP 400) and no model loads. The OpenCode plugin "
+                "shows this error. For a custom model, set the thinking field of its card (Models panel). Then "
+                "OpenCode shows the correct levels."]),
+            ("Load and Unload", ["Load starts a model now. The loaded model stops first. Unload releases the memory."]
              if d.router is not None else [])], w - 4, main_w=96)
         return indent(draw_card("router", "ROUTER", f"{DIM}model switching: {saved}{R}", L, w, 2))
 
@@ -966,8 +985,8 @@ class SettingsView:
                   lv("folder", f"{home_short(folder, self.home)}{DIM} (the server's --slot-save-path){R}", 11)]
             packed = [f for f in files if f.packed]
             if packed:
-                L.append(lv("shared", f"{len(packed)} conversation(s) stored as patches against their prompt: "
-                                      f"{gb_text(shared_saving(files))} saved", 11))
+                L.append(lv("shared", f"{len(packed)} conversation(s) kept as patches against their prompt: "
+                                      f"{gb_text(shared_saving(files))} less on the disk", 11))
             nw = max(mw - 42, 12)
             for f in sorted(files, key=lambda f: -f.mtime)[:12]:
                 what = "prompt      " if f.kind == PROMPT else "patch       " if f.packed else "conversation"
@@ -976,28 +995,31 @@ class SettingsView:
             if n > 12:
                 L.append(f"  {DIM}… and {n - 12} more{R}")
             if not files:
-                L.append(f"  {DIM}nothing yet: OpenCode and Pi save here as they work{R}")
+                L.append(f"  {DIM}empty: OpenCode and Pi save their states here during their work{R}")
             return [*L, "", *button_rows("", [("Clear the disk cache (c)", "cache:clear")], mw)]
 
-        L = with_side(main, "Click an option, or press its key (? lists them); every change is saved at once.", [
-            ("Experimental", [f"{YEL}{B}EXPERIMENTAL{R}{YEL}: the disk cache is new. It works with the model that runs: "
-                              f"saved states belong to one model file and llama.cpp build, and another model's sessions "
-                              f"wait for that model (router mode loads it first). Turn sessions or prompts off here if "
-                              f"something looks wrong.{R}"]),
-            ("How it works", [f"OpenCode and Pi save prompt states through the server, so a restart, a model switch or "
-                              f"many other sessions don't mean reading everything again: {B}prompts{R} = each agent's "
-                              f"system prompt and tools (read once: a new session reads only its own messages) · "
-                              f"{B}conversations{R} = each session, saved as the Save row says and put back before its "
-                              f"next request when the server no longer holds it. Within the disk limit the oldest "
-                              f"conversations go first, then the oldest prompts. The switches apply to the clients on "
-                              f"this Mac (a VM's: NO_CACHE=1 ./install.sh there)."]),
+        L = with_side(main, "Click an option, or press its key (? shows the keys). CARL saves each change immediately.", [
+            ("Experimental", [f"{YEL}{B}EXPERIMENTAL{R}{YEL}: The disk cache is new. It works with the model that runs. "
+                              f"Each saved state is for one model file and one llama.cpp build. The sessions of a "
+                              f"different model wait for that model (router mode loads it first). If you see a problem, "
+                              f"set sessions or prompts to off here.{R}"]),
+            ("How it works", [f"OpenCode and Pi save prompt states through the server. Then the server does not read "
+                              f"everything again after a restart, a model switch or many other sessions. "
+                              f"{B}prompts{R} = the system prompt and tools of each agent. The server reads them once, "
+                              f"and a new session reads only its own messages. {B}conversations{R} = each session. "
+                              f"CARL saves it as the Save row tells. If the server does not hold it, CARL puts it back "
+                              f"before its next request. At the disk limit, CARL removes the oldest conversations first, "
+                              f"then the oldest prompts. These settings apply to the clients on this Mac. For a VM, run "
+                              f"NO_CACHE=1 ./install.sh there."]),
             (f"Save: {conf.save}", [dict(SAVE_HELP)[conf.save].replace("AUTO", dur(conf.auto_s))]),
             (f"SWA models: {conf.swa}", [dict(SWA_HELP)[conf.swa]]),
-            ("RAM cache", ["llama.cpp's own prompt cache in RAM, while the server runs: the Server panel's RAM cache row."])],
+            ("RAM cache", ["The llama.cpp prompt cache in RAM, while the server runs. Set it in the RAM cache row of the "
+                           "Server panel."])],
             w - 4, main_w=104)
         ui.keys = [("d", "disk limit"), ("p", "prompts"), ("s", "sessions"), ("o", "when to save"), ("t", "auto after"),
                    ("h", "shared"), ("w", "SWA models"), ("c", "clear"), ("[ ]", "panels")]
-        ui.keys_more = ["Each key steps to the next choice of its row; a click picks one. Clear asks first."]
+        ui.keys_more = ["Each key selects the next choice of its row. A click selects one choice. Clear asks before "
+                        "it removes files."]
         return indent(draw_card("caching", "CACHING (EXPERIMENTAL)", f"{DIM}disk cache: {gb_text(use)} of {conf.disk_gb} GB{R}",
                                 L, w, 2))
 
@@ -1019,6 +1041,22 @@ class SettingsView:
 _STEP = re.compile(r"STEP (\d+)/(\d+) (.*)")
 
 
+def best_tune(t: object) -> str:
+    """Auto-tune's best result in one line: the speculation it picked with its speeds, the KV cache, the
+    window and the slots, when and where it was measured."""
+    tune = jdict(t)
+    st = jdict(tune.get("settings"))
+    if not st:
+        return f"{DIM}not on this Mac yet (the Auto-tune panel measures it){R}"
+    mode = f"{st.get('spec')}:{st.get('spec_n')}"
+    r = jdict(jdict(jdict(tune.get("results")).get("speculation")).get(mode))
+    speeds = (f" · {r.get('prose')} prose · {r.get('code')} code · {r.get('edit')} re-emit tok/s"
+              if r.get("prose") is not None else "")
+    ctx = ctx_label(st["ctx"]) if isinstance(st.get("ctx"), int) else "?"
+    return (f"{GRN}{st.get('spec')} n={st.get('spec_n')}{speeds}{R} · kv {st.get('kv')} · {ctx} × {st.get('slots')} "
+            f"slots {DIM}({tune.get('date', '?')}, {tune.get('machine', '?')}){R}")
+
+
 def tune_progress(tn: TuneRun, w: int, server_up: bool) -> List[CardLine]:
     """The tune's step bar and its last output lines; Cancel while it runs, the result after."""
     steps = [x for x in tn.lines if x.startswith("STEP ")]
@@ -1034,7 +1072,7 @@ def tune_progress(tn: TuneRun, w: int, server_up: bool) -> List[CardLine]:
     else:
         ok = tn.proc.returncode == 0
         out.append(f"{GRN if ok else RED}{'finished' if ok else 'failed'}{R}"
-                   + (f"{DIM} · starting the server again…{R}" if tn.restart and not server_up else ""))
+                   + (f"{DIM} · the server starts again…{R}" if tn.restart and not server_up else ""))
         out.append(buttons("", [("Run again (Enter)", "trun")]))
     return out
 
@@ -1044,7 +1082,7 @@ def download_status(dl: Download) -> List[CardLine]:
     if not dl.done:
         frac = dl.have / dl.total if dl.total else 0
         eta = dur((dl.total - dl.have) / dl.rate) if dl.rate > 0 and dl.total else "–"
-        line = (f"{YEL}verifying the checksum of {dl.name}…{R}" if any("verifying" in x for x in dl.tail) else
+        line = (f"{YEL}CARL checks the SHA-256 of {dl.name}…{R}" if any("verifying" in x for x in dl.tail) else
                 f"{B}downloading {dl.name}{R} {bar(frac, 24)} {frac:5.1%} {size(dl.have)} / {size(dl.total)} · "
                 f"{size(dl.rate)}/s · ETA {eta}")
         return [line, buttons("", [("Cancel download (c)", "mcancel")])]

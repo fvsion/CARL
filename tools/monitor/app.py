@@ -121,7 +121,7 @@ class App:
                        os.path.dirname(self.jobs.paths.config_file))
         err = api.start()
         if err:
-            self.ui.toast(f"{err} (clients on other computers save without the Caching settings)", 10)
+            self.ui.toast(f"{err} (clients on other computers do not use the Caching settings)", 10)
         else:
             self._api = api
             self.jobs.registry = api.registry
@@ -187,13 +187,13 @@ class App:
         ui = self.ui
         msg, until = ui.toast_msg
         if ui.stopping:
-            return f"{YEL}stopping the server (pid {ui.stopping[0]})…{R}"
+            return f"{YEL}the server (pid {ui.stopping[0]}) stops…{R}"
         if ui.restart:
             return f"{YEL}{ui.restart}{R}"
         if msg and time.time() < until:
             return f"{GRN}{msg}{R}"
         if ui.help:
-            return f"{DIM}every key of this panel above · {R}{B}?{R}{DIM} closes it{R}"
+            return f"{DIM}the keys of this panel are above · {R}{B}?{R}{DIM} closes the list{R}"
         return key_hint([*ui.keys, ("1-5", "tabs"), ("q", "quit"), ("?", "all keys")])
 
     def body(self, d: ServerData, cols: int, height: int) -> List[Row]:
@@ -341,8 +341,9 @@ class App:
 def panel_error(e: Exception, cols: int) -> List[Row]:
     """A Settings panel that could not be drawn: the reason instead of a crash."""
     lines = [f"{RED}{x}{R}" for x in wwrap(f"{type(e).__name__}: {e}", cols - 6)[:6]]
-    lines += ["", f"{DIM}The catalogue (host/catalog.json), models.json or config.json could not be read. Fix the file"
-                  f" (./carl.sh models and ./carl.sh config show name the problem); this panel tries again.{R}"]
+    lines += ["", *[f"{DIM}{x}{R}" for x in wwrap("CARL cannot read the catalogue (host/catalog.json), models.json or "
+                                                  "config.json. Correct the file: ./carl.sh models and ./carl.sh config "
+                                                  "show tell the problem. This panel tries again.", cols - 6)]]
     return indent(draw_card("seterror", "SETTINGS UNAVAILABLE", "", lines, cols - 1, 2))
 
 

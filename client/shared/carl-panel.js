@@ -136,7 +136,7 @@ function pieces(client) {
     const bg = /OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=1/.test(env);
     add("coder", "Coder subagent", Boolean(cfg.agent?.coder || cfg.agent?.["carl-coder"]),
         "on when the server runs 2 slots (the installer decides) · background off: NO_BACKGROUND_SUBAGENTS=1 ./install.sh",
-        ["tools: everything but task (LSP and web search too)",
+        ["tools: everything but task (LSP and web search too); no browser: it hands live-page checks back to the browser agent",
          bg ? "background: on: the main session goes on while the coder works (both slots busy)"
            : "background: off: the main session waits for the coder"]);
     add("browser", "Browser", Boolean(cfg.mcp?.["carl-browser"]), "off: NO_BROWSER=1 ./install.sh · a visible window: BROWSER_HEADED=1",
@@ -153,7 +153,7 @@ function pieces(client) {
     const bg = json(join(PI, "carl.json"))?.background_subagents !== false;
     add("coder", "Coder subagent", exists(join(PI, "agents", "coder.md")) || exists(join(PI, "agents", "carl-coder.md")),
         "on when the server runs 2 slots (the installer decides) · background off: NO_BACKGROUND_SUBAGENTS=1 ./install.sh",
-        ["tools: every tool but subagent (web search too when it is on)",
+        ["tools: every tool but subagent and tool_search (web search too when it is on); no browser: it hands live-page checks back",
          bg ? "background: on: the main session goes on while the coder works (both slots busy); /subagents lists them"
            : "background: off: the main session waits for the coder"]);
     add("subagent", "Subagent tool", exists(join(PI, "extensions", "subagent", "index.ts")), "comes with the coder");

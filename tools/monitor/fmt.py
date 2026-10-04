@@ -293,11 +293,12 @@ SIDE_MAX = 90       # wider explanations are hard to read
 
 
 def with_side(main: Callable[[int], list[CardLine]], tip: str, sections: Sequence[Section], inner: int,
-              main_w: int = 0) -> list[CardLine]:
+              main_w: int = 0, beside: bool = True) -> list[CardLine]:
     """The controls and the data on the left; the quick tip and the explanations beside them when
     the card is wide (SIDE_MIN), else under them, under the same headers. main(w) draws w columns;
-    main_w: the width the controls need (the side column takes the rest, up to SIDE_MAX)."""
-    if inner >= SIDE_MIN:
+    main_w: the width the controls need (the side column takes the rest, up to SIDE_MAX); beside=False:
+    always under them (a panel whose table needs the whole width)."""
+    if beside and inner >= SIDE_MIN:
         mw = max(main_w, inner - SIDE_MAX - 3) if main_w else inner - side_width(inner) - 3
         if inner - mw - 3 >= 44:
             return merge_columns(main(mw), side_lines(tip, sections, inner - mw - 3), mw)

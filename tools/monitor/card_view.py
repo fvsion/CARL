@@ -13,9 +13,9 @@ from .fmt import B, CYN, DIM, GRN, R, RED, YEL, CardLine, Ln, Row, button_rows, 
 LABEL_W = 15                                           # the label column
 REV = "\x1b[7m"                                        # reverse video: the selected row's label
 TAG_COLOUR = {"agent coding": GRN, "hard code": CYN, "chat & writing": B, "uncensored": RED}
-KEYS_HELP = ("Press ↑ ↓ to select a field and Enter to edit it: type the text, Enter keeps it, Esc drops it. "
-             "← → or space change a choice or tick a tag, x clears the field. Press s to save the card, Esc to "
-             "cancel (nothing is saved).")
+KEYS_HELP = ("Press ↑ ↓ to select a field. Press Enter to edit it. Type the text, then press Enter to keep it or "
+             "Esc to discard it. Press ← → or space to change a choice or to tick a tag. Press x to clear the field. "
+             "Press s to save the card. Press Esc to cancel without a save.")
 
 
 def value_text(form: CardForm, it: Item, sel: bool) -> str:
@@ -84,13 +84,13 @@ def draw_form(form: CardForm, cols: int, height: int) -> List[Row]:
     w = cols - 2
     tw = w - 4
     it = form.item()
-    intro = cwrap(f"{DIM}Describe {form.model}: CARL can't tell what a model is for from its file. The MODEL card, the "
-                  f"model lists (role, tags), sort by quality and the filters read this card; auto fit only if you "
-                  f"switch it on. Good-for tags: {', '.join(GOOD_FOR)}.{R}", tw)
+    intro = cwrap(f"{DIM}Describe {form.model}. CARL cannot find the purpose of a model from its file. The MODEL card, "
+                  f"the model lists (role, tags), sort by quality and the filters read this card. Auto fit reads it "
+                  f"only if you set auto fit to yes. Good-for tags: {', '.join(GOOD_FOR)}.{R}", tw)
     foot: List[CardLine] = [""]
     foot += cwrap(f"{B}{it.field.label}{R}  {DIM}{it.field.help}{R}", tw)
     if form.typing is not None:
-        foot += cwrap(f"{YEL}typing: Enter keeps it, Esc drops it (paste works; Backspace deletes){R}", tw)
+        foot += cwrap(f"{YEL}typing: Enter keeps the text, Esc discards it. You can paste. Backspace deletes.{R}", tw)
     if form.error:
         foot += cwrap(f"{RED}{form.error}{R}", tw)
     foot += ["", *button_rows("", [("Save (s)", "cardsave"), ("Cancel (Esc)", "cardcancel"),

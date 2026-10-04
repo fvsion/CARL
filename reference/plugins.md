@@ -88,8 +88,9 @@ Pi has no subagents of its own. CARL installs the `subagent` extension (from Pi'
 - **CARL's changes:**
   - The tool's description lists the installed agents and when to use each one.
   - The delegation rule goes into Pi's system prompt.
-  - An agent file can say `exclude-tools:`. The agent then gets every tool except those, the MCP tools included. The coder says `exclude-tools: subagent`, so it gets web search when it is installed, but it cannot start nested subagents.
+  - An agent file can say `exclude-tools:`. The agent then gets every tool except those, the MCP tools included. The coder says `exclude-tools: subagent, tool_search`: it gets web search when it is installed, but it cannot start nested subagents or load the browser tools.
   - Each subagent's process gets `CARL_AGENT`, so its prompt file has its own name.
+  - The coder has no browser. Its report has a "Needs a browser check" part; the main agent starts the app and does the check (OpenCode: the browser subagent; Pi: its own browser tools).
 - **Background:**
   - CARL's coder runs in the background unless the call says `background: false`.
   - `/subagents` lists the agents that run in the background, and stops one.

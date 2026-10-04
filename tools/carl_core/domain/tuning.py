@@ -36,9 +36,10 @@ Read = Tuple[int, float]                   # (prompt tokens, cold read tok/s)
 Depth = Literal["quick", "default", "long"]
 DEPTHS: Tuple[Depth, ...] = ("quick", "default", "long")
 DEPTH_TEXT: Dict[Depth, str] = {
-    "quick": "quick: the MTP modes with 1 draft, reads at 8K and 32K (~4 min)",
-    "default": "default: every speculation mode, reads at 8K, 32K and 64K (~5-10 min)",
-    "long": "long: the default, then reads at 128K and 192K and the decode speed at each depth (+10-40 min)"}
+    "quick": "quick: measures the MTP modes with 1 draft token and reads at 8K and 32K (about 4 min).",
+    "default": "default: measures all speculation modes and reads at 8K, 32K and 64K (about 5-10 min).",
+    "long": "long: does the default steps, then reads at 128K and 192K and measures the decode speed at each "
+            "depth (10-40 min more)."}
 
 TUNE_KV = "q4_0"
 MIN_WINDOW = 16384                         # below this the model is not usable here

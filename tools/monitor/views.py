@@ -40,10 +40,10 @@ def keys_card(keys: Sequence[Key], more: Sequence[str], w: int) -> List[Row]:
 
 PREVIEW_TITLES = {"opencode": "OPENCODE CONFIG", "pi": "PI CONFIG", "curl": "CURL TEST"}
 PREVIEW_WHERE = {
-    "opencode": "→ add under \"provider\" in ~/.config/opencode/opencode.json (keep your other providers), restart OpenCode, "
-                "pick it with /models",
-    "pi": "→ add under \"providers\" in ~/.pi/agent/models.json (keep yours), then /model in Pi",
-    "curl": "→ run anywhere that can reach the server"}
+    "opencode": "→ Add it under \"provider\" in ~/.config/opencode/opencode.json (keep the others). Restart OpenCode. "
+                "Use /models.",
+    "pi": "→ Add it under \"providers\" in ~/.pi/agent/models.json (keep the others). Then use /model in Pi.",
+    "curl": "→ Run it on a computer that can connect to the server."}
 
 
 def _card(v: View, name: str, card: Card, w: int, lvl: Optional[int] = None) -> List[Row]:
@@ -78,12 +78,13 @@ def body_connect(v: View, ui: UIState, d: ServerData, cols: int, height: int,
     height -= 2
     if ui.connect_sp == 1:
         ui.keys = [("P", "push config to clients"), ("[ ]", "Setup / Clients")]
-        ui.keys_more = ["Forget clients not seen for a week: its button (it asks nothing: they come back when they sync)."]
+        ui.keys_more = ["The Forget button removes the clients not seen for a week. It does not ask first. A client "
+                        "comes back when it syncs."]
         return (top + indent(draw_card("clients", "CLIENTS", f"{DIM}{len(v.clients)} that sync · this Mac{R}",
                                        clients_lines(v, here, stale, tw), w, 2)))[:height + 2]
     ui.keys = [("i", "install here"), ("u", "update configs"), ("P", "push to clients"), ("o p t", "copy a config"),
                ("k", "show key"), ("[ ]", "Setup / Clients")]
-    ui.keys_more = ["Click a card title for more or less detail; the config below scrolls with ↑↓ PgUp PgDn."]
+    ui.keys_more = ["Click a card title for more or less detail. To scroll the config below, use ↑↓ PgUp PgDn."]
     full = dataclasses.replace(v, level_override={"connect": 2})
     rows = _card(full, "connect", card_connect(full, d)._replace(title="CONNECTION"), w, 2)
     rows += draw_card("guide", "SET UP OPENCODE AND PI", "", setup_lines(v, ui, here, tw, stale, installed), w,
@@ -96,7 +97,8 @@ def body_connect(v: View, ui: UIState, d: ServerData, cols: int, height: int,
     note = f"{GRN}copied to the clipboard ✓{R}" if ui.copied == kind else f"{DIM}click its button (or o/p/t) to copy{R}"
     plines = preview.splitlines()
     ui.prev_scroll = min(ui.prev_scroll, max(len(plines) - room, 0))
-    shown: List[CardLine] = [f"{DIM}{PREVIEW_WHERE[kind]}{R}", *plines[ui.prev_scroll:ui.prev_scroll + room - 1]]
+    where = cwrap(f"{DIM}{PREVIEW_WHERE[kind]}{R}", tw)
+    shown: List[CardLine] = [*where, *plines[ui.prev_scroll:ui.prev_scroll + max(room - len(where), 1)]]
     rows += draw_card("preview", PREVIEW_TITLES[kind], note, shown, w, v.level("preview"))
     return (top + indent(rows))[:height + 2]
 
@@ -109,7 +111,7 @@ def connect_bar(sp: int) -> Row:
         text += (f"\x1b[1;7m{lab}{R}" if i == sp else f"{DIM}{lab}{R}") + " "
         spans.append((1 + col, 1 + col + len(lab), f"csp:{i}"))
         col += len(lab) + 1
-    return " " + text + f"{DIM}  press [ or ] to switch{R}", spans
+    return " " + text + f"{DIM}  press [ or ] to change{R}", spans
 
 
 def _ago(t: float, now: float) -> str:
@@ -146,14 +148,16 @@ def clients_lines(v: View, here: List[Tuple[str, str]], stale: Sequence[Drift], 
         return [*L, "", *button_rows("  ", [("Push config to clients (P)", "inspush"),
                                              ("Forget clients not seen for a week", "clforget")], mw)]
 
-    tip = ("Press P to send the installed models to every computer that syncs." if v.clients
-           else "Copy the client folder to another computer and run its installer there.")
+    tip = ("Press P to send the installed models to all computers that sync." if v.clients
+           else "Copy the client folder to a different computer. Then run its installer there.")
     return with_side(main, tip, [
-        ("Who is listed", ["This Mac's OpenCode and Pi (their configs follow ./carl.sh install and Setup's Update), and "
-                           "every computer whose installer set up the sync (a copied client folder: it pulls the config "
-                           "you push)."]),
-        ("Add a computer", [f"Copy the client folder to it and run {CYN}./install-clients.sh && ./install.sh{R} there: "
-                            f"the folder carries the server's address and key."])], tw, main_w=100)
+        ("Who is in the list", ["The list shows OpenCode and Pi on this Mac. Their configs follow ./carl.sh install "
+                                "and the Update button in Setup. The list also shows each computer whose installer set "
+                                "up the sync. "
+                                "That computer has a copy of the client folder, and it gets the config that you push."]),
+        ("Add a computer", [f"Copy the client folder to the computer. Then run {CYN}./install-clients.sh && "
+                            f"./install.sh{R} there. The folder contains the address and the key of the server."])],
+        tw, main_w=100)
 
 
 def setup_lines(v: View, ui: UIState, here: List[Tuple[str, str]], tw: int, stale: Sequence[Drift] = (),
@@ -172,10 +176,10 @@ def setup_lines(v: View, ui: UIState, here: List[Tuple[str, str]], tw: int, stal
         elif not here:
             L.append(f"{DIM}not set up for this server yet{R}")
         if ui.install_ask:
-            what = ("install OpenCode and Pi when missing (downloads from npm), then write their configs"
-                    if ui.install_ask == "all" else "write the OpenCode and Pi configs for this server")
+            what = ("installs OpenCode and Pi if they are missing (a download from npm). Then it writes their configs"
+                    if ui.install_ask == "all" else "writes the OpenCode and Pi configs for this server")
             L += cwrap(f"{YEL}Run ./carl.sh install{' --config-only' if ui.install_ask == 'config' else ''} now? It "
-                       f"will {what}.{R}", mw)
+                       f"{what}.{R}", mw)
             L.append(buttons("  ", [("Yes, run it (y)", "insyes"), ("Cancel (n)", "insno")]))
         elif ui.install and not ui.install.done:
             L.append(buttons("  ", [("Show the installer (i)", "insshow"), ("Stop it", "inscancel")]))
@@ -194,17 +198,19 @@ def setup_lines(v: View, ui: UIState, here: List[Tuple[str, str]], tw: int, stal
 
     tip = ("Press u to list the installed models in the OpenCode and Pi configs." if stale
            else "Press i to set up OpenCode and Pi on this Mac." if not here
-           else "Run the installer again after a new model or a context / slots change (u).")
+           else "After a new model or a change to the context or slots, press u to run the installer again.")
     return with_side(main, tip, [
-        ("On this Mac", [f"One command, {CYN}./carl.sh install{R}: it installs OpenCode and Pi when they are missing "
-                         f"(into ~/.local, no sudo) and points them at this server. Your own providers, default model "
-                         f"and agents are kept, and a backup is written first."]),
-        ("In a VM", ["Start the server for the VM with --vm, copy the client folder into the VM, then run the installer "
-                     "there. The folder carries the server's address and key (remote.json, api-key: written at every "
-                     "server start), so the installer needs no arguments."]),
-        ("Other computers", ["The installer there adds a sync service: it keeps one connection to this dashboard (it "
-                             "opens no port on the client) and applies the config you push, with backups."]),
-        ("By hand", ["A provider block only (id carl), copied to the clipboard; it adds, never replaces."])],
+        ("On this Mac", [f"One command does it: {CYN}./carl.sh install{R}. It installs OpenCode and Pi if they are "
+                         f"missing (into ~/.local, no sudo). Then it connects them to this server. It keeps your own "
+                         f"providers, default model and agents, and it writes a backup first."]),
+        ("In a VM", ["Start the server for the VM with --vm. Copy the client folder into the VM. Then run the "
+                     "installer there. The folder contains the address and the key of the server (remote.json and "
+                     "api-key). CARL writes them at each server start, so the installer needs no arguments."]),
+        ("Other computers", ["On a different computer, the installer adds a sync service. The service keeps one "
+                             "connection to this dashboard and opens no port on the client. It applies the config "
+                             "that you push, and it makes backups."]),
+        ("By hand", ["Each button copies one provider block (id carl) to the clipboard. The block adds a provider and "
+                     "does not replace your providers."])],
         tw, main_w=90)
 
 
@@ -266,11 +272,12 @@ def quit_dialog(d: ServerData, ui: UIState, cols: int, height: int) -> List[Row]
     w = min(70, cols - 4)
     lines: List[CardLine] = [""]
     if alive:
-        lines += [f"The server (pid {pid}) is still running.", "",
+        lines += [f"The server (pid {pid}) still runs.", "",
                   buttons("  ", [("Stop server (s)", "stop"), ("Leave it running (d)", "detach"), ("Cancel (Esc)", "cancel")]),
-                  "", f"{DIM}Leave it running: it keeps serving; re-attach with ./carl.sh monitor{R}"]
+                  "", *cwrap(f"{DIM}Leave it running: the server continues. To attach again, run ./carl.sh monitor.{R}",
+                             w - 4)]
     else:
-        lines += ["The server isn't running.", "", buttons("  ", [("Quit (q)", "detach"), ("Cancel (Esc)", "cancel")])]
+        lines += ["No server runs.", "", buttons("  ", [("Quit (q)", "detach"), ("Cancel (Esc)", "cancel")])]
     card = draw_card("quitbox", "QUIT", "", lines, w, 1)
     pad = (cols - w) // 2
     top = max((height - len(card)) // 2, 0)
@@ -283,22 +290,23 @@ def drain_dialog(dr: Drain, cols: int, height: int) -> List[Row]:
     w = min(80, cols - 4)
     def slots(ids: List[int]) -> str:
         return ("slot " if len(ids) == 1 else "slots ") + ", ".join(str(i) for i in ids)
-    state = (f"{slots(dr.busy)} writing a reply" if dr.busy
+    state = (f"{slots(dr.busy)}: a reply is in progress" if dr.busy
              else f"{slots(dr.turns)}: between two requests (a tool runs)" if dr.turns
-             else "saving the session" if dr.saving else "ending")
+             else "CARL saves the session" if dr.saving else "the turn ends")
     tw = w - 4
     lines: List[CardLine] = [""]
     if dr.waiting:
-        lines += [*cwrap(f"Waiting for the turn to end: {state} ({_ago(dr.since, time.time())}).", tw),
-                  *cwrap(f"Then CARL saves the session and will {dr.what}.", tw), "",
+        lines += [*cwrap(f"CARL waits for the end of the turn: {state} ({_ago(dr.since, time.time())}).", tw),
+                  *cwrap(f"Then CARL saves the session. After that, it will {dr.what}.", tw), "",
                   *button_rows("  ", [("Now (y)", "drain:now"), ("Cancel (Esc)", "drain:cancel")], tw), "",
-                  *cwrap(f"{DIM}A client without CARL's plugin marks no turns: for it, CARL waits for an idle slot.{R}", tw)]
+                  *cwrap(f"{DIM}A client without the CARL plugin does not mark its turns. For such a client, CARL waits "
+                         f"for an idle slot.{R}", tw)]
     else:
-        lines += [*cwrap(f"An agent's turn is running: {state}.", tw), *cwrap(f"To {dr.what}, CARL stops the model.", tw), "",
+        lines += [*cwrap(f"The turn of an agent runs now: {state}.", tw), *cwrap(f"To {dr.what}, CARL stops the model.", tw), "",
                   *button_rows("  ", [("Wait for the turn to end (w)", "drain:wait"), ("Now (y)", "drain:now"),
                                       ("Cancel (Esc)", "drain:cancel")], tw), "",
-                  *cwrap(f"{DIM}Wait: CARL goes on when the turn ends and its session is saved.{R}", tw),
-                  *cwrap(f"{DIM}Now: the reply stops. The client shows an error (Pi tries again), and the session goes "
+                  *cwrap(f"{DIM}Wait: CARL continues after the turn ends and after it saves the session.{R}", tw),
+                  *cwrap(f"{DIM}Now: the reply stops. The client shows an error (Pi tries again). The session goes "
                          f"back to its last save.{R}", tw)]
     card = draw_card("drainbox", "A TURN IS RUNNING", "", lines, w, 1)
     pad = (cols - w) // 2

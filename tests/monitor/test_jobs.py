@@ -127,7 +127,7 @@ class JobsTest(unittest.TestCase):
         self.launcher(HEALTH_SERVER)
         self.ui.pending = dict(self.pending)
         self.jobs._restart(self.pending, ServerData())
-        self.assertTrue(self.ui.toast_msg[0].startswith("restarted with the new settings"))
+        self.assertTrue(self.ui.toast_msg[0].startswith("the server restarted with the new settings"))
         self.assertIsNone(self.ui.pending)
         self.assertIsNotNone(self.collector.server_pid)
         self.assertNotIn("backend", self.store.saved[-1])

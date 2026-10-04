@@ -156,8 +156,8 @@ class CardForm:
         key = it.field.key
         if self.adding is not None or it.kind == "pick":
             if not text:
-                self.error = ("say when it is the better pick" if self.adding is not None else
-                              "say when it is the better pick, or press Esc and then x to remove the entry")
+                self.error = ("type when it is the better pick" if self.adding is not None else
+                              "type when it is the better pick. To remove the entry, press Esc, then x")
                 return False
             picks = self._picks()
             if self.adding is not None:
@@ -167,7 +167,7 @@ class CardForm:
             self._set(key, picks)
         elif it.kind == "number":
             if text and not (text.isdigit() and int(text) >= 1):
-                self.error = f"{it.field.label}: a whole number, 1 or more (empty: no rank)"
+                self.error = f"{it.field.label}: type a whole number, 1 or more (empty: no rank)"
                 return False
             self._set(key, int(text) if text else None)
         else:

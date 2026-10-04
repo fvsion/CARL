@@ -137,7 +137,7 @@ class FitMathTest(unittest.TestCase):
         swa = {**shape(kv_elems=2048, rs_bytes=0), "swa_window": 1024, "kv_elems_per_token_swa": 204800}
         ok, text = llama_fit("g", 10 * GIB, swa, "q4_0", 98304, "2", 40 * GIB)
         self.assertTrue(ok)
-        self.assertIn("full cache (saved prompts restore)", text)
+        self.assertIn("full cache (CARL can restore saved prompts)", text)
         ok, text = llama_fit("g", 10 * GIB, swa, "q4_0", 98304, "2", 16 * GIB)          # only the window fits
         self.assertTrue(ok)
         self.assertIn("window only", text)
@@ -290,11 +290,11 @@ class AutoFitTest(unittest.TestCase):
         self.assertFalse(ok)
         self.assertIn("largest window", text)
         ok, text = llama_fit("m", 30 * GIB, shape(), "q4_0", 4096, "1", 22 * GIB)
-        self.assertIn("the weights alone don't fit", text)
+        self.assertIn("the weights alone do not fit", text)
 
     def test_row_instructions_are_for_new_users(self) -> None:
         self.assertTrue(row_instruction("model").startswith("Press Enter"))
-        self.assertTrue(row_instruction("ctx").startswith("Type a number and press Enter"))
+        self.assertTrue(row_instruction("ctx").startswith("Type a number, then press Enter"))
         self.assertTrue(row_instruction("kv").startswith("Press ← →"))
         for key, text in SET_HELP.items():
             with self.subTest(key=key):

@@ -310,7 +310,7 @@ class AppTest(unittest.TestCase):
         text = self.screen()
         self.assertIn("INSTALLER", text)
         self.assertIn("done: configs", text)
-        self.assertIn("open a new terminal", self.ui.toast_msg[0])
+        self.assertIn("Open a new terminal", self.ui.toast_msg[0])
         self.keys("x")                                  # close: the config preview is back
         self.assertFalse(self.ui.install_shown)
         self.assertIn("OPENCODE CONFIG", self.screen())
@@ -491,7 +491,7 @@ class AppTest(unittest.TestCase):
         self.assertEqual(self.ui.sp, SP_ROUTER)
         text = " ".join(" ".join(x.strip(" │") for x in ANSI.sub("", self.screen()).splitlines()).split())
         for part in ("ROUTER", "Dashboard only (single model)", "OpenCode / Pi switch models (router)",
-                     "prefer to choose models on the fly", "every switch empties the prompt cache",
+                     "change models during their work", "Each switch empties the prompt cache",
                      "Update the OpenCode / Pi configs"):
             self.assertIn(part, text)
         self.ctl.do("rmode:router")
@@ -555,7 +555,7 @@ class AppTest(unittest.TestCase):
                 card = text[:next(i for i, x in enumerate(text) if "╰" in x)]
                 self.assertFalse(any("…" in x for x in card), [x for x in card if "…" in x])
                 joined = " ".join(" ".join(x.strip(" │").split()) for x in card)
-                self.assertIn("adds any GGUF from Hugging Face.", joined.replace("│ ", ""))   # the help, in full
+                self.assertIn("GGUF from Hugging Face.", joined.replace("│ ", ""))   # the help, in full
         self.assertIn("start", self.app.footer())
         self.assertIn("all keys", self.app.footer())
 

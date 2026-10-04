@@ -77,7 +77,7 @@ class CardEditTest(unittest.TestCase):
         self.select("big")
         self.keys("e")
         self.assertIsNone(self.ui.card)
-        self.assertIn("catalogue models are read-only", self.ui.toast_msg[0])
+        self.assertIn("You cannot edit a catalogue card", self.ui.toast_msg[0])
         self.assertNotIn("Edit card (e)", self.screen())
         self.select("mine")
         self.assertIn("Edit card (e)", self.screen())

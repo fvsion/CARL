@@ -420,11 +420,16 @@ class ConfigureTests(unittest.TestCase):
         self.assertNotIn("subagent tool's `background: true`", oc)
         self.assertIn("the subagent tool's `background: true`", pi)
         self.assertNotIn("carl:background", oc + pi)
+        self.assertIn('subagent_type "browser"', oc)                    # the coder's browser check: the browser agent
+        self.assertIn("Load the browser tools (`tool_search`)", pi)
+        self.assertNotIn("carl:browser", oc + pi)
+        self.assertNotIn("carl:nobrowser", oc + pi)
+        self.assertIn("message when it ends: do not wait, poll or check on it.\n\n**Browser checks", oc)
         self.assertTrue(self.read_json(".pi/agent/carl.json")["background_subagents"])
         plugins = json.dumps(self.read_json(".config/opencode/opencode.json")["plugin"])
         self.assertIn("plugins/carl-background", plugins)                 # sets background: true for the coder
         with open(self.path(".pi/agent/agents/coder.md"), encoding="utf-8") as f:
-            self.assertIn("exclude-tools: subagent\n", f.read())      # every tool but nested subagents
+            self.assertIn("exclude-tools: subagent, tool_search\n", f.read())   # no nested subagents, no browser
         self.assertEqual(self.run_configure("--coder", "1", "--background", "0").returncode, 0)
         with open(self.path(".config/opencode/carl/delegation.md"), encoding="utf-8") as f:
             oc = f.read()
@@ -432,6 +437,11 @@ class ConfigureTests(unittest.TestCase):
             pi = f.read()
         self.assertNotIn("background: true", oc + pi)
         self.assertNotIn("carl:background", oc + pi)
+        self.assertEqual(self.run_configure("--coder", "1", "--browser", "0", "--background", "0").returncode, 0)
+        with open(self.path(".config/opencode/carl/delegation.md"), encoding="utf-8") as f:
+            oc = f.read()
+        self.assertIn("pass that list on to the user", oc)                # no browser: the user checks by hand
+        self.assertNotIn('subagent_type "browser"', oc)
         self.assertFalse(self.read_json(".pi/agent/carl.json")["background_subagents"])
         self.assertNotIn("carl-background", json.dumps(self.read_json(".config/opencode/opencode.json")["plugin"]))
         self.assertFalse(os.path.exists(self.path(".config/opencode/plugins/carl-background")))
