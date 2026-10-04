@@ -15,7 +15,7 @@ ENTER = ("\r", "\n")
 ESC = "\x1b"
 BACKSPACE = "\x7f\x08"
 SCROLL_KEYS = {UP: 1, DOWN: -1, PGUP: 10, PGDN: -10}       # scroll steps (> 0: up)
-PANEL_PASSTHROUGH = ("q", "Q", "\x03", "\t")       # keys a Settings panel leaves to the app: quit, Ctrl-C, Tab
+PANEL_PASSTHROUGH = ("q", "Q", "\x03", "\t", "?")  # keys a Settings panel leaves to the app: quit, Ctrl-C, Tab, the ? card
 
 
 class Click(NamedTuple):

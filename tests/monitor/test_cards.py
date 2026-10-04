@@ -73,6 +73,16 @@ class CardsTest(unittest.TestCase):
         card = card_activity(view(), d)
         self.assertEqual(ANSI.sub("", card.summary), "ETA 30s")
 
+    def test_averages_need_time_behind_them(self) -> None:
+        """One 1-token reply measures ~1 µs of generating: no 1,000,000 tok/s average, a dash until 0.5 s."""
+        m = {"prompt_tokens_total": 5000, "prompt_seconds_total": 6.5, "tokens_predicted_total": 1,
+             "tokens_predicted_seconds_total": 0.000001}
+        body = text(card_activity(view(levels={"activity": 1}), ServerData(up=True, slots=True, metrics=m)).lines)
+        self.assertIn("read 769 · generate – tok/s", body)
+        m.update(tokens_predicted_total=500, tokens_predicted_seconds_total=10.0)
+        body = text(card_activity(view(levels={"activity": 1}), ServerData(up=True, slots=True, metrics=m)).lines)
+        self.assertIn("generate 50.0 tok/s", body)
+
     def test_column_rows_are_exactly_w_wide(self) -> None:
         rows = column(view(), ["connect", "context", "memory", "activity", "model", "health", "system"], ServerData(), 70)
         self.assertTrue(all(vlen(t) == 70 for t, _ in rows))

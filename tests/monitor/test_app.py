@@ -580,6 +580,11 @@ class AppTest(unittest.TestCase):
                         self.assertTrue(self.ui.keys)
                         if (tab, sub) != (4, 3) or self.store.models:
                             self.assertIn("Quick tip", ANSI.sub("", "\n".join(lines)))
+        for tab, sp in [(4, n) for n in range(6)] + [(0, 0), (1, 0), (2, 0), (3, 0)]:   # ? works everywhere
+            self.ui.tab, self.ui.sp, self.ui.help = tab, sp, False
+            self.keys("?")
+            self.assertTrue(self.ui.help, (tab, sp))
+        self.ui.help = False
         self.ui.tab, self.ui.sp = 4, 0
         self.keys("?")
         text = ANSI.sub("", self.screen())

@@ -203,12 +203,16 @@ def card_memory(v: View, d: ServerData) -> Card:
     return Card("MEMORY", (f"server {size(rss)}" if rss else f"{DIM}no server process{R}"), L)
 
 
+AVG_MIN_S = 0.5         # seconds of reading or generating before an average shows
+
+
 def card_activity(v: View, d: ServerData) -> Card:
     """What the server does now, live speeds and the prompt ETA, averages, draft acceptance."""
     m = d.metrics
     pps, tgs = m.get("prompt_seconds_total", 0), m.get("tokens_predicted_seconds_total", 0)
-    pp_avg = m.get("prompt_tokens_total", 0) / pps if pps else 0
-    tg_avg = m.get("tokens_predicted_total", 0) / tgs if tgs else 0
+    # an average needs some time behind it: one 1-token reply measures ~1 µs (1,000,000 tok/s)
+    pp_avg = m.get("prompt_tokens_total", 0) / pps if pps >= AVG_MIN_S else 0
+    tg_avg = m.get("tokens_predicted_total", 0) / tgs if tgs >= AVG_MIN_S else 0
     lvl = v.level("activity")
     L: List[CardLine] = [lv("now", status_of(d, v.server_pid)[2])]
     summary = f"{DIM}idle{R}"
@@ -229,7 +233,9 @@ def card_activity(v: View, d: ServerData) -> Card:
         L.append(lv("speed", f"0 tok/s · ETA {DIM}none{R}"))
     llama = d.slots
     if lvl >= 1:
-        L.append(lv("average", f"read {pp_avg:.0f} · generate {tg_avg:.1f} tok/s" if llama else NA))
+        avg_pp = f"{pp_avg:.0f}" if pp_avg else "–"
+        avg_tg = f"{tg_avg:.1f}" if tg_avg else "–"
+        L.append(lv("average", f"read {avg_pp} · generate {avg_tg} tok/s" if llama else NA))
         r = v.log.requests[-1] if v.log.requests else None
         L.append(lv("last", f"read {r.pp or 0:.0f} · generate {r.tg or 0:.1f} tok/s · "
                             f"{dur((r.t1 or 0) - (r.t0 or 0))}" if r else f"{DIM}none{R}"))
