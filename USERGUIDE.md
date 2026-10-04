@@ -111,7 +111,11 @@ Use this procedure for a Mac without a VM, for example the Mac of a friend. The 
    ```
    - On a Mac, `install.sh` uses `--local` by default. It sets the clients to the address that the server listens on now. This address is 127.0.0.1, or 192.168.42.1 if the server started for the VM. It reads the key directly from `~/.config/carl/api-key`.
    - `install.sh` needs `python3`. If macOS asks you to install the command-line developer tools, accept. Alternatively, run `xcode-select --install`.
-3. **Start a client:** open a new terminal, so that `~/.local/bin` is on the `PATH`. Then run `opencode` or `pi`.
+3. **Start a client:** open a new terminal, so that `~/.local/bin` is on the `PATH`. Go to the folder of your project, then run `opencode` or `pi` there. The client works on the folder that you start it in.
+   ```bash
+   cd ~/path/to/your/project
+   opencode
+   ```
 
 **Alternative without the installer:** in the monitor, click **[ OpenCode config ]** or **[ Pi config ]** (or press `o` / `p`). The monitor copies the config for the server that runs now to the clipboard, with the URL and the key filled in. Merge it into `~/.config/opencode/opencode.json` or `~/.pi/agent/models.json`.
 
@@ -324,6 +328,7 @@ Then restart OpenCode or Pi.
   - The banner shows `slots: 2 (auto) x 98304 tokens, KV q4_0/q4_0, RAM prompt cache … MiB`.
   - `--slots 1` forces one slot (less memory). `./carl.sh fit --slots 2` shows what fits.
 - **Two at the same time:** a subagent can run while the main session keeps its position. OpenCode can also run two subagents in parallel.
+- **The coder runs in the background** (OpenCode and Pi; `NO_BACKGROUND_SUBAGENTS=1` turns it off). The main agent starts it, tells you what it does, and is free: you can ask the main session other things while the coder works in the other slot. The coder's result comes back to the main session as a message when it ends; the main agent then checks it. CARL makes sure of this: local models often ignore an instruction to use the background, so the `carl-background` plugin (OpenCode) and the `subagent` tool (Pi) start CARL's coder in the background unless the model asks for the foreground.
   - On the 35B, two requests together get ~39% more total throughput.
   - On the 27B, the two requests share the GPU (each runs at about half speed).
 - **The title agent of OpenCode stays on.** Earlier versions disabled it. With 2 slots, it runs at the same time as the main session. It does not wait in a queue behind the main session.
@@ -394,7 +399,7 @@ OpenCode and Pi prevent this with CARL's **prompt cache** (the OpenCode plugin a
 | **web search** | `websearch` (Exa) | `web_search_exa`, `web_fetch_exa` (MCP) | `WEB_SEARCH=exa\|parallel\|off` |
 | **LSP** (go to definition, references, diagnostics) | `lsp`, with `"lsp": true` (OpenCode downloads and runs the language servers it needs) | | `NO_LSP=1` |
 | **browser** (a real Chrome: open pages, click, type, fill forms, screenshots, console and network) | the **browser** subagent | the `carl-browser` MCP server, loaded on demand | `NO_BROWSER=1`, `BROWSER_HEADED=1` (show the window) |
-| **background subagents** | the task tool can run a subagent in the background | | `NO_BACKGROUND_SUBAGENTS=1` |
+| **background subagents** | the task tool can run a subagent in the background; CARL's coder always does (`carl-background`) | the `subagent` tool's `background`; CARL's coder always does; `/subagents` lists and stops them | `NO_BACKGROUND_SUBAGENTS=1` |
 | **parallel tool calls** | several tool calls in one turn (llama.cpp needs the request to ask: CARL's model entries do) | | |
 
 Put a switch in front of the installer: `WEB_SEARCH=off ./carl.sh install --config-only`.
@@ -436,6 +441,8 @@ The main agent keeps questions, explanations, code searches and small edits.
   The coder applies the standards as follows:
   - New modules follow the standards fully. For changes to current code, the coder applies the standards within the change. If a structure blocks a clean change, the coder reports the structure and does not refactor it silently.
   - A definition-of-done checklist runs before each report (tests green, typed, ports/adapters, secure, real input samples, no placeholders). The report has a "Standards" section.
+- **In the background:** the coder runs in the background, so you can go on with the main session ([Subagents](#subagents-opencode)). In Pi, `/subagents` lists the subagents that run and stops one; the footer shows how many run.
+- **Its tools:** OpenCode: every tool except `task` (LSP and web search too). Pi: every tool except `subagent` (web search too, when it is installed).
 - **Same model:** the coder uses the loaded model. Thus, the gain is a new, focused context and more reasoning (OpenCode: effort medium), not a stronger model. With 2 slots, the main session keeps its cache while the coder works.
 - **To ask for it directly:**
   - **OpenCode:** type `@coder` and your task in the prompt, e.g. `@coder add tests for parse_config` (subagents are in the `@` list; Tab completes the name). The task goes straight to the coder: the main agent does not have to decide to delegate. If you already had an agent of your own called `coder`, CARL's coder is `@carl-coder`. Writing "use the coder agent to …" works too.
@@ -446,6 +453,24 @@ The main agent keeps questions, explanations, code searches and small edits.
   - OpenCode: `agent.coder` in `opencode.json` (mode subagent, reasoning medium, no nested subagents, ≤80 steps), and `instructions`. Its prompt is in `~/.config/opencode/carl/coder.md`.
   - Pi: `~/.pi/agent/agents/coder.md`, the `subagent` extension, and a marked block in `~/.pi/agent/APPEND_SYSTEM.md`.
   - `install.sh` never replaces your own `coder` agent, Pi `agents/coder.md` or `extensions/subagent`. Our agent then gets the name `carl-coder`, or the installer skips it and shows a note (if you also have your own `carl-coder`).
+
+### CARL's plugins and extensions
+
+`./carl.sh install` adds these to OpenCode and Pi. Each one has a switch for the installer. Type `/carl` in OpenCode or Pi to see which are on. [The plugins and extensions](reference/plugins.md) explains how each one works.
+
+| Plugin | In | What you get | Off |
+|---|---|---|---|
+| **Prompt cache** (`carl-cache`) | OpenCode, Pi | Fast starts: each agent's prompt and each session saved on the server's disk ([Fast starts](#fast-starts-the-disk-cache)) | `NO_CACHE=1` |
+| **Model check** (`carl-model-check`) | OpenCode | A warning when the model you pick is not the one the server runs, is not installed, or is loading | `NO_MODEL_CHECK=1` |
+| **Coder in the background** (`carl-background`) | OpenCode | The coder subagent runs in the background, so the main session stays free | `NO_BACKGROUND_SUBAGENTS=1` |
+| **Subagent tool** (`subagent`) | Pi | The `subagent` tool: the coder and other agents, one, several at once, a chain, or in the background; `/subagents` | `NO_CODER=1` |
+| **Subagents panel** (`subagents-sidebar`) | OpenCode | The running and finished subagents in the sidebar ([Subagents](#subagents-opencode)) | `NO_SIDEBAR=1` |
+| **Session switcher** (`session-switcher`) | OpenCode | `‹ 2/3 ● title ›` in the prompt box, `/switch` ([Switching sessions](#switching-sessions-opencode)) | `NO_SWITCHER=1` |
+| **The /carl panel** (`carl-panel`) | OpenCode, Pi | Every CARL piece on this computer with its state, and the config sync (auto-apply, apply now, check) | (always) |
+
+- Put a switch in front of the installer: `NO_SIDEBAR=1 ./carl.sh install --config-only`. The installer then takes the plugin out.
+- Restart OpenCode or Pi after an install: they load their plugins when they start.
+- Your own plugins and extensions stay. If one of yours has the same name, CARL does not install its own.
 
 ## 6. KV cache: q4 or q8
 
@@ -596,6 +621,10 @@ The dashboard (the monitor) is `tools/llama-monitor.py`.
   - **Stop server** (`s`);
   - **Leave it running** (`d`): the server continues to serve after you close the terminal. To attach again, run `./carl.sh monitor`;
   - **Cancel** (Esc).
+- **A turn is running** when you stop the server (also Apply, Auto-tune and a router load): the dashboard asks first.
+  - **Wait for the turn to end** (`w`): CARL waits until the agent's turn ends (all its tool calls and its last reply) and its session is saved, then stops. OpenCode and Pi with CARL mark each turn; for another client, CARL waits for an idle slot.
+  - **Now** (`y`): the reply stops. The client shows an error (Pi tries again), and the session goes back to its last save. The earlier turns stay in the client.
+  - **Cancel** (Esc).
 - If the server stops on its own (a crash, a failed start), the header badge shows **EXITED**, and the log shows the cause. Then `q` quits immediately.
 - `MONITOR=0 ./carl.sh llama` runs the server in the foreground with plain log output. Scripts and `nohup` starts do this automatically.
 
@@ -617,7 +646,9 @@ The dashboard (the monitor) is `tools/llama-monitor.py`.
 | **2 Connect** | Endpoint, model, API key, who can reach the server, connected clients, key file; setup steps for Mac and VM clients; **[ Install on this Mac ]** (`i`: runs `./carl.sh install` and shows its output) and **[ Update configs only ]** (`u`), both asked first; buttons **[ OpenCode config ]**, **[ Pi config ]**, **[ curl test ]**. A button copies its snippet to the clipboard and shows it below. The screen masks the key unless you reveal it. The copy has the real key. CAUTION: Protect a copied config as you protect the key. |
 | **3 Requests** | All finished requests in the log, newest first: start time, context size, new tokens, read speed, output tokens, generation speed, duration, draft acceptance, prompt tokens from the cache. The title shows the averages. |
 | **4 Log** | The full server log, which you can scroll. Buttons and keys: wrap (`w`), errors and warnings only (`f`), follow (End). |
-| **5 Settings** | Five panels; `[` and `]` change the panel. **Server:** the model and the server setup, with an explanation of the model and of each tuned value. **Models:** the catalogue and the models folder: download, verify, delete, add from Hugging Face. **Auto fit:** the best stock model for this Mac, why, and the ranking. **Auto-tune:** measure a model on this Mac. **Router:** who switches the model (the dashboard, or OpenCode / Pi in router mode). See "The Settings tab" below. |
+| **5 Settings** | Six panels; `[` and `]` change the panel. **Server:** the model and the server setup, with an explanation of the model and of each tuned value. **Models:** the catalogue and the models folder: download, verify, delete, add from Hugging Face. **Auto fit:** the best stock model for this Mac, why, and the ranking. **Auto-tune:** measure a model on this Mac. **Router:** who switches the model (the dashboard, or OpenCode / Pi in router mode). **Caching:** the disk cache (EXPERIMENTAL). See "The Settings tab" below. |
+
+**How a panel is laid out:** the controls and the data are on the left. On a wide terminal (a card about 140 columns or wider), the explanations are in a column on the right; on a narrower one, they are below the controls. That column starts with a **Quick tip**: one line about what you selected and the key that acts on it. Then come short sections, each with its own header (for example **About this setting** and **Status** in the Server panel). The keys are not in the text: the **footer** shows the keys of the panel you see, and `?` opens a card with every key of that panel and of every tab.
 
 **The Overview cards:** click the title of a card to see more detail. Click again to see full detail. Click once more to collapse the card. The dots after the title show the level: `○○` collapsed, `●○` normal, `●●` full detail.
 
@@ -648,13 +679,15 @@ Each card keeps the same height while the server works. If a value is not availa
 | ↑ ↓ PgUp PgDn, wheel | scroll the current tab (End: go back to the newest log line) |
 | `+` / `-` | more / fewer log lines on the Overview |
 | space | refresh now |
-| `?` | show all keys in the footer |
+| `?` | a card with every key of this panel and of every tab (`?` again closes it); the footer always shows the keys of the panel you see |
 | `q`, Ctrl-C | quit (asks stop / leave running / cancel) |
 | `[` / `]` | Settings tab: the previous / next panel (Server, Models, Auto fit, Auto-tune, Router) |
 | ↑ ↓, ← →, Enter, `a`, `A`, `r`, `x` | Settings tab, Server panel: select a row, change the value, open the model list (on the model row) or type a value, apply, open the Auto fit panel, revert, tuned values |
 | ↑ ↓, Enter, `d`, `v`, `u`, `x`, `h`, `c` | Settings tab, Models panel: select a model, use it, download, verify, Auto-tune, delete, add from Hugging Face, cancel the download |
 | `g`, `f`, Enter, `d`, ↑ ↓ | Settings tab, Auto fit panel: the other goal, the other model set, use the pick, download it, scroll |
-| ← →, Enter, `c` | Settings tab, Auto-tune panel: select a model, run, cancel |
+| ← →, space, Enter, `c` | Settings tab, Auto-tune panel: select a model, the mode, run, cancel |
+| `d` `p` `s` `o` `t` `h` `w` `c` | Settings tab, Caching panel: disk limit, prompts, sessions, when to save, auto after, shared, SWA models, clear |
+| `w` / `y` / Esc | a turn is running (Stop, Apply, Auto-tune, a router load): wait for the end of the turn / now / cancel |
 
 Mouse: left-click only (titles, tabs, buttons). The wheel scrolls.
 
@@ -704,11 +737,11 @@ The Settings tab (tab 5) has six panels: **Server**, **Models**, **Auto fit**, *
    - **Normal:** the role, the **good for** tags (`agent coding`, `hard code`, `chat & writing`, `uncensored`), **why use it**, the **trade-offs**, the hardware it is meant for, the speed (measured on this Mac after Auto-tune, else the catalogue figure and the Mac it came from), the recommended values next to yours, the context zones, and **why** the selected value is tuned that way.
    - **Full:** also what *uncensored* means (abliterated models), the models to **pick instead** and when, the quality **rank**, the description, the reason for every tuned value, the Auto-tune table, and the source and file.
    - The model list (Enter on the model row) shows the role and the tags of each model, and *why use it* and the trade-offs of the selected one.
-6. Below the rows, the card has four parts: **About this setting** (how to change the selected row and what it does), **Status** (the **fit** line, auto fit's pick in one line, the settings file), the buttons, and **Keys**. The fit line shows whether the model is downloaded and whether it fits in the GPU memory with these settings. If it does not fit, you cannot apply the settings (the launcher would refuse the start too). Every text wraps to the width of the terminal.
+6. Beside the rows (on a narrow terminal: below the buttons) are the **Quick tip** (how to change the selected row), **About this setting** (what it does), **Status** (the **fit** line, auto fit's pick in one line, the settings file) and **Colours**. The fit line shows whether the model is downloaded and whether it fits in the GPU memory with these settings. If it does not fit, you cannot apply the settings (the launcher would refuse the start too). For a model with sliding-window layers (Gemma), the fit line says which cache the start gets: the full cache (saved prompts restore) or the window only (Settings > Caching, SWA models). Every text wraps to the width of its column.
 7. Press `a` (or click **[ Apply and restart ]**; with no server: **[ Start server ]**). Then press `y` to confirm.
 8. Wait while the model loads (about 30 s to 2 min). The footer shows the progress.
 
-- CAUTION: **Apply stops the server.** Requests in progress stop. Make sure that no client waits for an answer.
+- CAUTION: **Apply stops the server.** If an agent's turn is running, the dashboard asks first: wait for the end of the turn (its session is saved), or stop now (the reply stops).
 - **If the new server does not start,** the monitor starts the old server again with its old values. A message shows the last lines of the error.
 - **The monitor saves the settings in `~/.config/carl/config.json`** ([The settings file](#the-settings-file)). `./carl.sh llama` uses this file the next time. Flags and environment variables have priority over the file.
   - Server-wide values go to the `llama` section. The monitor writes only values that are different from the defaults.
@@ -733,7 +766,7 @@ The Settings tab (tab 5) has six panels: **Server**, **Models**, **Auto fit**, *
 
 **Models panel:**
 - It lists the catalogue models and each `.gguf` in the models folder, with the size, the status (downloaded, partial, missing), whether it fits this Mac, and the role and "good for" tags.
-- **Sort and filter:** the two rows of chips above the list show every option, the current one highlighted. Click one, or step with `s` / `S` (sort: next / previous) and `f` / `F` (filter: next / previous). Sort: downloaded first, quality (the catalogue rank), speed (measured: fastest first, see below), size, name. Show: all, a use case (agent coding, hard code, chat & writing, uncensored), stock, dense, MoE, downloaded, fits this Mac. The same order applies to every model list (the Server panel's list and the model drop-down). Below the list: the description, the source and the file of the selected model, and its Auto-tune result.
+- **Sort and filter:** the two rows of chips above the list show every option, the current one highlighted. Click one, or step with `s` / `S` (sort: next / previous) and `f` / `F` (filter: next / previous). Sort: downloaded first, quality (the catalogue rank), speed (measured: fastest first, see below), size, name. Show: all, a use case (agent coding, hard code, chat & writing, uncensored), stock, dense, MoE, downloaded, fits this Mac. The same order applies to every model list (the Server panel's list and the model drop-down). Beside the list (below it on a narrow terminal): the description, the source and the file of the selected model, and its Auto-tune result.
 - **The speed column** is Auto-tune's score (a weighted mean of its prose, code and re-emit tok/s): **green** = measured on this Mac by Auto-tune, dim = the catalogue's figure from another Mac (it names the Mac on the model card), `?` = never measured. The speed sort uses it, fastest first; models without a figure come last, MoE before dense, then smaller files. The Auto fit panel's ranking shows the same column.
 - **Enter:** use this model (the Server panel opens with it; push `a` to start it).
 - **`d`:** download. A progress bar shows the speed and the ETA, then the checksum check. `c` cancels; the partial file stays, and Download continues it.
@@ -752,7 +785,7 @@ The Settings tab (tab 5) has six panels: **Server**, **Models**, **Auto fit**, *
 - Select a model with ← → (or click its name for a list). Only downloaded models are in the list. Choose the mode: **quick**, **default** or **long** (click one, or push space for the next).
 - Push Enter to run Auto-tune ([section 7](#auto-tune)). The panel shows each step and the last lines of its output. `c` cancels.
 - **All models:** push ← from the first model (or select **all downloaded models** in the list). Auto-tune then tunes each downloaded model, one after the other. A model that fails does not stop the others. The panel shows the last result of each model. On the command line: `./carl.sh tune all`.
-- CAUTION: Auto-tune needs the GPU for itself. If a server runs, the panel asks first. Then it stops the server, runs the tune, and starts the server again with the saved settings (and the new tune).
+- CAUTION: Auto-tune needs the GPU for itself. If a server runs, the panel asks first (and, if an agent's turn is running, whether to wait for its end). Then it stops the server, runs the tune, and starts the server again with the saved settings (and the new tune).
 - **Last result:** the date, the Mac, the selected settings, the speed of each speculation mode (prose, code, re-emit), the prompt read speeds and the context zones.
 - **[ Use these values ]** removes your own values for this model from config.json. Then the tuned values apply.
 

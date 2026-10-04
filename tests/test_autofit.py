@@ -21,7 +21,13 @@ CATALOG = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 # 27B:     16 attention layers x 4 KV heads x 512 = 32768 (18.0 KiB at q4_0)
 SHAPES = {"qwen3.6-35b-a3b": shape(experts=256, kv_elems=10240, rs_bytes=65863680),
           "qwen3.8-27b": shape(experts=0, kv_elems=32768, rs_bytes=156893184),
-          "qwen3.8-9b": shape(experts=0, kv_elems=16384, rs_bytes=52690944)}
+          "qwen3.8-9b": shape(experts=0, kv_elems=16384, rs_bytes=52690944),
+          # Gemma 4 (2026-10-04): full-attention KV elements + sliding-window ones (window 512 / 1024)
+          "gemma-4-e4b": {**shape(experts=0, kv_elems=8192, rs_bytes=0), "swa_window": 512, "kv_elems_per_token_swa": 20480},
+          "gemma-4-26b-a4b": {**shape(experts=128, kv_elems=10240, rs_bytes=0), "swa_window": 1024,
+                              "kv_elems_per_token_swa": 102400},
+          "gemma-4-31b": {**shape(experts=0, kv_elems=40960, rs_bytes=0), "swa_window": 1024,
+                          "kv_elems_per_token_swa": 409600}}
 THIS_MAC_LIMIT = 26800603136                  # an M2 Max 32 GB: Metal's recommendedMaxWorkingSetSize (25.0 GiB)
 RESERVE, RESERVE_VM = 6 * GIB, 10 * GIB
 
@@ -144,6 +150,16 @@ class PassesTest(unittest.TestCase):
         fit = auto_fit([big, small], Budget(18 * GIB, 0, 0), "everyday")
         self.assertEqual((fit.name, fit.plan.slots if fit.plan else 0, fit.tier), ("small", 2, 0))
         self.assertEqual(fit.rejected[0].reason, "needs 20.8 GiB for 2 × 96K, this Mac allows 18.0 GiB")
+
+    def test_sliding_window_models_plan_as_cache_swa_says(self) -> None:
+        """A sliding-window model: planned with the window cache (auto, window), with every layer at full
+        length only with cache.swa = full."""
+        g = Candidate("g", "moe", 1, False, True, 13 * GIB,
+                      {**shape(kv_elems=8192), "swa_window": 1024, "kv_elems_per_token_swa": 65536})
+        auto = auto_fit([g], Budget(18 * GIB, 0, 0), "everyday")
+        self.assertEqual((auto.name, auto.plan.slots if auto.plan else 0), ("g", 2))
+        full = auto_fit([g], Budget(18 * GIB, 0, 0, swa="full"), "everyday")
+        self.assertEqual(full.plan.slots if full.plan else 0, 1)
 
     def test_one_slot_then_the_largest_window(self) -> None:
         m = cand("m", "moe", 1, 13.0, kv_elems=65536)

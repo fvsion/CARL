@@ -21,8 +21,9 @@
 #   (the pre-1.2.0 form HOST MTPLX_PORT LLAMA_PORT still works; the second value
 #   is ignored: MTPLX support was removed)
 #
-# The llama.cpp context limit follows the running server's --ctx (read from
-# /props); override with LLAMA_CTX=128k, default 96K if the server is down.
+# The context limit of the model the server runs now follows its --ctx (read
+# from /props); LLAMA_CTX=128k overrides it (that model only, and only while the
+# server runs). The other models get the window of their own settings.
 # Re-run after restarting the server with a different --ctx.
 #
 # API key source (first hit wins): --key / --key-file, $CARL_API_KEY, ./api-key next to
@@ -173,7 +174,8 @@ api_get() { curl -fsS -m 5 -H @<(printf 'Authorization: Bearer %s\n' "$key") "$1
 # The clients' context limit (OpenCode limit.context, Pi contextWindow) is
 # client-side only: it decides when they compact. It must not exceed the
 # server's -c, or requests past it fail with HTTP 400 exceed_context_size_error.
-# Source: $LLAMA_CTX (N or Nk) > the running server's /props n_ctx > 98304 (96K).
+# Source: $LLAMA_CTX (N or Nk) > the running server's /props n_ctx > 98304 (96K); for the running model
+# only (client/carl_models.py _ctx_for): the others use their own settings.
 # Re-run this script after restarting the server with a different --ctx.
 if [[ -n "${LLAMA_CTX:-}" ]]; then
   v="$(printf '%s' "$LLAMA_CTX" | tr '[:upper:]' '[:lower:]')"
@@ -334,14 +336,16 @@ Description=CARL client config sync (applies the config pushed from the CARL das
 After=network-online.target
 
 [Service]
-ExecStart=$py $HERE/carl-sync.py watch
+ExecStart="$py" "$HERE/carl-sync.py" watch
 Restart=always
 RestartSec=30
 
 [Install]
 WantedBy=default.target
 UNIT
-    systemctl --user daemon-reload && systemctl --user enable --now carl-sync.service >/dev/null
+    # restart, not enable --now: a running service would keep the carl-sync.py it started with
+    systemctl --user daemon-reload && systemctl --user enable carl-sync.service >/dev/null \
+      && systemctl --user restart carl-sync.service
   else
     return 1
   fi
@@ -361,6 +365,11 @@ if [[ "${CARL_SYNC:-0}" != 1 ]]; then
     echo "client sync: a background service ($([[ "$OS" == Darwin ]] && echo "launchd $SYNC_LABEL" || echo "systemd --user carl-sync")) keeps one"
     echo "             connection to the server's dashboard and applies the config pushed from there (it"
     echo "             opens no port here; /carl in OpenCode or Pi shows it). Off: NO_SYNC_SERVICE=1 ./install.sh"
+    if [[ "$OS" != Darwin ]] && command -v loginctl >/dev/null 2>&1 \
+         && [[ "$(loginctl show-user "$(id -un)" -p Linger --value 2>/dev/null)" == no ]]; then
+      echo "             Note: it runs only while you are logged in. To keep it running (a VM reached by SSH):"
+      echo "             loginctl enable-linger $(id -un)"
+    fi
   else
     python3 "$HERE/carl-sync.py" register off 2>/dev/null || true
     echo "client sync: no service manager here: OpenCode and Pi check for a pushed config when they start"

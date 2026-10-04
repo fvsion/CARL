@@ -13,6 +13,10 @@ and the client config they sync (clientsync.py; client/carl-sync.py):
   POST /carl/cache/record   {model, slot, file, task, base}   the session a slot holds
   GET  /carl/cache/record?model=M&file=F      where that session is (404: no record)
   POST /carl/cache/unrecord {model, slot}
+  POST /carl/cache/turn     {model, slot, session, running}   a turn runs in a slot, or it ended (the
+                                              dashboard's Stop can wait for the end of the turn)
+  GET  /carl/cache/turns?model=M             the slots where a turn runs: [{slot, session}] (a new
+                                              session takes another slot first)
   POST /carl/cache/unpack   {file}            make a conversation stored as a patch whole again, before
                                               a restore (slotpack.py)
   POST /carl/cache/save-recorded {model}      save the recorded sessions of a model about to stop
@@ -20,7 +24,7 @@ and the client config they sync (clientsync.py; client/carl-sync.py):
 
 It listens next to llama-server (its address, port + 1) and wants the same API key (Bearer).
 Claims and records are the same files the local clients use (client/shared/carl-cache.js:
-.claim+MODEL+SLOT, .resident+MODEL+SLOT.json in the slots folder), so every client sees the
+.claim+MODEL+SLOT, .resident+MODEL+SLOT.json, .turn+MODEL+SLOT in the slots folder), so every client sees the
 same state. Inputs are checked (names, slot numbers, a small body); nothing else is served.
 """
 from __future__ import annotations
@@ -29,6 +33,8 @@ import hmac
 import json
 import os
 import re
+import select
+import socket
 import threading
 import time
 import urllib.parse
@@ -43,6 +49,7 @@ from .model import JSONDict, jdict
 MAX_BODY = 4096
 MAX_SLOT = 64
 CLAIM_STALE_S = 120
+TURN_STALE_S = 600       # a turn mark this old is a client that went away (carl-cache.js TURN_STALE_MS)
 SAFE = re.compile(r"[^A-Za-z0-9._-]")
 SESSION_FILE = re.compile(r"carl-session\+[A-Za-z0-9._+-]{1,300}\.bin")
 
@@ -121,6 +128,48 @@ class CacheState:
         except OSError:
             pass
 
+    def _turn_path(self, model: str, slot: int) -> str:
+        return os.path.join(self.folder, f".turn+{safe_name(model, 60)}+{slot}")
+
+    def turn(self, model: str, slot: int, session: str, running: bool) -> None:
+        """A turn runs in the slot (each request refreshes it), or it ended (only its own mark goes)."""
+        path = self._turn_path(model, slot)
+        if running:
+            with open(path + ".tmp", "w", encoding="utf-8") as f:
+                json.dump({"model": model, "slot": slot, "session": session}, f)
+            os.replace(path + ".tmp", path)
+            return
+        try:
+            with open(path, encoding="utf-8") as f:
+                if jdict(json.load(f)).get("session") == session:
+                    os.remove(path)
+        except (OSError, ValueError):
+            pass
+
+    def turns(self, model: str, now: Optional[float] = None) -> List[int]:
+        """The slots of a model where a client's turn runs (marks newer than TURN_STALE_S)."""
+        return sorted(slot for slot, _ in self.turn_marks(model, now))
+
+    def turn_marks(self, model: str, now: Optional[float] = None) -> List[Tuple[int, str]]:
+        """(slot, session) of each running turn of a model."""
+        now = time.time() if now is None else now
+        head = f".turn+{safe_name(model, 60)}+"
+        out: List[Tuple[int, str]] = []
+        try:
+            names = os.listdir(self.folder)
+        except OSError:
+            return out
+        for n in names:
+            if n.startswith(head) and n[len(head):].isdigit():
+                path = os.path.join(self.folder, n)
+                try:
+                    if now - os.path.getmtime(path) <= TURN_STALE_S:
+                        with open(path, encoding="utf-8") as f:
+                            out.append((int(n[len(head):]), str(jdict(json.load(f)).get("session") or "")))
+                except (OSError, ValueError):
+                    continue
+        return out
+
 
 CLIENT_ID = re.compile(r"[0-9a-f]{6,32}")
 CLIENT_KEYS = ("host", "user", "os", "applied", "mode")
@@ -185,6 +234,15 @@ class Registry:
             if changed or time.time() - self.saved_at > 60:
                 self._save()
 
+    def gone(self, cid: str) -> None:
+        """A client's event stream ended: one connection less, seen now; what it reported since (its
+        applied config) stays, not the values from when the stream started."""
+        with self.lock:
+            c = self.clients.get(cid)
+            if c:
+                c.connected, c.last_seen = max(c.connected - 1, 0), time.time()
+                self._save()
+
     def _save(self) -> None:
         doc = {cid: {k: getattr(c, k) for k in (*CLIENT_KEYS, "auto_apply", "address", "last_seen")}
                for cid, c in self.clients.items()}
@@ -205,6 +263,16 @@ class Registry:
     def list(self) -> List[Client]:
         with self.lock:
             return sorted(self.clients.values(), key=lambda c: -c.last_seen)
+
+
+def closed(conn: socket.socket, wait: float) -> bool:
+    """Has the other end closed the connection? Waits up to `wait` s for it (a client of the event
+    stream sends nothing: readable then means it left)."""
+    try:
+        ready, _, _ = select.select([conn], [], [], wait)
+        return bool(ready) and conn.recv(1, socket.MSG_PEEK) == b""
+    except (OSError, ValueError):
+        return True
 
 
 Reply = Tuple[int, JSONDict]
@@ -245,6 +313,11 @@ def handle(state: CacheState, conf: Callable[[], CacheConfig], method: str, path
             c = conf()
             return 200, {"prefix": c.prefix, "sessions": c.sessions, "save": c.save, "auto_s": c.auto_s,
                          "disk_gb": c.disk_gb}
+        if method == "GET" and path == "/carl/cache/turns":
+            tmodel = query.get("model", "")
+            if not tmodel or len(tmodel) > 200:
+                return 400, {"error": "model"}
+            return 200, {"turns": [{"slot": sl, "session": ses} for sl, ses in sorted(state.turn_marks(tmodel))]}
         if method == "GET" and path == "/carl/cache/record":
             model, file = query.get("model", ""), query.get("file", "")
             if not model or not SESSION_FILE.fullmatch(file):
@@ -268,6 +341,12 @@ def handle(state: CacheState, conf: Callable[[], CacheConfig], method: str, path
             return 200, {"ok": True}
         if path == "/carl/cache/unrecord":
             state.unrecord(model, slot)
+            return 200, {"ok": True}
+        if path == "/carl/cache/turn":
+            session, running = body.get("session"), body.get("running")
+            if not (isinstance(session, str) and 0 < len(session) <= 200 and isinstance(running, bool)):
+                return 400, {"error": "session and running"}
+            state.turn(model, slot, session, running)
             return 200, {"ok": True}
         return 404, {"error": "not found"}
     except ValueError as e:
@@ -330,13 +409,14 @@ class CacheApi:
                             self.wfile.write(b": ping\n\n")
                             self.wfile.flush()
                             ping = time.time()
-                        time.sleep(2)
+                        if closed(self.connection, 2.0):     # waits up to 2 s; a client that left: at once
+                            break
                 except OSError:
                     pass                          # the client went away
                 finally:
                     api.listeners -= 1
                     if who:
-                        api.registry.seen(who, self.client_address[0], connected=-1)
+                        api.registry.gone(who.id)
 
             def _call(self, method: str) -> None:
                 want = api.key()

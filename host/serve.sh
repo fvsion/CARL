@@ -156,7 +156,8 @@ BEHAVIOUR
   In a terminal: the server runs in the background (output in its log file) and the
   monitor runs here; quitting asks stop-or-leave-running. Not a terminal (scripts,
   nohup) or MONITOR=0: the server runs in the foreground as before.
-  Flash attention on; prompt checkpoints 8 x 4K; 2 GB RAM prompt cache; --parallel 1.
+  Flash attention on; prompt checkpoints 8 x 4K; a RAM prompt cache of 1-8 GB (what RAM allows);
+  slots auto = 2 when two full windows fit, else 1 (--slots 1-4).
 
 EXAMPLES
   $CMD llama

@@ -99,6 +99,15 @@ export default {
     /** @type {Map<string, boolean>} sessions: is it a subagent's */
     const child = new Map();
     return {
+      // a session goes idle (its turn ended, was stopped with Esc, or failed): its turn marks go, so the
+      // dashboard's Stop does not wait for it (carl-cache.js turn())
+      event: async ({ event }) => {
+        const e = /** @type {any} */ (event);
+        if (e?.type !== "session.idle" && !(e?.type === "session.status" && e.properties?.status?.type === "idle")) return;
+        const sid = e.properties?.sessionID;
+        if (typeof sid !== "string") return;
+        for (const c of g.caches.values()) await c.turnsDone(sid).catch(() => {});
+      },
       "chat.headers": async (input, output) => {
         try {
           if (input?.model?.providerID !== ours || !input.sessionID) return;

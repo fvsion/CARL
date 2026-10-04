@@ -131,6 +131,21 @@ class FitMathTest(unittest.TestCase):
         self.assertIn("for 1 ×", text1)
         self.assertFalse(llama_fit("m", 30 * GIB, shp, "q4_0", 65536, "1", 25 * GIB)[0])
 
+    def test_sliding_window_models(self) -> None:
+        """A model with sliding-window layers: the fit line plans the cache as the launcher does (cache.swa)
+        and says which; auto takes the full cache only when it fits."""
+        swa = {**shape(kv_elems=2048, rs_bytes=0), "swa_window": 1024, "kv_elems_per_token_swa": 204800}
+        ok, text = llama_fit("g", 10 * GIB, swa, "q4_0", 98304, "2", 40 * GIB)
+        self.assertTrue(ok)
+        self.assertIn("full cache (saved prompts restore)", text)
+        ok, text = llama_fit("g", 10 * GIB, swa, "q4_0", 98304, "2", 16 * GIB)          # only the window fits
+        self.assertTrue(ok)
+        self.assertIn("window only", text)
+        self.assertFalse(llama_fit("g", 10 * GIB, swa, "q4_0", 98304, "2", 16 * GIB, swa="full")[0])
+        self.assertGreater(max_ctx_per_slot(10 * GIB, swa, 16 * GIB, swa_full=False),
+                           max_ctx_per_slot(10 * GIB, swa, 16 * GIB))
+        self.assertNotIn("sliding-window", llama_fit("m", 10 * GIB, shape(), "q4_0", 65536, "1", 25 * GIB)[1])
+
     def test_max_ctx_per_slot(self) -> None:
         shp = shape(kv_elems=10240, rs_bytes=0, ctx_train=40960)
         self.assertEqual(max_ctx_per_slot(10 * GIB, shp, 25 * GIB), 40960)        # capped at the trained context

@@ -1,6 +1,6 @@
 ---
 name: coder
-tools: read, bash, edit, write, grep, find, ls
+exclude-tools: subagent
 description: "Specialist coding agent. Use it PROACTIVELY, as your first action, whenever a request asks for a new module, package, tool or CLI, several files, or an implementation plus tests; and use it ONLY in these two situations. (1) STUCK: a specific piece of code still fails after two fix attempts, yours in this conversation or ones the user says already failed (the same error comes back, tests keep failing, or you are going in circles). Give it the file paths, the code, the exact error or test output, and what you already tried. (2) LARGE: the task is known up front to be a large implementation: a new feature or refactor touching 3 or more files, or roughly 150+ lines of new or changed code. Give it the full requirements and how to check it works. Do NOT use it for small edits, single-function changes, questions, explanations, or searching and reading code; do those yourself. It starts with an empty context, so include every detail it needs."
 ---
 

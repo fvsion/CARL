@@ -193,10 +193,19 @@ class Controller:
         elif action == "stop":
             pid = d.target_pid
             if pid:
-                self.jobs.save_before_stop(d)           # the sessions in the slots (save = auto, switch, stop)
-                system.kill(pid, signal.SIGTERM)
-                ui.stopping = (pid, time.time() + 30)
+                def stop() -> None:
+                    self.jobs.save_before_stop(self.data)   # the sessions in the slots (save = auto, switch, stop)
+                    system.kill(pid, signal.SIGTERM)
+                    ui.stopping = (pid, time.time() + 30)
+                self.jobs.when_idle(d, "stop the server", stop)
             ui.quit = False
+        elif action == "drain:now" and ui.drain:
+            go, ui.drain = ui.drain.go, None
+            go()
+        elif action == "drain:wait" and ui.drain:
+            ui.drain.waiting, ui.drain.since = True, time.time()
+        elif action == "drain:cancel":
+            ui.drain = None
 
     def settings_action(self, act: str) -> None:
         """Actions of the Settings panels, the picker and the confirmations."""
@@ -879,6 +888,8 @@ class Controller:
             return
         for r in self.regions:
             if r.y == c.y and r.x0 <= c.x < r.x1:
+                if ui.drain and not r.action.startswith("drain:"):
+                    return
                 if ui.quit and r.action not in ("stop", "detach", "cancel", "quit"):
                     return
                 if ui.confirm and r.action not in ("setyes", "setno"):
@@ -892,6 +903,18 @@ class Controller:
         clicks, rest = split_mouse(data)
         for c in clicks:
             self.handle_click(c)
+        if ui.drain:                              # a reply runs: y now, w wait, n / Esc cancel
+            for ch in rest:
+                if ch in "yYsS":
+                    self.do("drain:now")
+                    break
+                if ch in "wW" and not ui.drain.waiting:
+                    self.do("drain:wait")
+                    break
+                if ch in "nN" + ESC:
+                    self.do("drain:cancel")
+                    break
+            return False
         if ui.confirm and not ui.quit:
             if rest == ESC:
                 self.do("setno")

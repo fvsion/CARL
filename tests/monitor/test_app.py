@@ -9,7 +9,7 @@ import unittest
 
 from mon_support import GIB, FakeStore
 from monitor.arrange import FILTERS
-from monitor.fmt import ANSI
+from monitor.fmt import ANSI, vlen
 from monitor.api import Endpoint
 from monitor.app import App, Machine
 from monitor.cli import Options
@@ -290,7 +290,7 @@ class AppTest(unittest.TestCase):
         self.keys("2")
         text = " ".join(self.screen().split())
         for part in ("SET UP OPENCODE AND PI", "./carl.sh install", "[ Install on this Mac (i) ]",
-                     "[ Update configs only (u) ]", "./carl.sh --vm", "(now it listens on this Mac only)"):
+                     "[ Update configs only (u) ]", "./carl.sh --vm", "(now: this Mac only)"):
             self.assertIn(part, text)
 
     def test_connect_install_asks_first_then_runs_and_shows_its_output(self) -> None:
@@ -322,7 +322,7 @@ class AppTest(unittest.TestCase):
         installed = [m["name"] for m in self.store.models if m["status"] == "downloaded"]
         self.assertIn(f"Out of date: OpenCode lists 1 models; installed now: {len(installed)}", text)
         self.assertIn("removed gone", text)
-        self.assertIn("Press u (Update configs only)", text)
+        self.assertIn("Press u to list the installed models", text)          # the quick tip
 
     def test_connect_install_failure_is_shown(self) -> None:
         self.fake_serve('echo "npm: network down"; exit 3\n')
@@ -407,6 +407,59 @@ class AppTest(unittest.TestCase):
             self.app.jobs.save_before_stop(d)
         post2.assert_not_called()
 
+    def test_stop_waits_for_the_turn_and_its_save(self) -> None:
+        """Stop while a client's turn runs: asked first; Wait goes on only when no slot writes, no turn is
+        marked and the save is on disk (two looks in a row); then the server stops."""
+        from unittest import mock
+        from monitor.model import ServerData
+        conf = os.path.join(self.tmp.name, "carl", "config.json")
+        self.app.jobs.paths = Paths(repo=self.tmp.name, logs=self.tmp.name, config_file=conf)
+        slots = os.path.join(self.tmp.name, "carl", "slots")
+        os.makedirs(slots)
+        mark = os.path.join(slots, ".turn+m+1")
+        with open(mark, "w") as f:
+            json.dump({"model": "m", "slot": 1, "session": "s"}, f)
+        live = [{"id": 0, "is_processing": False}, {"id": 1, "is_processing": True}]
+        self.ctl.data = d = ServerData(up=True, props={"model_alias": "m"}, target_pid=4242)
+        ep = self.app.jobs.collector.endpoint
+        jobs = self.app.jobs
+        with mock.patch.object(ep, "get", side_effect=lambda *a, **k: json.dumps(live)), \
+                mock.patch.object(jobs, "save_before_stop") as save, \
+                mock.patch("monitor.system.kill") as kill:
+            self.ctl.do("stop")
+            self.assertIsNotNone(self.ui.drain)
+            self.assertIn("A TURN IS RUNNING", "\n".join(self.app.frame(d)))
+            self.keys("w")                                          # wait for the end of the turn
+            self.assertTrue(self.ui.drain and self.ui.drain.waiting)
+            live[1]["is_processing"] = False                        # the reply ended, the agent runs a tool
+            for _ in range(3):
+                self.ui.drain.checked = 0
+                jobs.drain_tick(d)
+            self.assertIsNotNone(self.ui.drain)                     # the turn mark: still waiting
+            self.assertEqual(self.ui.drain.turns, [1])
+            os.remove(mark)                                         # the turn's save is done
+            self.ui.drain.checked = 0
+            jobs.drain_tick(d)
+            kill.assert_not_called()                                # one idle look is not enough
+            self.ui.drain.checked = 0
+            jobs.drain_tick(d)
+            self.assertIsNone(self.ui.drain)
+            save.assert_called_once()
+            kill.assert_called_once()
+            self.assertEqual(self.ui.stopping[0], 4242)
+            # nothing runs: Stop goes at once; a turn runs and the user says Now: at once too
+            self.ui.stopping = None
+            kill.reset_mock()
+            self.ctl.do("stop")
+            self.assertIsNone(self.ui.drain)
+            kill.assert_called_once()
+            live[0]["is_processing"] = True
+            kill.reset_mock()
+            self.ctl.do("stop")
+            self.keys("y")
+            self.assertIsNone(self.ui.drain)
+            kill.assert_called_once()
+
     def test_connect_clients_tab(self) -> None:
         from monitor.cacheapi import Client
         conf = os.path.join(self.tmp.name, "carl", "config.json")
@@ -428,7 +481,7 @@ class AppTest(unittest.TestCase):
                     clients=(Client("0123456789ab", host="vm-1", user="u", os="Linux", applied=version, mode="service",
                                     connected=1),
                              Client("ba9876543210", host="vm-2", applied="old", mode="check", auto_apply=False)))
-        lines = " ".join(ANSI.sub("", x if isinstance(x, str) else x.text) for x in clients_lines(view, [], [], 200))
+        lines = " ".join(ANSI.sub("", x if isinstance(x, str) else x.text) for x in clients_lines(view, [], [], 400))
         self.assertIn("vm-1", lines)
         self.assertIn(f"up to date ({version})", lines)
         self.assertIn(f"has old, pushed {version} (auto-apply off: it waits)", lines)
@@ -480,25 +533,60 @@ class AppTest(unittest.TestCase):
         self.write_client_state(installed)
         self.assertNotIn("Connect ⚠", self.screen())
 
-    def test_server_card_sections_at_80_and_160_columns(self) -> None:
-        """About this setting, Status, the buttons and Keys are separate, and nothing is cut."""
+    def test_server_card_sections_at_80_160_and_200_columns(self) -> None:
+        """The table and the buttons; the quick tip, About this setting and Status under their own headers (beside
+        the table when the card is wide, under it else); no key list in the card (the footer and ? have it)."""
         self.keys("5")
-        for cols in (80, 160):
+        for cols in (80, 160, 200):
             with self.subTest(cols=cols):
                 text = self.server_text(cols)
                 heads = {h: next(i for i, x in enumerate(text) if f" {h} ─" in x)
-                         for h in ("About this setting", "Status", "Keys")}
+                         for h in ("Quick tip", "About this setting", "Status")}
+                self.assertLess(heads["Quick tip"], heads["About this setting"])
                 self.assertLess(heads["About this setting"], heads["Status"])
-                self.assertLess(heads["Status"], heads["Keys"])
+                self.assertFalse(any(" Keys ─" in x for x in text))
                 buttons = [i for i, x in enumerate(text) if "[ Start server (a) ]" in x]
                 self.assertEqual(len(buttons), 1)
-                self.assertTrue(heads["Status"] < buttons[0] < heads["Keys"])
-                self.assertNotIn("Status", text[buttons[0]])
+                advanced = next(i for i, x in enumerate(text) if "advanced" in x)
+                if cols == 200:                     # beside the table
+                    self.assertLess(heads["Quick tip"], advanced)
+                else:
+                    self.assertGreater(heads["Quick tip"], buttons[0])
                 card = text[:next(i for i, x in enumerate(text) if "╰" in x)]
                 self.assertFalse(any("…" in x for x in card), [x for x in card if "…" in x])
                 joined = " ".join(" ".join(x.strip(" │").split()) for x in card)
-                self.assertIn("then h to add one from Hugging Face.", joined)      # the model row's help, in full
-                self.assertIn("Press a to start the server", joined)
+                self.assertIn("adds any GGUF from Hugging Face.", joined.replace("│ ", ""))   # the help, in full
+        self.assertIn("start", self.app.footer())
+        self.assertIn("all keys", self.app.footer())
+
+    def test_every_panel_has_its_keys_a_quick_tip_and_fits(self) -> None:
+        """Every Settings panel and Connect sub-tab, at 100, 140 and 200 columns: a quick tip, its own keys
+        for the footer, every line within the width; ? shows them all in a card."""
+        import shutil
+        from unittest import mock
+        conf = os.path.join(self.tmp.name, "carl", "config.json")
+        self.app.jobs.paths = Paths(repo=self.tmp.name, logs=self.tmp.name, config_file=conf)
+        for cols in (100, 140, 200):
+            with mock.patch.object(shutil, "get_terminal_size", return_value=os.terminal_size((cols, 60))):
+                for tab, sub in [(4, sp) for sp in range(6)] + [(1, 0), (1, 1)]:
+                    with self.subTest(cols=cols, tab=tab, sub=sub):
+                        self.ui.tab = tab
+                        if tab == 4:
+                            self.ui.sp = sub
+                        else:
+                            self.ui.connect_sp = sub
+                        lines = self.app.frame(self.ctl.data)
+                        self.assertTrue(all(vlen(x) <= cols for x in lines))
+                        self.assertTrue(self.ui.keys)
+                        if (tab, sub) != (4, 3) or self.store.models:
+                            self.assertIn("Quick tip", ANSI.sub("", "\n".join(lines)))
+        self.ui.tab, self.ui.sp = 4, 0
+        self.keys("?")
+        text = ANSI.sub("", self.screen())
+        for part in ("KEYS", "This panel", "Every tab", "tuned values", "quit (asks)"):
+            self.assertIn(part, text)
+        self.keys("?")
+        self.assertNotIn("Every tab", ANSI.sub("", self.screen()))
 
 
 if __name__ == "__main__":

@@ -6,7 +6,7 @@ import re
 import textwrap
 import unicodedata
 from dataclasses import dataclass, field
-from typing import NamedTuple, Sequence, Union
+from typing import Callable, NamedTuple, Sequence, Union
 
 ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
 R, DIM, B = "\x1b[0m", "\x1b[2m", "\x1b[1m"
@@ -255,6 +255,58 @@ def merge_columns(left: Sequence[CardLine], right: Sequence[CardLine], lw: int) 
             spans.append((shift, shift + max(vlen(rl.text), 1), rl.act))
         out.append(Ln(fit(ll.text, lw) + f" {DIM}│{R} " + rl.text, spans=spans))
     return out
+
+
+SIDE_MIN = 140      # a card at least this wide (inside) puts its explanations in a side column
+Section = tuple[str, Sequence[CardLine]]       # a side section: its header and its lines (text wraps)
+Key = tuple[str, str]                          # a key and what it does (the footer, the ? card)
+
+
+def side_width(inner: int) -> int:
+    """The side column's width in a card `inner` columns wide (no main_w given)."""
+    return max(44, min(76, inner * 2 // 5))
+
+
+def side_lines(tip: str, sections: Sequence[Section], w: int) -> list[CardLine]:
+    """The side column: a one-line Quick tip about the selection, then each section under its own
+    header (sections without lines are left out)."""
+    out: list[CardLine] = []
+    if tip:
+        out += [heading("Quick tip", w), *cwrap(f"{CYN}{tip}{R}", w)]
+    for title, body in sections:
+        if not body:
+            continue
+        if out:
+            out.append("")
+        out.append(heading(title, w))
+        for x in body:
+            if isinstance(x, str):
+                out += cwrap(x, w)
+            elif x.spans:                    # buttons: as they are
+                out.append(x)
+            else:                            # a clickable line: every wrapped piece clicks
+                out += [Ln(t, act=x.act) for t in cwrap(x.text, w)]
+    return out
+
+
+SIDE_MAX = 90       # wider explanations are hard to read
+
+
+def with_side(main: Callable[[int], list[CardLine]], tip: str, sections: Sequence[Section], inner: int,
+              main_w: int = 0) -> list[CardLine]:
+    """The controls and the data on the left; the quick tip and the explanations beside them when
+    the card is wide (SIDE_MIN), else under them, under the same headers. main(w) draws w columns;
+    main_w: the width the controls need (the side column takes the rest, up to SIDE_MAX)."""
+    if inner >= SIDE_MIN:
+        mw = max(main_w, inner - SIDE_MAX - 3) if main_w else inner - side_width(inner) - 3
+        if inner - mw - 3 >= 44:
+            return merge_columns(main(mw), side_lines(tip, sections, inner - mw - 3), mw)
+    return [*main(inner), "", *side_lines(tip, sections, inner)]
+
+
+def key_hint(keys: Sequence[Key]) -> str:
+    """The footer's keys: "↑↓ select · a apply · ..." (key bold, what it does dim)."""
+    return f"{DIM} · {R}".join(f"{B}{k}{R}{DIM} {what}{R}" for k, what in keys)
 
 
 def side_by_side(left: Sequence[Row], right: Sequence[Row], lw: int, pad_left: bool = True) -> list[Row]:

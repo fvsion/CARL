@@ -19,7 +19,7 @@ from .cards import View, status_of
 from .clients import Drift, drift
 from .collector import Collector
 from .controller import Controller, Region
-from .fmt import B, DIM, GRN, R, RED, YEL, Row, draw_card, fit, indent, pill, vlen, wwrap
+from .fmt import B, DIM, GRN, R, RED, YEL, Row, draw_card, fit, indent, key_hint, pill, vlen, wwrap
 from .jobs import Paths, ServerJobs
 from .keys import InputBuffer
 from .model import ServerData, jdict
@@ -28,7 +28,7 @@ from .settings_view import ModelsDir, SettingsView, subpanel_bar
 from .state import SP_CACHE, SP_FIT, SP_MODELS, SP_ROUTER, SP_SERVER, TABS, UIState
 from .store import CarlStore, ModelList
 from .terminal import LOGO_COLS, Terminal, logo_escape, logo_mode, place_lines
-from .views import body_connect, body_log, body_overview, body_requests, quit_dialog
+from .views import TAB_KEYS, body_connect, body_log, body_overview, body_requests, drain_dialog, keys_card, quit_dialog
 
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 LOGO_FILE = os.path.join(REPO, "assets", "carl-icon.png")
@@ -159,7 +159,16 @@ class App:
             x += len(lab) + 1
         out = [head, fit(tabs, cols - self.logo_cols), fit(DIM + "─" * cols, cols)]
         height = (rows - 5) if not once else 10**4
-        body = quit_dialog(d, ui, cols, height) if ui.quit else self.body(d, cols, height)
+        if ui.drain:
+            body = drain_dialog(ui.drain, cols, height)
+        elif ui.quit:
+            body = quit_dialog(d, ui, cols, height)
+        else:
+            ui.keys, ui.keys_more = list(TAB_KEYS.get(ui.tab, [])), []     # the panel drawn next sets its own
+            body = self.body(d, cols, height)
+            if ui.help:                          # ?: every key of this panel, then the keys of every tab
+                card = indent(keys_card(ui.keys, ui.keys_more, min(cols - 2, 110)))
+                body = card + self.body(d, cols, max(height - len(card), 4))
         for text, spans in body:
             y = len(out) + 1
             regions.extend(Region(y, a + 1, b + 1, act) for a, b, act in spans)
@@ -184,9 +193,8 @@ class App:
         if msg and time.time() < until:
             return f"{GRN}{msg}{R}"
         if ui.help:
-            return (f"{DIM}1-5/Tab tabs · click a card title: more/less detail · e/c expand/collapse all · k key · "
-                    f"o/p/t copy configs · w wrap · f errors only · ↑↓ PgUp PgDn scroll · space refresh · q quit · ? hide{R}")
-        return f"{DIM}click a card title for detail · 1-5 tabs · o/p/t copy configs · k key · q quit · ? all keys{R}"
+            return f"{DIM}every key of this panel above · {R}{B}?{R}{DIM} closes it{R}"
+        return key_hint([*ui.keys, ("1-5", "tabs"), ("q", "quit"), ("?", "all keys")])
 
     def body(self, d: ServerData, cols: int, height: int) -> List[Row]:
         """The selected tab's rows."""
@@ -253,7 +261,7 @@ class App:
                                         [s.line(n) for s in stale], cols)[:height - 2]
             elif ui.sp == SP_CACHE:
                 folder = self.jobs.paths.slots
-                body = self.view.caching(self.jobs.cache_conf(), diskcache.listing(folder), folder, cols)[:height - 2]
+                body = self.view.caching(ui, self.jobs.cache_conf(), diskcache.listing(folder), folder, cols)[:height - 2]
             elif ui.sp == SP_MODELS:
                 mdir = self.store.models_dir()
                 body = self.view.models(ui, cols, height - 2, ModelsDir(mdir, disk_free(mdir)))
@@ -301,6 +309,7 @@ class App:
                     self.ctl.data = c.collect()
                     next_fetch = time.time() + (0.5 if ui.stopping else self.opts.interval)
                 self.jobs.poll()
+                self.jobs.drain_tick(self.ctl.data)
                 self.cache_api()
                 if ui.stopping:
                     pid, deadline = ui.stopping

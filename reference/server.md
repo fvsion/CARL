@@ -6,106 +6,251 @@
 
 | | llama.cpp (`./carl.sh llama`) |
 |---|---|
-| Version | 0.4.1 (Homebrew), `llama-server` |
+| Program | `llama-server` from Homebrew `llama.cpp`. Measured with 0.4.1 (M3 Pro) and 0.5.0, build 11146 (M2 Max). |
 | Port | 8080 |
-| API | OpenAI API (`/v1/chat/completions`, `/v1/models`), Bearer key `~/.config/carl/api-key` |
-| Weights | GGUF (`~/models/gguf/`): the catalogue models, and any other GGUF |
-| Models available | Qwen3.6-35B-A3B (default, `qwen3.6-35b-a3b`), Qwen3.8-27B stock, Qwen3.8-27B abliterated (orcarouter), and their Q3/IQ3 builds |
-| KV cache | Real q4_0 (default) or q8_0, allocated one time with no bf16 copy. Set it with `--kv`. |
-| Usable context | 96K per slot by default, up to 256K (`--ctx`) |
-| Memory behaviour | The server allocates the full KV cache at start. Memory stays flat during a session (a 56K → 81K session was measured). |
-| Prompt reuse | Context checkpoints (8, every 4K tokens) at user-message boundaries. RAM prompt cache, sized automatically to 1–8 GiB ([section 2](memory.md#ram-prompt-cache-and-checkpoints-measured-2026-10-02)). |
+| API | The OpenAI API (`/v1/chat/completions`, `/v1/models`) and the Bearer key `~/.config/carl/api-key` |
+| Weights | GGUF files in `~/models/gguf/`: the catalogue models and any other GGUF |
+| Catalogue | Qwen3.6-35B-A3B (Q4 and IQ3), Qwen3.8-27B stock (Q4, Q3, IQ3), Qwen3.8-27B abliterated (orcarouter: Q4, Q3, IQ3), Heretic 35B-A3B abliterated (Q4, IQ3), Qwen3.8-9B Distill ([Models](models.md)) |
+| Default model | Auto fit's pick for this Mac (`llama.model = auto`) |
+| KV cache | Real q4_0 (default) or q8_0, allocated one time with no bf16 copy. `--kv` sets it. |
+| Usable context | 96K for each slot by default, from 4K to 256K (`--ctx`) |
+| Memory | The server allocates the full KV cache at start. The memory stays flat during a session (measured from 56K to 81K tokens). |
+| Prompt reuse | Context checkpoints (8, at least 4K tokens apart) at user-message boundaries. A RAM prompt cache of 1–8 GiB ([RAM prompt cache](memory.md#ram-prompt-cache-and-checkpoints-measured-2026-10-02)). A disk prompt cache for OpenCode and Pi ([The disk prompt cache](cache.md)). |
 | Speculation | MTP head + n-gram (`draft-mtp,ngram-mod`). The draft count is set for each model. |
-| Decode (27B) | 10.5–11 tok/s on new text, 27 tok/s when it re-emits text |
-| Prompt read speed (27B, cold) | ~85–90 tok/s at 2–9K, ~56–65 tok/s at 66K |
-| Thinking off from OpenCode | Yes: `none` variant (patched template) |
+| Decode (27B, M3 Pro) | 10.5–11 tok/s on new text, 27 tok/s when the model writes text again |
+| Prompt read (27B, cold, M3 Pro) | ~85–90 tok/s at 2–9K, ~56–65 tok/s at 66K |
+| Thinking off from OpenCode | Yes: the `none` variant (patched template) |
 | Thinking off from Pi | Yes: `off` → `chat_template_kwargs.enable_thinking=false` |
-| Effort values accepted | Depends on the template of the model ([section 5](thinking.md#thinking-by-model)) |
-| Bad effort value | The Qwen3.8 template raises an error (the request fails). |
-| Concurrency | 2 slots by default (`--slots auto`): two conversations at the same time, each with its own cache. More requests wait in a queue. |
-| Stop | In the monitor: `q`, then `s`. Or kill the PID that `netstat -anv -p tcp` shows for :8080 ([Port and PID lookups](#port-and-pid-lookups-no-lsof)) |
+| Effort values | They depend on the template of the model ([Thinking by model](thinking.md#thinking-by-model)). |
+| Bad effort value | The Qwen3.8 27B template raises an error, and the request fails. |
+| Concurrency | `--slots auto` (default): 2 slots when two full windows fit, else 1. `--slots` accepts 1–4. More requests wait in a queue. |
+| Stop | In the dashboard: `q`, then `s`. Or stop the PID that `netstat -anv -p tcp` shows for :8080 ([Port and PID lookups](#port-and-pid-lookups-no-lsof)). |
 | Logs | `~/models/logs/llama-server-*.log` (`tools/llama-log.sh`) |
 | Health | `/health`, `/props`, `/metrics`, `/slots` |
 
-**Other servers considered:**
-- MTPLX was evaluated (2026-09/10) and removed in 1.2.0. On 32–36 GB Macs, it could not hold long sessions: HTTP 507 from ~4–56K tokens (it depends on the free memory), no real quantized KV cache in 2.11, and a 48K cap. llama.cpp holds 2 × 96K slots. The last version with MTPLX support is commit 470c316.
-- NOTE: oMLX (a different MLX server) was researched as an alternative and not used. It was not tested on this Mac.
+**Other servers that were examined:**
+- MTPLX was examined in 2026-09 and 2026-10, and removed in 1.2.0. On 32–36 GB Macs, it could not hold long sessions. It gave HTTP 507 from about 4K–56K tokens (this depends on the free memory). Version 2.11 had no real quantized KV cache and a 48K limit. llama.cpp holds 2 × 96K slots. The last commit with MTPLX support is 470c316.
+- NOTE: oMLX (a different MLX server) was examined on paper only. It was not tested on this Mac.
 
 ---
 
 ## llama.cpp details
 
-`host/serve.sh` gives the `llama` command to `host/serve-llama.sh`. With no arguments, `./carl.sh` opens the dashboard. It attaches to a server on port 8080. If no server runs, it starts llama.cpp with the saved settings. If no model is downloaded, it first offers to download auto fit's pick for this Mac. `./carl.sh -h` prints the help. The flags that `serve-llama.sh` uses are in [Server flags](#server-flags).
+### The start
 
-- **Slots: 2 by default when they fit** (`--slots auto`).
-  - **Reason:** OpenCode subagents are separate conversations. With one slot, a subagent evicts the main session. llama.cpp could park the main session in the RAM cache only if it fit. The states were 2.1–2.3 GiB, and the old cap was 2048 MiB (`exceeds cache size limit … skipping`). Thus, the server read the main session again after each subagent.
-  - **Two slots:** `--parallel 2 --kv-unified --kv-unified-per-slot CTX -c 2×CTX --no-cache-idle-slots -sps 0.5`.
-    - The last two flags are important. By default, llama.cpp parks and clears idle slots at each new task (`--cache-idle-slots`). By default, it also gives a slot to each prompt that shares ≥10% of its tokens with that slot (`-sps 0.1`). A subagent that shares the system prompt meets this condition.
-  - **Measured:** A follow-up turn after a subagent took 0.6 s (35B) / 1.9 s (27B). The prompt stayed fully cached in its slot.
-    - Two slots that generate at the same time: the 35B gives +39% combined (each slot at 72–77% of its speed alone). The 27B gives 8.8 vs 9.6 tok/s (time-shared).
-    - MTP works in both slots.
-  - **RAM prompt cache** (`--cache-ram`): The server calculates its size from the free RAM after the weights, the KV cache and a reserve. The reserve is 10 GiB with the VM network, otherwise 6 GiB. The size is clamped to 1–8 GiB. This cache holds conversations that are not in a slot.
-  - **NVMe parking:** llama.cpp has no automatic disk tier. It has only a manual function (`--slot-save-path` + `/slots/{id}?action=save|restore`). On Apple Silicon, the RAM cache is the same memory as "VRAM". Also, macOS moves this memory to swap on the SSD when memory pressure is high.
-- **Two models at the same time do not fit.**
-  - CAUTION: Do not load a second model while a server runs. The second load causes Metal out-of-memory errors.
-  - After that, the first server returns `Compute error` for each request. But `/health` continues to report ok. Only a restart repairs the server.
-- **Launch guard** (`guard_other_models` in `host/common.sh`). `serve-llama.sh` and Auto-tune refuse to start in these conditions:
-  - a process holds more than 8 GB of resident memory (`BIG_GB`, default 8);
-  - a process has a known model-server name (`llama-server`, `ollama`, `LM Studio`, …).
-  - **Reason:** two models do not fit. A name check alone misses servers that started in a different way. On 2026-10-02, a second model crashed the Mac (it restarted).
-  - `ALLOW_SECOND_MODEL=1` skips the check. Use it only if the large process is not a model.
-- **Sleep stops requests.** The launchers keep `caffeinate -i` active for the full life of the server. To disable this, set `KEEP_AWAKE=0`. If you close the lid on battery power, the Mac still goes to sleep.
-  - **Evidence:** before this change, idle sleep (1 min on battery) froze a 74K prompt for 30+ min.
-- **The server ignores the model name in a request.** The GGUF that is loaded answers all requests. Thus, the model picker in the client must match the server.
-- **Template override.** The server uses `--chat-template-file ~/models/templates/<model>.thinking-toggle.jinja`. This file is generated at start ([section 4](thinking.md#how-thinking-works)). To use the template of the GGUF, set `THINK_TOGGLE=0`.
-- **Speculation per model** (catalogue `tune.spec` and `tune.spec_n`, or the Auto-tune result): The 27B dense uses MTP + n-gram with 1 draft token. The 35B MoE (Q4) uses 2. More drafts help a MoE, because with 3B active parameters it costs little to verify more tokens. The stock IQ3 builds use MTP + n-gram with 1 draft token: 2 drafts lose on IQ quants. The abliterated IQ3 builds use n-gram only (Heretic 35B: no MTP head, n=1; orcarouter 27B IQ3: n=2, a tie with MTP + n-gram) ([IQ3 speculation](models.md#iq3-speculation-measured-2026-10-03)).
-- **The monitor (since 2026-10-01):** `tools/llama-monitor.py`.
-  - It has a header with the status and **[ Quit ]**.
-  - Tabs: Overview (cards), Connect (URL, key, config copy), Requests, Log, Settings.
-  - Use only the left click. The monitor does not use the right click, because terminals such as iTerm2 show their own context menu.
-  - A config that you copy from the Connect tab contains the API key. On screen, the key stays masked until you reveal it.
-- **Launch model (since 2026-10-01).** When you start from a terminal, `run_server` (`host/common.sh`) does these steps:
-  - It starts the server under `nohup` with job control on (`set -m`). Thus, the server gets its own process group, and Ctrl-C in the monitor cannot reach it.
-  - It starts `caffeinate -w <server pid>`.
-  - It then uses `exec` to change into the monitor.
-  - **Result:** The server is a child process of the monitor, so the monitor must reap it. If the monitor does not reap it, a stopped or crashed server stays as a zombie process. `ps` still lists this zombie. The `pid_alive()` function of the monitor calls `waitpid(WNOHANG)` and treats state `Z` as dead.
-  - Without a terminal (scripts, `nohup`, `MONITOR=0`), the launcher starts the server with `exec` in the foreground, as before. The benchmark tools need this behaviour.
-- **API key** (`ensure_api_key` in `host/common.sh`): the server and the clients use `~/.config/carl/api-key` (mode 600, in a folder with mode 700; the folder of `config.json`). `API_KEY_FILE` overrides the path.
-  - If the file is missing, the first server start copies the key from an earlier path (`carl_core/domain/apikey.py`; `~/.mtplx/api-key` before 1.2.0). It is the same key, so existing clients continue to work. If there is no old key, it makes a random 40-character key.
-  - The dashboard, Auto-tune, the bench tools and `tools/llama-wait-idle.sh` read the new path. While the new file does not exist, they read the old paths.
-- **Settings folder, formerly `~/.config/llm-deploy`** (CARL was called LLM-Deploy; `migrate_conf_dir` in `host/common.sh`, `carl_core/domain/confdir.py`). Every `./carl.sh` command except help moves it once to `~/.config/carl` (folder 0700, files 0600) and leaves the symlink `~/.config/llm-deploy -> carl`: client configs from before the rename read the key there. If both folders exist, CARL uses `~/.config/carl` and does not change the old one. Until the move, the readers use the old folder, and the key chain is `API_KEY_FILE` > `~/.config/carl/api-key` > `~/.config/llm-deploy/api-key` > `~/.mtplx/api-key`. `CARL_CONF_DIR` turns the move off. On the client side, `client/install.sh` moves the same folder, and `configure.py` (`OLD_NAMES`) changes CARL's own `llm-deploy.json`, `~/.config/opencode/llm-deploy/`, provider `llm-deploy`, the `llm-deploy:delegation` block in `APPEND_SYSTEM.md` and the `LLM-Deploy:` marker of the Pi extension to `carl.json`, `~/.config/opencode/carl/`, `carl`, `carl:delegation` and `CARL:`. The dashboard's pasted provider id and the plugin packages are `carl` (`carl-subagents-sidebar`, `carl-session-switcher`, command `carl.session.switch`).
-- **Served names and the client lists (1.3.0):** every model is served under its CARL name (`--alias` = the catalogue or custom name; before 1.3.0 builds shared a family alias such as `qwen3.8-27b`, so OpenCode's label could name the wrong build). The client configs list only the installed models (`tools/carl.py client-models`: id, label, window per slot from the effective settings, thinking `on-off` | `effort` from the catalogue's or the user's card), one entry each; the default model is the one a start loads. The dashboard compares what the configs on this Mac list (`opencode.json` / `models.json`, CARL's provider) with the downloaded models and warns in the Connect tab.
-- **Router mode** (opt-in: `llama.mode = router`, `LLAMA_MODE`, `--router`; `carl_core/domain/router.py`, the router branch of `serve-llama.sh`). llama.cpp 0.5.0's router (`llama-server --models-preset FILE --models-max 1`, no `-m`) starts one child `llama-server` per loaded model on a free port and proxies requests by the `model` field. Measured 2026-10-03 on this Mac:
-  - `--models-max 1`: a request for another model evicts the loaded one ("evicting idle LRU"), waits for it to **exit**, then spawns the new one: never two models in memory. A busy model finishes its request first (the new request queues).
-  - An unknown model: HTTP 400 `model 'X' not found` (nothing loads; the router doesn't log it). Stopping the router (SIGTERM) stops its child.
-  - `/slots`, `/metrics` need `?model=ID`, and **load the model if it isn't loaded** unless `&autoload=false` is added: the dashboard asks only about the loaded model, always with `autoload=false`. `/props` without a model answers `role: router`; `/models` lists every model with `status.value` (unloaded / loading / loaded / sleeping) and the child's arguments. `/models/load` returns at once (the load takes 10 s to 2 min).
-  - The presets INI: `[*]` = CARL's shared flags (jinja, reasoning format, `preserve_thinking`, `-ngl 999`, `-fa on`, batch, ubatch, checkpoints, metrics, no mmproj), one section per downloaded model with its effective settings (`ctx-size` = slots × window, `parallel`, `kv-unified*` and `cache-idle-slots = false` / `slot-prompt-similarity` with 2+ slots, KV types, `cache-ram`, sampling, `spec-type` / `spec-draft-n-max`, the thinking-toggle `chat-template-file`); keys are long option names, `cache-idle-slots = false` becomes `--no-cache-idle-slots`. A model whose setup fails the start check is left out (a comment and the banner say why). `load-on-startup` marks the start model. Command-line arguments of the router override every preset, so the router gets only host, port, key file and log flags (plus `llama.extra_args`).
-  - The router's log file carries its children's lines as `[PORT] M.SS.mmm.uuu L ...` with the child's own clock: the dashboard strips the prefix and moves the time by the router's "spawning server instance ... on port PORT" line; the router's per-request "proxying request" lines (one per dashboard poll) are hidden.
-  - **Downside:** every switch evicts the prompt cache (the new child starts cold): the next request re-reads the whole conversation, and so does switching back.
-- **Network modes** (`host/common.sh`):
-  - `--vm` = 192.168.42.1. This is the VMware Fusion NAT network (vmnet8). The Mac is `192.168.42.1` on `bridge101`. The Kali VM is `192.168.42.130`. The VM and the Mac itself can both connect to this address. The mode fails if this address is missing.
-  - `--local` = 127.0.0.1. Only the Mac can connect. **The default since 1.3.0** (also without any flag, `NET` or `llama.net`). When the VMware network is up, the banner says that `--vm` serves a VM client.
-  - Before 1.3.0 the default was auto: the VM address whenever vmnet8 existed, so a VMware user exposed the server to the VM network without asking. Removed: `NET=auto` means local (the banner says so), and a saved `llama.net = auto` is dropped once by `migrate_config()` (`carl_core/domain/settings.py`), with a note on stderr, so it means local.
-  - `--host ADDR` (or `HOST=ADDR`) has priority over the modes. ADDR must exist on an interface of this Mac: for example its LAN address, or the address on a Parallels network (often `10.211.55.2`). `VM_HOST=ADDR` changes the address of `--vm`.
-  - The settings file can hold an address (`llama.host` in `config.json`; the Settings tab writes it when you select an address in the network row). Order of priority: flag, environment, settings file.
-  - The start-up banner shows the mode. For an address that is not 127.0.0.1 or the VM address, it shows a CAUTION: every computer that can reach the address can use the server, and only the API key protects it.
-  - After a restart from the Settings tab, the health check also tries the selected address. Thus, a server on the LAN address is not taken as a failed start.
-  - CAUTION: The script refuses 0.0.0.0 / `::`, also through `HOST=0.0.0.0`. The macOS firewall is off on this Mac, so a wildcard bind would make the model available to the LAN.
-  - `client/install.sh --local` sets the clients to the address on which the server actually listens. `--host ADDR` sets any address. `--port N` sets the llama.cpp port (default 8080). The old positional form `install.sh HOST [X] [PORT]` still works: the second value (an old port) is ignored with a note, and the third is the llama.cpp port.
-  - API key for `client/install.sh` (first hit wins): `--key KEY` / `--key-file FILE`, `$CARL_API_KEY`, a file `api-key` next to the script, on a Mac with `--local` the server key (`~/.config/carl/api-key`, else the old `~/.mtplx/api-key`), the key from a previous run (the same new path, else the old `~/.config/mtplx/api-key`), a hidden prompt. The installer stores it at `~/.config/carl/api-key` (mode 600), and the OpenCode and Pi configs point at that file. A new run changes old configs to the new path. It does not delete the old client file (a provider of your own can use it): delete it when nothing uses it. `--key` leaves the key in the shell history. The smoke test gives the key to `curl` through a header file (`curl -H @file`, curl 7.55 or later), so the key does not show in `ps`.
-- **Memory check before load.** `serve-llama.sh` runs `tools/llama-fit.py --check` (`check_start()` in `carl_core/domain/fit.py`; the dashboard's fit line uses the same function). When weights + KV + buffers are more than the GPU limit ([below](memory.md#gpu-memory-limit-and-what-fits)), the start is **refused** (exit 3 → the launcher exits 1): such a start fails to load or swaps the Mac to a crawl. The message names the need and the limit, the largest window that fits (with these slots and with 1), and auto fit's alternative (the best downloaded model, and the catalogue pick to download when it is better). `FIT_CHECK=0` is the expert override. A check that cannot run (an unreadable header) only warns.
-- **Port guard.** `serve-llama.sh` does not start if a process already listens on the port (`port_pid`, see below). It does this check before it touches `llama-server-latest.log` or loads anything. Before this guard, a second `serve.sh` (10:08 on 2026-10-01) failed to bind. But it had already pointed the `latest` symlink to its own 4-line failure log.
-- **`/metrics` gauges reset at each read.** (`--metrics` enables this Prometheus endpoint.) `prompt_tokens_seconds` and `predicted_tokens_seconds` cover only the time since the last scrape. Thus, you must calculate averages from the `*_total` counters. The monitor does this.
-- **The server does not log its KV cache size** at the default log level. Thus, the monitor calculates it ([below](memory.md#context-memory-kv-cache-and-recurrent-state)).
-- **Dependency check** (`ensure_deps` in `host/common.sh`). Before a start, the launchers look for `llama-server` (llama.cpp), `aria2c` and `ansifilter`. In a terminal, they offer to run `brew install` for the missing tools. Without a terminal, they show the command. Only `llama-server` is necessary; the others are optional. `SKIP_DEPS=1` skips the check.
-- **No model, or auto fit's pick is not downloaded.** `./carl.sh` with no arguments offers to download auto fit's pick (`llama-fit.py --pick-default`: the whole catalogue, everyday goal) if no model is downloaded. If you answer no, or nothing fits, it opens the dashboard without a server. With `llama.model = auto`, `tools/carl.py` (`resolve_launch`) starts auto fit's pick (`llama.auto_goal`, `llama.auto_fit`); if the pick is not downloaded, it starts the best downloaded stock model that fits, and says so. It never falls back to an abliterated model.
-- **Auto fit** (`carl_core/domain/autofit.py`, pure, unit-tested): candidates are ranked stock models (a rank and not abliterated; custom models have no rank yet). Order: the goal's family (`everyday` = `arch: moe`, `hard-code` = `arch: dense`) by rank, then the other family as a fallback. Passes: 2 × 96K, then 1 × 96K, then 1 × the largest window ≥ 32K; the first pass that any candidate of the family meets wins, best rank first. Memory allowed: min(GPU limit, RAM − reserve), the reserve as for the RAM cache (6 GiB, 10 with the VM network, `RESERVE_GB`). The result names every better-ranked candidate that was passed over and why (needs X GiB for 2 × 96K, this Mac allows Y; not downloaded; the other goal's family; header unreadable). If the pick's window is below 96K, an `auto` start uses that window unless `config.json` sets one (`CARL_SOURCES` shows `ctx:auto-fit`). Offline (no header readable): the catalogue `default`, or `default_small` when the default's weights alone don't fit.
+- `host/serve.sh` gives the `llama` command to `host/serve-llama.sh`.
+- `./carl.sh` with no arguments opens the dashboard. If a server runs on port 8080, the dashboard attaches to it.
+- If no server runs, `./carl.sh` starts llama.cpp with the saved settings.
+- If no model is downloaded, `./carl.sh` first offers to download auto fit's pick for this Mac (`llama-fit.py --pick-default`: the whole catalogue, the everyday goal).
+- If you answer no, or no model fits, the dashboard opens without a server.
+- `./carl.sh -h` shows the help. [Server flags](#server-flags) lists the flags of `serve-llama.sh`.
+
+### Slots
+
+**Slots: 2 by default when they fit** (`--slots auto`).
+- **Reason:** OpenCode subagents are separate conversations. With one slot, a subagent removes the main session from the slot. llama.cpp can keep the main session in the RAM cache only if it fits there. The states were 2.1–2.3 GiB, and the old limit was 2048 MiB (`exceeds cache size limit … skipping`). Thus, the server read the main session again after each subagent.
+- **Flags for 2 or more slots:** `--parallel N --kv-unified --kv-unified-per-slot CTX -c N×CTX --no-cache-idle-slots -sps 0.5`.
+- The last two flags are important:
+  - By default, llama.cpp parks and clears idle slots at each new task (`--cache-idle-slots`).
+  - By default, llama.cpp also gives a slot to each prompt that shares ≥10% of its tokens with that slot (`-sps 0.1`). A subagent that shares the system prompt meets this condition.
+- **Measured (2026-10-01):** a follow-up turn after a subagent took 0.6 s (35B) and 1.9 s (27B). The prompt stayed fully cached in its slot.
+- Two slots that generate at the same time: the 35B gives +39% in total (each slot at 72–77% of its speed alone). The 27B gives 8.8 tok/s vs 9.6 alone (it shares the time). MTP works in both slots.
+- `--slots 3` and `--slots 4` are for more subagents at the same time. The start check refuses them when they do not fit. `auto` never selects more than 2.
+
+### The RAM prompt cache and the disk
+
+- **RAM prompt cache** (`--cache-ram`): the launcher calculates its size from the free RAM after the model and a reserve. The reserve is 10 GiB with the VM network, else 6 GiB (`RESERVE_GB`). The size is 1–8 GiB, in 256 MiB steps. This cache holds conversations that are not in a slot.
+- **Disk:** llama.cpp has no automatic disk tier. It has only a manual function (`--slot-save-path` and `/slots/{id}?action=save|restore`). CARL's clients use this function ([The disk prompt cache](cache.md)).
+- On Apple Silicon, the RAM cache uses the same memory as "VRAM". macOS moves this memory to swap on the SSD when the memory pressure is high.
+
+### Two models at the same time do not fit
+
+- CAUTION: Do not load a second model while a server runs. The second load causes Metal out-of-memory errors.
+- After that, the first server returns `Compute error` for each request. But `/health` continues to report ok. Only a restart repairs the server.
+
+**Launch guard** (`guard_other_models` in `host/common.sh`). `serve-llama.sh` and Auto-tune refuse to start when:
+- a process holds more than 8 GB of resident memory (`BIG_GB`, default 8), or
+- a process has a known model-server name (`llama-server`, `mtplx`, `ollama`, `LM Studio`).
+
+- **Reason:** two models do not fit. A name check alone does not find servers that started in a different way. On 2026-10-02, a second model crashed the Mac (it restarted).
+- `ALLOW_SECOND_MODEL=1` skips the check. Use it only when the large process is not a model.
+
+### Sleep, model names, templates
+
+- **Sleep stops requests.** The launchers keep `caffeinate -i` active while the server runs. `KEEP_AWAKE=0` turns this off. If you close the lid on battery power, the Mac still goes to sleep.
+  - **Evidence:** before this change, idle sleep (1 min on battery) stopped a 74K prompt for 30+ min.
+- **The server ignores the model name in a request** (single mode). The GGUF that is loaded answers all requests. Thus, the model in the client must match the server. The OpenCode plugin `carl-model-check` warns when they are different.
+- **Served names (since 1.3.0):** each model is served under its CARL name (`--alias` = the catalogue or custom name). Before 1.3.0, builds shared a family alias such as `qwen3.8-27b`, and OpenCode could show the wrong build.
+- **The client lists (since 1.3.0):** the client configs list only the installed models, one entry each (`tools/carl.py client-models`). Each entry has the id, the label and the window for each slot (from the effective settings). It also has the thinking type from the card: `on-off` or `effort`. The default model is the model that a start loads.
+- The dashboard compares the models in the configs on this Mac (`opencode.json`, `models.json`, CARL's provider) with the downloaded models. The Connect tab shows a warning when they are different.
+- **Template override.** The server uses `--chat-template-file ~/models/templates/<model>.thinking-toggle.jinja`. The launcher makes this file at start ([How thinking works](thinking.md#how-thinking-works)). `THINK_TOGGLE=0` uses the template of the GGUF.
+
+### Speculation for each model
+
+The catalogue (`tune.spec`, `tune.spec_n`) or the Auto-tune result sets the speculation:
+
+| Model | Speculation | Draft tokens |
+|---|---|---|
+| 27B dense (Q4, Q3) | MTP + n-gram | 1 |
+| 35B MoE (Q4, stock and Heretic) | MTP + n-gram | 2 |
+| Stock IQ3 builds (35B, 27B) | MTP + n-gram | 1 |
+| 9B Distill | MTP + n-gram | 1 |
+| Heretic 35B IQ3 (no MTP head) | n-gram only | 1 |
+| orcarouter 27B IQ3 | n-gram only | 2 (a tie with MTP + n-gram) |
+
+- More drafts help a MoE: with 3B active parameters, it costs little to verify more tokens.
+- 2 drafts lose on IQ quants ([IQ3 speculation](models.md#iq3-speculation-measured-2026-10-03)).
+- A custom model gets MTP + n-gram with 1 draft when its GGUF has an MTP head, else n-gram with 2 drafts.
+
+### The dashboard and the launch model
+
+- The dashboard is `tools/llama-monitor.py` (since 2026-10-01). It has the tabs Overview, Connect, Requests, Log and Settings ([The dashboard](architecture.md#the-dashboard)).
+- Use only the left click. The dashboard does not use the right click, because terminals such as iTerm2 show their own context menu.
+- A config that you copy from the Connect tab contains the API key. On the screen, the key stays masked until you show it.
+
+When you start from a terminal, `run_server` (`host/common.sh`) does these steps:
+1. It starts the server under `nohup` with job control on (`set -m`). Thus, the server gets its own process group, and Ctrl-C in the dashboard cannot reach it.
+2. It starts `caffeinate -i -w <server pid>`.
+3. It uses `exec` to change into the dashboard.
+
+- **Result:** the server is a child process of the dashboard, so the dashboard must reap it. Otherwise, a stopped or crashed server stays as a zombie process, and `ps` still lists it. The `pid_alive()` function of the dashboard calls `waitpid(WNOHANG)` and treats state `Z` as dead.
+- Without a terminal (scripts, `nohup`, `MONITOR=0`), the launcher starts the server with `exec` in the foreground. The benchmark tools need this.
+
+### The API key and the settings folder
+
+**API key** (`ensure_api_key` in `host/common.sh`):
+- The server and the clients use `~/.config/carl/api-key` (mode 600, in a folder with mode 700). `API_KEY_FILE` sets a different path.
+- If the file is missing, the first start copies the key from an earlier path: `~/.config/llm-deploy/api-key`, then `~/.mtplx/api-key` (before 1.2.0). The key stays the same, so the clients continue to work.
+- If there is no earlier key, the first start makes a random 40-character key.
+- The dashboard, Auto-tune, the bench tools and `tools/llama-wait-idle.sh` read the new path. While the new file does not exist, they read the old paths.
+
+**Settings folder, formerly `~/.config/llm-deploy`** (CARL was called LLM-Deploy; `migrate_conf_dir` in `host/common.sh`):
+- The launch commands of `./carl.sh` move the folder one time to `~/.config/carl` (folder 0700, files 0600). Help and unknown commands do not move it.
+- A symlink `~/.config/llm-deploy -> carl` stays. Client configs from before the rename read the key there.
+- If both folders exist, CARL uses `~/.config/carl` and does not change the old folder.
+- Until the move, the readers use the old folder. The key order is `API_KEY_FILE` > `~/.config/carl/api-key` > `~/.config/llm-deploy/api-key` > `~/.mtplx/api-key`.
+- `CARL_CONF_DIR` turns the move off.
+- On the client side, `client/install.sh` moves the same folder. `configure.py` (`OLD_NAMES`) renames CARL's own pieces:
+
+| Before | Now |
+|---|---|
+| `llm-deploy.json` (state file) | `carl.json` |
+| `~/.config/opencode/llm-deploy/` | `~/.config/opencode/carl/` |
+| Provider `llm-deploy` | `carl` |
+| The `llm-deploy:delegation` block in `APPEND_SYSTEM.md` | `carl:delegation` |
+| The `LLM-Deploy:` marker of the Pi extension | `CARL:` |
+
+- A provider block that you paste from the dashboard uses the id `carl`. The plugin packages are `carl-subagents-sidebar` and `carl-session-switcher` (command `carl.session.switch`).
+
+### Router mode
+
+Router mode is opt-in: `llama.mode = router`, `LLAMA_MODE=router` or `--router` (`carl_core/domain/router.py`, the router branch of `serve-llama.sh`).
+- The router of llama.cpp 0.5.0 (`llama-server --models-preset FILE --models-max 1`, no `-m`) starts one child `llama-server` for the loaded model on a free port. It sends each request to the child by the `model` field.
+- The presets file is `~/.config/carl/router-presets.ini`. The launcher writes it again at each router start.
+- The start banner lists the models that the router offers, the models that it leaves out, and the model that it loads first.
+
+Measured on 2026-10-03 (M2 Max):
+- `--models-max 1`: a request for a different model stops the loaded model ("evicting idle LRU"). The router waits until it **exits**, then starts the new model. Two models are never in memory. A busy model completes its request first, and the new request waits.
+- An unknown model gives HTTP 400 `model 'X' not found`. Nothing loads, and the router does not log it.
+- A stop of the router (SIGTERM) stops its child.
+- `/slots` and `/metrics` need `?model=ID`. They **load the model if it is not loaded**, unless you add `&autoload=false`. The dashboard asks only about the loaded model, always with `autoload=false`.
+- `/props` without a model answers `role: router`. `/models` lists each model with `status.value` (unloaded, loading, loaded, sleeping) and the arguments of the child.
+- `/models/load` returns at once. The load takes 10 s to 2 min.
+
+The presets INI:
+
+| Section | Contents |
+|---|---|
+| `[*]` | CARL's shared flags: jinja, the reasoning format, `preserve_thinking`, `-ngl 999`, `-fa on`, batch, ubatch, checkpoints, metrics, no mmproj, `slot-save-path` |
+| One section for each downloaded model | Its effective settings: `ctx-size` (slots × window), `parallel`, KV types, `cache-ram`, sampling, `spec-type` and `spec-draft-n-max`, the thinking-toggle `chat-template-file` |
+| With 2 or more slots | `kv-unified`, `kv-unified-per-slot`, `cache-idle-slots = false`, `slot-prompt-similarity = 0.5` |
+| A sliding-window model with a full cache | `swa-full = true` |
+| The start model | `load-on-startup = true` |
+
+- The keys are the long option names. `cache-idle-slots = false` becomes `--no-cache-idle-slots`.
+- A model that fails the start check is left out. A comment in the file and the banner tell why.
+- The command-line arguments of the router override every preset. Thus, the router gets only the host, the port, the key file and the log flags (and `llama.extra_args`).
+- The log of the router holds the lines of its children as `[PORT] M.SS.mmm.uuu L ...`, with the clock of the child. The dashboard removes the prefix and moves the time by the "spawning server instance ... on port PORT" line. It hides the "proxying request" lines of the router (one for each dashboard poll).
+- **Disadvantage:** each switch empties the prompt cache. The new child starts cold. OpenCode and Pi put a session back from the disk cache. Other clients read the whole conversation again, also when you switch back.
+
+### Network modes
+
+The network modes are in `host/common.sh`:
+
+| Mode | Address | Who can connect |
+|---|---|---|
+| `--local` (default since 1.3.0) | 127.0.0.1 | Only this Mac |
+| `--vm` | 192.168.42.1 (`VM_HOST`) | The VMware Fusion VM and this Mac |
+| `--host ADDR` or `HOST=ADDR` | ADDR | Every computer that can reach ADDR |
+
+- `--local` is the default also with no flag, `NET` or `llama.net`. When the VMware network is up, the banner tells you that `--vm` serves a VM client.
+- `--vm` uses the VMware Fusion NAT network (vmnet8). The Mac is `192.168.42.1` on `bridge101`. The Kali VM is `192.168.42.130`. The mode fails if no interface has this address.
+- Before 1.3.0, the default was auto: the VM address when vmnet8 was up. Thus, a VMware user exposed the server to the VM network without a question. `NET=auto` now means local (the banner tells you). `migrate_config()` (`carl_core/domain/settings.py`) removes a saved `llama.net = auto` one time, with a note on stderr.
+- `--host ADDR` has priority over the modes. ADDR must be on an interface of this Mac: for example its LAN address, or the address on a Parallels network (often `10.211.55.2`).
+- The settings file can hold an address: `llama.host` in `config.json`. The Settings tab writes it when you select an address in the network row. The order of priority is: flag, environment, settings file.
+- The banner shows the mode. For an address that is not 127.0.0.1 or the VM address, it shows a CAUTION. Every computer that can reach the address can use the server. Only the API key protects it.
+- After a restart from the Settings tab, the health check also tries the selected address. Thus, a server on the LAN address does not show as a failed start.
+- CAUTION: The launcher refuses 0.0.0.0 and `::`, also through `HOST=0.0.0.0`. The macOS firewall is off on this Mac, so a wildcard address would make the model available to the LAN.
+
+**The address and the key of `client/install.sh`:**
+- With no address argument, `install.sh` reads `client/remote.json`. Without it, the default is `--local` on macOS and `--vm` on Linux.
+- `--local` sets the clients to the address on which the server actually listens. `--host ADDR` sets any address. `--port N` sets the llama.cpp port (default 8080).
+- The old form `install.sh HOST [X] [PORT]` still works. The installer ignores the second value (an old MTPLX port) with a note. The third value is the llama.cpp port.
+
+The installer takes the API key from the first of these sources:
+1. `--key KEY` or `--key-file FILE`
+2. `$CARL_API_KEY`
+3. A file `api-key` next to the script
+4. `~/.config/carl/api-key` (the server key on the Mac, or the key from a previous run)
+5. `~/.config/llm-deploy/api-key`
+6. With `--local`: `~/.mtplx/api-key`
+7. `~/.config/mtplx/api-key`
+8. A hidden prompt
+
+- The installer stores the key at `~/.config/carl/api-key` (mode 600). The OpenCode and Pi configs point at that file.
+- If the stored key is different, the installer keeps a backup (`api-key.bak.<time>`).
+- A new run changes old configs to the new path. It does not delete the old client file, because a provider of your own can use it. Delete it when nothing uses it.
+- `--key` leaves the key in the shell history.
+- The smoke test gives the key to `curl` from a file descriptor (`curl -H @<(…)`). Thus, the key does not show in `ps`.
+
+### Checks before a start
+
+| Check | What it does |
+|---|---|
+| Dependency check (`ensure_deps`) | Finds `llama-server`, `aria2c`, `ansifilter` and `zstd`. In a terminal, it offers `brew install` for the missing tools. Without a terminal, it shows the command. Only `llama-server` is necessary. `SKIP_DEPS=1` skips the check. |
+| Port guard | No start if a process listens on the port (`port_pid`). The check runs before the launcher changes `llama-server-latest.log` or loads a model. |
+| Launch guard | No start if a second model is in memory (see above) |
+| Memory check | `tools/llama-fit.py --check` (see below) |
+
+- **Port guard history:** before this guard, a second `serve.sh` (10:08 on 2026-10-01) failed to bind. But it had already pointed the `latest` symlink to its own 4-line failure log.
+- **Memory check:** `check_start()` in `carl_core/domain/fit.py` compares weights + KV + buffers with the GPU limit ([GPU memory limit](memory.md#gpu-memory-limit-and-what-fits)). The dashboard uses the same function.
+  - Over the limit, the start is **refused** (exit 3, then the launcher exits 1). Such a start does not load, or it makes the Mac swap and become very slow.
+  - The message gives the need and the limit.
+  - It gives the largest window that fits, with these slots and with 1 slot.
+  - It gives auto fit's alternative: the best downloaded model, and a better catalogue model to download.
+  - `FIT_CHECK=0` is the expert override. A check that cannot run (an unreadable header) only shows a warning.
+- **`/metrics` gauges reset at each read** (`--metrics` turns on this Prometheus endpoint). `prompt_tokens_seconds` and `predicted_tokens_seconds` cover only the time since the last read. Thus, calculate averages from the `*_total` counters. The dashboard does this.
+- **The server does not log its KV cache size** at the default log level. Thus, the dashboard calculates it ([Context memory](memory.md#context-memory-kv-cache-and-recurrent-state)).
+
+### Auto fit and the start model
+
+- With `llama.model = auto`, `tools/carl.py` (`resolve_launch`) starts auto fit's pick (`llama.auto_goal`, `llama.auto_fit`).
+- If the pick is not downloaded, it starts the best downloaded stock model that fits, and tells you. It never selects an abliterated model.
+
+**Auto fit** (`carl_core/domain/autofit.py`, pure, with unit tests):
+- The candidates are the ranked stock models: a rank, and not abliterated. A custom model is a candidate only when its card says `auto_fit: true`.
+- The goal selects the family first: `everyday` = `arch: moe`, `hard-code` = `arch: dense`. The other family is the fallback.
+- The passes, in this order: 2 × 96K, then 1 × 96K, then 1 × the largest window ≥ 32K. The first pass that a candidate of the family meets wins, best rank first.
+- The memory allowed is min(GPU limit, RAM − reserve). The reserve is as for the RAM cache: 6 GiB, 10 GiB with the VM network, or `RESERVE_GB`.
+- The result gives each better-ranked candidate that was not selected, and why. Examples: "needs X GiB for 2 × 96K, this Mac allows Y", "not downloaded", "for the other goal", "header unreadable".
+- If the window of the pick is less than 96K, an `auto` start uses that window, unless `config.json` sets one. `CARL_SOURCES` then shows `ctx:auto-fit`.
+- Offline (no header can be read), the download offer and `./carl.sh download default` use the catalogue `default`. If the weights of the default alone do not fit, they use `default_small`.
 
 ### Port and PID lookups (no lsof)
 
-CARL does not use `lsof`. `lsof` checks each mounted file system. On a stale network share (for example a Time Machine SMB volume that is disconnected), it hangs in the kernel, and no signal can stop it. Before version 1.1.0, this froze the monitor and `./carl.sh` on a Mac with such a volume.
+CARL does not use `lsof`. `lsof` examines each mounted file system. On a stale network share (for example a disconnected Time Machine SMB volume), it stops in the kernel, and no signal can stop it. Before 1.1.0, this stopped the dashboard and `./carl.sh` on a Mac with such a volume.
 
-The launchers (`port_pid`, `port_host` in `host/common.sh`), the monitor, `client/install.sh` and the test tools use `netstat -anv -p tcp`. Its `process:pid` column gives the PID of the process that listens on a port. To do the same by hand:
+The launchers (`port_pid`, `port_host` in `host/common.sh`), the dashboard, `client/install.sh` and the test tools use `netstat -anv -p tcp`. Its `process:pid` column gives the PID of the process that listens on a port. To do the same by hand:
 
 ```bash
 netstat -anv -p tcp | awk '$6=="LISTEN" && $4 ~ /[.]8080$/ {n=split($(NF-8),a,":"); print a[n]; exit}'
@@ -115,7 +260,7 @@ netstat -anv -p tcp | awk '$6=="LISTEN" && $4 ~ /[.]8080$/ {n=split($(NF-8),a,":
 
 ### Settings: config.json, Auto-tune and the catalogue
 
-`tools/carl.py` gives each llama.cpp start its model and settings (`launch-env`). Each value comes from the first source that has it:
+`tools/carl.py launch-env` gives each llama.cpp start its model and settings. Each value comes from the first source that has it:
 
 | Order | Source | Where |
 |---|---|---|
@@ -123,71 +268,142 @@ netstat -anv -p tcp | awk '$6=="LISTEN" && $4 ~ /[.]8080$/ {n=split($(NF-8),a,":
 | 2 | Environment variables | `CTX`, `KV`, `SPEC`, `SPEC_N`, `TEMP`, … |
 | 3 | `config.json` | `~/.config/carl/config.json`: the `llama` section, and the profile `models.<name>` |
 | 4 | Auto-tune result for this Mac | `~/.config/carl/models.json`: `models.<name>.tune.settings` |
-| 5 | Catalogue | `host/catalog.json`: `tune` of the model. For a custom model: values from its GGUF header |
+| 5 | Catalogue | `host/catalog.json`: the `tune` of the model. For a custom model: values from its GGUF header. |
 | 6 | Built-in defaults | q4_0, 96K, auto slots, MTP + n-gram n=1, temperature 1.0, … |
 
-- **`config.json` sections:** `llama` (`model`, `net`, `host`, `cache_ram`, `ub`, `batch`, `ckpt`, `ckpt_step`, `think_toggle`, `extra_args`); `models.<name>` (`kv`, `ctx`, `slots`, `spec`, `spec_n`, `temp`, `top_p`, `top_k`, `min_p`, `presence`, `repeat`, `alias`); `paths` (`models_dir`).
-- **Validation:** each key has a type, a range or a list of choices (`./carl.sh config show` lists them). A bad value stops the start with an error. An unknown key is ignored. CARL writes the file atomically, with mode 600.
-- **Migration:** before `config.json`, the dashboard wrote `llama.env`. If `config.json` is missing, CARL converts this file into it one time.
-- **Files from before 1.2.0** can hold settings of features that 1.2.0 removed (CHANGELOG.md). They load: CARL ignores them (`./carl.sh config show` warns about a removed section), and they go away the next time CARL saves the file.
+**`config.json` sections:**
+
+| Section | Keys |
+|---|---|
+| `llama` | `model`, `auto_goal`, `auto_fit`, `mode`, `net`, `host`, `cache_ram`, `ub`, `batch`, `ckpt`, `ckpt_step`, `think_toggle`, `extra_args` |
+| `models.<name>` | `kv`, `ctx`, `slots`, `spec`, `spec_n`, `temp`, `top_p`, `top_k`, `min_p`, `presence`, `repeat`, `alias` |
+| `paths` | `models_dir` |
+| `cache` | `disk_gb`, `prefix`, `sessions`, `save`, `auto_s`, `share`, `swa` ([The disk prompt cache](cache.md#the-cache-settings)) |
+
+- **Validation:** each key has a type, a range or a list of choices. `./carl.sh config show` lists them. A bad value stops the start with an error. An unknown key gets a warning and has no effect.
+- CARL writes the file atomically, with mode 600.
+- **Migration:** before `config.json`, the dashboard wrote `llama.env`. If `config.json` is missing, CARL converts this file one time.
+- **Files from before 1.2.0** can hold settings of removed features (CHANGELOG.md). The file loads. CARL ignores these settings, and `./carl.sh config show` warns about a removed section. They go away the next time that CARL saves the file.
 - `SETTINGS_FILE=none` skips `config.json`.
-- **Custom models:** each `.gguf` in the models folder (`paths.models_dir`, or `MODELS_DIR`) is a model, also if it is not in the catalogue. `./carl.sh download hf:OWNER/REPO/FILE.gguf` resolves the revision, the size and the SHA-256 from the Hugging Face API, records the model in `models.json`, downloads it and verifies it.
-- **Custom model cards (`models.json` `models.<name>.card`):** the user's card for a custom model (catalogue models are read-only: CARL refuses to write a card for them, and a card written by hand under a catalogue model's name is ignored). Written by `./carl.sh card NAME set FIELD VALUE` / `unset FIELD` and the dashboard's edit mode (Models panel, `e`); saving one also records the model's `path` and `source`, as Auto-tune does. Example:
+- **Custom models:** each `.gguf` in the models folder (`paths.models_dir`, or `MODELS_DIR`) is a model, also when it is not in the catalogue.
+- `./carl.sh download hf:OWNER/REPO/FILE.gguf` gets the revision, the size and the SHA-256 from the Hugging Face API. It records the model in `models.json`, downloads it and verifies it.
 
-  ```json
-  "my-coder-7b.q4_k_m": {
-    "path": "/Users/me/models/gguf/My-Coder-7B.Q4_K_M.gguf",
-    "source": "file",
-    "card": {
-      "role": "Fast local coder", "good_for": ["agent coding", "hard code"], "arch": "moe", "quant": "Q4_K_M",
-      "rank": 4, "thinking": "on-off", "auto_fit": false,
-      "pick_instead": [{"model": "qwen3.8-27b", "when": "harder code"}]
-    }
+**Custom model cards** (`models.json` `models.<name>.card`):
+- A card is for a custom model only. Catalogue models are read-only: CARL refuses to write a card for them, and ignores a card written by hand under a catalogue name.
+- `./carl.sh card NAME set FIELD VALUE` and `unset FIELD` write the card. The dashboard's edit mode does the same (Models panel, `e`).
+- When CARL saves a card, it also records the `path` and the `source` of the model, as Auto-tune does.
+
+Example:
+
+```json
+"my-coder-7b.q4_k_m": {
+  "path": "/Users/me/models/gguf/My-Coder-7B.Q4_K_M.gguf",
+  "source": "file",
+  "card": {
+    "role": "Fast local coder", "good_for": ["agent coding", "hard code"], "arch": "moe", "quant": "Q4_K_M",
+    "rank": 4, "thinking": "on-off", "auto_fit": false,
+    "pick_instead": [{"model": "qwen3.8-27b", "when": "harder code"}]
   }
-  ```
+}
+```
 
-  Fields: `label` (≤ 60 characters), `role` (≤ 60), `good_for` (the catalogue's tags), `why_use`, `trade_offs`, `hardware`, `uncensored` (text, ≤ 1000 characters each), `abliterated` and `auto_fit` (true / false), `arch` (`dense` \| `moe`), `quant` (≤ 40), `rank` (integer ≥ 1), `thinking` (`on-off` \| `effort`), `pick_instead` (`[{model, when}]`). The rules (`parse_custom_card()` in `carl_core/domain/records.py`) are the catalogue's (`_card()`: the tag set, `uncensored` tag only when abliterated, role length, rank ≥ 1, `pick_instead` models exist) plus: known fields only; one line of printable text (no control characters: the text is drawn in the terminal); the `uncensored` text only when abliterated; `auto_fit` only with `rank` and `arch` and not abliterated. A bad card in the file stops the model list with an error that names the model and the field. When the card is saved, a `pick_instead` model must exist; when it loads, an entry whose model is gone (deleted, renamed) is left out instead.
-- **Where a card is read:** `all_models()` joins the card into the custom model's record (`build_models()` in `carl_core/domain/models.py`), so the MODEL card, the role and tags columns, sort by quality (the rank), the filters (tags, stock, dense / MoE) and auto fit see the same fields as a catalogue model's. **Auto fit** takes a custom model only when its card says `auto_fit: true` (a user's rank is not measured: opt-in, never by default); `./carl.sh download default` and the download offer only consider catalogue models.
+| Field | Value |
+|---|---|
+| `label`, `role` | Text, at most 60 characters |
+| `good_for` | The catalogue's tags: `agent coding`, `hard code`, `chat & writing`, `uncensored` |
+| `why_use`, `trade_offs`, `hardware`, `uncensored` | Text, at most 1000 characters each |
+| `abliterated`, `auto_fit` | true or false |
+| `arch` | `dense` or `moe` |
+| `quant` | Text, at most 40 characters |
+| `rank` | An integer ≥ 1 |
+| `thinking` | `on-off` or `effort` |
+| `pick_instead` | `[{model, when}]` |
+
+`parse_custom_card()` (`carl_core/domain/records.py`) uses the rules of the catalogue (`_card()`):
+- only the catalogue's tags, and the `uncensored` tag only when abliterated
+- the role length
+- rank ≥ 1
+- `pick_instead` models that exist
+
+It adds these rules:
+- only known fields
+- one line of printable text (no control characters, because the terminal shows the text)
+- the `uncensored` text only when abliterated
+- `auto_fit` only with `rank` and `arch`, and not abliterated
+
+More about cards:
+- A bad card in the file stops the model list with an error that names the model and the field.
+- When you save a card, each `pick_instead` model must exist. When a card loads, CARL leaves out an entry whose model is gone (deleted or renamed).
+- **Where CARL reads a card:** `build_models()` (`carl_core/domain/models.py`) joins the card into the record of the custom model. Thus, the model lists, the sort by quality (the rank), the filters and auto fit use the same fields as for a catalogue model.
+- **Auto fit** uses a custom model only when its card says `auto_fit: true`. The rank of a user is not measured, so this is opt-in. `./carl.sh download default` and the download offer use only catalogue models.
 
 ### Auto-tune
 
-`./carl.sh tune NAME [--quick]` (`tools/carl-tune.py`) measures one model on this Mac. It starts its own server on port 8093, one time for each speculation mode (about 5–10 min in all). It refuses to start if a server runs on 8080, or if another large process is in memory (more than `BIG_GB`, default 8 GB, or a known model server; `ALLOW_SECOND_MODEL=1` skips this check, as for the launch guard).
+`./carl.sh tune NAME [--quick | --long]` (`tools/carl-tune.py`) measures one model on this Mac. `./carl.sh tune all` measures each downloaded model in turn. `--dry-run` measures but does not save.
 
-1. **Memory:** the largest window for each slot that fits the GPU limit, with 1 and 2 slots (the same maths as `./carl.sh fit`).
-2. **Speculation:** none, `ngram-mod` (n=2), and, if the GGUF has an MTP head, `draft-mtp` and `draft-mtp,ngram-mod` at n=1 and n=2 (`--quick` skips the MTP modes at n=2; n-gram alone n=2, and n=1 too when the file has no MTP head). Each mode generates prose, new code and a code re-emit, two times. The score is a weighted geometric mean (prose 0.4, code 0.4, re-emit 0.2). A mode with drafting must beat a simpler mode by 3% to win.
-3. **Prompt reading:** a cold read at 8K and 32K tokens, and 64K without `--quick`. The time for each token grows about linearly with the depth. From this, Auto-tune calculates the time to read a full window. The context zones of this Mac: a full cold read in ≤3 min = fast, ≤10 min = slow, more = very slow. The fast zone is never smaller than 96K (`ctx_zones()` in `carl_core/domain/models.py`).
-4. **Result** (`choose_ctx()` in `carl_core/domain/tuning.py`): kv q4_0, the best speculation, the context, and 2 slots if two windows fit. It is saved in `~/.config/carl/models.json`, with the speed of each mode, the read speeds and the zones.
-   - If 96K fits one slot, 96K is the floor. Above it, Auto-tune keeps the catalogue window while a cold read of it is not worse than slow on this Mac and it fits. Otherwise, it uses the largest standard window (96K, 128K, 160K) in the fast zone that fits.
-   - If 96K does not fit, it uses the largest standard window (32K, 48K, 64K) that fits.
+- Auto-tune starts its own server on port 8093, one time for each speculation mode. The default run takes about 5–10 min, `--quick` about 4 min, and `--long` 10–40 min more.
+- It refuses to start if a server runs on 8080 or 8093. It also refuses if a different large process is in memory (more than `BIG_GB`, default 8 GB, or a known model server). `ALLOW_SECOND_MODEL=1` skips this check, as for the launch guard.
+
+The steps:
+
+1. **Memory:** the largest window for each slot that fits the GPU limit, with 1 and 2 slots (the same calculation as `./carl.sh fit`). If not even a 16K window fits, Auto-tune stops.
+2. **Speculation:** the modes in the next table. Each mode writes prose, new code and a code re-emit, two times. The score is a weighted geometric mean (prose 0.4, code 0.4, re-emit 0.2). A mode with drafts must be 3% better than a simpler mode to win.
+3. **Prompt reading:** cold reads at 8K, 32K and 64K tokens. `--quick` reads at 8K and 32K. `--long` also reads at 128K and 192K, and measures the decode speed at each depth. The time for each token increases about linearly with the depth. From this, Auto-tune calculates the time to read a full window.
+4. **Parallel requests** (not with `--quick`): 1, 2, 3 and 4 requests at the same time (`llama-batched-bench`).
+5. **Result** (`choose_ctx()` in `carl_core/domain/tuning.py`): kv q4_0, the best speculation, the context, and 2 slots if two windows fit. Auto-tune saves it in `~/.config/carl/models.json`, with the speed of each mode, the read speeds and the zones.
+
+| Speculation mode | When |
+|---|---|
+| none, `ngram-mod` n=2 | Always |
+| `ngram-mod` n=1 | When the GGUF has no MTP head |
+| `draft-mtp` n=1, `draft-mtp,ngram-mod` n=1 | When the GGUF has an MTP head |
+| `draft-mtp` n=2, `draft-mtp,ngram-mod` n=2 | With an MTP head, not with `--quick` |
+
+| Context zone | A full cold read takes |
+|---|---|
+| Fast | ≤ 3 min |
+| Slow | ≤ 10 min |
+| Very slow | more |
+
+- The fast zone is never smaller than 96K (`ctx_zones()` in `carl_core/domain/models.py`).
+- If 96K fits one slot, 96K is the minimum. Above it, Auto-tune keeps the catalogue window while a cold read of it is not worse than slow on this Mac and it fits. Else, it uses the largest standard window (96K, 128K, 160K) in the fast zone that fits.
+- If 96K does not fit, Auto-tune uses the largest standard window (32K, 48K, 64K) that fits.
 
 NOTE: The re-emit workload copies `tools/carl_core/adapters/llama_server.py` back (since 1.1.0). Thus, re-emit scores are not directly comparable with older Auto-tune results.
 
-The dashboard (Settings, Auto-tune panel) stops the running server, runs the tune, and starts the server again.
+The Auto-tune panel of the dashboard stops the running server, runs the tune, and starts the server again.
 
 ### Server flags
 
-This table shows the flags that `host/serve-llama.sh` gives to `llama-server`, and the reasons:
+This table shows the flags that `host/serve-llama.sh` gives to `llama-server` (single mode), and the reasons:
 
 | Setting | Value | Why |
 |---|---|---|
-| Bind | `--host 192.168.42.1 --port 8080 --api-key-file ~/.config/carl/api-key` | An address for the VM only; a shared key |
+| Bind | `--host 127.0.0.1 --port 8080 --api-key-file ~/.config/carl/api-key` | This Mac only by default (`--vm`: 192.168.42.1). A shared key. |
+| Model name | `--alias NAME` | The CARL name of the model |
 | Offload | `-ngl 999` | The whole model is on the GPU (Metal). |
-| Flash attention | `-fa on` | Necessary for a quantized V cache. It was on for every measurement. |
-| KV cache | `-ctk q4_0 -ctv q4_0` (`--kv q8` → q8_0) | q4: +16% prefill and about 2 GB less memory than q8, the same decode speed, 8/8 needle recall at 66K. Do not mix K and V types (prefill is about 5× slower). |
-| Context | `-c` = slots × 96K (`--ctx` sets the context window for each slot) | 96K per slot by default, because long context windows read cold prompts and decode much more slowly ([Context length](memory.md#context-length-what-longer-windows-cost)). The model maximum is 262144. The server allocates the whole KV cache at start. |
-| Batching | `-b 2048 -ub 512` | `-ub 512` gave the best measured result (90.5 tok/s vs 88.6 / 86.1 for 1024 / 2048). |
-| Slots | `--slots auto` (default): 2 if two full context windows fit, else 1 → `--parallel 2 --kv-unified --kv-unified-per-slot CTX -c 2×CTX --no-cache-idle-slots -sps 0.5` | The main OpenCode session and a subagent each keep their own slot and cache (see above). |
-| Prompt cache | `--ctx-checkpoints 8 --checkpoint-min-step 4096 --cache-ram N` (N comes from the free RAM, 1–8 GiB) | Checkpoints let follow-up turns use the cache again, because the recurrent layers of Qwen cannot trim it. The RAM cache holds conversations that do not fit in the slots (a third session). Each held state is 2–2.5 GiB. Size = RAM − weights − KV − reserve (10 GiB with the VM network, else 6; `RESERVE_GB`). |
-| Templates | `--jinja --reasoning-format deepseek`, `preserve_thinking: true`, `--chat-template-file` (patched) | The server sends the reasoning to `reasoning_content`. `reasoning_effort: none` turns off thinking ([section 4](thinking.md#how-thinking-works)). |
-| Sampling | `--temp 1.0 --top-p 0.95 --top-k 20 --min-p 0 --presence-penalty 0 --repeat-penalty 1.0` (`TEMP`, `TOP_P`, `TOP_K`, `MIN_P`, `PRESENCE`) | The Qwen recommendation for thinking mode ([section 8](sampling.md#sampling-and-output-limits)). |
-| Speculation | `--spec-type draft-mtp,ngram-mod --spec-draft-n-max N` (type and N from the tune of each model: N 1 for the dense 27B and the IQ3 builds, 2 for the Q4 35B) | The best of 7 configs that were measured on each model ([section 12](performance.md#performance-measured), [IQ3 speculation](models.md#iq3-speculation-measured-2026-10-03)). |
-| Logging | `--log-file ~/models/logs/llama-server-<ts>.log --log-timestamps --log-prefix` | `llama-server-latest.log` points to the newest log. Use `tools/llama-log.sh` to read it. |
+| Flash attention | `-fa on` | Necessary for a quantized V cache. It was on for each measurement. |
+| KV cache | `-ctk q4_0 -ctv q4_0` (`--kv q8` → q8_0) | q4 against q8: +16% prefill, about 2 GB less memory, the same decode speed, 8/8 needle recall at 66K. Do not mix K and V types (prefill is about 5× slower). |
+| Context | `-c` = slots × 96K (`--ctx` sets the window for each slot) | Long windows read cold prompts and decode much more slowly ([Context length](memory.md#context-length-what-longer-windows-cost)). The model maximum is 262144. The server allocates the whole KV cache at start. |
+| Batching | `-b 2048 -ub 512` | `-ub 512` gave the best measured result (90.5 tok/s vs 88.6 and 86.1 for 1024 and 2048). |
+| Slots | `--parallel N`; with 2 or more: `--kv-unified --kv-unified-per-slot CTX --no-cache-idle-slots -sps 0.5` | The main OpenCode session and a subagent each keep their own slot and cache. |
+| Prompt cache | `--ctx-checkpoints 8 --checkpoint-min-step 4096 --cache-ram N` | Checkpoints let follow-up turns use the cache again, because the recurrent layers of Qwen cannot trim it. The RAM cache holds conversations that are not in a slot (each held state is 2–2.5 GiB). N = RAM − the model's need − the reserve, 1–8 GiB. If the size calculation fails, N is 4096. |
+| Disk cache | `--slot-save-path ~/.config/carl/slots` | OpenCode and Pi save and restore prompt states here ([The disk prompt cache](cache.md)). |
+| Sliding window | `--swa-full` (only for a sliding-window model, when `cache.swa` gives full) | A restored state needs every layer at full length ([Sliding-window models](cache.md#sliding-window-models)). |
+| Projector | `--no-mmproj` | CARL uses text only. |
+| Templates | `--jinja --reasoning-format deepseek`, `--chat-template-kwargs '{"preserve_thinking":true}'`, `--chat-template-file` (patched) | The server sends the reasoning to `reasoning_content`. `reasoning_effort: none` turns off thinking ([How thinking works](thinking.md#how-thinking-works)). |
+| Sampling | `--temp 1.0 --top-p 0.95 --top-k 20 --min-p 0 --presence-penalty 0 --repeat-penalty 1.0` | The Qwen values for thinking mode ([Sampling](sampling.md#sampling-and-output-limits)). `TEMP`, `TOP_P`, `TOP_K`, `MIN_P`, `PRESENCE`, `REPEAT` override them. |
+| Speculation | `--spec-type TYPE --spec-draft-n-max N` (from the tune of each model; none with `SPEC=none`) | The best of the modes that were measured on each model ([Performance](performance.md#performance-measured), [IQ3 speculation](models.md#iq3-speculation-measured-2026-10-03)). |
+| Logging | `--log-file ~/models/logs/llama-server-<ts>.log --log-timestamps --log-prefix` | `llama-server-latest.log` points to the newest log. Use `tools/llama-log.sh` to read it. `LOG_FILE=none` turns the file off. |
+| Metrics | `--metrics` | A Prometheus endpoint at `/metrics` |
 | Keep awake | `caffeinate -i -w <server pid>` | If the Mac goes to sleep, requests stop in the middle of the prompt. |
-| Monitor in the same terminal | `run_server` in `host/common.sh` | One command shows the server live. `MONITOR=0` gives a plain foreground server. |
+| Dashboard in the same terminal | `run_server` in `host/common.sh` | One command shows the server live. `MONITOR=0` gives a plain foreground server. |
 | Network | `--local` (127.0.0.1, the default), `--vm` (192.168.42.1) | The launcher refuses 0.0.0.0. |
-| Memory check | `tools/llama-fit.py --check` before the model loads | The start is refused if weights + KV + buffers are more than the GPU limit; the message shows the largest context window that fits and auto fit's alternative (`FIT_CHECK=0` skips it: the expert override). |
-| Launch guard | `guard_other_models` | No start if a second model is in memory (`ALLOW_SECOND_MODEL=1` skips it). |
+| Memory check | `tools/llama-fit.py --check` before the model loads | No start over the GPU limit. `FIT_CHECK=0` skips it (the expert override). |
+| Launch guard | `guard_other_models` | No start if a second model is in memory. `ALLOW_SECOND_MODEL=1` skips it. |
 | Port guard | No start if the port is in use (`netstat`, not `lsof`) | A second model would collide with the running one. Also, `llama-server-latest.log` continues to point at the running server. |
-| Metrics | `--metrics` | A Prometheus endpoint at `/metrics`. |
 
-You can override the settings with environment variables (`CTX`, `KV`, `KV_K`/`KV_V`, `UB`, `SPEC`, `SPEC_N`, `MODEL`, `ALIAS`, `HOST`, `PORT`, `LOG_FILE`, `THINK_TOGGLE`, `KEEP_AWAKE`), or in `config.json` ([Settings](#settings-configjson-auto-tune-and-the-catalogue)). Extra arguments go directly to `llama-server` (also `llama.extra_args` in `config.json`). `./carl.sh -h` lists all of them, with the current defaults.
+- These environment variables override the settings: `CTX`, `KV`, `KV_K`, `KV_V`, `SLOTS`, `UB`, `BATCH`, `CKPT`, `CKPT_STEP`, `CACHE_RAM`, `RESERVE_GB`, `SPEC`, `SPEC_N`, the sampling variables, `MODEL`, `ALIAS`, `HOST`, `PORT`, `NET`, `LLAMA_MODE`, `SWA_MODE`, `API_KEY_FILE`, `LOG_FILE`, `THINK_TOGGLE`, `KEEP_AWAKE`, `MONITOR`, `FIT_CHECK`.
+- `config.json` can hold the same settings ([Settings](#settings-configjson-auto-tune-and-the-catalogue)).
+- Extra arguments go directly to `llama-server`. `llama.extra_args` in `config.json` does the same.
+- `./carl.sh -h` lists the commands. `./carl.sh help llama` lists the flags and the variables with the current defaults.

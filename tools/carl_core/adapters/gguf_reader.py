@@ -5,7 +5,7 @@ import os
 import urllib.request
 from typing import Dict, Tuple
 
-from ..domain.gguf import LOCAL_HEADER_BYTES, REMOTE_HEADER_BYTES, Meta, ModelShape, model_shape, parse_meta
+from ..domain.gguf import LOCAL_HEADER_BYTES, META_VERSION, REMOTE_HEADER_BYTES, Meta, ModelShape, model_shape, parse_meta
 from ..domain.hf import download_url, validate_file, validate_repo, validate_revision
 from ..domain.types import HfRef
 from .json_files import read_json, write_json
@@ -37,7 +37,7 @@ def remote_meta(ref: HfRef, cache_file: str) -> Meta:
     a pinned revision's header never changes."""
     repo, rev, file = validate_repo(ref.get("repo", "")), validate_revision(ref.get("revision") or "main"), \
         validate_file(ref.get("file", ""))
-    key = f"{repo}@{rev}/{file}"
+    key = f"{repo}@{rev}/{file}#{META_VERSION}"           # a new version: what parse_meta keeps changed
     db = _cached_metas(cache_file)
     if key not in db:
         req = urllib.request.Request(download_url(ref), headers={"Range": f"bytes=0-{REMOTE_HEADER_BYTES - 1}",

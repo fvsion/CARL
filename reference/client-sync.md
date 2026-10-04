@@ -47,6 +47,8 @@ The dashboard writes the config to `~/.config/carl/client-config.json`, with a v
 `install.sh` on another computer adds the sync service (`client/carl-sync.py watch`):
 
 - macOS: a launchd agent, `dev.carl.sync`. Linux: a `systemd --user` unit, `carl-sync.service`.
+- Linux: a user service runs only while you are logged in. To keep it running (a VM that you reach by SSH), run `loginctl enable-linger $USER` one time. The installer tells you when lingering is off.
+- A test in Docker containers checks the Linux service: `CARL_DOCKER_TESTS=1 python3 -m unittest tests/integration/test_sync_docker.py`.
 - The service opens one connection to the dashboard's API and waits for events. It opens no port on the client.
 - When a new config arrives, the service writes `installed-models.json` and runs `install.sh` again. The installer uses the switches of your last install (`~/.config/carl/client-install.env`) and makes backups as always.
 - When the dashboard is not running, the service tries again: after 5 s, 10 s, 30 s, then each minute.

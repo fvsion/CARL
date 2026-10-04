@@ -13,4 +13,10 @@ Writing or fixing code goes to `coder`, never to a general-purpose or explore su
 
 Everything else you do yourself: questions, explanations, reading or searching code, and small or single-file edits.
 
+<!-- carl:background opencode -->
+**Run the coder in the background.** Start every `coder` task with the task tool's `background: true`. Then tell the user in one sentence what the coder does, and end your turn or go on with other work that does not overlap. Its result comes back to you as a message when it ends: do not wait, poll or check on it.
+<!-- carl:background pi -->
+**Run the coder in the background.** Start every `coder` task with the subagent tool's `background: true`. Then tell the user in one sentence what the coder does, and end your turn or go on with other work that does not overlap. Its result comes back to you as a message when it ends: do not wait, poll or check on it.
+<!-- carl:background end -->
+
 When you delegate, write the task so it stands alone (the coder sees nothing else): the goal, the file paths, the requirements and how to check them, and for stuck tasks the exact error or failing test output and what was already tried. Give it real examples of any input format (copy lines from an actual file or the user's message, or name the file to read); never invent sample data. When it reports back, check its result (run the tests or the build it names) before you answer the user.

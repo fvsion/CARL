@@ -68,7 +68,13 @@ export default function carlCache(pi: ExtensionAPI) {
 		const msg = event.message as { role?: string; stopReason?: string };
 		const sm = ctx.sessionManager;
 		if (!last || msg?.role !== "assistant" || !(msg.stopReason === "stop" || msg.stopReason === "length")) return undefined;
-		if (sm.getSessionFile()) await last.after({ session: sm.getSessionId(), agent });
+		// a subagent (no session file) saves nothing, but its turn ends too
+		await last.after({ session: sm.getSessionId(), agent, sub: !sm.getSessionFile() });
 		return undefined;
+	});
+
+	// the turn ends also when it is stopped (Esc) or fails: the dashboard waits for no turn
+	pi.on("agent_end", async (_event, ctx) => {
+		await last?.turnsDone(ctx.sessionManager.getSessionId());
 	});
 }

@@ -63,9 +63,11 @@ class ConfigureTests(unittest.TestCase):
         self.assertEqual(set(oc["provider"]), {"llamacpp"})
         check = self.path(".config/opencode/plugins/carl-model-check")
         cache = self.path(".config/opencode/plugins/carl-cache")
+        bg = self.path(".config/opencode/plugins/carl-background")
         self.assertEqual(oc["plugin"], [["file:" + check, {"provider": "llamacpp"}],     # the model warnings
                                         ["file:" + cache, {"provider": "llamacpp",       # the prompt cache
-                                                           "cacheApi": "http://192.168.42.1:8081"}]])
+                                                           "cacheApi": "http://192.168.42.1:8081"}],
+                                        ["file:" + bg, {"provider": "llamacpp"}]])       # the coder in the background
         self.assertEqual(self.read_json(".pi/agent/carl.json")["cache_api"], "http://192.168.42.1:8081")
         with open(os.path.join(cache, "package.json"), encoding="utf-8") as f:
             self.assertIn("./server", json.load(f)["exports"])
@@ -138,7 +140,7 @@ class ConfigureTests(unittest.TestCase):
         entry = "file:" + self.path(".config/opencode/plugins/carl-model-check")
         oc = self.read_json(".config/opencode/opencode.json")
         self.assertEqual(oc["plugin"][:2], ["/home/u/mine.js", [entry, {"provider": "carl"}]])  # ours is "carl" here
-        p = self.run_configure("--model-check", "0", "--cache", "0")
+        p = self.run_configure("--model-check", "0", "--cache", "0", "--background", "0")
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertEqual(self.read_json(".config/opencode/opencode.json")["plugin"], ["/home/u/mine.js"])
         self.assertFalse(os.path.exists(self.path(".config/opencode/plugins/carl-model-check")))
@@ -340,7 +342,7 @@ class ConfigureTests(unittest.TestCase):
         self.assertEqual(oc["provider"]["llamacpp"]["options"]["apiKey"],
                          "{file:" + self.home + "/.config/carl/api-key}")             # rewritten to the new key path
         self.assertEqual(oc["plugin"][0], "/home/u/my-plugin")                         # the user's plugin stays
-        self.assertEqual(len(oc["plugin"]), 3)                                          # + CARL's two plugins
+        self.assertEqual(len(oc["plugin"]), 4)                                          # + CARL's three plugins
         self.assertFalse(os.path.exists(self.path(".config/opencode/plugins/mtplx-session-headers")))
         self.assertEqual(self.read_json(".config/opencode/carl.json")["providers"], {"llamacpp": "llamacpp"})
         self.assertFalse(os.path.exists(self.path(".config/opencode/llm-deploy.json")))   # the old state file
@@ -405,6 +407,34 @@ class ConfigureTests(unittest.TestCase):
         with open(self.path(".pi/agent/APPEND_SYSTEM.md"), encoding="utf-8") as f:
             self.assertIn('agent "coder"', f.read())
         self.assertFalse(os.path.exists(self.path(".pi/agent/agents/carl-coder.md")))
+
+    def test_background_subagents_in_the_delegation_rule(self) -> None:
+        """On (the default): each client's own "run the coder in the background" paragraph, Pi's extension
+        told through carl.json; --background 0: neither, no markers left."""
+        self.assertEqual(self.run_configure("--coder", "1").returncode, 0)
+        with open(self.path(".config/opencode/carl/delegation.md"), encoding="utf-8") as f:
+            oc = f.read()
+        with open(self.path(".pi/agent/APPEND_SYSTEM.md"), encoding="utf-8") as f:
+            pi = f.read()
+        self.assertIn("the task tool's `background: true`", oc)
+        self.assertNotIn("subagent tool's `background: true`", oc)
+        self.assertIn("the subagent tool's `background: true`", pi)
+        self.assertNotIn("carl:background", oc + pi)
+        self.assertTrue(self.read_json(".pi/agent/carl.json")["background_subagents"])
+        plugins = json.dumps(self.read_json(".config/opencode/opencode.json")["plugin"])
+        self.assertIn("plugins/carl-background", plugins)                 # sets background: true for the coder
+        with open(self.path(".pi/agent/agents/coder.md"), encoding="utf-8") as f:
+            self.assertIn("exclude-tools: subagent\n", f.read())      # every tool but nested subagents
+        self.assertEqual(self.run_configure("--coder", "1", "--background", "0").returncode, 0)
+        with open(self.path(".config/opencode/carl/delegation.md"), encoding="utf-8") as f:
+            oc = f.read()
+        with open(self.path(".pi/agent/APPEND_SYSTEM.md"), encoding="utf-8") as f:
+            pi = f.read()
+        self.assertNotIn("background: true", oc + pi)
+        self.assertNotIn("carl:background", oc + pi)
+        self.assertFalse(self.read_json(".pi/agent/carl.json")["background_subagents"])
+        self.assertNotIn("carl-background", json.dumps(self.read_json(".config/opencode/opencode.json")["plugin"]))
+        self.assertFalse(os.path.exists(self.path(".config/opencode/plugins/carl-background")))
 
     def test_users_own_coder_gives_carl_coder_in_pi(self) -> None:
         self.write_text(".pi/agent/agents/coder.md", "---\nname: coder\n---\nmy own agent\n")

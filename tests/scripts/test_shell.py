@@ -310,6 +310,15 @@ class ServeLlamaArgs(unittest.TestCase):
         slots = int(argv[argv.index("--parallel") + 1])
         self.assertEqual(argv[argv.index("-c") + 1], str(slots * 16384))   # slots x the 16k window
 
+    def test_local_wins_over_a_saved_or_environment_address(self) -> None:
+        """--local (every run here passes it) serves this Mac only even when HOST (config.json llama.host,
+        or the environment) names another address; --host still wins."""
+        p, argv, _ = self.run_serve(env={"HOST": "10.9.8.7"})
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(argv[argv.index("--host") + 1], "127.0.0.1")
+        p, argv, _ = self.run_serve("--host", "127.0.0.1", env={"HOST": "10.9.8.7"})
+        self.assertEqual(argv[argv.index("--host") + 1], "127.0.0.1")
+
     def test_a_start_over_the_gpu_limit_is_refused(self) -> None:
         """Weights bigger than any Mac's GPU limit: refused before llama-server runs, with the
         reasons; FIT_CHECK=0 (the expert override) starts it anyway."""

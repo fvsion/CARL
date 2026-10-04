@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from typing import Callable, Dict, List, NamedTuple, Optional, Sequence, Tuple, Union
 
 from carl_core.domain.autofit import AutoFit
-from carl_core.domain.fit import check_start, max_ctx, need_bytes, plan_slots
+from carl_core.domain.fit import check_start, max_ctx, need_bytes, swa_plan
 
 from .fmt import GRN, R, RED, YEL, ctx_label, size
 from .model import JSONDict, ModelInfo, ServerData, Shape, flag, flag_int, jdict
@@ -102,15 +102,15 @@ NOT_RUNNING = {"adv", "goal", "scope"}                  # rows without a "runnin
 REINSTALL = {"ctx", "slots"}         # clients need install.sh again when these change
 
 ADV_WARN = "Caution: these values are tuned and measured (REFERENCE.md). A change can make the model slower, " \
-           "or its answers worse. Press x to set them back to the tuned values."
+           "or its answers worse. The tuned values (x) set them back."
 _NET_HELP = ("local = this Mac only (the default) · vm = also a VMware Fusion VM client (192.168.42.1) · "
              "an address = that interface "
              "(LAN: other computers can reach it)")
 SET_HELP = {
     "model": "Every model: the catalogue, the models folder and Hugging Face downloads. auto = auto fit's pick for this "
-             "Mac (★). Press A for the Auto fit panel: why it picks that model, the goal (everyday / hard code), and "
-             "Use this, which sets the model, context, slots and KV cache in one step. Another model: press ] for "
-             "the Models panel, then h to add one from Hugging Face.",
+             "Mac (★). The Auto fit panel says why it picks that model, takes the goal (everyday / hard code), and "
+             "sets the model, context, slots and KV cache in one step (Use this). More models: the Models panel adds "
+             "any GGUF from Hugging Face.",
     "goal": "What auto fit optimises for: everyday = the MoE builds first (fast, usually sufficient) · hard-code = "
             "the dense builds first (better at code and hard tasks, slower). Stock models only.",
     "scope": "Which models auto fit picks from: catalogue = every catalogue model (it offers the download; a start "
@@ -140,7 +140,7 @@ SET_HELP = {
 def row_instruction(key: str) -> str:
     """How to change a Settings row, for someone new to the dashboard."""
     if key == "model":
-        return "Press Enter to pick a model from the list (or click one)."
+        return "Press Enter to pick a model from the list (or click one); A shows auto fit's pick and why."
     if key == "adv":
         return "Press ← → to show or hide the advanced settings."
     if key in NUMERIC:
@@ -271,25 +271,30 @@ def _fits(ok: bool) -> str:
     return f"{GRN if ok else RED}{'fits' if ok else 'does not fit'}{R}"
 
 
-def llama_need(weights: int, shape: Shape, kv: str, ctx: int, n: int) -> float:
+def llama_need(weights: int, shape: Shape, kv: str, ctx: int, n: int, swa_full: bool = True) -> float:
     """GPU bytes for a llama.cpp model with n slots of ctx tokens each (carl_core.domain.fit)."""
-    return need_bytes(shape, weights, ctx, n, kv)
+    return need_bytes(shape, weights, ctx, n, kv, swa_full)
 
 
-def llama_fit(name: str, weights: int, shape: Shape, kv: str, ctx: int, slots: str, limit: int) -> FitResult:
-    """Does the model fit with these settings? slots "auto" = 2 when two fit, else 1. The same
-    check the launcher refuses a start with (carl_core.domain.fit.check_start)."""
-    n = plan_slots(slots, llama_need(weights, shape, kv, ctx, 2) <= limit)
-    chk = check_start(shape, weights, ctx, n, kv, limit)
+def llama_fit(name: str, weights: int, shape: Shape, kv: str, ctx: int, slots: str, limit: int,
+              swa: str = "auto") -> FitResult:
+    """Does the model fit with these settings? Slots and, for a model with sliding-window layers, the
+    full or the window cache as the launcher decides (fit.swa_plan with cache.swa); the same check the
+    launcher refuses a start with (carl_core.domain.fit.check_start)."""
+    n, full = swa_plan(swa, shape, weights, ctx, slots, kv, limit)
+    chk = check_start(shape, weights, ctx, n, kv, limit, full is not False)
     text = f"{_fits(chk.fits)}: {name} needs {size(chk.need)} for {n} × {ctx_label(ctx)} ({kv}) of {size(limit)} GPU memory"
+    if full is not None:
+        text += (" · sliding-window layers: full cache (saved prompts restore)" if full
+                 else f" · sliding-window layers: {YEL}window only{R} (saved prompts don't restore: Settings > Caching)")
     if not chk.fits:
         text += (f" · largest window: {ctx_label(chk.largest)}" if chk.largest else " · the weights alone don't fit")
     return chk.fits, text
 
 
-def max_ctx_per_slot(weights: int, shape: Shape, limit: int) -> int:
+def max_ctx_per_slot(weights: int, shape: Shape, limit: int, swa_full: bool = True) -> int:
     """Largest window (q4_0, 1 slot, in steps of 4K) that fits limit, at most the trained context."""
-    return max_ctx(shape, weights, limit, 1, "q4_0")
+    return max_ctx(shape, weights, limit, 1, "q4_0", swa_full)
 
 
 class SettingsService:
@@ -304,7 +309,7 @@ class SettingsService:
         self._fit_key: Optional[Tuple[Tuple[str, str], ...]] = None
         self._fit: FitResult = (False, "")
         self._max: Dict[str, Tuple[float, Optional[int]]] = {}     # model -> (list time, largest window)
-        self._slots: Dict[Tuple[str, str, str], int] = {}           # (model, ctx, kv) -> most slots that fit
+        self._slots: Dict[Tuple[str, str, str, str], int] = {}      # (model, ctx, kv, swa) -> most slots that fit
 
     def rows(self, p: Pending) -> List[SettingRow]:
         """The rows shown for p (the model row offers every model; the slots row 3 and 4 only when
@@ -317,7 +322,7 @@ class SettingsService:
     def max_slots(self, p: Pending) -> int:
         """The most slots (up to 4) whose windows fit the GPU limit with these settings (2 when unknown);
         cached per model, window and KV type (it reads the GGUF header)."""
-        key = (self.resolved_model(p), str(p.get("ctx")), str(p.get("kv")))
+        key = (self.resolved_model(p), str(p.get("ctx")), str(p.get("kv")), self.swa_mode())
         if key not in self._slots:
             self._slots[key] = self._max_slots(p)
         return self._slots[key]
@@ -329,9 +334,17 @@ class SettingsService:
                 return 2
             shape, w = self.store.shape_of(m["path"]), self.store.file_size(m["path"])
             ctx, kv, limit = int(str(p["ctx"])), str(p["kv"]), self.gpu_limit()
-            return max([n for n in (1, 2, 3, 4) if need_bytes(shape, w, ctx, n, kv) <= limit] or [1])
+            full = self.swa_mode() == "full"            # auto and window: the window when it has to
+            return max([n for n in (1, 2, 3, 4) if need_bytes(shape, w, ctx, n, kv, full) <= limit] or [1])
         except Exception:           # an unreadable header, a value that is not a number: no extra slots offered
             return 2
+
+    def swa_mode(self) -> str:
+        """cache.swa (Settings > Caching): auto, full or window; auto when config.json can't be read."""
+        try:
+            return str(jdict(self.store.load_config().get("cache")).get("swa") or "auto")
+        except Exception:           # an unreadable config: the default
+            return "auto"
 
     @staticmethod
     def goal_scope(p: Pending) -> Tuple[str, str]:
@@ -466,13 +479,13 @@ class SettingsService:
                            f"(or ./carl.sh download {name})")
         try:
             return llama_fit(name, self.store.file_size(m["path"]), self.store.shape_of(m["path"]), str(p["kv"]),
-                             int(p["ctx"]), str(p["slots"]), self.gpu_limit())
+                             int(p["ctx"]), str(p["slots"]), self.gpu_limit(), self.swa_mode())
         except Exception as e:      # a GGUF that can't be read, a value that is not a number, ...: say so
             return False, f"{RED}fit check failed: {e}{R}"
 
     def fit_cached(self, p: Pending) -> FitResult:
         """fit_line, recomputed only when a pending value changes (it reads the GGUF header)."""
-        key = tuple(sorted((k, str(v)) for k, v in p.items()))
+        key = tuple(sorted((k, str(v)) for k, v in p.items())) + (("swa", self.swa_mode()),)
         if self._fit_key != key:
             self._fit_key, self._fit = key, self.fit_line(p)
         return self._fit
@@ -489,9 +502,11 @@ class SettingsService:
     def _max_ctx(self, m: ModelInfo) -> Optional[int]:
         try:
             if m["status"] == "downloaded":
-                return max_ctx_per_slot(self.store.file_size(m["path"]), self.store.shape_of(m["path"]), self.gpu_limit())
+                return max_ctx_per_slot(self.store.file_size(m["path"]), self.store.shape_of(m["path"]), self.gpu_limit(),
+                                        self.swa_mode() == "full")
             shape = self.store.model_shape(m)
-            return None if shape is None else max_ctx_per_slot(int(m.get("bytes", 0)), shape, self.gpu_limit())
+            return None if shape is None else max_ctx_per_slot(int(m.get("bytes", 0)), shape, self.gpu_limit(),
+                                                               self.swa_mode() == "full")
         except Exception:           # unreadable GGUF header or file: unknown
             return None
 

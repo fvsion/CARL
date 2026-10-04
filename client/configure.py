@@ -116,6 +116,7 @@ BROWSER_AGENT, BROWSER_AGENT_ALT = "browser", "carl-browser"
 BROWSER_OFF = ("bash", "edit", "write", "lsp", "task", "todowrite", "question", "skill")   # not for the browser agent
 CHROME_APP = "/Applications/Google Chrome.app"
 MODEL_CHECK = "carl-model-check"
+BACKGROUND = "carl-background"                          # the coder in the background (OpenCode plugin)
 CACHE = "carl-cache"                                    # the prompt cache: OpenCode plugin and Pi extension
 OLD_CACHE = "carl-prefix-cache"                         # its OpenCode plugin before 11.5 (removed)
 CACHE_CORE = "shared/carl-cache.js"                     # the code both carry
@@ -256,6 +257,18 @@ class CoderPlan:
     remove: tuple[str, ...]     # our entries to take out
     why: str                    # the reason shown for the removals
     kept: tuple[str, ...]       # report lines about the user's own agents
+
+
+BACKGROUND_BLOCK = re.compile(r"<!-- carl:background (\w+) -->\n(.*?)(?=<!-- carl:background )", re.S)
+BACKGROUND_END = re.compile(r"<!-- carl:background end -->\n\n?")
+
+
+def delegation_for(text: str, client: str, background: bool) -> str:
+    """The delegation rule for one client: its own "run the coder in the background" paragraph when
+    background subagents are on, none otherwise (the markers go)."""
+    out = BACKGROUND_BLOCK.sub(lambda m: m.group(2) if background and m.group(1) == client else "", text)
+    out = BACKGROUND_END.sub("\n" if background else "", out)
+    return re.sub(r"\n{3,}", "\n\n", out)
 
 
 def coder_plan(mine: set[str], has_coder: bool, has_alt: bool, wanted: bool) -> CoderPlan:
@@ -526,6 +539,7 @@ class Installer:
         self._oc_server_plugin(cfg, MODEL_CHECK, self.o.model_check, new_id, "model warnings")
         self._oc_server_plugin(cfg, OLD_CACHE, False, new_id, "")
         self._oc_server_plugin(cfg, CACHE, self.o.cache, new_id, "the prompt cache")
+        self._oc_server_plugin(cfg, BACKGROUND, self.o.background and self.o.coder, new_id, "the coder in the background")
         old_specs = os.path.join(self.o.home, ".config", "carl", "prefix")    # what carl-prefix-cache recorded
         if os.path.isdir(old_specs):
             shutil.rmtree(old_specs, ignore_errors=True)
@@ -778,7 +792,8 @@ class Installer:
         prompt_path = os.path.join(ddir, "coder.md")
         os.makedirs(ddir, exist_ok=True)
         for p, t, what in ((prompt_path, name_agent(body, name), "coder prompt"),
-                           (rule_path, name_agent(self.delegation_text(), name), "delegation rule")):
+                           (rule_path, name_agent(delegation_for(self.delegation_text(), "opencode", self.o.background),
+                                                  name), "delegation rule")):
             old = read_or_none(p)
             if old is not None and old != t:
                 rep.add("updated", f"OpenCode {what} ({self.short(p)})")
@@ -1032,14 +1047,16 @@ class Installer:
             if existing != new_text:
                 rep.add("updated" if existing is not None else "added", f"Pi agent '{name}' + delegation rule")
             write_text(cpath, new_text)
-            rule = name_agent(self.delegation_text().strip(), name)
+            rule = name_agent(delegation_for(self.delegation_text(), "pi", self.o.background).strip(), name)
             cur = (cur + "\n\n" if cur else "") + f"{begin}\n{rule}\n{end}"
             st["coder_agent"] = name
+            st["background_subagents"] = self.o.background     # the subagent extension reads it
         else:
             if sub_ours and os.path.isdir(sub):
                 shutil.rmtree(sub)
             st.pop("coder_agent", None)
             st.pop("subagent_ext", None)
+            st.pop("background_subagents", None)
         if cur or os.path.exists(asp):
             self.save_text(asp, cur + "\n" if cur else "", mode=0o644)
 

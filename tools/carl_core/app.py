@@ -200,10 +200,19 @@ class Carl:
     def budget(self, ram_gb: Optional[float] = None, reserve_gb: Optional[float] = None) -> Budget:
         """What a model may use: on this Mac (GPU limit, RAM, the reserve for macOS + apps,
         more with the VM up), or estimated for a Mac with ram_gb of RAM (VM not counted)."""
+        swa = self.swa_mode()
         if ram_gb:
-            return Budget(estimated_limit(ram_gb * GIB)[0], ram_gb * GIB, reserve_bytes(reserve_gb, False))
+            return Budget(estimated_limit(ram_gb * GIB)[0], ram_gb * GIB, reserve_bytes(reserve_gb, False), swa=swa)
         vm = self.host.vm_network_up()
-        return Budget(self.gpu.limit()[0], self.host.ram_bytes(), reserve_bytes(reserve_gb, vm), vm)
+        return Budget(self.gpu.limit()[0], self.host.ram_bytes(), reserve_bytes(reserve_gb, vm), vm, swa)
+
+    def swa_mode(self) -> str:
+        """cache.swa (auto / full / window): how sliding-window models are planned; auto when the
+        config can't be read."""
+        try:
+            return str(self.load_config().cache.get("swa") or "auto")
+        except (ConfigError, OSError, ValueError):
+            return "auto"
 
     def shape_of(self, m: ModelInfo) -> Optional[ModelShape]:
         """A model's header shape: the local file's, or (a catalogue model not downloaded)

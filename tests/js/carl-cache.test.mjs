@@ -381,6 +381,36 @@ test("a new process finds a session still in its slot through the record", () =>
   assert.equal(sessionSaves(srv).length, 0);                              // the record's base: ~400 unsaved
 }));
 
+test("a turn is marked in its slot from the first request to its save or record (subagents too)", () => withSave("turn", async () => {
+  const h = home();
+  const srv = fakeServer();
+  const c = new CarlCache({ baseURL: "http://127.0.0.1:8080/v1", fetch: srv.fetch, split: splitOpenCode, home: h });
+  const dir = join(h, ".config", "carl", "slots");
+  const marks = () => readdirSync(dir).filter((n) => n.startsWith(".turn+"));
+  await send(c, request("hello"), { session: "s1", agent: "build" });
+  assert.deepEqual(marks(), [".turn+m+0"]);                               // a tool call or the reply: still running
+  await send(c, request("sub"), { session: "k1", agent: "coder", sub: true });
+  assert.deepEqual(marks().sort(), [".turn+m+0", ".turn+m+1"]);
+  ran(srv, 0, 7300);
+  await c.after({ session: "s1", agent: "build" });                        // saved (save = turn), then the mark goes
+  assert.equal(sessionSaves(srv).length, 1);
+  assert.deepEqual(marks(), [".turn+m+1"]);
+  await c.turnsDone("k1");                                                 // stopped with Esc: the idle event
+  assert.deepEqual(marks(), []);
+}));
+
+test("a new session takes a slot where no other turn runs, though that slot holds more", async () => {
+  const h = home();
+  const srv = fakeServer();
+  const c = new CarlCache({ baseURL: "http://127.0.0.1:8080/v1", fetch: srv.fetch, split: splitOpenCode, home: h });
+  const first = await send(c, request("main"), { session: "s1", agent: "build" });   // its turn runs (a tool now)
+  assert.equal(first.payload.id_slot, 0);
+  ran(srv, 0, 900);
+  ran(srv, 1, 5000);                                                     // slot 1: an old, larger conversation
+  const sub = await send(c, request("sub"), { session: "k1", agent: "coder", sub: true });
+  assert.equal(sub.payload.id_slot, 1);                                  // not slot 0: s1's turn still runs there
+});
+
 test("two processes on this Mac don't pin the same slot", async () => {
   const h = home();
   const srv = fakeServer();
@@ -398,7 +428,7 @@ test("two processes on this Mac don't pin the same slot", async () => {
 
 test("a client on another computer uses the dashboard's cache API: settings, claims, records", async () => {
   const srv = fakeServer();
-  const api = { claims: new Set(), records: new Map(), calls: [] };
+  const api = { claims: new Set(), records: new Map(), calls: [], turns: [] };
   const fetch = async (url, init = {}) => {
     const u = new URL(url);
     if (u.port !== "8081") return srv.fetch(url, init);
@@ -413,6 +443,7 @@ test("a client on another computer uses the dashboard's cache API: settings, cla
       return json({ ok: true });
     }
     if (u.pathname === "/carl/cache/release") { api.claims.delete(`${body.model}:${body.slot}`); return json({ ok: true }); }
+    if (u.pathname === "/carl/cache/turn") { api.turns.push([body.slot, body.session, body.running]); return json({ ok: true }); }
     if (u.pathname === "/carl/cache/record" && init.method === "POST") { api.records.set(body.file, body); return json({ ok: true }); }
     if (u.pathname === "/carl/cache/record") {
       const r = api.records.get(u.searchParams.get("file"));
@@ -435,6 +466,7 @@ test("a client on another computer uses the dashboard's cache API: settings, cla
     await a.after({ session: "s1", agent: "build" });                       // save = switch (the API's): a record
     assert.equal(sessionSaves(srv).length, 0);
     assert.equal(api.records.size, 1);
+    assert.deepEqual(api.turns, [[0, "s1", true], [0, "s1", false]]);      // the turn ran, then ended
     const b = new CarlCache(opts);                                          // the next process
     srv.st.calls.length = 0;
     const { payload } = await send(b, request("again"), { session: "s1", agent: "build" });

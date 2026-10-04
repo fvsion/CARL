@@ -40,6 +40,7 @@ CTX_FLAG=""
 SLOTS_FLAG=""
 MODEL_FLAG=""
 NET_FLAG=""
+HOST_FLAG=""
 MODE_FLAG=""
 pass=()
 while [[ $# -gt 0 ]]; do
@@ -53,7 +54,7 @@ while [[ $# -gt 0 ]]; do
       v="${1#--host}"; v="${v#=}"
       if [[ -z "$v" ]]; then shift; v="${1:-}"; fi
       [[ -n "$v" ]] || { echo "error: --host needs an address" >&2; exit 2; }
-      HOST="$v" ;;
+      HOST="$v"; HOST_FLAG=1 ;;
     --q4) KV_FLAG=q4_0 ;;
     --q8) KV_FLAG=q8_0 ;;
     --kv|--kv=*)
@@ -122,6 +123,9 @@ ALIAS="${ALIAS:-$(basename "$MODEL" .gguf)}"
 extra_args=()
 [[ -n "${EXTRA_ARGS:-}" ]] && read -r -a extra_args <<< "$EXTRA_ARGS"
 set -- ${extra_args[@]+"${extra_args[@]}"} "$@"
+# --local / --vm win over an address saved in config.json (llama.host) or set in the environment;
+# --host wins over everything
+[[ -n "$NET_FLAG" && -z "$HOST_FLAG" ]] && HOST=""
 resolve_host "$NET_FLAG"
 PORT="${PORT:-8080}"
 is_port "$PORT" || { echo "error: PORT must be a TCP port (1-65535), got '$PORT'" >&2; exit 2; }

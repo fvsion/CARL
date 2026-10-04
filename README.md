@@ -37,7 +37,14 @@ If you skip the `brew install`, `./carl.sh` finds the missing tools and asks to 
 ./carl.sh                              # start the server and the dashboard
 ```
 
-Then run `opencode` or `pi` in a second terminal. `./carl.sh -h` shows all commands.
+Then, in a second terminal, go to your project folder and start `opencode` or `pi` there: they work on the folder you start them in.
+
+```bash
+cd ~/path/to/your/project
+opencode
+```
+
+`./carl.sh -h` shows all commands.
 
 - **The first time,** CARL offers the model that **auto fit** picks for your Mac: the best stock model that holds two 96K windows (the fast Qwen3.6-35B-A3B by default; the 27B dense for the "hard-code" goal). `./carl.sh fit` shows the pick and why.
 - **The next time,** it starts llama.cpp with the settings that you saved.
@@ -87,13 +94,19 @@ More: USERGUIDE.md, "Thinking on, off and effort".
 
 **Tools:** OpenCode gets web search, LSP, a browser (a `browser` subagent that drives Chrome), background subagents and parallel tool calls on top of its own tools, within a ~9.9K-token prompt; Pi gets grep / find / ls, web search and the browser. Web search sends the queries to Exa: `WEB_SEARCH=off ./carl.sh install` turns it off (USERGUIDE.md, "Tools in OpenCode and Pi").
 
-## OpenCode plugins
+## Plugins
 
 ![OpenCode with the CARL plugins](assets/opencode-plugins.png)
 
-- **Subagents panel** (right): what each running subagent does now. Below them: the subagents that finished (✓ or ✗, and the duration). A specialist **coder** subagent gets the large coding tasks.
-- **Model check:** a CARL warning when the model you picked isn't the one the server runs, isn't installed on it, or is being loaded (router mode).
-- **Session switcher** (in the prompt box): `‹ 1/3 ● title ›`. Click the arrows to go to the previous or next session. Click the title, or type `/switch`, to select a session from a list. `●` = busy, `○` = idle.
+`./carl.sh install` adds CARL's plugins to OpenCode and Pi:
+
+- **Prompt cache:** fast starts; sessions come back after a restart (OpenCode, Pi).
+- **Coder subagent, in the background:** large tasks go to a specialist coder while the main session stays free (OpenCode, Pi).
+- **Subagents panel** and **session switcher** in OpenCode's sidebar and prompt box.
+- **Model check:** a warning when the model you pick isn't the one the server runs (OpenCode).
+- **`/carl`:** every CARL piece and its state, and the config sync (OpenCode, Pi).
+
+What each one does and how to turn it off: [USERGUIDE.md, "CARL's plugins and extensions"](USERGUIDE.md#carls-plugins-and-extensions). How they work: [reference/plugins.md](reference/plugins.md).
 
 ## Read more
 

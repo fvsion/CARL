@@ -34,6 +34,7 @@ export const SAVES = ["auto", "turn", "switch", "stop"];
 export const AUTO_S = 120;                   // the default: a crash costs at most ~2 min of reading; stops save anyway
 const READ_SPEED = 500;                       // tokens/s until this model's speed is measured
 const CLAIM_STALE_MS = 120_000;
+export const TURN_STALE_MS = 600_000;  // a turn mark this old is a client that went away (the dashboard ignores it)
 export const NO_PIN_AGENTS = new Set(["title", "summary"]);            // small one-off prompts
 export const NO_SAVE_AGENTS = new Set(["title", "summary", "compaction"]);
 const LOAD_WAIT_MS = 180_000;        // a switch takes 30 s to 2 min
@@ -592,7 +593,7 @@ export class CarlCache {
       }
       if (slot === undefined) {
         let pick;
-        for (const c of rankSlots(slots)) {
+        for (const c of await this.rankFree(model, slots, meta.session)) {
           if ((release = await this.tryClaim(model, c.id))) {
             pick = c;
             break;
@@ -619,6 +620,7 @@ export class CarlCache {
       if (meta.session) {
         this.sessions.set(id, { ...(known ?? {}), slot, epoch: m.epoch, model, router: srv.router, payload: out,
                                 at: Date.now(), sub: Boolean(meta.sub), base });
+        await this.turn(model, slot, meta.session, true);
       }
       return { payload: { ...out, id_slot: slot }, release };
     } catch (e) {
@@ -812,6 +814,15 @@ export class CarlCache {
    * @param {Meta} meta
    */
   async after(meta) {
+    try {
+      await this.saveTurn(meta);
+    } finally {
+      await this.turnsDone(meta.session);
+    }
+  }
+
+  /** @param {Meta} meta */
+  async saveTurn(meta) {
     const set = await this.loadSettings();
     if (!set.enabled || !set.sessions || meta.sub || !meta.session || NO_SAVE_AGENTS.has(meta.agent)) return;
     /** @type {SessionState | undefined} */
@@ -870,6 +881,60 @@ export class CarlCache {
                                              ...this.withModel(model, router) }, 3_600_000);
     const now = (await this.slots(model, router)).find((x) => x.id === e.slot);
     return now ?? { id: e.slot, busy: false, n: toks.length, task: -1 };
+  }
+
+  /**
+   * Mark a slot's turn running (each request of an agent loop, tool calls too) or done (the turn's save or
+   * record is on disk): the dashboard's Stop, Apply, Auto-tune and router loads can wait for the end of
+   * the turn, so the session is saved whole. On this Mac a file (.turn+MODEL+SLOT, its session), else
+   * through the cache API. A mark older than TURN_STALE_MS counts as gone.
+   * @param {string} model @param {number} slot @param {string} session @param {boolean} running
+   */
+  async turn(model, slot, session, running) {
+    const path = this.local && this.dirExists() ? join(this.dir, `.turn+${safeName(model, 60)}+${slot}`) : "";
+    try {
+      if (!path) {
+        if (this.remote()) await this.api("POST", "/carl/cache/turn", { model, slot, session, running });
+      } else if (running) {
+        fs.writeFileSync(path + ".tmp", JSON.stringify({ model, slot, session }));
+        fs.renameSync(path + ".tmp", path);
+      } else if (JSON.parse(fs.readFileSync(path, "utf8")).session === session) {
+        fs.unlinkSync(path);                // only its own: another session may run in that slot now
+      }
+    } catch { /* no mark: the dashboard waits for an idle slot only */ }
+  }
+
+  /**
+   * The free slots, best first: a slot where another session's turn still runs (an agent loop between two
+   * requests: a tool runs) last, so a new session doesn't push it out; then the emptiest.
+   * @param {string} model @param {{ id: number, busy: boolean, n: number }[]} slots @param {string | undefined} session
+   */
+  async rankFree(model, slots, session) {
+    const free = rankSlots(slots);
+    const running = new Set();
+    try {
+      if (this.local && this.dirExists()) {
+        const head = `.turn+${safeName(model, 60)}+`;
+        for (const n of fs.readdirSync(this.dir)) {
+          if (!n.startsWith(head)) continue;
+          const path = join(this.dir, n);
+          if (Date.now() - fs.statSync(path).mtimeMs > TURN_STALE_MS) continue;
+          if (JSON.parse(fs.readFileSync(path, "utf8")).session !== session) running.add(Number(n.slice(head.length)));
+        }
+      } else if (this.remote()) {
+        const r = await this.api("GET", `/carl/cache/turns?model=${encodeURIComponent(model)}`);
+        for (const t of r.status === 200 ? r.json?.turns ?? [] : []) if (t.session !== session) running.add(t.slot);
+      }
+    } catch { /* no marks: by size only */ }
+    return [...free.filter((s) => !running.has(s.id)), ...free.filter((s) => running.has(s.id))];
+  }
+
+  /** Every turn of a session is done (its slots). @param {string | undefined} session */
+  async turnsDone(session) {
+    if (!session) return;
+    for (const [k, v] of this.sessions) {
+      if (k.split("\n")[1] === session) await this.turn(v.model, v.slot, session, false);
+    }
   }
 
   /** The record file of a slot (this Mac only). @param {string} model @param {number} slot */

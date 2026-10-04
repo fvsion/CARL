@@ -17,12 +17,12 @@ from dataclasses import dataclass
 from typing import Callable, Dict, List, Mapping, Optional
 
 from . import api, clientsync, diskcache, fsio, slotpack, system
-from .cacheapi import Registry
+from .cacheapi import CacheState, Registry
 from .collector import Collector
 from .fmt import DIM, R, RED, size
 from .model import ServerData, SlotInfo, clean, jlist
 from .settings import REINSTALL, Pending, SettingsService, env_from_cmd
-from .state import TUNE_ALL, Confirm, Download, HFLookup, InstallRun, Picker, TuneRun, UIState
+from .state import TUNE_ALL, Confirm, Download, Drain, HFLookup, InstallRun, Picker, TuneRun, UIState
 from .store import ModelList
 
 # Settings the launchers read from the environment: removed, so config.json (or the
@@ -139,9 +139,12 @@ class ServerJobs:
 
     # ------------------------------------------------------------ settings: restart
     def restart(self, p: Pending, d: ServerData) -> None:
-        """Save the settings, stop the server, start it with them (in a thread)."""
-        self.ui.restart = "saving the settings…"
-        threading.Thread(target=self._restart, args=(dict(p), d), daemon=True).start()
+        """Save the settings, stop the server, start it with them (in a thread); while a reply is
+        being written, ask first (when_idle)."""
+        def go() -> None:
+            self.ui.restart = "saving the settings…"
+            threading.Thread(target=self._restart, args=(dict(p), d), daemon=True).start()
+        self.when_idle(d, "apply the settings (the server restarts)", go)
 
     def _restart(self, p: Pending, d: ServerData) -> None:
         """Save, stop the old server, start the new one; on failure, put config.json back
@@ -229,7 +232,10 @@ class ServerJobs:
             proc = start_tool([os.path.join(self.paths.repo, "tools", "carl-tune.py"), "all" if model == TUNE_ALL else model]
                               + flag, log)
             ui.tune = TuneRun(model=model, proc=proc, log=log, restart=restart)
-        threading.Thread(target=work, daemon=True).start()
+        if restart:
+            self.when_idle(d, "auto-tune (the server stops)", lambda: threading.Thread(target=work, daemon=True).start())
+        else:
+            threading.Thread(target=work, daemon=True).start()
 
     def cancel_tune(self) -> None:
         """Stop Auto-tune (SIGINT: it cleans up its test server)."""
@@ -331,8 +337,59 @@ class ServerJobs:
                                                                        "when it is loaded)"), 10)
             except api.FETCH_ERRORS as e:
                 self.ui.toast(f"{RED}{name}: {what} failed: {e}{R}", 10)
-        self.ui.toast(f"{'unloading' if unload else 'loading'} {name}…", 120 if not unload else 10)
-        threading.Thread(target=work, daemon=True).start()
+        def go() -> None:
+            self.ui.toast(f"{'unloading' if unload else 'loading'} {name}…", 120 if not unload else 10)
+            threading.Thread(target=work, daemon=True).start()
+        self.when_idle(d, f"{'unload' if unload else 'load'} {name} (the loaded model stops)", go)
+
+    # ------------------------------------------------------------ a turn is running
+    def busy_slots(self, d: ServerData) -> List[int]:
+        """The slots writing a reply now (a fresh /slots; the loaded model's in router mode); none
+        when the server doesn't answer."""
+        if not d.up or (d.router is not None and not d.alias):
+            return []
+        q = f"?model={urllib.parse.quote(d.alias)}" if d.router is not None else ""
+        try:
+            slots = [SlotInfo.from_json(x) for x in jlist(json.loads(self.collector.endpoint.get("/slots" + q, timeout=3)))]
+        except (api.FETCH_ERRORS + (ValueError,)):
+            return []
+        return [s.id for s in slots if s.busy and s.id is not None]
+
+    def turn_slots(self, d: ServerData) -> List[int]:
+        """The slots where a client's turn runs (OpenCode and Pi with CARL mark each request of an agent
+        loop, tool calls too, until the turn's save or record is on disk)."""
+        return CacheState(self.paths.slots).turns(d.alias) if d.up and d.alias else []
+
+    def saving(self) -> bool:
+        """A saved state was written in the last 2 s (a save may still be going on)."""
+        try:
+            return any(n.startswith("carl-") and n.endswith(".bin")
+                       and time.time() - os.path.getmtime(os.path.join(self.paths.slots, n)) < 2
+                       for n in os.listdir(self.paths.slots))
+        except OSError:
+            return False
+
+    def when_idle(self, d: ServerData, what: str, go: Callable[[], None]) -> None:
+        """Run `go` (it stops the model) now when no turn runs; else ask first: wait for the end of the
+        turn (its session saved), or stop now (the reply is cut, the session goes back to its last save)."""
+        busy, turns = self.busy_slots(d), self.turn_slots(d)
+        if not busy and not turns:
+            go()
+            return
+        self.ui.drain = Drain(what=what, go=go, busy=busy, turns=turns)
+
+    def drain_tick(self, d: ServerData) -> None:
+        """While waiting: go on at the second look in a row (0.5 s apart) with no slot writing, no turn
+        marked and no save file being written; then save_before_stop saves the recorded sessions."""
+        dr = self.ui.drain
+        if dr is None or not dr.waiting or time.time() - dr.checked < 0.5:
+            return
+        dr.checked = time.time()
+        dr.busy, dr.turns, dr.saving = self.busy_slots(d), self.turn_slots(d), self.saving()
+        dr.idle = 0 if dr.busy or dr.turns or dr.saving else dr.idle + 1
+        if dr.idle >= 2 or not d.up:
+            self.ui.drain = None
+            dr.go()
 
     def save_before_stop(self, d: ServerData) -> None:
         """Before CARL stops the server or its model (Stop, Apply, Auto-tune, a router load): the

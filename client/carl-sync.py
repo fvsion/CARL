@@ -42,6 +42,7 @@ CONF = os.path.join(os.path.expanduser("~"), ".config", "carl")
 STATE = os.path.join(CONF, "client-sync.json")
 LOG = os.path.join(CONF, "client-sync.log")
 LOCK = os.path.join(CONF, "client-sync.lock")
+STATE_LOCK = os.path.join(CONF, "client-sync.state.lock")
 INSTALL_ENV = os.path.join(CONF, "client-install.env")
 # the install switches a sync applies again (install.sh records them)
 SWITCHES = ("WEB_SEARCH", "NO_LSP", "LSP", "NO_BROWSER", "BROWSER_HEADED", "NO_SIDEBAR", "NO_SWITCHER",
@@ -74,8 +75,11 @@ def save_state(doc: Json) -> None:
 
 
 def update(**kv: Any) -> Json:
-    doc = {**state(), **kv}
-    save_state(doc)
+    os.makedirs(CONF, exist_ok=True)
+    with open(STATE_LOCK, "w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)            # the service, install.sh and the plugins all write it
+        doc = {**state(), **kv}
+        save_state(doc)
     return doc
 
 
@@ -220,6 +224,7 @@ def watch() -> None:
                 fails = 0
                 if name == "config":
                     once()
+            update(connected=False)                  # the dashboard closed the stream (it stopped)
         except (OSError, ValueError, urllib.error.URLError) as e:
             update(connected=False, error=str(e)[:200])
         time.sleep(BACKOFF[min(fails, len(BACKOFF) - 1)])

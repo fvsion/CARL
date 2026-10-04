@@ -12,6 +12,8 @@ export interface AgentConfig {
 	name: string;
 	description: string;
 	tools?: string[];
+	// CARL: tools the agent never gets (`exclude-tools:`): every other tool stays, the MCP ones too
+	excludeTools?: string[];
 	model?: string;
 	systemPrompt: string;
 	source: "user" | "project";
@@ -35,6 +37,7 @@ type AgentFrontmatter = {
 	name?: unknown;
 	description?: unknown;
 	tools?: unknown;
+	"exclude-tools"?: unknown;
 	model?: unknown;
 };
 
@@ -95,6 +98,7 @@ function loadAgentsFromDir(dir: string, source: "user" | "project"): AgentConfig
 			name: frontmatter.name,
 			description: frontmatter.description,
 			tools: parseToolList(frontmatter.tools),
+			excludeTools: parseToolList(frontmatter["exclude-tools"]),
 			model: typeof frontmatter.model === "string" ? frontmatter.model : undefined,
 			systemPrompt: body,
 			source,

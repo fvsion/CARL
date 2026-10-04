@@ -9,7 +9,7 @@ keeps a KV cache, the rest have a fixed-size recurrent state.
 from __future__ import annotations
 
 import struct
-from typing import Dict, Optional, TypedDict, Union
+from typing import Dict, List, Optional, TypedDict, Union
 
 MetaValue = Union[int, float, bool, str]
 Meta = Dict[str, MetaValue]
@@ -34,6 +34,7 @@ KV_BPE: Dict[str, float] = {"f32": 4, "f16": 2, "bf16": 2, "q8_0": 34 / 32, "q4_
 # 64 MB prefix holds every scalar CARL needs (24 MB is enough over HTTP for these models).
 LOCAL_HEADER_BYTES = 64 * 1024 * 1024
 REMOTE_HEADER_BYTES = 24 * 1024 * 1024
+META_VERSION = 2          # what parse_meta keeps (2: per-layer KV heads, the SWA pattern); cached headers carry it
 
 
 class _Shape(TypedDict):
@@ -125,6 +126,9 @@ def parse_meta(head: bytes) -> Meta:
                 elif key.endswith(".attention.sliding_window_pattern") and cnt <= 4096:
                     # which layers use the sliding window, as "1" / "0" per layer (model_shape)
                     out[key] = "".join("1" if r.scalar(GGUF_TYPES[at]) else "0" for _ in range(cnt))
+                elif key.endswith(".attention.head_count_kv") and cnt <= 4096:
+                    # KV heads per layer (Gemma 4 26B / 31B: fewer on the full-attention layers), "8,8,2,..."
+                    out[key] = ",".join(str(int(r.scalar(GGUF_TYPES[at]))) for _ in range(cnt))
                 else:
                     r.skip(struct.calcsize(GGUF_TYPES[at]) * cnt)
             else:
@@ -139,6 +143,17 @@ def _num(meta: Meta, key: str, default: int = 0) -> int:
     return int(v) if isinstance(v, (int, float)) else default
 
 
+def _per_layer(v: object, layers: int) -> List[int]:
+    """A per-layer list ("8,8,2,...", parse_meta) for `layers` layers; [] for a single number."""
+    if not isinstance(v, str) or not v:
+        return []
+    try:
+        heads = [int(x) for x in v.split(",")]
+    except ValueError:
+        return []
+    return heads[:layers] if len(heads) >= layers else []
+
+
 def model_shape(meta: Meta) -> ModelShape:
     a = str(meta.get("general.architecture", ""))
 
@@ -150,17 +165,21 @@ def model_shape(meta: Meta) -> ModelShape:
     interval = g("full_attention_interval", 1) or 1
     attn = main // interval
     rec = main - attn if interval > 1 else 0
-    kvh, kl, vl = g("attention.head_count_kv"), g("attention.key_length"), g("attention.value_length")
+    kl, vl = g("attention.key_length"), g("attention.value_length")
     if not kl:
         kl = vl = g("embedding_length") // max(g("attention.head_count", 1), 1)
-    kv_full, kv_swa = attn * kvh * (kl + vl), 0
+    per_layer = _per_layer(meta.get(f"{a}.attention.head_count_kv"), main)    # KV heads of each layer
+    kvh = max(per_layer) if per_layer else g("attention.head_count_kv")
+    # an array: the layers with KV heads (a recurrent layer has none); a number: every attention layer
+    kv_full, kv_swa = (sum(per_layer) if per_layer else attn * kvh) * (kl + vl), 0
     window = g("attention.sliding_window")
     pattern = meta.get(f"{a}.attention.sliding_window_pattern")
     own = main - g("attention.shared_kv_layers")     # Gemma 4: the last layers reuse earlier layers' KV
     if window and isinstance(pattern, str) and 0 < own <= len(pattern):
-        n_swa = pattern[:own].count("1")
-        kv_full = (own - n_swa) * kvh * (kl + vl)
-        kv_swa = n_swa * kvh * (g("attention.key_length_swa", kl) + g("attention.value_length_swa", vl))
+        heads = per_layer or [kvh] * own
+        kv_full = sum(heads[i] for i in range(own) if pattern[i] == "0") * (kl + vl)
+        kv_swa = (sum(heads[i] for i in range(own) if pattern[i] == "1")
+                  * (g("attention.key_length_swa", kl) + g("attention.value_length_swa", vl)))
     inner, rank, state = g("ssm.inner_size"), g("ssm.time_step_rank"), g("ssm.state_size")
     conv, groups = g("ssm.conv_kernel"), g("ssm.group_count")
     rs_layer = 0

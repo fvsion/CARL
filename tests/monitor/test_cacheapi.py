@@ -6,6 +6,7 @@ import json
 import os
 import socket
 import tempfile
+import time
 import unittest
 import urllib.error
 import urllib.request
@@ -47,6 +48,20 @@ class HandleTest(unittest.TestCase):
                          (200, {"slot": 0, "task": 5, "base": 8000}))
         self.call("POST", "/carl/cache/unrecord", {"model": "m", "slot": 0})
         self.assertEqual(self.call("GET", "/carl/cache/record", model="m", file=rec["file"])[0], 404)
+
+    def test_turns(self) -> None:
+        """A remote client's turn marks: the same files as the local clients'; only its own mark goes;
+        an old mark counts as gone."""
+        run = {"model": "m", "slot": 1, "session": "ses_a", "running": True}
+        self.assertEqual(self.call("POST", "/carl/cache/turn", run)[0], 200)
+        self.assertEqual(self.state.turns("m"), [1])
+        self.assertEqual(self.call("GET", "/carl/cache/turns", model="m"), (200, {"turns": [{"slot": 1, "session": "ses_a"}]}))
+        self.call("POST", "/carl/cache/turn", {**run, "session": "ses_b", "running": False})
+        self.assertEqual(self.state.turns("m"), [1])                     # another session's end: kept
+        self.assertEqual(self.state.turns("m", now=time.time() + 601), [])
+        self.call("POST", "/carl/cache/turn", {**run, "running": False})
+        self.assertEqual(self.state.turns("m"), [])
+        self.assertEqual(self.call("POST", "/carl/cache/turn", {**run, "running": "yes"})[0], 400)
 
     def test_bad_inputs(self) -> None:
         for body in ({"model": "m", "slot": -1}, {"model": "m", "slot": 99}, {"model": "", "slot": 0},
@@ -100,6 +115,36 @@ class RegistryTest(unittest.TestCase):
             reg.seen(c, "192.168.42.128", connected=-1)
             again = Registry(path).list()                            # kept across dashboard restarts
             self.assertEqual([(x.host, x.address, x.connected) for x in again], [("vm-1", "192.168.42.128", 0)])
+
+    def test_a_client_that_leaves_is_seen_at_once_and_keeps_what_it_reported(self) -> None:
+        """The event stream ends: the client counts as gone within ~2 s, and the config it applied while
+        connected stays (not the value from when the stream started)."""
+        with tempfile.TemporaryDirectory() as d:
+            s = socket.socket()
+            s.bind(("127.0.0.1", 0))
+            port = s.getsockname()[1]
+            s.close()
+            api = CacheApi("127.0.0.1", port, lambda: "k3y", d, lambda: CONF)
+            self.assertIsNone(api.start())
+            try:
+                who = '{"id": "0123456789ab", "host": "vm", "applied": "v1", "mode": "service"}'
+                req = urllib.request.Request(f"http://127.0.0.1:{port}/carl/client/events",
+                                             headers={"Authorization": "Bearer k3y", "X-Carl-Client": who})
+                r = urllib.request.urlopen(req, timeout=5)
+                time.sleep(0.3)
+                self.assertEqual(api.registry.list()[0].connected, 1)
+                cfg = urllib.request.Request(f"http://127.0.0.1:{port}/carl/client/config",
+                                             headers={"Authorization": "Bearer k3y", "X-Carl-Client": who.replace("v1", "v2")})
+                with self.assertRaises(urllib.error.HTTPError):             # nothing published: 404, but seen
+                    urllib.request.urlopen(cfg, timeout=5)
+                r.close()
+                t0 = time.time()
+                while api.registry.list()[0].connected and time.time() - t0 < 5:
+                    time.sleep(0.1)
+                self.assertLess(time.time() - t0, 3.5)
+                self.assertEqual(api.registry.list()[0].applied, "v2")
+            finally:
+                api.stop()
 
 
 class UnpackTest(unittest.TestCase):

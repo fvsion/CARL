@@ -72,7 +72,7 @@ def parse_args(argv: List[str]) -> argparse.Namespace:
                     help="RAM kept for macOS and apps (default 6, 10 with the VM network up)")
     # launcher-only options
     ap.add_argument("--check", metavar="GGUF", help=argparse.SUPPRESS)      # refuse a start that won't fit (exit 3)
-    ap.add_argument("--plan", metavar="GGUF", help=argparse.SUPPRESS)       # print "SLOTS CACHE_MIB"
+    ap.add_argument("--plan", metavar="GGUF", help=argparse.SUPPRESS)       # print "SLOTS CACHE_MIB SWA"
     ap.add_argument("--pick-default", action="store_true", help=argparse.SUPPRESS)  # auto fit's pick (catalogue)
     ap.add_argument("--want-slots", default="auto", help=argparse.SUPPRESS)
     ap.add_argument("--kv", default="q4_0", help=argparse.SUPPRESS)

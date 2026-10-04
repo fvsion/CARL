@@ -133,8 +133,12 @@ function pieces(client) {
     add("switcher", "Session switcher", tuiPlugins.includes("session-switcher"), "off / on: NO_SWITCHER=1 ./install.sh",
         ["‹ › in the prompt box, /switch"]);
     add("sidebar", "Subagents sidebar", tuiPlugins.includes("subagents-sidebar"), "off / on: NO_SIDEBAR=1 ./install.sh");
+    const bg = /OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=1/.test(env);
     add("coder", "Coder subagent", Boolean(cfg.agent?.coder || cfg.agent?.["carl-coder"]),
-        "on when the server runs 2 slots (the installer decides)", ["tools: everything but task (LSP and web search too)"]);
+        "on when the server runs 2 slots (the installer decides) · background off: NO_BACKGROUND_SUBAGENTS=1 ./install.sh",
+        ["tools: everything but task (LSP and web search too)",
+         bg ? "background: on: the main session goes on while the coder works (both slots busy)"
+           : "background: off: the main session waits for the coder"]);
     add("browser", "Browser", Boolean(cfg.mcp?.["carl-browser"]), "off: NO_BROWSER=1 ./install.sh · a visible window: BROWSER_HEADED=1",
         ["its tools belong to the browser subagent"]);
     add("web", "Web search", /OPENCODE_ENABLE_EXA=1/.test(env), "WEB_SEARCH=exa|parallel|off ./install.sh",
@@ -146,8 +150,12 @@ function pieces(client) {
     const servers = mcp.mcpServers ?? mcp.servers ?? {};
     add("cache", "Prompt cache", exists(join(PI, "extensions", "carl-cache", "index.ts")), "off / on: NO_CACHE=1 ./install.sh, or ./install.sh",
         ["each agent's prompt and each session saved on the server's disk (Settings > Caching on the server)"]);
+    const bg = json(join(PI, "carl.json"))?.background_subagents !== false;
     add("coder", "Coder subagent", exists(join(PI, "agents", "coder.md")) || exists(join(PI, "agents", "carl-coder.md")),
-        "on when the server runs 2 slots (the installer decides)", ["tools: read, bash, edit, write, grep, find, ls"]);
+        "on when the server runs 2 slots (the installer decides) · background off: NO_BACKGROUND_SUBAGENTS=1 ./install.sh",
+        ["tools: every tool but subagent (web search too when it is on)",
+         bg ? "background: on: the main session goes on while the coder works (both slots busy); /subagents lists them"
+           : "background: off: the main session waits for the coder"]);
     add("subagent", "Subagent tool", exists(join(PI, "extensions", "subagent", "index.ts")), "comes with the coder");
     add("browser", "Browser", Boolean(servers["carl-browser"]), "off: NO_BROWSER=1 ./install.sh", ["an MCP server, loaded on demand"]);
     add("web", "Web search", Boolean(servers["carl-web-search"]), "WEB_SEARCH=exa|parallel|off ./install.sh",

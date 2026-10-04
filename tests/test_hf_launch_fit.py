@@ -194,6 +194,24 @@ class GgufTest(unittest.TestCase):
         no_pattern = model_shape({k: v for k, v in gemma.items() if not k.endswith("pattern")})
         self.assertEqual((no_pattern["kv_elems_per_token"], no_pattern["kv_elems_per_token_swa"]), (6 * 2048, 0))
 
+    def test_kv_heads_per_layer(self) -> None:
+        """Gemma 4 26B / 31B list the KV heads per layer (fewer on the full-attention layers): kept by
+        parse_meta and summed per layer; without them the KV cache would count as free."""
+        arr = u32(5) + struct.pack("<Q", 6) + b"".join(struct.pack("<i", n) for n in (8, 8, 2, 8, 8, 2))
+        meta = parse_meta(gguf_header([("general.architecture", 8, struct.pack("<Q", 6) + b"gemma4"),
+                                       ("gemma4.attention.head_count_kv", 9, arr)]))
+        self.assertEqual(meta["gemma4.attention.head_count_kv"], "8,8,2,8,8,2")
+        g = model_shape({"general.architecture": "gemma4", "gemma4.block_count": 6,
+                         "gemma4.attention.head_count_kv": "8,8,2,8,8,2",
+                         "gemma4.attention.key_length": 512, "gemma4.attention.value_length": 512,
+                         "gemma4.attention.key_length_swa": 256, "gemma4.attention.value_length_swa": 256,
+                         "gemma4.attention.sliding_window": 1024, "gemma4.attention.sliding_window_pattern": "110110"})
+        self.assertEqual((g["kvh"], g["kv_elems_per_token"], g["kv_elems_per_token_swa"]),
+                         (8, 2 * 2 * 1024, 4 * 8 * 512))
+        hybrid = model_shape({"general.architecture": "q", "q.block_count": 4, "q.attention.head_count_kv": "0,0,0,2",
+                              "q.attention.key_length": 256, "q.attention.value_length": 256})
+        self.assertEqual(hybrid["kv_elems_per_token"], 2 * 512)          # recurrent layers: no KV heads
+
     def test_truncated_or_foreign_headers(self) -> None:
         self.assertEqual(parse_meta(b"NOPE"), {})
         head = gguf_header([("a.x", 4, struct.pack("<I", 1)), ("a.y", 4, struct.pack("<I", 2))])

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Protocol, Tuple, Union
+from typing import Callable, Dict, List, Optional, Protocol, Tuple, Union
 
 from .card_form import CardForm
 from .cards import LEVEL_NAMES
@@ -53,6 +53,22 @@ class Confirm:
     lines: List[str]
     yes: str                        # the action Yes runs
     model: Optional[str] = None
+
+
+@dataclass
+class Drain:
+    """A step that stops the model (Stop, Apply, Auto-tune, a router load) asked for while a client's
+    turn runs: CARL asks first (now, or wait for the end of the turn), then runs it once no turn runs
+    and the turn's save is on disk."""
+    what: str                       # "stop the server", "apply the settings", ...
+    go: Callable[[], None]
+    busy: List[int]                 # the slots writing a reply
+    turns: List[int] = field(default_factory=list)     # the slots where a client's turn runs
+    saving: bool = False            # a save file is being written
+    waiting: bool = False
+    since: float = 0.0              # when the wait started
+    checked: float = 0.0            # the last look at the slots
+    idle: int = 0                   # looks in a row with every slot idle
 
 
 @dataclass
@@ -122,6 +138,8 @@ class UIState:
     errors_only: bool = False
     key_shown: bool = False
     help: bool = False
+    keys: List[Tuple[str, str]] = field(default_factory=list)   # the shown panel's keys (the footer; set as it draws)
+    keys_more: List[str] = field(default_factory=list)         # ... and what the ? card adds
     quit: bool = False              # the quit dialog is open
     stopping: Optional[Tuple[int, float]] = None    # (server pid, SIGKILL deadline)
     exit_msg: str = ""
@@ -147,6 +165,7 @@ class UIState:
     card: Optional[CardForm] = None # Models panel: a custom model's card being edited (e)
     picker: Optional[Picker] = None
     confirm2: Optional[Confirm] = None
+    drain: Optional[Drain] = None     # a reply runs: stop now, or wait for it
     text: Optional[TextPrompt] = None
     hf: Optional[HFLookup] = None
     dl: Optional[Download] = None

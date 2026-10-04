@@ -7,7 +7,12 @@
 // - a promptSnippet and promptGuidelines put the tool and the coder rule into
 //   the system prompt;
 // - no `any`: tool-call arguments and the subagent's JSON events are `unknown`
-//   until checked.
+//   until checked;
+// - `exclude-tools:` in an agent file (agents.ts): every tool but those, so the
+//   coder gets web search when it is installed, but no nested subagents;
+// - background: true starts a subagent and returns at once; its result comes
+//   back to the session as a message when it ends (/subagents lists and stops
+//   the running ones). CARL's coder runs there unless the call says false.
 /**
  * Subagent Tool - Delegate tasks to specialized agents
  *
@@ -326,6 +331,7 @@ async function runSingleAgent(
 		args.push("--thinking", dispatchDefaults.thinkingLevel);
 	}
 	if (agent.tools && agent.tools.length > 0) args.push("--tools", agent.tools.join(","));
+	if (agent.excludeTools && agent.excludeTools.length > 0) args.push("--exclude-tools", agent.excludeTools.join(","));
 
 	let tmpPromptDir: string | null = null;
 	let tmpPromptPath: string | null = null;
@@ -491,6 +497,17 @@ const SubagentParams = Type.Object({
 	cwd: Type.Optional(Type.String({ description: "Working directory for the agent process (single mode)" })),
 });
 
+// CARL: the same with the background switch (the model sees it only when background subagents are on)
+const SubagentParamsBackground = Type.Object({
+	...SubagentParams.properties,
+	background: Type.Optional(
+		Type.Boolean({
+			description:
+				"Run in the background (single and parallel modes): the tool returns at once and each result comes back to you as a message when its subagent ends. Do not wait, poll or check on it.",
+		}),
+	),
+});
+
 // CARL: the user-level agents, read once when the extension loads. A
 // broken agents directory must not stop the tool from registering.
 function installedUserAgents(): AgentConfig[] {
@@ -509,7 +526,7 @@ function agentListing(agents: AgentConfig[]): string[] {
 // CARL: without promptSnippet Pi leaves custom tools out of the system
 // prompt's "Available tools" list, and the model rarely delegates. The
 // guidelines carry the coder rule into the Guidelines section.
-function delegationPrompt(agents: AgentConfig[]): { promptSnippet?: string; promptGuidelines?: string[] } {
+function delegationPrompt(agents: AgentConfig[], background: boolean): { promptSnippet?: string; promptGuidelines?: string[] } {
 	const names = agents.map((a) => a.name);
 	if (!names.length) return {};
 	// "carl-coder" when the user already had their own agent called "coder" (client/configure.py)
@@ -521,13 +538,116 @@ function delegationPrompt(agents: AgentConfig[]): { promptSnippet?: string; prom
 					`Large request (3+ files, ~150+ lines, a new module/package/tool/CLI, implementation plus tests, a multi-step feature or refactor): your FIRST action is the subagent tool with agent "${coder}" and a self-contained task. Do not start writing it yourself.`,
 					`Stuck: if a fix for the same code has already failed twice (your attempts, or ones the user says failed), delegate to agent "${coder}" with the code, the exact error and what was tried, instead of a third attempt.`,
 					"Questions, explanations, reading or searching code, and small or single-file edits: do them yourself, no subagent.",
+					...(background ? [backgroundGuideline(coder)] : []),
 				]
 			: [],
 	};
 }
 
+// CARL: background subagents: on unless the installer wrote "background_subagents": false into
+// carl.json (NO_BACKGROUND_SUBAGENTS=1). A background run returns at once; each subagent runs in its own
+// pi process (its own server slot), and its result comes back to the session as a message (the model
+// reads it as a user turn) when it ends.
+function backgroundOn(): boolean {
+	try {
+		const st: unknown = JSON.parse(fs.readFileSync(path.join(getAgentDir(), "carl.json"), "utf-8"));
+		return !(typeof st === "object" && st !== null && (st as Record<string, unknown>).background_subagents === false);
+	} catch {
+		return true;
+	}
+}
+
+interface BackgroundJob {
+	id: string;
+	agent: string;
+	task: string;
+	started: number;
+	abort: AbortController;
+}
+
+const CODERS = new Set(["coder", "carl-coder"]); // CARL's coder ("carl-coder" next to a user's own "coder")
+
+const BACKGROUND_STARTED =
+	"You get each result as a message when its subagent ends. Do not wait, poll or check on it: tell the user in a sentence what runs, then end your turn or go on with other work.";
+
+function backgroundGuideline(coder: string): string {
+	return `Start "${coder}" tasks with background: true, so you and the user can go on while it works; check its result when the message comes back.`;
+}
+
+function ago(t: number): string {
+	const s = Math.round((Date.now() - t) / 1000);
+	return s < 90 ? `${s} s` : `${Math.round(s / 60)} min`;
+}
+
 export default function (pi: ExtensionAPI) {
 	const userAgents = installedUserAgents();
+	const background = backgroundOn();
+	const jobs = new Map<string, BackgroundJob>();
+	let jobSeq = 0;
+	let closing = false; // Pi is shutting down: a stopped job sends no result
+	let setStatus: ((text: string | undefined) => void) | undefined;
+	const showJobs = () => setStatus?.(jobs.size ? `${jobs.size} subagent${jobs.size === 1 ? "" : "s"} running (/subagents)` : undefined);
+
+	/** Start one subagent in the background; its result comes back as a message. */
+	const startJob = (
+		cwd: string,
+		dispatchDefaults: DispatchDefaults,
+		agents: AgentConfig[],
+		agentName: string,
+		task: string,
+		taskCwd: string | undefined,
+	): BackgroundJob => {
+		const job: BackgroundJob = { id: `bg-${++jobSeq}`, agent: agentName, task, started: Date.now(), abort: new AbortController() };
+		jobs.set(job.id, job);
+		showJobs();
+		const details = (results: SingleResult[]): SubagentDetails => ({
+			mode: "single",
+			agentScope: "user",
+			projectAgentsDir: null,
+			results,
+		});
+		const finish = (state: "done" | "failed" | "stopped", text: string, results: SingleResult[]) => {
+			jobs.delete(job.id);
+			if (closing) return;
+			showJobs();
+			const body = text.length > PER_TASK_OUTPUT_CAP ? `${text.slice(0, PER_TASK_OUTPUT_CAP)}\n... (cut)` : text;
+			pi.sendMessage(
+				{
+					customType: "subagent-result",
+					content: `<subagent id="${job.id}" agent="${job.agent}" state="${state}" took="${ago(job.started)}">\n${body || "(no output)"}\n</subagent>`,
+					display: true,
+					details: details(results),
+				},
+				{ triggerTurn: true, deliverAs: "followUp" },
+			);
+		};
+		runSingleAgent(cwd, dispatchDefaults, agents, agentName, task, taskCwd, undefined, job.abort.signal, undefined, details)
+			.then((r) => finish(isFailedResult(r) ? "failed" : "done", isFailedResult(r) ? getResultOutput(r) : getFinalOutput(r.messages), [r]))
+			.catch((e: unknown) => finish(job.abort.signal.aborted ? "stopped" : "failed", e instanceof Error ? e.message : String(e), []));
+		return job;
+	};
+
+	pi.on("session_shutdown", async () => {
+		closing = true;
+		for (const j of jobs.values()) j.abort.abort();
+	});
+
+	pi.registerCommand("subagents", {
+		description: "The subagents running in the background: see them, stop one",
+		handler: async (_args, ctx) => {
+			if (!jobs.size) {
+				ctx.ui.notify("No subagent runs in the background.", "info");
+				return;
+			}
+			const rows = [...jobs.values()].map((j) => `${j.id} · ${j.agent} · ${ago(j.started)} · ${j.task.replace(/\s+/g, " ").slice(0, 60)}`);
+			const pick = await ctx.ui.select("Subagents in the background (select one to stop it)", rows);
+			const job = pick ? jobs.get(pick.split(" · ")[0]) : undefined;
+			if (job && (await ctx.ui.confirm(`Stop ${job.id} (${job.agent})?`, "Its work so far stays on disk; its result says it was stopped."))) {
+				job.abort.abort();
+			}
+		},
+	});
+
 	pi.registerTool({
 		name: "subagent",
 		label: "Subagent",
@@ -539,10 +659,11 @@ export default function (pi: ExtensionAPI) {
 			// CARL: tell the model which agents exist and when each one applies.
 			...agentListing(userAgents),
 		].join(" "),
-		...delegationPrompt(userAgents),
-		parameters: SubagentParams,
+		...delegationPrompt(userAgents, background),
+		parameters: background ? SubagentParamsBackground : SubagentParams,
 
 		async execute(_toolCallId, params, signal, onUpdate, ctx) {
+			setStatus = (text) => ctx.ui.setStatus("subagents", text);
 			const agentScope: AgentScope = params.agentScope ?? "user";
 			const dispatchDefaults: DispatchDefaults = {
 				model: ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined,
@@ -607,6 +728,44 @@ export default function (pi: ExtensionAPI) {
 							details: makeDetails(hasChain ? "chain" : hasTasks ? "parallel" : "single")([]),
 						};
 				}
+			}
+
+			// CARL: background: start each subagent and return at once. CARL's coder goes there unless the model
+			// says background: false (local models often don't ask, even when told to)
+			const askBg = (params as { background?: boolean }).background;
+			const coders = hasChain ? [] : hasTasks ? (params.tasks ?? []).map((t) => t.agent) : [params.agent ?? ""];
+			const allCoders = coders.length > 0 && coders.every((n) => CODERS.has(n));
+			if (background && (askBg === true || (askBg === undefined && allCoders))) {
+				if (hasChain)
+					return {
+						content: [{ type: "text", text: "A chain can't run in the background: run it without background, or start its steps one at a time." }],
+						details: makeDetails("chain")([]),
+						isError: true,
+					};
+				const list = hasTasks ? (params.tasks ?? []) : [{ agent: params.agent ?? "", task: params.task ?? "", cwd: params.cwd }];
+				if (list.length > MAX_PARALLEL_TASKS)
+					return {
+						content: [{ type: "text", text: `Too many parallel tasks (${list.length}). Max is ${MAX_PARALLEL_TASKS}.` }],
+						details: makeDetails("parallel")([]),
+						isError: true,
+					};
+				const unknown = list.filter((t) => !agents.some((a) => a.name === t.agent)).map((t) => t.agent);
+				if (unknown.length)
+					return {
+						content: [{ type: "text", text: `Unknown agent: ${unknown.join(", ")}. Available agents: ${agents.map((a) => a.name).join(", ") || "none"}.` }],
+						details: makeDetails("single")([]),
+						isError: true,
+					};
+				const started = list.map((t) => startJob(ctx.cwd, dispatchDefaults, agents, t.agent, t.task, t.cwd));
+				return {
+					content: [
+						{
+							type: "text",
+							text: `Started in the background: ${started.map((j) => `${j.id} (${j.agent})`).join(", ")}. ${BACKGROUND_STARTED}`,
+						},
+					],
+					details: makeDetails(hasTasks ? "parallel" : "single")([]),
+				};
 			}
 
 			if (params.chain && params.chain.length > 0) {

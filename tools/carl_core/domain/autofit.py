@@ -94,6 +94,13 @@ class Budget:
     ram: float
     reserve: float
     vm_up: bool = False             # VMware's network is up (the reserve is larger)
+    swa: str = "auto"               # cache.swa: sliding-window layers at full length only with "full"
+
+    @property
+    def swa_full(self) -> bool:
+        """Plan a sliding-window model's cache at full length (cache.swa full); auto and window plan
+        the window (auto takes the full cache at the start only when it fits: fit.swa_plan)."""
+        return self.swa == "full"
 
     @property
     def allowed(self) -> float:
@@ -133,23 +140,23 @@ class Tier:
 TIERS: Tuple[Tier, ...] = (Tier(2, CTX_FLOOR), Tier(1, CTX_FLOOR), Tier(1, None))
 
 
-def plan_for(c: Candidate, tier: Tier, allowed: float) -> Optional[Plan]:
+def plan_for(c: Candidate, tier: Tier, allowed: float, swa_full: bool = True) -> Optional[Plan]:
     """The plan of a candidate in one pass, None when it doesn't fit (or its shape is unknown)."""
     if c.shape is None:
         return None
     if tier.ctx is None:
-        ctx = min(max_ctx(c.shape, c.weights, allowed, tier.slots, c.kv), CTX_FLOOR)
+        ctx = min(max_ctx(c.shape, c.weights, allowed, tier.slots, c.kv, swa_full), CTX_FLOOR)
         if ctx < MIN_WINDOW:
             return None
     else:
         ctx = tier.ctx
         if ctx > ctx_train(c.shape):
             return None
-    need = need_bytes(c.shape, c.weights, ctx, tier.slots, c.kv)
+    need = need_bytes(c.shape, c.weights, ctx, tier.slots, c.kv, swa_full)
     return Plan(ctx, tier.slots, c.kv, need) if need <= allowed else None
 
 
-def why_not(c: Candidate, tier: Tier, allowed: float) -> str:
+def why_not(c: Candidate, tier: Tier, allowed: float, swa_full: bool = True) -> str:
     """Why a candidate fails a pass, with the numbers."""
     if c.shape is None:
         return "size unknown: its GGUF header could not be read (offline?)"
@@ -157,9 +164,9 @@ def why_not(c: Candidate, tier: Tier, allowed: float) -> str:
     if alone > allowed:
         return f"the weights and buffers alone need {gib(alone)}, this Mac allows {gib(allowed)}"
     if tier.ctx is None:
-        mx = max_ctx(c.shape, c.weights, allowed, 1, c.kv)
+        mx = max_ctx(c.shape, c.weights, allowed, 1, c.kv, swa_full)
         return f"the largest window that fits is {window_label(mx)} (less than {window_label(MIN_WINDOW)})"
-    need = need_bytes(c.shape, c.weights, tier.ctx, tier.slots, c.kv)
+    need = need_bytes(c.shape, c.weights, tier.ctx, tier.slots, c.kv, swa_full)
     return f"needs {gib(need)} for {tier.label()}, this Mac allows {gib(allowed)}"
 
 
@@ -229,16 +236,16 @@ def auto_fit(candidates: Sequence[Candidate], budget: Budget, goal: Goal = "ever
     for g, group in enumerate(groups):
         for t, tier in enumerate(TIERS):
             for c in group:
-                plan = plan_for(c, tier, allowed)
+                plan = plan_for(c, tier, allowed, budget.swa_full)
                 if plan:
                     return AutoFit(goal, scope, budget, c, plan, t, g == 1,
-                                   tuple(_rejections(eligible, c, t, g == 1, scope, first, allowed)))
+                                   tuple(_rejections(eligible, c, t, g == 1, scope, first, allowed, budget.swa_full)))
     return AutoFit(goal, scope, budget, None, None, len(TIERS) - 1, False,
-                   tuple(_rejections(eligible, None, len(TIERS) - 1, False, scope, first, allowed)))
+                   tuple(_rejections(eligible, None, len(TIERS) - 1, False, scope, first, allowed, budget.swa_full)))
 
 
 def _rejections(eligible: Sequence[Candidate], pick: Optional[Candidate], tier: int, fallback: bool, scope: Scope,
-                first: str, allowed: float) -> List[Rejection]:
+                first: str, allowed: float, swa_full: bool = True) -> List[Rejection]:
     """Every eligible candidate ranked above the pick (and, after a fallback, the whole goal
     family), best rank first, with the reason it lost."""
     def better(c: Candidate) -> bool:
@@ -257,7 +264,7 @@ def _rejections(eligible: Sequence[Candidate], pick: Optional[Candidate], tier: 
                       f"{'everyday goal (faster)' if c.arch == GOAL_ARCH['everyday'] else 'hard-code goal (slower)'}")
         else:
             failed = tier if pick is not None and not (fallback and c.arch == first) else len(TIERS) - 1
-            reason = why_not(c, TIERS[failed], allowed)
+            reason = why_not(c, TIERS[failed], allowed, swa_full)
         out.append(Rejection(c.name, c.rank or 0, reason))
     return out
 
