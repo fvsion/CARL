@@ -153,8 +153,24 @@ ensure_api_key() {
   echo "created API key: $f (clients need it: ./carl.sh monitor shows it, or client/install.sh)" >&2
 }
 
+# write_client_package HOST PORT KEY_FILE: the client folder's connection file, so a copy of
+# client/ (to a VM or another computer) needs nothing else: client/remote.json (the server's
+# address and port, the dashboard's cache API at port + 1) and client/api-key (the key), both
+# readable by the owner only and git-ignored. Written at every server start (the address can
+# change between --local and --vm). client/install.sh uses them when it is given no address.
+write_client_package() {
+  local host="$1" port="$2" key="$3" dir="$CARL_CLIENT_DIR"
+  [[ -d "$dir" && -s "$key" ]] || return 0
+  ( umask 077
+    printf '{\n  "host": "%s",\n  "port": %s,\n  "cache_api": "http://%s:%s",\n  "written": "%s"\n}\n' \
+      "$host" "$port" "$host" "$(( port + 1 ))" "$(date +%Y-%m-%dT%H:%M:%S)" > "$dir/remote.json.tmp" \
+      && mv "$dir/remote.json.tmp" "$dir/remote.json"
+    cp "$key" "$dir/api-key.tmp" && mv "$dir/api-key.tmp" "$dir/api-key" ) || return 0
+  chmod 600 "$dir/remote.json" "$dir/api-key" 2>/dev/null || true
+}
+
 # ensure_deps: the Homebrew tools CARL needs (llama-server from llama.cpp,
-# aria2c, ansifilter). Missing ones are installed with Homebrew after asking (in
+# aria2c, ansifilter, zstd: the disk cache's shared pieces). Missing ones are installed with Homebrew after asking (in
 # a terminal), or listed with the command to run. Homebrew itself is not
 # installed automatically (it needs the user's password). SKIP_DEPS=1 skips this.
 ensure_deps() {
@@ -165,6 +181,7 @@ ensure_deps() {
   command -v llama-server >/dev/null || missing+=(llama.cpp)
   command -v aria2c >/dev/null || missing+=(aria2)
   command -v ansifilter >/dev/null || missing+=(ansifilter)
+  command -v zstd >/dev/null || missing+=(zstd)
   (( ${#missing[@]} )) || return 0
   echo "CARL needs: ${missing[*]} (not installed)"
   if ! command -v brew >/dev/null; then

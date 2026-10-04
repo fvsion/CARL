@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import {
-  CarlCache, chooseSlot, commonPrefix, overBudget, prefixFile, relocate, sessionFile, splitOpenCode, splitPi, thinkingOff,
+  CarlCache, rankSlots, commonPrefix, overBudget, prefixFile, relocate, sessionFile, splitOpenCode, splitPi, thinkingOff,
 } from "../../client/shared/carl-cache.js";
 
 const OC_SYSTEM = [
@@ -47,9 +47,9 @@ test("relocate puts the moved text in front of the first user message (text or p
 
 test("small helpers", () => {
   assert.equal(commonPrefix([1, 2, 3], [1, 2, 4]), 2);
-  assert.deepEqual(chooseSlot([{ id: 0, busy: false, n: 50 }, { id: 1, busy: false, n: 0 }, { id: 2, busy: true, n: 0 }]),
-                   { id: 1, busy: false, n: 0 });
-  assert.equal(chooseSlot([{ id: 0, busy: true, n: 0 }]), undefined);
+  assert.deepEqual(rankSlots([{ id: 0, busy: false, n: 50 }, { id: 1, busy: false, n: 0 }, { id: 2, busy: true, n: 0 }])
+                     .map((x) => x.id), [1, 0]);
+  assert.deepEqual(rankSlots([{ id: 0, busy: true, n: 0 }]), []);
   assert.ok(thinkingOff({ reasoning_effort: "none" }) && thinkingOff({ chat_template_kwargs: { enable_thinking: false } }));
   assert.ok(!thinkingOff({ chat_template_kwargs: { enable_thinking: true } }));
   assert.equal(sessionFile("q/m", "k", "ses 1"), "carl-session+q_m+k+ses_1.bin");
@@ -67,13 +67,14 @@ test("the disk limit removes the oldest conversations first, then prompts, and t
 
 // ------------------------------------------------------------------ a fake llama-server
 
-/** Tokens are character codes; a template is "S:<system>|T:<tools>|U:<user>|A:<assistant>…|G:" */
+/** Tokens are character codes; a template is "S:<system>|U:<user>|G:<assistant>…|T:<tools>|G:" */
 function fakeServer({ router = false, loaded = true, slots = 2 } = {}) {
   const st = {
     slots: Array.from({ length: slots }, (_, id) => ({ id, busy: false, n: 0, task: -1 })),
     files: new Map(), calls: [], task: 0, loaded,
   };
-  const render = (b) => b.messages.map((m) => `${m.role[0].toUpperCase()}:${typeof m.content === "string" ? m.content : JSON.stringify(m.content)}` +
+  // the generation prompt "G:" is how a reply starts, so a reply re-renders as generated (a stable template)
+  const render = (b) => b.messages.map((m) => `${m.role === "assistant" ? "G" : m.role[0].toUpperCase()}:${typeof m.content === "string" ? m.content : JSON.stringify(m.content)}` +
     (m.reasoning_content ? `~${m.reasoning_content}` : "")).join("|") + (b.tools ? `|T:${JSON.stringify(b.tools)}` : "") + "|G:";
   const json = (x, status = 200) => new Response(JSON.stringify(x), { status, headers: { "Content-Type": "application/json" } });
   const fetch = async (url, init = {}) => {
@@ -120,6 +121,8 @@ const home = () => {
   mkdirSync(join(h, ".config", "carl", "slots"), { recursive: true });
   return h;
 };
+process.env.CARL_CACHE_SAVE = "turn";      // most tests: a save after every turn (the policy tests set their own)
+
 // a request: prepared, then sent (the slot is released for this process's next request)
 const send = async (c, p, meta) => {
   const r = await c.before(p, meta);
@@ -292,4 +295,177 @@ test("on this Mac the settings switch it off, and saves keep the disk limit", as
   const d = new CarlCache({ baseURL: "http://127.0.0.1:8080/v1", fetch: srv.fetch, split: splitOpenCode, home: h });
   d.wrote("carl-session+m+0123456789+new.bin", "");
   assert.equal(readdirSync(dir).length, 2);                                   // 20 bytes: within 1 GB
+});
+
+// ------------------------------------------------------------------ the save policy and the slot claims
+
+const withSave = async (mode, fn) => {
+  const was = process.env.CARL_CACHE_SAVE;
+  process.env.CARL_CACHE_SAVE = mode;
+  try {
+    await fn();
+  } finally {
+    process.env.CARL_CACHE_SAVE = was;
+  }
+};
+const sessionSaves = (srv) => srv.st.calls.filter((x) => x.path.endsWith("?save") && x.body.filename.startsWith("carl-session+"));
+
+test("auto saves a session once its unsaved part would take ~2 min to read again", () => withSave("auto", async () => {
+  const srv = fakeServer();
+  const c = cache(srv.fetch);
+  await send(c, request("hello"), { session: "s1", agent: "build" });     // the build prompt: ~7.2K tokens put in
+  c.models.get("m").speed = 1000 / 120;                                   // 2 min = 1,000 tokens
+  ran(srv, 0, 7700);
+  await c.after({ session: "s1", agent: "build" });
+  assert.equal(sessionSaves(srv).length, 0);                              // ~500 new tokens: not yet
+  ran(srv, 0, 9000);
+  await c.after({ session: "s1", agent: "build" });
+  assert.equal(sessionSaves(srv).length, 1);
+  ran(srv, 0, 9300);
+  await c.after({ session: "s1", agent: "build" });
+  assert.equal(sessionSaves(srv).length, 1);                              // 300 since the save
+}));
+
+test("save = stop: a session isn't saved when its slot is needed (it stays in the RAM cache)", () => withSave("stop", async () => {
+  const srv = fakeServer({ slots: 1 });
+  const c = cache(srv.fetch);
+  await send(c, request("hello"), { session: "main", agent: "build" });
+  ran(srv, 0, 9000);
+  await send(c, request("sub"), { session: "child", agent: "coder", sub: true });
+  assert.equal(sessionSaves(srv).length, 0);
+}));
+
+test("on this Mac a turn leaves a record of the slot's session; a router switch saves it first", () => withSave("switch", async () => {
+  const h = home();
+  const srv = fakeServer({ router: true });
+  const inner = srv.fetch;
+  let loaded = "m";
+  srv.fetch = async (url, init) => {
+    const u = String(url);
+    if (u.endsWith("/v1/models")) {
+      return new Response(JSON.stringify({ data: ["m", "big"].map((id) => ({ id, status: { value: id === loaded ? "loaded" : "unloaded" } })) }));
+    }
+    if (u.endsWith("/models/load")) loaded = JSON.parse(init.body).model;
+    return inner(url, init);
+  };
+  const c = new CarlCache({ baseURL: "http://127.0.0.1:8080/v1", fetch: srv.fetch, split: splitOpenCode, home: h });
+  await send(c, request("hello"), { session: "s1", agent: "build" });
+  ran(srv, 0, 9000);
+  await c.after({ session: "s1", agent: "build" });
+  assert.equal(sessionSaves(srv).length, 0);                              // switch: not after the turn
+  const dir = join(h, ".config", "carl", "slots");
+  const rec = readdirSync(dir).filter((n) => n.startsWith(".resident+"));
+  assert.deepEqual(rec, [".resident+m+0.json"]);
+  await send(c, { ...request("x"), model: "big" }, { session: "s2", agent: "build" });
+  assert.equal(sessionSaves(srv).length, 1);                              // saved before "m" stopped
+  assert.equal(sessionSaves(srv)[0].body.model, "m");
+  assert.deepEqual(readdirSync(dir).filter((n) => n.startsWith(".resident+")), []);
+}));
+
+test("a new process finds a session still in its slot through the record", () => withSave("auto", async () => {
+  const h = home();
+  const srv = fakeServer();
+  const opts = { baseURL: "http://127.0.0.1:8080/v1", fetch: srv.fetch, split: splitOpenCode, home: h };
+  const a = new CarlCache(opts);
+  await send(a, request("hello"), { session: "s1", agent: "build" });
+  ran(srv, 0, 7300);
+  await a.after({ session: "s1", agent: "build" });                        // small: recorded, not saved
+  const b = new CarlCache(opts);                                           // the next `opencode run`
+  srv.st.calls.length = 0;
+  const { payload } = await send(b, request("again"), { session: "s1", agent: "build" });
+  assert.equal(payload.id_slot, 0);
+  assert.ok(!srv.st.calls.some((x) => x.path.endsWith("?restore")));    // used where it is
+  b.models.get("m").speed = 1000 / 120;                                   // 2 min = 1,000 tokens
+  ran(srv, 0, 7600);
+  await b.after({ session: "s1", agent: "build" });
+  assert.equal(sessionSaves(srv).length, 0);                              // the record's base: ~400 unsaved
+}));
+
+test("two processes on this Mac don't pin the same slot", async () => {
+  const h = home();
+  const srv = fakeServer();
+  const a = new CarlCache({ baseURL: "http://127.0.0.1:8080/v1", fetch: srv.fetch, split: splitOpenCode, home: h });
+  const b = new CarlCache({ baseURL: "http://127.0.0.1:8080/v1", fetch: srv.fetch, split: splitOpenCode, home: h });
+  const first = await a.before(request("one"), { session: "s1", agent: "build" });   // not released yet: in flight
+  const second = await b.before(request("two"), { session: "s2", agent: "build" });
+  assert.notEqual(first.payload.id_slot, second.payload.id_slot);
+  const third = await b.before(request("three"), { session: "s3", agent: "build" });
+  assert.equal(third.payload.id_slot, undefined);                         // both taken: llama.cpp decides
+  first.release();
+  second.release();
+  assert.deepEqual(readdirSync(join(h, ".config", "carl", "slots")).filter((n) => n.startsWith(".claim+")), []);
+});
+
+test("a client on another computer uses the dashboard's cache API: settings, claims, records", async () => {
+  const srv = fakeServer();
+  const api = { claims: new Set(), records: new Map(), calls: [] };
+  const fetch = async (url, init = {}) => {
+    const u = new URL(url);
+    if (u.port !== "8081") return srv.fetch(url, init);
+    const body = init.body ? JSON.parse(init.body) : {};
+    api.calls.push(u.pathname);
+    const json = (x, status = 200) => new Response(JSON.stringify(x), { status });
+    if (u.pathname === "/carl/cache/settings") return json({ prefix: true, sessions: true, save: "switch", disk_gb: 10 });
+    if (u.pathname === "/carl/cache/claim") {
+      const k = `${body.model}:${body.slot}`;
+      if (api.claims.has(k)) return json({ error: "taken" }, 409);
+      api.claims.add(k);
+      return json({ ok: true });
+    }
+    if (u.pathname === "/carl/cache/release") { api.claims.delete(`${body.model}:${body.slot}`); return json({ ok: true }); }
+    if (u.pathname === "/carl/cache/record" && init.method === "POST") { api.records.set(body.file, body); return json({ ok: true }); }
+    if (u.pathname === "/carl/cache/record") {
+      const r = api.records.get(u.searchParams.get("file"));
+      return r ? json({ slot: r.slot, task: r.task, base: r.base }) : json({ error: "none" }, 404);
+    }
+    return json({ error: "?" }, 404);
+  };
+  const was = process.env.CARL_CACHE_SAVE;
+  delete process.env.CARL_CACHE_SAVE;
+  try {
+    const opts = { baseURL: "http://10.0.0.1:8080/v1", fetch, split: splitOpenCode, home: "/nonexistent",
+                   cacheApi: "http://10.0.0.1:8081" };
+    const a = new CarlCache(opts);
+    const first = await a.before(request("hello"), { session: "s1", agent: "build" });
+    assert.ok(api.claims.has("m:0"));                                        // claimed through the API
+    first.release();
+    await new Promise((ok) => setTimeout(ok, 10));
+    assert.equal(api.claims.size, 0);
+    ran(srv, 0, 7500);
+    await a.after({ session: "s1", agent: "build" });                       // save = switch (the API's): a record
+    assert.equal(sessionSaves(srv).length, 0);
+    assert.equal(api.records.size, 1);
+    const b = new CarlCache(opts);                                          // the next process
+    srv.st.calls.length = 0;
+    const { payload } = await send(b, request("again"), { session: "s1", agent: "build" });
+    assert.equal(payload.id_slot, 0);
+    assert.ok(!srv.st.calls.some((x) => x.path.endsWith("?restore")));
+  } finally {
+    process.env.CARL_CACHE_SAVE = was;
+  }
+});
+
+test("a conversation stored as a patch is made whole before a restore (on this Mac, with zstd)", async (t) => {
+  const { spawnSync } = await import("node:child_process");
+  if (spawnSync("zstd", ["--version"]).status !== 0) return t.skip("zstd is not installed");
+  const h = home();
+  const dir = join(h, ".config", "carl", "slots");
+  const shared = Buffer.alloc(400_000, 7);
+  writeFileSync(join(dir, "carl-prefix+m+build+abc.bin"), shared);
+  const whole = Buffer.concat([shared, Buffer.alloc(50_000, 3)]);
+  const name = "carl-session+m+0123456789+s1.bin";
+  writeFileSync(join(dir, name), whole);
+  assert.equal(spawnSync("zstd", ["-q", "--long=31", `--patch-from=${join(dir, "carl-prefix+m+build+abc.bin")}`,
+                                  join(dir, name), "-o", join(dir, `${name}.zst`)]).status, 0);
+  writeFileSync(join(dir, `${name}.json`), JSON.stringify({ base: "carl-prefix+m+build+abc.bin", size: whole.length, packed_at: 1000 }));
+  (await import("node:fs")).unlinkSync(join(dir, name));
+  const srv = fakeServer();
+  srv.st.files.set(name, 9000);
+  const c = new CarlCache({ baseURL: "http://127.0.0.1:8080/v1", fetch: srv.fetch, split: splitOpenCode, home: h });
+  assert.equal(await c.restore("m", false, 0, name), 9000);
+  assert.deepEqual((await import("node:fs")).readFileSync(join(dir, name)), whole);      // byte for byte
+  // the budget sees it in all its forms, and a prompt that goes takes its patch with it
+  assert.deepEqual(overBudget([{ name: "carl-prefix+m+build+abc.bin", bytes: 10, mtime: 1 },
+                               { name, bytes: 5, mtime: 2, base: "carl-prefix+m+build+abc.bin" }], 1, "zzz").sort(),
+                   ["carl-prefix+m+build+abc.bin", name].sort());
 });

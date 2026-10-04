@@ -1,0 +1,14 @@
+{
+  "name": "carl-panel",
+  "version": "1.0.0",
+  "description": "The /carl panel in OpenCode: every CARL piece on this computer with its state, and the client config sync (auto-apply, a config that waits, check now).",
+  "type": "module",
+  "license": "MIT",
+  "exports": {
+    ".": { "import": "./index.js" },
+    "./tui": { "import": "./tui.js" }
+  },
+  "peerDependencies": {
+    "@opencode-ai/plugin": ">=1.14.0"
+  }
+}

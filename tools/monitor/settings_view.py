@@ -15,14 +15,35 @@ from carl_core.domain.autofit import GOAL_TEXT, GOALS, SCOPE_TEXT, SCOPES, AutoF
 from carl_core.domain.cards import CHOICE_TEXT
 from carl_core.domain.tuning import DEPTH_TEXT, DEPTHS, as_depth
 
-from .diskcache import PROMPT, CacheConfig, CacheFile, describe, gb as gb_text, used
+from .diskcache import PROMPT, CacheConfig, CacheFile, describe, gb as gb_text, shared_saving, used
 from .model import ModelInfo, RouterModel, ServerData, flag, jdict
 from .settings import (ADV_WARN, LLAMA_ADV, MODEL_ROW_KEYS, NOT_RUNNING, SET_HELP, UNMARKED, Pending,
                        SettingsService, fmt_val, row_instruction, shown_value)
 from .arrange import FILTERS, MIN_FIT, SORTS, arrange, label as arrange_label, speed_of
-from .state import SP_FIT, SUBPANELS, Confirm, Download, PickItem, Picker, TuneRun, UIState
+from .state import SP_FIT, SUBPANELS, TUNE_ALL, Confirm, Download, PickItem, Picker, TuneRun, UIState
 
 DISK_CHOICES = (2, 5, 10, 20, 50)                      # the Caching panel's disk limits (GB)
+AUTO_CHOICES = (30, 120, 300, 600)                    # save = auto: seconds of unsaved reading (default 120)
+SAVE_TEXT = (("auto", "auto"), ("turn", "every turn"), ("switch", "on a switch"), ("stop", "before a stop"))
+SAVE_HELP = (
+    ("auto", "auto: when the part not saved yet would take AUTO to read again (this model's measured read speed; "
+             "the Auto after row), and before a session leaves the server (its slot is needed, a router switch, a "
+             "stop). Few writes; a crash loses at most AUTO of reading per session."),
+    ("turn", "every turn: after each reply. Nothing is ever lost; the most disk writes (a long session: up to ~1 GB per "
+             "turn on the 35B)."),
+    ("switch", "on a switch: before a session leaves the server (its slot is needed, a router switch, a dashboard stop "
+               "or restart). A crash or a stop outside the dashboard (Ctrl-C) loses what wasn't saved."),
+    ("stop", "before a stop: only before the dashboard stops or restarts the server, or a router switch. Sessions moved "
+             "to the RAM cache meanwhile are lost at the stop."),
+)
+SWA_TEXT = (("auto", "auto"), ("full", "full cache"), ("window", "window only"))
+SWA_HELP = (
+    ("auto", "auto: models with sliding-window layers (Gemma) keep every layer at full length when that fits this Mac "
+             "(saved states can be restored), else only the window (less memory, no restores). Applies at the next start."),
+    ("full", "full cache: restores work; more memory (Gemma 4 E4B at 2 × 96K: +2.3 GB). Applies at the next start."),
+    ("window", "window only: the least memory; this model's saved states can't be restored (llama.cpp re-reads "
+               "them). Applies at the next start."),
+)
 LIST_W = 40                                            # the Server panel's model list
 MODEL_HEADER = f"{DIM}{'':2}{'model':<26} {'size':>8}  {'status':<10} {'fits':>5} {'speed':>7} role and good for{R}"
 PICKER_FOOT = ("Press ↑ ↓ to select a model and Enter to choose it, Esc to cancel. ★ = auto fit's pick · fits = the "
@@ -728,9 +749,11 @@ class SettingsView:
             return indent(draw_card("tune", "AUTO-TUNE", "", cwrap("No model is downloaded yet: press [ for the Models panel, "
                                                                    "then d to download one.", w - 4), w, 2))
         names = [m["name"] for m in ms]
-        if ui.tune_model not in names:
+        if ui.tune_model not in names and ui.tune_model != TUNE_ALL:
             cur = self.svc.resolved_model(ui.pending) if ui.pending else names[0]
             ui.tune_model = cur if cur in names else names[0]
+        if ui.tune_model == TUNE_ALL:
+            return self._tune_all(ui, ms, cols, server_up)
         m = ms[names.index(ui.tune_model)]
         tn = ui.tune
         tw = w - 4
@@ -797,6 +820,40 @@ class SettingsView:
         return indent(draw_card("tune", "AUTO-TUNE", f"{DIM}per model, per Mac{R}", L, w, 2))
 
 
+    def _tune_all(self, ui: UIState, ms: Sequence[ModelInfo], cols: int, server_up: bool) -> List[Row]:
+        """Auto-tune for every downloaded model: the list with each one's last result, the run."""
+        w = cols - 2
+        tw = w - 4
+        tn = ui.tune
+        L: List[CardLine] = [*cwrap(f"{DIM}Tunes every downloaded model, one after another (~5-10 min each, the "
+                                    f"chosen mode for all); a model that fails doesn't stop the rest. Each one's result "
+                                    f"is saved as when it is tuned alone.{R}", tw), ""]
+        sel = f"{CYN}[<]{R} {B}{'all models (' + str(len(ms)) + ')':^30}{R} {CYN}[>]{R}"
+        L.append(Ln(f"model     {sel}", spans=[(10, 13, "tprev"), (14, 44, "tpick"), (45, 48, "tnext")]))
+        depth = as_depth(ui.tune_depth)
+        text, spans, col = "mode      ", [], 10
+        for d in DEPTHS:
+            chip = f" {d} "
+            text += (f"\x1b[7m{chip}{R}" if d == depth else f"{DIM}{chip}{R}") + " "
+            spans.append((col, col + len(chip), f"tdepth:{d}"))
+            col += len(chip) + 1
+        L.append(Ln(text, spans=spans))
+        L += [f"{' ' * 10}{x}" for x in cwrap(f"{DIM}{DEPTH_TEXT[depth]}; press space for the next mode{R}", tw - 10)]
+        L.append("")
+        if tn and (not tn.done or tn.model == TUNE_ALL):
+            L += tune_progress(tn, w, server_up)
+        else:
+            L.append(buttons("", [("Run auto-tune for all (Enter)", "trun")]))
+        L += ["", f"{B}Last results{R}"]
+        for m in ms:
+            t = jdict(jdict(m.get("local")).get("tune"))
+            st = jdict(t.get("settings"))
+            res = (f"{GRN}{t.get('date')} · kv {st.get('kv')} · {st.get('spec')} n={st.get('spec_n')} · "
+                   f"{ctx_label(int(st['ctx'])) if isinstance(st.get('ctx'), int) else '?'} × {st.get('slots')}{R}"
+                   if st else f"{DIM}not tuned on this Mac yet{R}")
+            L.append(f"  {m['name']:<28} {res}")
+        return indent(draw_card("tune", "AUTO-TUNE", f"{DIM}all models, per Mac{R}", L, w, 2))
+
     # ------------------------------------------------------------ panel 5: router mode
     def router(self, ui: UIState, d: ServerData, saved: str, switches: Sequence[Tuple[str, str]],
                stale: Sequence[str], cols: int) -> List[Row]:
@@ -854,10 +911,13 @@ class SettingsView:
         w = cols - 2
         tw = w - 4
         L: List[CardLine] = [*cwrap(
+            f"{YEL}{B}EXPERIMENTAL{R}{YEL}: the disk cache is new. It works with the model that runs: saved states "
+            f"belong to one model file and llama.cpp build, and another model's sessions wait for that model (router "
+            f"mode loads it first). Turn sessions or prompts off here if something looks wrong.{R}", tw), "", *cwrap(
             f"{DIM}OpenCode and Pi save prompt states through the server, so a restart, a model switch or many other "
             f"sessions don't mean reading everything again: {B}prompts{R}{DIM} = each agent's system prompt and tools "
             f"(read once: a new session reads only its own messages) · {B}conversations{R}{DIM} = each session, saved "
-            f"after every turn and put back before its next request when the server no longer holds it. Within the "
+            f"as the Save row says and put back before its next request when the server no longer holds it. Within the "
             f"disk limit the oldest conversations go first, then the oldest prompts. The switches apply to the clients "
             f"on this Mac (a VM's: NO_CACHE=1 ./install.sh there).{R}", tw), ""]
         gbs = sorted({*DISK_CHOICES, conf.disk_gb})
@@ -866,14 +926,27 @@ class SettingsView:
                                            ("off", "off", "cache:prefix:off")], "on" if conf.prefix else "off", tw)
         L += self._choice_line("Sessions", [("on", "save conversations", "cache:sessions:on"),
                                             ("off", "off", "cache:sessions:off")], "on" if conf.sessions else "off", tw)
+        L += self._choice_line("Save", [(k, t, f"cache:save:{k}") for k, t in SAVE_TEXT], conf.save, tw)
+        L += [f"{' ' * 11}{x}" for x in cwrap(f"{DIM}{dict(SAVE_HELP)[conf.save].replace('AUTO', dur(conf.auto_s))}{R}",
+                                              tw - 11)]
+        autos = sorted({*AUTO_CHOICES, conf.auto_s})
+        L += self._choice_line("Auto after", [(str(a), dur(a), f"cache:auto:{a}") for a in autos], str(conf.auto_s), tw)
+        L += self._choice_line("Shared", [("on", "store conversations against their prompt", "cache:share:on"),
+                                          ("off", "off", "cache:share:off")], "on" if conf.share else "off", tw)
+        L += self._choice_line("SWA models", [(k, t, f"cache:swa:{k}") for k, t in SWA_TEXT], conf.swa, tw)
+        L += [f"{' ' * 11}{x}" for x in cwrap(f"{DIM}{dict(SWA_HELP)[conf.swa]}{R}", tw - 11)]
         use = used(files)
         n = len(files)
         L += ["", heading("On disk", tw),
               lv("used", f"{bar(use / conf.limit, 18)} {gb_text(use)} of {conf.disk_gb} GB · {n} file{'' if n == 1 else 's'}", 11),
               lv("folder", f"{home_short(folder, self.home)}{DIM} (the server's --slot-save-path){R}", 11)]
+        packed = [f for f in files if f.packed]
+        if packed:
+            L.append(lv("shared", f"{len(packed)} conversation(s) stored as patches against their prompt: "
+                                  f"{gb_text(shared_saving(files))} saved", 11))
         nw = max(tw - 42, 12)
         for f in sorted(files, key=lambda f: -f.mtime)[:12]:
-            what = "prompt      " if f.kind == PROMPT else "conversation"
+            what = "prompt      " if f.kind == PROMPT else "patch       " if f.packed else "conversation"
             L.append(f"  {DIM}{what}{R}  {fit(describe(f.name), nw):<{nw}} {size(f.bytes):>7}  "
                      f"{DIM}{dur(time.time() - f.mtime)} ago{R}")
         if n > 12:
@@ -883,9 +956,10 @@ class SettingsView:
         L.append("")
         L += button_rows("", [("Clear the disk cache (c)", "cache:clear")], tw)
         L += ["", *cwrap(f"{DIM}Keys: d = the next disk limit · p = prompts on / off · s = conversations on / off · "
-                         f"c = clear. The RAM prompt cache (llama.cpp's own, while the server runs) is the Server "
-                         f"panel's RAM cache row.{R}", tw)]
-        return indent(draw_card("caching", "CACHING", f"{DIM}disk cache: {gb_text(use)} of {conf.disk_gb} GB{R}", L, w, 2))
+                         f"o = when to save · t = auto after · h = shared · w = SWA models · c = clear. The RAM prompt cache (llama.cpp's own, while "
+                         f"the server runs) is the Server panel's RAM cache row.{R}", tw)]
+        return indent(draw_card("caching", "CACHING (EXPERIMENTAL)", f"{DIM}disk cache: {gb_text(use)} of {conf.disk_gb} GB{R}",
+                                L, w, 2))
 
     @staticmethod
     def _router_row(m: RouterModel, w: int) -> Ln:

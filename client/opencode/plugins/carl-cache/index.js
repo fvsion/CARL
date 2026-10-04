@@ -7,10 +7,11 @@
 // subagent; a wrapper around fetch (the AI SDK calls the global fetch) reads those marks, takes them off
 // and lets carl-cache.js prepare the request body; when a reply that ends the turn has streamed, the
 // session is saved before OpenCode sees the end.
-// Options: { provider: "<our provider id>" } (configure.py).
+// Options: { provider: "<our provider id>", cacheApi: "<the dashboard's cache API>" } (configure.py).
 // Export nothing else from this file: older OpenCode versions call every export of the entry module as
 // a plugin function.
 import { CarlCache, splitOpenCode } from "./carl-cache.js";
+import { checkOnce, watchApplied } from "./carl-panel.js";
 
 const MARK = "x-carl-cache";
 const STATE = Symbol.for("carl-cache.opencode");
@@ -44,10 +45,17 @@ export default {
   id: "carl-cache",
   server: async ({ client }, options) => {
     const ours = typeof options?.provider === "string" ? options.provider : "llamacpp";
+    checkOnce();                  // without the sync service: a config pushed from the server, applied once
+    watchApplied((v) => {         // OpenCode reads its config when it starts
+      const message = `CARL: the server's client config ${v} was applied (models, windows): restart OpenCode to use it.`;
+      void client.app.log({ body: { service: "carl-cache", level: "info", message } }).catch(() => {});
+      void client.tui.showToast({ body: { title: "CARL", message, variant: "info", duration: 15000 } }).catch(() => {});
+    });
     const log = (/** @type {string} */ message) =>
       client.app.log({ body: { service: "carl-cache", level: "info", message } }).catch(() => {});
-    /** @type {{ original: typeof fetch, caches: Map<string, CarlCache> }} */
+    /** @type {{ original: typeof fetch, caches: Map<string, CarlCache>, cacheApi?: string }} */
     const g = /** @type {any} */ (globalThis)[STATE] ?? { original: globalThis.fetch, caches: new Map() };
+    if (typeof options?.cacheApi === "string") g.cacheApi = options.cacheApi;
     if (!(/** @type {any} */ (globalThis)[STATE])) {
       /** @type {any} */ (globalThis)[STATE] = g;
       globalThis.fetch = /** @type {typeof fetch} */ (async (input, init) => {
@@ -68,7 +76,8 @@ export default {
           let cache = g.caches.get(base);
           if (!cache) {
             const key = (headers.get("authorization") ?? "").replace(/^Bearer\s+/i, "") || undefined;
-            cache = new CarlCache({ baseURL: base, apiKey: key, fetch: g.original, split: splitOpenCode, log });
+            cache = new CarlCache({ baseURL: base, apiKey: key, fetch: g.original, split: splitOpenCode, log,
+                                    cacheApi: g.cacheApi });
             g.caches.set(base, cache);
           }
           const r = await cache.before(JSON.parse(body), /** @type {any} */ (meta));

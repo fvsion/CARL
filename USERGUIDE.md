@@ -86,6 +86,8 @@ The VM needs Python 3 and curl. The staging folder for the client bundle is `~/D
    ```
    - On the first run, the installer asks for the API key. Paste the contents of `~/.config/carl/api-key` from the Mac. Alternatively, put the key in a file with the name `api-key` next to `install.sh`, or set `CARL_API_KEY`.
    - The installer keeps the key at `~/.config/carl/api-key`. It uses the key again on later runs.
+   - The client folder that a server start wrote carries the server's address and key (`remote.json`, `api-key`). Then the installer asks nothing.
+   - On a computer whose server is elsewhere, the installer adds the client sync service: it applies the config that you push from the dashboard ([Clients on other computers](reference/client-sync.md)). `NO_SYNC_SERVICE=1` leaves it out.
    - At the end, the installer does a smoke test. If it shows `OK: llama.cpp reachable at http://192.168.42.1:8080/v1 -> "id":"qwen3.6-35b-a3b"` (the loaded model), you have a connection.
 4. **Start a client:** run `opencode` or `pi`. Both clients use the llama.cpp model by default. The OpenCode config is `~/.config/opencode/opencode.json`. The Pi configs are `~/.pi/agent/models.json` and `~/.pi/agent/settings.json`.
 
@@ -358,16 +360,29 @@ The server keeps the conversations it has read in memory: in its slots, and in i
 OpenCode and Pi prevent this with CARL's **prompt cache** (the OpenCode plugin and the Pi extension `carl-cache`, which `install.sh` adds). They save prompt states on the server's disk, through the server:
 
 - **Each agent's prompt:** the system prompt and the tools of each agent (OpenCode's build, plan and coder; Pi, and each Pi subagent), read once and saved. A new session reads only its own messages: **207 tokens instead of ~8.4K** (35B IQ3).
-- **Each session:** saved after every turn. When the session continues and the server no longer holds it, its file goes back in first: **21-23 tokens read instead of the whole conversation**, after a restart, after a router switch, or after many other sessions. This works per session, so a session you reopen after several others comes back too.
+- **Each session:** saved when it matters (below). When the session continues and the server no longer holds it, its file goes back in first: **18-23 tokens read instead of the whole conversation**, after a restart, after a router switch, or after many other sessions. This works per session, so a session you reopen after several others comes back too.
+- **When a session is saved** (Caching panel: Save; `cache.save`):
+
+  | Save | When | Trade-off |
+  |---|---|---|
+  | **auto** (default) | when the part not saved yet would take 2 minutes to read again (this model's measured read speed; Caching panel: Auto after, `cache.auto_s`), and before the session leaves the server: its slot is needed, a router switch, a dashboard stop or restart | the fewest writes for normal use; a crash loses at most ~2 minutes of reading per session |
+  | every turn | after each reply | nothing is lost; the most writes (a long session: up to ~0.5 GB per turn on the 35B) |
+  | on a switch | before the session leaves the server (as above) | a crash, or a stop outside the dashboard (Ctrl-C), loses what wasn't saved |
+  | before a stop | only before a dashboard stop or restart, or a router switch | the fewest writes; sessions moved to the RAM cache meanwhile are lost at the stop |
+
+  For the stop saves, OpenCode and Pi on this Mac leave a small record of the session each slot holds (`.resident+…` in the slots folder); the dashboard saves those slots before Stop, Apply and Auto-tune. A new OpenCode or Pi process uses the record too: it finds a session still in its slot instead of reading it again.
 
 - **What changes in the prompt:** the parts of the system prompt that differ between projects and days move to the first message of each session: OpenCode's environment block (folder, git, date) and the project's instructions (AGENTS.md); Pi's project context and folder. The model gets the same information. Then the agent's prompt is the same in every project, and its saved file fits every session.
 - **Router mode:** before a request for another model, the plugin loads that model and puts the session back, so a switch costs the load (30 s to 2 min) and about a second. OpenCode's title requests go to the model that is loaded, so a new session doesn't switch twice.
-- **Any model:** Qwen (the hybrid models) and normal transformer models (tested: Gemma 4 E4B, whose template puts the tools after the system prompt). A model with sliding-window layers (Gemma) starts with `--swa-full`, so its saved states can be put back; the memory check already counts that.
-- **The files** are in `~/.config/carl/slots` (the server's folder). They stay within a disk limit: **5 GB** by default. The oldest conversations go first, then the oldest prompts. An agent's prompt is ~40-120 MB; a conversation ~5-13 KB per token (a 74K-token session on the 35B: ~1 GB). Below 10 GB free on the disk, nothing is saved.
-- **Settings tab → Caching panel:** the disk limit, prompts on / off, sessions on / off, what is on disk, and **Clear**. `./carl.sh cache` shows the files (`cache trim`, `cache clear`).
+- **Any model:** Qwen (the hybrid models) and normal transformer models (tested: Gemma 4 E4B, whose template puts the tools after the system prompt).
+- **Models with sliding-window layers** (Gemma; Caching panel: SWA models; `cache.swa`): llama.cpp can restore their saved states only when every layer keeps the full context (`--swa-full`), which costs memory (Gemma 4 E4B at 2 × 96K: +2.3 GB). **auto** (default) uses the full cache when it fits this Mac with the slots it gets (a second slot comes first), else only the window; **full** always; **window** never (the least memory; their sessions are read again after a restart). The start says which: `sliding-window cache: full` or `window only`. The memory check knows the window now (from the GGUF's layer pattern), so such a model may fit a larger window than before.
+- **The files** are in `~/.config/carl/slots` (the server's folder). They stay within a disk limit: **10 GB** by default. The oldest conversations go first, then the oldest prompts. An agent's prompt is ~25-120 MB. On the 35B a conversation is ~59 MB plus ~5.8 KB per token (a 74K-token session: ~0.5 GB). Below 10 GB free on the disk, nothing is saved.
+- **Shared pieces:** a conversation is stored as a patch against the agent's prompt file it starts with, so the prompt part is on the disk only once ([How the pieces fit](reference/pieces.md)). On the 35B a short session is ~45% smaller, a long one ~10%. Caching panel: Shared (`cache.share`). It needs zstd (`brew install zstd`).
+- **When the prompt changes** (a new tool or MCP server, an OpenCode or Pi update): the next new session reads the new prompt one time and saves it; the old prompt files go. A saved session from before the change is read again one time.
+- **Settings tab → Caching panel** (EXPERIMENTAL): the disk limit, prompts on / off, sessions on / off, when to save, auto after, shared pieces, SWA models, what is on disk, and **Clear**. `./carl.sh cache` shows the files (`cache trim`, `cache clear`).
 - **A saved state is used only when it fits exactly:** the same model file and llama.cpp build, and a prompt that starts with the saved one. If the request is different (you added a tool, or edited an earlier message), the server reads the whole prompt, as without the cache, and the new state is saved for next time.
-- **Slots:** each session runs in its own slot while it is there. When a subagent needs a slot that holds another session, that session is saved first and comes back from its file. OpenCode's title requests run without thinking (they are short), so they don't hold a slot for long.
-- NOTE: Subagent sessions and title requests are not saved. In a VM, the Caching panel's switches don't reach the clients: `NO_CACHE=1 ./install.sh` there leaves the cache out. `CARL_CACHE=0` turns it off for one run.
+- **Slots:** each request goes to a free slot: the session's own when it is free, else another (then its state goes in from the disk or the RAM cache). Two requests never take the same slot at once: OpenCode and Pi on this Mac claim a slot with a small file (`.claim+…`) until the server has the request; if every slot is taken, llama.cpp decides as without the cache. When a subagent needs a slot that holds another session, that session is saved first and comes back from its file. OpenCode's title requests run without thinking (they are short), so they don't hold a slot for long.
+- NOTE: Subagent sessions and title requests are not saved. Clients on another computer (a VM) get the Caching settings, the slot claims and the records from the dashboard's API while the dashboard runs ([Clients on other computers](reference/client-sync.md)). `CARL_CACHE_SAVE=turn|auto|switch|stop` sets the save rule for one client, `NO_CACHE=1 ./install.sh` leaves the cache out, `CARL_CACHE=0` turns it off for one run.
 
 ### Tools in OpenCode and Pi
 
@@ -625,6 +640,8 @@ Each card keeps the same height while the server works. If a value is not availa
 | `1`–`5`, Tab | change the tab |
 | `o` / `p` / `t` | copy the OpenCode / Pi config / curl test (opens the Connect tab) |
 | `i` / `u`, then `y` | Connect tab: install OpenCode and Pi and their configs / update the configs only (`n` or Esc: no); `x` closes the installer's output |
+| `[` / `]`, `P` | Connect tab: the Setup / Clients sub-tabs; push the client config to the clients on other computers |
+| `/carl` (in OpenCode or Pi) | every CARL piece on this computer with its state; the config sync (auto-apply, apply, check) |
 | `k` | show / hide the API key |
 | `e` / `c` | expand / collapse all cards |
 | `w` / `f` | log: wrap / errors only |
@@ -734,13 +751,18 @@ The Settings tab (tab 5) has six panels: **Server**, **Models**, **Auto fit**, *
 **Auto-tune panel:**
 - Select a model with ← → (or click its name for a list). Only downloaded models are in the list. Choose the mode: **quick**, **default** or **long** (click one, or push space for the next).
 - Push Enter to run Auto-tune ([section 7](#auto-tune)). The panel shows each step and the last lines of its output. `c` cancels.
+- **All models:** push ← from the first model (or select **all downloaded models** in the list). Auto-tune then tunes each downloaded model, one after the other. A model that fails does not stop the others. The panel shows the last result of each model. On the command line: `./carl.sh tune all`.
 - CAUTION: Auto-tune needs the GPU for itself. If a server runs, the panel asks first. Then it stops the server, runs the tune, and starts the server again with the saved settings (and the new tune).
 - **Last result:** the date, the Mac, the selected settings, the speed of each speculation mode (prose, code, re-emit), the prompt read speeds and the context zones.
 - **[ Use these values ]** removes your own values for this model from config.json. Then the tuned values apply.
 
-**Caching panel:** the [disk cache](#fast-starts-the-disk-cache). Every change is saved at once (the `cache` section of config.json) and needs no restart.
-- **Disk limit:** 2, 5 (the default), 10, 20 or 50 GB (`d` for the next one). A lower limit removes the oldest files at once (the dashboard also checks the limit every minute).
+**Caching panel** (EXPERIMENTAL): the [disk cache](#fast-starts-the-disk-cache). It works with the model that runs: the saved states of another model wait for that model. Every change is saved at once (the `cache` section of config.json) and needs no restart.
+- **Disk limit:** 2, 5, 10 (the default), 20 or 50 GB (`d` for the next one). A lower limit removes the oldest files at once (the dashboard also checks the limit every minute).
 - **Prompts** (`p`) and **Sessions** (`s`): on or off, for OpenCode and Pi on this Mac. Off stops new saves and restores; the files stay until you clear them.
+- **Save** (`o`): when a session is saved: auto (the default), every turn, on a switch, before a stop ([the table](#fast-starts-the-disk-cache)). The line below it says what the choice means.
+- **Auto after** (`t`): for save = auto, the reading time of the unsaved part before a save: 30 s, 2 min (the default), 5 min, 10 min.
+- **Shared** (`h`): store conversations as patches against their prompt (on, the default) or whole.
+- **SWA models** (`w`): auto, full cache, window only (models with sliding-window layers; at the next start).
 - **On disk:** the space used of the limit, the folder, and each file: a prompt (model · agent) or a conversation (model · session), its size and age.
 - **[ Clear the disk cache ]** (`c`) asks, then removes every saved state. The server keeps what it holds now.
 - The RAM prompt cache (llama.cpp's own, lost when the server stops) is the **RAM cache** row of the Server panel.
@@ -754,7 +776,7 @@ The dashboard and the launchers keep your settings in `~/.config/carl/config.jso
 | `llama` | Server-wide llama.cpp settings: `model` (`auto` = auto fit's pick for this Mac), `auto_goal` (`everyday` \| `hard-code`), `auto_fit` (`catalogue` \| `downloaded`), `net` (`local` \| `vm`; default local), `host`, `cache_ram`, `ub`, `batch`, `ckpt`, `ckpt_step`, `think_toggle`, `extra_args` (more `llama-server` flags, as a list) |
 | `models.<name>` | The profile of one model: `kv`, `ctx`, `slots`, `spec`, `spec_n`, `temp`, `top_p`, `top_k`, `min_p`, `presence`, `repeat`, `alias` |
 | `paths` | `models_dir` (default `~/models/gguf`) |
-| `cache` | The [disk cache](#fast-starts-the-disk-cache): `disk_gb` (default 5), `prefix` (each agent's prompt, default true), `sessions` (each session, default true) |
+| `cache` | The [disk cache](#fast-starts-the-disk-cache): `disk_gb` (default 10), `prefix` (each agent's prompt, default true), `sessions` (each session, default true), `save` (`auto` \| `turn` \| `switch` \| `stop`), `swa` (`auto` \| `full` \| `window`) |
 
 - **Order of priority** for a llama.cpp start: command-line flags, then environment variables, then `config.json`, then the Auto-tune result of this Mac, then the catalogue (`host/catalog.json`), then the built-in defaults.
 - **CARL validates the file.** Each value must have the correct type, range or choice. A bad value stops the start with an error that names the key. CARL ignores an unknown key.
@@ -977,7 +999,9 @@ python3 -m unittest discover -s tests/monitor -t tests/monitor   # the dashboard
 | `./carl.sh tune NAME [--quick\|--long]` | Auto-tune a model for this Mac: speculation, context window, slots (~5–10 min; quick ~4 min; long +10–40 min, up to 192K; stop the server first) |
 | `./carl.sh config [show\|path\|get KEY\|set KEY VALUE\|unset KEY]` | the settings file `~/.config/carl/config.json`; KEY like `llama.net` or `models.NAME.ctx` |
 | `./carl.sh card NAME [set FIELD VALUE\|unset FIELD]` | a model's card; custom models: set or remove one field of your card ([Cards for custom models](#cards-for-custom-models)) |
-| `./carl.sh cache [show\|trim\|clear]` | the [disk cache](#fast-starts-the-disk-cache) OpenCode and Pi fill: the files, trim to the limit, remove all |
+| `./carl.sh cache [show\|trim\|clear]` | the [disk cache](#fast-starts-the-disk-cache) OpenCode and Pi fill: the files, trim to the limit (and store new conversations as patches), remove all |
+| `./carl.sh push` | push the client config (the installed models) to the clients on other computers ([Clients on other computers](reference/client-sync.md)) |
+| `./carl.sh tune all` | Auto-tune every downloaded model, one after the other |
 | `./host/models.sh list\|download\|verify\|delete NAME\|path NAME\|get NAME FIELD\|default\|downloaded` | the models tool (a wrapper around `tools/carl.py`; `./carl.sh models\|download\|verify\|delete` use it): list, download, verify, delete, the local path, one field, the default model for this Mac, the downloaded models |
 | `./carl.sh -h` | print the help: overview of all commands; `<command> -h` for one command |
 | `./carl.sh --help-adv` | all `llama-server` flags |

@@ -225,6 +225,20 @@ class AppTest(unittest.TestCase):
         self.ctl.do("tclear")
         self.assertEqual(self.store.saved[-1]["models"], {})
 
+    def test_auto_tune_all_models(self) -> None:
+        from unittest import mock
+        from monitor.state import TUNE_ALL
+        self.keys("5", "[", "[", "[")
+        self.keys("\x1b[D")                                      # back from the first model: all models
+        self.assertEqual(self.ui.tune_model, TUNE_ALL)
+        text = " ".join(ANSI.sub("", self.screen()).split())
+        self.assertIn("all models (", text)
+        self.assertIn("Last results", text)
+        with mock.patch("monitor.jobs.start_tool") as start, mock.patch("threading.Thread") as thread:
+            self.app.jobs.run_tune(self.ctl.data, confirmed=True)
+            thread.call_args.kwargs["target"]()                 # the work, here and now
+        self.assertEqual(start.call_args.args[0][1:], ["all"])
+
     def server_text(self, cols: int) -> list:
         p = self.ui.pending
         assert p is not None
@@ -351,18 +365,73 @@ class AppTest(unittest.TestCase):
         self.keys("5", "[")                                     # back from the first panel: the last, Caching
         self.assertEqual(self.ui.sp, SP_CACHE)
         text = " ".join(ANSI.sub("", self.screen()).split())
-        for part in ("CACHING", "Disk limit", "5 GB", "Prompts", "save conversations", "m · build", "m · ses_1"):
+        for part in ("CACHING", "Disk limit", "10 GB", "Prompts", "save conversations", "m · build", "m · ses_1"):
             self.assertIn(part, text)
-        self.keys("d", "p")                                     # the next limit; prompts off
-        self.assertEqual(self.store.config["cache"], {"disk_gb": 10, "prefix": False})
-        self.assertEqual(self.app.jobs.cache_conf().disk_gb, 10)
+        self.keys("d", "p")                                     # the next limit after the default 10; prompts off
+        self.assertEqual(self.store.config["cache"], {"disk_gb": 20, "prefix": False})
+        self.assertEqual(self.app.jobs.cache_conf().disk_gb, 20)
         self.ctl.do("cache:disk:50")
         self.assertEqual(self.store.config["cache"]["disk_gb"], 50)
+        self.keys("o", "w")                                     # when to save: the next after auto; SWA: next after auto
+        self.assertEqual((self.store.config["cache"]["save"], self.store.config["cache"]["swa"]), ("turn", "full"))
+        self.ctl.do("cache:save:stop")
+        self.assertEqual(self.app.jobs.cache_conf(fresh=True).save, "stop")
         self.keys("c")
         self.assertIsNotNone(self.ui.confirm2)
         self.assertEqual(len(os.listdir(slots)), 2)             # nothing removed before the answer
         self.keys("y")
         self.assertEqual(os.listdir(slots), [])
+
+    def test_before_a_stop_the_recorded_sessions_are_saved(self) -> None:
+        from unittest import mock
+        from monitor.model import ServerData, SlotInfo
+        conf = os.path.join(self.tmp.name, "carl", "config.json")
+        self.app.jobs.paths = Paths(repo=self.tmp.name, logs=self.tmp.name, config_file=conf)
+        slots = os.path.join(self.tmp.name, "carl", "slots")
+        os.makedirs(slots)
+        for slot, task in ((0, 7), (1, 3)):
+            with open(os.path.join(slots, f".resident+m+{slot}.json"), "w") as f:
+                json.dump({"model": "m", "slot": slot, "file": f"carl-session+m+k+s{slot}.bin", "task": task}, f)
+        live = [{"id": 0, "id_task": 7, "is_processing": False}, {"id": 1, "id_task": 9, "is_processing": False}]
+        d = ServerData(up=True, props={"model_alias": "m"})
+        d.slot_list = [SlotInfo.from_json(x) for x in live]
+        ep = self.app.jobs.collector.endpoint
+        with mock.patch.object(ep, "get", return_value=json.dumps(live)), \
+                mock.patch.object(ep, "post", return_value="{}") as post, \
+                mock.patch("monitor.diskcache.free_enough", return_value=True):
+            self.app.jobs.save_before_stop(d)
+        post.assert_called_once_with("/slots/0?action=save", {"filename": "carl-session+m+k+s0.bin"}, timeout=600)
+        self.assertEqual(sorted(os.listdir(slots)), [".resident+m+1.json"])   # slot 1 ran something since: kept
+        self.store.config["cache"] = {"save": "turn"}                            # every turn saved: nothing to do
+        with mock.patch.object(ep, "post") as post2:
+            self.app.jobs.save_before_stop(d)
+        post2.assert_not_called()
+
+    def test_connect_clients_tab(self) -> None:
+        from monitor.cacheapi import Client
+        conf = os.path.join(self.tmp.name, "carl", "config.json")
+        self.app.jobs.paths = Paths(repo=self.tmp.name, logs=self.tmp.name, config_file=conf)
+        self.keys("2", "]")
+        self.assertEqual(self.ui.connect_sp, 1)
+        text = " ".join(ANSI.sub("", self.screen()).split())
+        self.assertIn("CLIENTS", text)
+        self.assertIn("no other computer yet", text)
+        self.store.client_models = lambda: {"schema": 1, "models": [{"id": "m"}]}   # type: ignore[method-assign]
+        self.keys("P")                                                  # push
+        self.assertTrue(self.app.jobs.pushed())
+        version = self.app.jobs.pushed().split(" at ")[0]
+        from monitor.views import clients_lines
+        from monitor.cards import View
+        view = View(levels={}, host="h", port=1, base="b", key="", key_file="", key_shown=False, server_pid=None, log=None,
+                    log_path=None, model_path=None, model_size=None, gpu_limit=None, slow=None, total_mem=0, home="/",
+                    pushed=f"{version} at now",
+                    clients=(Client("0123456789ab", host="vm-1", user="u", os="Linux", applied=version, mode="service",
+                                    connected=1),
+                             Client("ba9876543210", host="vm-2", applied="old", mode="check", auto_apply=False)))
+        lines = " ".join(ANSI.sub("", x if isinstance(x, str) else x.text) for x in clients_lines(view, [], [], 200))
+        self.assertIn("vm-1", lines)
+        self.assertIn(f"up to date ({version})", lines)
+        self.assertIn(f"has old, pushed {version} (auto-apply off: it waits)", lines)
 
     def test_router_panel_switches_the_mode_after_a_question(self) -> None:
         self.keys("5", "[", "[")                                # back from the first panel: Caching, then Router

@@ -5,3 +5,5 @@ __pycache__/
 .pytest_cache/
 .DS_Store
 client/installed-models.json
+client/remote.json
+client/api-key

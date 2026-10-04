@@ -58,10 +58,12 @@ class _Shape(TypedDict):
 
 
 class ModelShape(_Shape, total=False):
-    """_Shape, and whether some layers use sliding-window attention (Gemma): such a model needs
-    --swa-full for a saved state to be usable after a restore (the memory estimate already
-    counts every layer at full length). Absent in shapes cached before 11.5."""
-    swa: bool
+    """_Shape, and the sliding-window layers (Gemma): swa_window = the window (0: none), and
+    kv_elems_per_token_swa = their KV elements per token (kv_elems_per_token then counts only the
+    full-attention layers). Such layers keep only the window unless the server runs --swa-full,
+    which a restored state needs (fit.need_bytes(swa_full)). Absent in shapes cached before 11.6."""
+    swa_window: int
+    kv_elems_per_token_swa: int
 
 
 class _Reader:
@@ -120,6 +122,9 @@ def parse_meta(head: bytes) -> Meta:
                 if at == GGUF_STRING:
                     for _ in range(cnt):
                         r.string()
+                elif key.endswith(".attention.sliding_window_pattern") and cnt <= 4096:
+                    # which layers use the sliding window, as "1" / "0" per layer (model_shape)
+                    out[key] = "".join("1" if r.scalar(GGUF_TYPES[at]) else "0" for _ in range(cnt))
                 else:
                     r.skip(struct.calcsize(GGUF_TYPES[at]) * cnt)
             else:
@@ -148,6 +153,14 @@ def model_shape(meta: Meta) -> ModelShape:
     kvh, kl, vl = g("attention.head_count_kv"), g("attention.key_length"), g("attention.value_length")
     if not kl:
         kl = vl = g("embedding_length") // max(g("attention.head_count", 1), 1)
+    kv_full, kv_swa = attn * kvh * (kl + vl), 0
+    window = g("attention.sliding_window")
+    pattern = meta.get(f"{a}.attention.sliding_window_pattern")
+    own = main - g("attention.shared_kv_layers")     # Gemma 4: the last layers reuse earlier layers' KV
+    if window and isinstance(pattern, str) and 0 < own <= len(pattern):
+        n_swa = pattern[:own].count("1")
+        kv_full = (own - n_swa) * kvh * (kl + vl)
+        kv_swa = n_swa * kvh * (g("attention.key_length_swa", kl) + g("attention.value_length_swa", vl))
     inner, rank, state = g("ssm.inner_size"), g("ssm.time_step_rank"), g("ssm.state_size")
     conv, groups = g("ssm.conv_kernel"), g("ssm.group_count")
     rs_layer = 0
@@ -156,14 +169,14 @@ def model_shape(meta: Meta) -> ModelShape:
     ft = meta.get("general.file_type")
     return {
         "arch": a, "blocks": blocks, "nextn": nextn, "attn_layers": attn, "rec_layers": rec,
-        "kv_elems_per_token": attn * kvh * (kl + vl), "kv_elems_per_token_mtp": nextn * kvh * (kl + vl),
+        "kv_elems_per_token": kv_full, "kv_elems_per_token_mtp": nextn * kvh * (kl + vl),
         "rs_bytes": rec * rs_layer, "experts": g("expert_count"), "experts_used": g("expert_used_count"),
         "ctx_train": g("context_length"),
         "ftype": FILE_TYPES.get(ft, str(ft)) if isinstance(ft, int) else ("?" if ft is None else str(ft)),
         "kvh": kvh, "kl": kl, "vl": vl,
         "effort_levels": bool(meta.get("_has_reasoning_effort")),
         "thinking_switch": bool(meta.get("_has_enable_thinking")),
-        "swa": g("attention.sliding_window") > 0,
+        "swa_window": window, "kv_elems_per_token_swa": kv_swa,
     }
 
 
@@ -171,6 +184,11 @@ def kv_bytes_per_token(shape: ModelShape, ktype: str = "q4_0", vtype: Optional[s
     """KV cache bytes per token of context (K and V may use different cache types)."""
     half = shape["kv_elems_per_token"] / 2
     return half * KV_BPE.get(ktype, 2) + half * KV_BPE.get(vtype or ktype, 2)
+
+
+def swa_bytes_per_token(shape: ModelShape, kv: str = "q4_0") -> float:
+    """KV bytes per token of the sliding-window layers (0 for other models)."""
+    return shape.get("kv_elems_per_token_swa", 0) * KV_BPE.get(kv, 2)
 
 
 def ctx_train(shape: ModelShape) -> int:

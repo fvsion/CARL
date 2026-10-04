@@ -4,6 +4,7 @@ checks (tools/carl.py) and Hugging Face lookups. Children run from argument list
 own sessions; their output goes to files under ~/models/logs."""
 from __future__ import annotations
 
+import json
 import os
 import re
 import signal
@@ -11,15 +12,17 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.parse
 from dataclasses import dataclass
 from typing import Callable, Dict, List, Mapping, Optional
 
-from . import api, diskcache, fsio, system
+from . import api, clientsync, diskcache, fsio, slotpack, system
+from .cacheapi import Registry
 from .collector import Collector
 from .fmt import DIM, R, RED, size
-from .model import ServerData, clean
+from .model import ServerData, SlotInfo, clean, jlist
 from .settings import REINSTALL, Pending, SettingsService, env_from_cmd
-from .state import Confirm, Download, HFLookup, InstallRun, Picker, TuneRun, UIState
+from .state import TUNE_ALL, Confirm, Download, HFLookup, InstallRun, Picker, TuneRun, UIState
 from .store import ModelList
 
 # Settings the launchers read from the environment: removed, so config.json (or the
@@ -105,6 +108,7 @@ class ServerJobs:
         self.paths = paths
         self.vm_addr = vm_addr
         self._conf, self._conf_at = diskcache.CacheConfig(), 0.0
+        self.registry: Optional[Registry] = None     # the API's clients (app.cache_api sets it)
         self._trim_at = 0.0
 
     def cache_conf(self, fresh: bool = False) -> diskcache.CacheConfig:
@@ -122,6 +126,8 @@ class ServerJobs:
         itself had to go (alone over the limit)."""
         folder = self.paths.slots
         diskcache.remove(folder, diskcache.legacy(folder))
+        if self.cache_conf().share:
+            slotpack.tidy(folder)                   # new saves as patches against their prompt, copies gone
         gone = diskcache.over_budget(diskcache.listing(folder), self.cache_conf().limit, keep)
         if not gone:
             return True
@@ -150,6 +156,8 @@ class ServerJobs:
                 raise OSError(f"can't read {path}")
             os.makedirs(os.path.dirname(console), exist_ok=True)
             self.svc.save(p)
+            ui.restart = "saving the sessions in the slots…"
+            self.save_before_stop(d)
             ui.restart = f"stopping the server (pid {old_pid})…"
             self.collector.server_pid = None
             system.stop_pid(old_pid)
@@ -196,10 +204,12 @@ class ServerJobs:
             return
         pid = d.target_pid if not d.exited else None
         model = ui.tune_model or ""
+        n = len(self.models.downloaded())
+        what = f"every downloaded model, one after another ({n} × ~5-10 min)" if model == TUNE_ALL else f"{model} (~5-10 min)"
         if pid and system.pid_alive(pid) and not confirmed:
             ui.confirm2 = Confirm("AUTO-TUNE?", [
                 f"Auto-tune needs the GPU to itself: it stops the running server (pid {pid}),",
-                f"tunes {model} (~5-10 min), then starts the server again with the saved settings.",
+                f"tunes {what}, then starts the server again with the saved settings.",
                 "Requests in progress stop."], "tyes")
             return
         restart = bool(pid and system.pid_alive(pid))
@@ -207,6 +217,8 @@ class ServerJobs:
 
         def work() -> None:
             if restart:
+                ui.restart = "saving the sessions in the slots…"
+                self.save_before_stop(d)
                 ui.restart = f"stopping the server (pid {pid}) for auto-tune…"
                 self.collector.server_pid = None
                 system.stop_pid(pid)
@@ -214,7 +226,8 @@ class ServerJobs:
             log = os.path.join(self.paths.logs, ".tune.out")
             os.makedirs(self.paths.logs, exist_ok=True)
             flag = {"quick": ["--quick"], "long": ["--long"]}.get(depth, [])
-            proc = start_tool([os.path.join(self.paths.repo, "tools", "carl-tune.py"), model] + flag, log)
+            proc = start_tool([os.path.join(self.paths.repo, "tools", "carl-tune.py"), "all" if model == TUNE_ALL else model]
+                              + flag, log)
             ui.tune = TuneRun(model=model, proc=proc, log=log, restart=restart)
         threading.Thread(target=work, daemon=True).start()
 
@@ -306,10 +319,12 @@ class ServerJobs:
             ui.hf = HFLookup(repo, f"Hugging Face lookup failed: {e}")
 
     # ------------------------------------------------------------ router mode
-    def router_load(self, name: str, unload: bool = False) -> None:
-        """Load (the loaded model stops first: --models-max 1) or unload one of a router's models."""
+    def router_load(self, name: str, d: ServerData, unload: bool = False) -> None:
+        """Load (the loaded model stops first: --models-max 1) or unload one of a router's models
+        (the sessions in the loaded model's slots are saved first)."""
         def work() -> None:
             what = "unload" if unload else "load"
+            self.save_before_stop(d)            # the loaded model stops
             try:
                 self.collector.endpoint.post(f"/models/{what}", {"model": name}, timeout=600)
                 self.ui.toast(f"{name}: " + ("unloaded" if unload else "loading (30 s to 2 min: the Router panel shows "
@@ -318,6 +333,68 @@ class ServerJobs:
                 self.ui.toast(f"{RED}{name}: {what} failed: {e}{R}", 10)
         self.ui.toast(f"{'unloading' if unload else 'loading'} {name}…", 120 if not unload else 10)
         threading.Thread(target=work, daemon=True).start()
+
+    def save_before_stop(self, d: ServerData) -> None:
+        """Before CARL stops the server or its model (Stop, Apply, Auto-tune, a router load): the
+        sessions OpenCode and Pi left in the slots, saved to their files (save_recorded)."""
+        if d.up and d.alias:
+            self.save_recorded(d.alias, d.router is not None)
+
+    def save_recorded(self, model: str, router: bool = True) -> int:
+        """Save the sessions the clients recorded in a model's slots (diskcache.residents), each only
+        while its slot still holds that state (the task id); the number saved. With save = turn every
+        session is saved already. Also the cache API's save-recorded (a remote client's router switch)."""
+        conf = self.cache_conf(fresh=True)
+        if not conf.sessions or conf.save == "turn" or not diskcache.free_enough(self.paths.slots):
+            return 0
+        recs = diskcache.residents(self.paths.slots, model)
+        if not recs:
+            return 0
+        ep = self.collector.endpoint
+        try:
+            slots = {s.id: s for s in (SlotInfo.from_json(x) for x in jlist(json.loads(
+                ep.get("/slots" + (f"?model={urllib.parse.quote(model)}" if router else ""), timeout=5))))}
+        except (api.FETCH_ERRORS + (ValueError,)):
+            return 0
+        n = 0
+        for r in recs:
+            s = slots.get(r.slot)
+            if s is None or s.busy or s.task != r.task:
+                continue
+            try:
+                ep.post(f"/slots/{r.slot}?action=save", {"filename": r.file, **({"model": model} if router else {})},
+                        timeout=600)
+                diskcache.drop_resident(r)
+                n += 1
+            except api.FETCH_ERRORS:
+                continue
+        return n
+
+    # ------------------------------------------------------------ Connect: the client config push
+    def push_client_config(self) -> None:
+        """Publish the client config (clientsync.py: the installed models) for the clients' sync service."""
+        try:
+            version = clientsync.publish(os.path.dirname(self.paths.config_file), self.svc.store.client_models())
+        except (OSError, ValueError) as e:
+            self.ui.toast(f"{RED}push failed: {e}{R}", 10)
+            return
+        self.ui.toast(f"client config {version} pushed: the clients' sync service applies it within seconds; "
+                      f"OpenCode and Pi use it at their next start", 12)
+
+    def forget_clients(self, older: float) -> int:
+        """Drop the clients the API hasn't seen for `older` seconds (and not connected now)."""
+        reg = self.registry
+        if reg is None:
+            return 0
+        gone = [c.id for c in reg.list() if c.connected <= 0 and time.time() - c.last_seen > older]
+        for cid in gone:
+            reg.forget(cid)
+        return len(gone)
+
+    def pushed(self) -> str:
+        """The last push, as "VERSION at TIME" ("" when nothing is pushed)."""
+        doc = clientsync.published(os.path.dirname(self.paths.config_file))
+        return f"{doc['version']} at {str(doc.get('published', '?')).replace('T', ' ')}" if doc else ""
 
     # ------------------------------------------------------------ Connect: the client installer
     def start_install(self, config_only: bool) -> None:

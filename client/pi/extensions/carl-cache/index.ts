@@ -13,18 +13,23 @@ import { join } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { CarlCache, splitPi } from "./carl-cache.js";
 
-function ourProviders(): Set<string> {
+/** CARL's state for Pi (carl.json in Pi's agent folder): our provider ids and the dashboard's cache API. */
+function carlState(): { providers: Set<string>; cacheApi?: string } {
 	try {
 		const dir = process.env.PI_CODING_AGENT_DIR || join(homedir(), ".pi", "agent");
 		const st = JSON.parse(readFileSync(join(dir, "carl.json"), "utf8"));
-		return new Set(Object.values(st?.providers ?? {}).filter((v): v is string => typeof v === "string"));
+		return {
+			providers: new Set(Object.values(st?.providers ?? {}).filter((v): v is string => typeof v === "string")),
+			cacheApi: typeof st?.cache_api === "string" ? st.cache_api : undefined,
+		};
 	} catch {
-		return new Set(["llamacpp"]);
+		return { providers: new Set(["llamacpp"]) };
 	}
 }
 
 export default function carlCache(pi: ExtensionAPI) {
-	const ours = ourProviders();
+	const state = carlState();
+	const ours = state.providers;
 	const caches = new Map<string, CarlCache>();
 	const agent = process.env.CARL_AGENT ? `pi-${process.env.CARL_AGENT}` : "pi";
 	let release = () => {};
@@ -38,7 +43,7 @@ export default function carlCache(pi: ExtensionAPI) {
 			let cache = caches.get(base);
 			if (!cache) {
 				const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
-				cache = new CarlCache({ baseURL: base, apiKey: auth?.apiKey, split: splitPi });
+				cache = new CarlCache({ baseURL: base, apiKey: auth?.apiKey, split: splitPi, cacheApi: state.cacheApi });
 				caches.set(base, cache);
 			}
 			last = cache;

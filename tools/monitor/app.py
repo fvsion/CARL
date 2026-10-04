@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from typing import List, Optional, Sequence, Tuple
 
 from . import cli, diskcache, fsio, system
+from .cacheapi import CacheApi, Registry
 from .api import Endpoint
 from .card_view import draw_form
 from .cards import View, status_of
@@ -60,6 +61,9 @@ class App:
         self.logo_kind = logo_kind
         self.logo_cols = LOGO_COLS if logo else 0
         self.ctl = Controller(ui, svc, jobs, view, collector.endpoint, collector.tail, REPO, opts.home)
+        self._api: Optional[CacheApi] = None              # the cache API for clients on other computers
+        self._api_where: Optional[Tuple[str, int]] = None
+        self._clients_file = os.path.join(os.path.dirname(jobs.paths.config_file), "clients.json")
 
     @classmethod
     def create(cls, opts: cli.Options) -> "App":
@@ -97,7 +101,30 @@ class App:
                     key_shown=ui.key_shown, server_pid=c.server_pid, log=c.tail.book, log_path=c.tail.path,
                     model_path=c.model_path, model_size=c.model_size, gpu_limit=c.gpu_limit, slow=c.slow,
                     total_mem=self.machine.total_mem, home=self.opts.home, wrap=ui.wrap, errors_only=ui.errors_only,
-                    log_scroll=ui.log_scroll, cache=self.cache_line())
+                    log_scroll=ui.log_scroll, cache=self.cache_line(),
+                    api=f"{self._api.host}:{self._api.port}" if self._api else "",
+                    listeners=self._api.listeners if self._api else 0, pushed=self.jobs.pushed(),
+                    clients=tuple((self._api.registry if self._api else Registry(self._clients_file)).list()))
+
+    def cache_api(self) -> None:
+        """The cache API (cacheapi.py) next to the server: its address, port + 1; moved when the
+        server moves. A port that is taken is said once."""
+        ep = self.endpoint
+        where = (ep.host, ep.port + 1)
+        if self._api_where == where:
+            return
+        if self._api:
+            self._api.stop()
+        self._api, self._api_where = None, where
+        api = CacheApi(ep.host, ep.port + 1, lambda: self.endpoint.key, self.jobs.paths.slots, self.jobs.cache_conf,
+                       lambda model: self.jobs.save_recorded(model, self.ctl.data.router is not None),
+                       os.path.dirname(self.jobs.paths.config_file))
+        err = api.start()
+        if err:
+            self.ui.toast(f"{err} (clients on other computers save without the Caching settings)", 10)
+        else:
+            self._api = api
+            self.jobs.registry = api.registry
 
     def cache_line(self) -> str:
         """The CONNECT card's disk cache line: what OpenCode and Pi have saved, of the limit."""
@@ -274,6 +301,7 @@ class App:
                     self.ctl.data = c.collect()
                     next_fetch = time.time() + (0.5 if ui.stopping else self.opts.interval)
                 self.jobs.poll()
+                self.cache_api()
                 if ui.stopping:
                     pid, deadline = ui.stopping
                     if not system.pid_alive(pid):

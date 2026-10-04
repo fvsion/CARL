@@ -288,7 +288,8 @@ class ServeLlamaArgs(unittest.TestCase):
             run_env = {k: v for k, v in os.environ.items() if k not in ("HOST", "NET", "EXTRA_ARGS", "CTX", "SLOTS")}
             run_env.update(PATH=bindir + ":" + os.environ["PATH"], SKIP_DEPS="1", MONITOR="0", KEEP_AWAKE="0",
                            LOG_FILE="none", THINK_TOGGLE="0", FIT_CHECK="0", ALLOW_SECOND_MODEL="1",
-                           PORT=str(free_port()), API_KEY_FILE=key, CARL_CONF_DIR=conf, MODEL=model)
+                           PORT=str(free_port()), API_KEY_FILE=key, CARL_CONF_DIR=conf, MODEL=model,
+                           CARL_CLIENT_DIR=os.path.join(d, "client"))      # not the repo's client folder
             run_env.update(env or {})
             p = subprocess.run([os.path.join(REPO, "host", "serve-llama.sh"), "--local", *args],
                                capture_output=True, text=True, env=run_env, stdin=subprocess.DEVNULL)

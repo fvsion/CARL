@@ -18,6 +18,7 @@
 // leaves the request as it was: the cache is never in the way.
 
 import { createHash } from "node:crypto";
+import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -25,6 +26,14 @@ import { join } from "node:path";
 export const MIN_PREFIX_TOKENS = 1024;   // a shorter prompt is quick to read: no file
 export const MIN_SESSION_TOKENS = 4096;  // a shorter conversation is quick to read again
 export const MIN_FREE_BYTES = 10 * 2 ** 30;  // no saves on this Mac below this much free disk
+export const DEFAULT_GB = 10;                // the disk limit (a 74K-token session on the 35B is ~1 GB)
+// When a session is saved: auto = when the part not saved yet would take autoS seconds to read again,
+// and before it leaves the server; turn = after every turn; switch = before it leaves the server (its
+// slot is needed, a router switch, a server stop); stop = before a server stop or router switch only.
+export const SAVES = ["auto", "turn", "switch", "stop"];
+export const AUTO_S = 120;                   // the default: a crash costs at most ~2 min of reading; stops save anyway
+const READ_SPEED = 500;                       // tokens/s until this model's speed is measured
+const CLAIM_STALE_MS = 120_000;
 export const NO_PIN_AGENTS = new Set(["title", "summary"]);            // small one-off prompts
 export const NO_SAVE_AGENTS = new Set(["title", "summary", "compaction"]);
 const LOAD_WAIT_MS = 180_000;        // a switch takes 30 s to 2 min
@@ -54,6 +63,15 @@ export function prefixFile(model, agent, hash) {
   return `carl-prefix+${safeName(model, 60)}+${safeName(agent, 30)}+${hash}.bin`;
 }
 
+/** A JSON file, or undefined. @param {string} path @returns {any} */
+function json(path) {
+  try {
+    return JSON.parse(fs.readFileSync(path, "utf8"));
+  } catch {
+    return undefined;
+  }
+}
+
 /** @param {readonly number[]} a @param {readonly number[]} b */
 export function commonPrefix(a, b) {
   let n = 0;
@@ -62,12 +80,13 @@ export function commonPrefix(a, b) {
 }
 
 /**
- * The slot to use among (id, busy, tokens): an idle empty one, else the idle one holding least.
- * @param {{ id: number, busy: boolean, n: number }[]} slots
+ * The idle slots in the order to use them: empty ones first, then the one holding least.
+ * @template {{ id: number, busy: boolean, n: number }} T
+ * @param {T[]} slots
+ * @returns {T[]}
  */
-export function chooseSlot(slots) {
-  const idle = slots.filter((s) => !s.busy).sort((a, b) => a.n - b.n || a.id - b.id);
-  return idle[0];
+export function rankSlots(slots) {
+  return slots.filter((s) => !s.busy).sort((a, b) => a.n - b.n || a.id - b.id);
 }
 
 /** Does the request turn thinking off? @param {Record<string, any>} p */
@@ -185,7 +204,7 @@ export function relocate(payload, split) {
 /**
  * The files to remove so the rest fit `limit` bytes: the oldest conversations first, then the oldest
  * prompts; `keep` last (only when it alone is over the limit). The same rule as the dashboard's.
- * @param {{ name: string, bytes: number, mtime: number }[]} files
+ * @param {{ name: string, bytes: number, mtime: number, base?: string }[]} files
  * @param {number} limit
  * @param {string} [keep]
  */
@@ -203,18 +222,66 @@ export function overBudget(files, limit, keep = "") {
     total -= f.bytes;
   }
   if (total > limit && files.some((f) => f.name === keep)) out.push(keep);
+  // a conversation stored as a patch against a prompt that goes, goes with it
+  const gone = new Set(out);
+  for (const f of files) if (f.base && gone.has(f.base) && !gone.has(f.name)) out.push(f.name);
   return out;
 }
 
-/** @param {string} dir */
+/**
+ * Create a claim file unless it exists (a stale one, older than CLAIM_STALE_MS, is taken over);
+ * true when this process has it. A folder it can't write to: true (no claim possible).
+ * @param {string} path
+ */
+export function takeFile(path) {
+  for (let i = 0; i < 2; i++) {
+    try {
+      fs.writeFileSync(path, String(process.pid), { flag: "wx" });
+      return true;
+    } catch (e) {
+      if (/** @type {any} */ (e)?.code !== "EEXIST") return true;
+      try {
+        if (Date.now() - fs.statSync(path).mtimeMs <= CLAIM_STALE_MS) return false;
+        fs.unlinkSync(path);
+      } catch { /* gone meanwhile: try again */ }
+    }
+  }
+  return false;
+}
+
+/**
+ * The saved states in the folder, each in all its forms (the file; for a conversation stored as a patch
+ * against its prompt, the patch .zst and its .json: tools/monitor/slotpack.py), as { name, bytes, mtime, base }.
+ * @param {string} dir
+ */
 function listing(dir) {
+  /** @type {Map<string, { name: string, bytes: number, mtime: number, base: string }>} */
+  const found = new Map();
   try {
-    return fs.readdirSync(dir).filter((n) => /^carl-(prefix|session)\+.*\.bin$/.test(n)).map((name) => {
-      const st = fs.statSync(join(dir, name));
-      return { name, bytes: st.size, mtime: st.mtimeMs };
-    });
-  } catch {
-    return [];
+    for (const n of fs.readdirSync(dir)) {
+      const m = n.match(/^(carl-(?:prefix|session)\+.*\.bin)(\.zst|\.json)?$/);
+      if (!m) continue;
+      const st = fs.statSync(join(dir, n));
+      const f = found.get(m[1]) ?? { name: m[1], bytes: 0, mtime: 0, base: "" };
+      f.bytes += st.size;
+      f.mtime = Math.max(f.mtime, st.mtimeMs);
+      if (m[2] === ".json") {
+        try {
+          f.base = String(JSON.parse(fs.readFileSync(join(dir, n), "utf8")).base ?? "");
+        } catch { /* no base */ }
+      }
+      found.set(m[1], f);
+    }
+  } catch { /* no folder */ }
+  return [...found.values()];
+}
+
+/** A saved state in every form. @param {string} dir @param {string} name */
+function removeState(dir, name) {
+  for (const p of [name, `${name}.zst`, `${name}.json`]) {
+    try {
+      fs.unlinkSync(join(dir, p));
+    } catch { /* not there */ }
   }
 }
 
@@ -223,18 +290,24 @@ function listing(dir) {
 /**
  * @typedef {{ session?: string, agent: string, sub?: boolean }} Meta
  * @typedef {{ slot: number, epoch: number, model: string, router: boolean, payload: Record<string, any>,
- *             at: number, saved?: string, sub?: boolean }} SessionState
+ *             at: number, saved?: string, sub?: boolean, base?: number, savedN?: number }} SessionState
  * @typedef {{ epoch: number, maxTask: number, key?: string, stable: Map<string, boolean>,
- *             prefixes: Map<string, { file: string, tokens: number[] } | null> }} ModelState
+ *             prefixes: Map<string, { file: string, tokens: number[] } | null>, speed?: number }} ModelState
  */
 
 export class CarlCache {
   /**
    * @param {{ baseURL: string, apiKey?: string, fetch?: typeof fetch, split?: (text: string) => [string, string],
-   *           log?: (msg: string) => void, home?: string, sendsReasoning?: boolean }} o
+   *           log?: (msg: string) => void, home?: string, sendsReasoning?: boolean, cacheApi?: string }} o
+   *   cacheApi: the dashboard's cache API (monitor/cacheapi.py), for a client whose slots folder is on
+   *   another computer: the Caching settings, slot claims and records go through it
    */
   constructor(o) {
     this.base = String(o.baseURL).replace(/\/+$/, "").replace(/\/v1$/, "");
+    this.cacheApi = o.cacheApi ? String(o.cacheApi).replace(/\/+$/, "") : "";
+    this.apiAt = 0;
+    /** @type {Record<string, any> | undefined} the cache API's settings (a remote client) */
+    this.fromApi = undefined;
     this.apiKey = o.apiKey;
     this.fetch = o.fetch ?? globalThis.fetch;
     this.split = o.split;
@@ -259,23 +332,62 @@ export class CarlCache {
     /** @type {Map<string, string>} model:slot -> the session of this process that ran there last */
     this.owner = new Map();
     this.settingsAt = 0;
-    this.settingsCache = { enabled: true, prefix: true, sessions: true, diskGb: 5 };
+    this.settingsCache = { enabled: true, prefix: true, sessions: true, diskGb: DEFAULT_GB, save: "auto", autoS: AUTO_S };
   }
 
-  /** The Caching settings (config.json "cache" on this Mac; the defaults elsewhere). */
+  /** Is the slots folder somewhere else (a VM's client) with the dashboard's cache API to use? */
+  remote() {
+    return Boolean(this.cacheApi) && !(this.local && this.dirExists());
+  }
+
+  /**
+   * A call to the cache API; { status, json } (status 0: no API, or it didn't answer).
+   * @param {"GET" | "POST"} method @param {string} path @param {Record<string, any>} [body]
+   */
+  async api(method, path, body) {
+    try {
+      /** @type {Record<string, string>} */
+      const headers = { "Content-Type": "application/json" };
+      if (this.apiKey) headers.Authorization = `Bearer ${this.apiKey}`;
+      const r = await this.fetch(this.cacheApi + path, { method, headers, body: body ? JSON.stringify(body) : undefined,
+                                                         signal: AbortSignal.timeout(3_000) });
+      const text = await r.text();
+      return { status: r.status, json: text ? JSON.parse(text) : {} };
+    } catch {
+      return { status: 0, json: {} };
+    }
+  }
+
+  /** The settings, from the cache API for a remote client (every few seconds); then settings(). */
+  async loadSettings() {
+    if (this.remote() && Date.now() - this.apiAt >= SETTINGS_MS) {
+      this.apiAt = Date.now();
+      const r = await this.api("GET", "/carl/cache/settings");
+      if (r.status === 200) this.fromApi = r.json;
+      this.settingsAt = 0;
+    }
+    return this.settings();
+  }
+
+  /** The Caching settings (config.json "cache" on this Mac; the cache API's for a remote client; else the defaults). */
   settings() {
     const now = Date.now();
     if (now - this.settingsAt < SETTINGS_MS) return this.settingsCache;
     this.settingsAt = now;
-    const s = { enabled: process.env.CARL_CACHE !== "0", prefix: true, sessions: true, diskGb: 5 };
-    if (this.local) {
+    const s = { enabled: process.env.CARL_CACHE !== "0", prefix: true, sessions: true, diskGb: DEFAULT_GB, save: "auto",
+                autoS: AUTO_S };
+    if (this.local || this.fromApi) {
       try {
-        const c = JSON.parse(fs.readFileSync(join(this.home, ".config", "carl", "config.json"), "utf8"))?.cache ?? {};
+        const c = this.fromApi ?? JSON.parse(fs.readFileSync(join(this.home, ".config", "carl", "config.json"), "utf8"))?.cache ?? {};
         s.prefix = c.prefix !== false;
         s.sessions = c.sessions !== false;
         if (Number.isInteger(c.disk_gb) && c.disk_gb > 0) s.diskGb = c.disk_gb;
+        if (SAVES.includes(c.save)) s.save = c.save;
+        if (Number.isInteger(c.auto_s) && c.auto_s > 0) s.autoS = c.auto_s;
       } catch { /* no settings file: the defaults */ }
     }
+    const env = process.env.CARL_CACHE_SAVE;      // a VM's clients: the Caching panel doesn't reach them
+    if (env && SAVES.includes(env)) s.save = env;
     s.enabled = s.enabled && (s.prefix || s.sessions);
     this.settingsCache = s;
     return s;
@@ -315,6 +427,8 @@ export class CarlCache {
     const me = data.find((m) => m?.id === model);
     if (!me) return undefined;                     // not installed: the router answers with its own error
     if (status(me) === "loaded") return { router: true };
+    const loaded = data.find((m) => status(m) === "loaded");
+    if (loaded && this.settings().sessions) await this.saveRecorded(String(loaded.id)).catch(() => {});
     this.log(`loading ${model} (router) before the request, to restore its saved state`);
     // a load asked for while the router switches to another model (a client's title request, say) is
     // refused: ask again while the model is still unloaded
@@ -405,19 +519,35 @@ export class CarlCache {
   }
 
   /**
-   * Mark a slot as taken by a request of this process until release() (the request reached the server).
+   * Take a slot for a request of this process until the returned release() (the request reached the
+   * server); undefined when another request has it. On this Mac a claim file (.claim+MODEL+SLOT in the
+   * slots folder, created only if absent) keeps the other OpenCode and Pi processes off it too; a remote
+   * client claims through the cache API (the same files; no API: as before the claims).
    * @param {string} model @param {number} slot
+   * @returns {Promise<(() => void) | undefined>}
    */
-  claim(model, slot) {
+  async tryClaim(model, slot) {
     const k = `${model}:${slot}`;
+    if (this.isClaimed(model, slot)) return undefined;
+    const path = this.local && this.dirExists() ? join(this.dir, `.claim+${safeName(model, 60)}+${slot}`) : "";
+    if (path && !takeFile(path)) return undefined;
+    const remote = !path && this.remote();
+    if (remote && (await this.api("POST", "/carl/cache/claim", { model, slot })).status === 409) return undefined;
     this.claimed.set(k, (this.claimed.get(k) ?? 0) + 1);
     let done = false;
     const release = () => {
       if (done) return;
       done = true;
       this.claimed.set(k, Math.max(0, (this.claimed.get(k) ?? 1) - 1));
+      if (path) {
+        try {
+          fs.unlinkSync(path);
+        } catch { /* gone */ }
+      } else if (remote) {
+        void this.api("POST", "/carl/cache/release", { model, slot });
+      }
     };
-    setTimeout(release, 30_000).unref?.();
+    setTimeout(release, 60_000).unref?.();
     return release;
   }
 
@@ -429,7 +559,7 @@ export class CarlCache {
    */
   async before(payload, meta) {
     const none = { payload, release: () => {} };
-    const set = this.settings();
+    const set = await this.loadSettings();
     if (!set.enabled || !Array.isArray(payload?.messages)) return none;
     const out = set.prefix && this.split ? relocate(payload, this.split) : payload;
     const moved = { payload: out, release: () => {} };
@@ -444,29 +574,51 @@ export class CarlCache {
       const known = meta.session ? this.sessions.get(id) : undefined;
       let slot;
       let how = "its own";
+      /** @type {(() => void) | undefined} */
+      let release;
+      let base = known?.base;
       if (known && known.epoch === m.epoch) {      // its own slot, unless another session of ours ran there since
         const s = slots.find((x) => x.id === known.slot);
-        if (s && !s.busy && !this.isClaimed(model, s.id) && this.owner.get(`${model}:${s.id}`) === id) slot = s.id;
+        if (s && !s.busy && this.owner.get(`${model}:${s.id}`) === id && (release = await this.tryClaim(model, s.id))) slot = s.id;
+      } else if (meta.session && !meta.sub) {         // new to this process: still in a slot, says a record on this Mac?
+        const file = sessionFile(model, await this.serverKey(model, srv.router, m), meta.session);
+        const rec = await this.recorded(model, file);
+        const s = rec && slots.find((x) => x.id === rec.slot && x.task === rec.task && !x.busy);
+        if (s && rec && (release = await this.tryClaim(model, s.id))) {
+          slot = s.id;
+          base = rec.base;
+          how = "its own, as recorded";
+        }
       }
       if (slot === undefined) {
-        const pick = chooseSlot(slots.filter((s) => !this.isClaimed(model, s.id)));
-        if (!pick) return moved;                         // every slot busy: llama.cpp decides
+        let pick;
+        for (const c of rankSlots(slots)) {
+          if ((release = await this.tryClaim(model, c.id))) {
+            pick = c;
+            break;
+          }
+        }
+        if (!pick || !release) return moved;          // every slot busy or taken: llama.cpp decides
         slot = pick.id;
         // from the disk: a session new to this process (or to this server), or one whose slot another
         // session took since its last save; else llama.cpp finds it in its RAM cache
         if (!(known && known.epoch === m.epoch) || known.saved) {
-          await this.fill(out, model, srv.router, m, pick, meta, set);
+          try {
+            base = await this.fill(out, model, srv.router, m, pick, meta, set);
+          } catch (e) {
+            release();
+            throw e;
+          }
           how = "filled";
         } else {
           how = "the RAM cache's";
         }
       }
-      const release = this.claim(model, slot);
       this.owner.set(`${model}:${slot}`, id);
       this.log(`request: ${meta.agent} ${meta.session ?? "-"} -> slot ${slot} (${how})`);
       if (meta.session) {
         this.sessions.set(id, { ...(known ?? {}), slot, epoch: m.epoch, model, router: srv.router, payload: out,
-                                at: Date.now(), sub: Boolean(meta.sub) });
+                                at: Date.now(), sub: Boolean(meta.sub), base });
       }
       return { payload: { ...out, id_slot: slot }, release };
     } catch (e) {
@@ -479,13 +631,15 @@ export class CarlCache {
    * Put the best saved state into the slot: the session's file, else the agent's prompt file (read once
    * and saved when there is none).
    * @param {Record<string, any>} payload @param {string} model @param {boolean} router @param {ModelState} m
-   * @param {{ id: number, n: number }} pick @param {Meta} meta @param {{ prefix: boolean, sessions: boolean }} set
+   * @param {{ id: number, n: number, task: number }} pick @param {Meta} meta
+   * @param {{ prefix: boolean, sessions: boolean, save: string }} set
+   * @returns {Promise<number | undefined>} the tokens put in
    */
   async fill(payload, model, router, m, pick, meta, set) {
     const key = await this.serverKey(model, router, m);
     const before = this.owner.get(`${model}:${pick.id}`);
     const other = before ? this.sessions.get(before) : undefined;
-    if (other && other.epoch === m.epoch && set.sessions && pick.n >= MIN_SESSION_TOKENS) {
+    if (other && other.epoch === m.epoch && set.sessions && set.save !== "stop" && pick.n >= MIN_SESSION_TOKENS) {
       // another session of ours is in the slot: saved first (set back to the end of its last prompt, so its
       // next prompt continues it), then put back from its file when it returns
       const [, session, agent] = before.split("\n");
@@ -495,44 +649,87 @@ export class CarlCache {
       await this.call("POST", "/completion", { prompt: [0], n_predict: 0, cache_prompt: true, id_slot: pick.id,
                                                ...this.withModel(model, router) }, 60_000);
     }
-    if (set.sessions && meta.session && !meta.sub && await this.restore(model, router, pick.id, sessionFile(model, key, meta.session))) {
+    const got = set.sessions && meta.session && !meta.sub
+      ? await this.restore(model, router, pick.id, sessionFile(model, key, meta.session)) : undefined;
+    if (got !== undefined) {
       this.log(`session ${meta.session}: restored into slot ${pick.id}`);
-      return;
+      return got;
     }
-    if (!set.prefix) return;
+    if (!set.prefix) return undefined;
     const pf = await this.prefix(payload, model, router, m, meta.agent);
-    if (!pf) return;
-    if (await this.restore(model, router, pick.id, pf.file)) {
+    if (!pf) return undefined;
+    if (await this.restore(model, router, pick.id, pf.file) !== undefined) {
       this.log(`${meta.agent}'s prompt (${pf.tokens.length} tokens) restored into slot ${pick.id}`);
-      return;
+      return pf.tokens.length;
     }
-    if (this.diskFull()) return;
+    if (this.diskFull()) return undefined;
     const t0 = Date.now();
     await this.call("POST", "/completion", { prompt: pf.tokens, n_predict: 0, cache_prompt: true, id_slot: pick.id,
                                              ...this.withModel(model, router) }, 3_600_000);
     await this.call("POST", `/slots/${pick.id}?action=save`, { filename: pf.file, ...this.withModel(model, router) });
-    this.log(`${meta.agent}'s prompt (${pf.tokens.length} tokens) read in ${((Date.now() - t0) / 1000).toFixed(1)} s and saved`);
+    const secs = (Date.now() - t0) / 1000;
+    m.speed = pf.tokens.length / Math.max(secs, 0.1);       // this model's read speed (the auto save rule)
+    this.log(`${meta.agent}'s prompt (${pf.tokens.length} tokens) read in ${secs.toFixed(1)} s and saved`);
     this.wrote(pf.file, pf.file.slice(0, pf.file.lastIndexOf("+") + 1));
+    return pf.tokens.length;
   }
 
-  /** @param {string} model @param {boolean} router @param {number} slot @param {string} file */
+  /**
+   * Put a saved state into the slot; the tokens it holds, undefined when it can't (no such file).
+   * @param {string} model @param {boolean} router @param {number} slot @param {string} file
+   * @returns {Promise<number | undefined>}
+   */
   async restore(model, router, slot, file) {
-    if (this.local && !this.exists(file)) return false;
+    if (this.local && !this.exists(file)) return undefined;
+    if (!(await this.whole(file))) return undefined;
     try {
-      await this.call("POST", `/slots/${slot}?action=restore`, { filename: file, ...this.withModel(model, router) }, 120_000);
-      return true;
+      const r = await this.call("POST", `/slots/${slot}?action=restore`, { filename: file, ...this.withModel(model, router) },
+                                120_000);
+      return Number(r?.n_restored) || 0;
     } catch {
-      return false;
+      return undefined;
     }
   }
 
   /** @param {string} file */
   exists(file) {
+    for (const f of [file, `${file}.zst`]) {
+      try {
+        fs.statSync(join(this.dir, f));
+        return true;
+      } catch { /* the next form */ }
+    }
+    return !this.dirExists();             // the folder isn't here (the server is elsewhere): try it
+  }
+
+  /**
+   * A conversation stored as a patch against its prompt (tools/monitor/slotpack.py) made whole again
+   * before a restore: here with zstd, for a remote client by the dashboard's API. True when it is whole.
+   * @param {string} file
+   */
+  async whole(file) {
+    if (!file.startsWith("carl-session+")) return true;
+    if (!(this.local && this.dirExists())) {
+      if (!this.remote()) return true;    // nothing to do from here: the restore says
+      return (await this.api("POST", "/carl/cache/unpack", { file })).status !== 404;
+    }
+    const path = join(this.dir, file);
+    if (fs.existsSync(path)) return true;
+    const meta = json(`${path}.json`);
+    const base = meta && typeof meta.base === "string" ? join(this.dir, meta.base) : "";
+    if (!base || !fs.existsSync(base) || !fs.existsSync(`${path}.zst`)) return false;
+    const r = spawnSync("zstd", ["-q", "-f", "--long=31", "-d", `--patch-from=${base}`, `${path}.zst`, "-o", `${path}.tmp`],
+                        { stdio: "ignore", timeout: 600_000 });
     try {
-      fs.statSync(join(this.dir, file));
+      if (r.status !== 0 || fs.statSync(`${path}.tmp`).size !== meta.size) throw new Error("unpack");
+      fs.utimesSync(`${path}.tmp`, meta.packed_at, meta.packed_at);   // a copy: the dashboard removes it later
+      fs.renameSync(`${path}.tmp`, path);
       return true;
     } catch {
-      return !this.dirExists();           // the folder isn't here (the server is elsewhere): try it
+      try {
+        fs.unlinkSync(`${path}.tmp`);
+      } catch { /* none */ }
+      return false;
     }
   }
 
@@ -615,7 +812,7 @@ export class CarlCache {
    * @param {Meta} meta
    */
   async after(meta) {
-    const set = this.settings();
+    const set = await this.loadSettings();
     if (!set.enabled || !set.sessions || meta.sub || !meta.session || NO_SAVE_AGENTS.has(meta.agent)) return;
     /** @type {SessionState | undefined} */
     let e;
@@ -640,9 +837,130 @@ export class CarlCache {
         this.log(`after: session ${meta.session} not saved (slot ${e.slot}: ${s ? `${s.n} tokens${s.busy ? ", busy" : ""}` : "gone"})`);
         return;
       }
-      await this.save(e, meta.session, s, m, false);
+      const unsaved = s.n - Math.max(e.savedN ?? 0, e.base ?? 0);
+      const mode = this.settings().save;
+      if (mode === "turn" || (mode === "auto" && unsaved >= (m.speed ?? READ_SPEED) * this.settings().autoS)) {
+        await this.save(e, meta.session, s, m, false);
+        await this.unrecord(model, e.slot);
+        return;
+      }
+      // the slot keeps it: a record says which session it is (saved before the server or model stops,
+      // or before its slot is needed), the slot first set back where a reply won't re-render as generated
+      const settled = (await this.stable(e.payload, model, router, m)) ? s : await this.settle(e);
+      await this.record(model, e.slot, sessionFile(model, await this.serverKey(model, router, m), meta.session), settled.task,
+                  Math.max(e.savedN ?? 0, e.base ?? 0));
+      this.log(`session ${meta.session}: ${unsaved} tokens not saved yet (save = ${mode})`);
     } catch (err) {
       this.log(`after: ${err instanceof Error ? err.message : err}`);
+    }
+  }
+
+  /**
+   * Set a session's slot back to the end of its last prompt (the state its next prompt continues);
+   * the slot as it is then.
+   * @param {SessionState} e
+   * @returns {Promise<{ id: number, busy: boolean, n: number, task: number }>}
+   */
+  async settle(e) {
+    const { model, router } = e;
+    const r = await this.call("POST", "/apply-template", { messages: e.payload.messages, ...templateFields(e.payload),
+                                                          ...this.withModel(model, router) });
+    const toks = await this.tokens(String(r?.prompt ?? ""), model, router);
+    await this.call("POST", "/completion", { prompt: toks, n_predict: 0, cache_prompt: true, id_slot: e.slot,
+                                             ...this.withModel(model, router) }, 3_600_000);
+    const now = (await this.slots(model, router)).find((x) => x.id === e.slot);
+    return now ?? { id: e.slot, busy: false, n: toks.length, task: -1 };
+  }
+
+  /** The record file of a slot (this Mac only). @param {string} model @param {number} slot */
+  recordPath(model, slot) {
+    return this.local && this.dirExists() ? join(this.dir, `.resident+${safeName(model, 60)}+${slot}.json`) : "";
+  }
+
+  /**
+   * Record which session a slot holds (its task id: a slot used since is not saved under its name), and
+   * how much of it a file already holds (base: the auto rule counts only the rest).
+   * @param {string} model @param {number} slot @param {string} file @param {number} task @param {number} base
+   */
+  async record(model, slot, file, task, base) {
+    const path = this.recordPath(model, slot);
+    if (!path) {
+      if (this.remote()) await this.api("POST", "/carl/cache/record", { model, slot, file, task, base });
+      return;
+    }
+    try {
+      fs.writeFileSync(path + ".tmp", JSON.stringify({ model, slot, file, task, base }));
+      fs.renameSync(path + ".tmp", path);
+    } catch { /* no record: the session waits for its next save */ }
+  }
+
+  /**
+   * The slot a record on this Mac says holds this session's state (its task id then).
+   * @param {string} model @param {string} file
+   * @returns {Promise<{ slot: number, task: number, base: number } | undefined>}
+   */
+  async recorded(model, file) {
+    if (!this.local || !this.dirExists()) {
+      if (!this.remote()) return undefined;
+      const r = await this.api("GET", `/carl/cache/record?model=${encodeURIComponent(model)}&file=${encodeURIComponent(file)}`);
+      const j = r.json;
+      return r.status === 200 && Number.isInteger(j?.slot) && Number.isInteger(j?.task)
+        ? { slot: j.slot, task: j.task, base: Number(j.base) || 0 } : undefined;
+    }
+    const head = `.resident+${safeName(model, 60)}+`;
+    try {
+      for (const n of fs.readdirSync(this.dir)) {
+        if (!n.startsWith(head) || !n.endsWith(".json")) continue;
+        const r = JSON.parse(fs.readFileSync(join(this.dir, n), "utf8"));
+        if (r?.model === model && r.file === file && Number.isInteger(r.slot) && Number.isInteger(r.task)) {
+          return { slot: r.slot, task: r.task, base: Number(r.base) || 0 };
+        }
+      }
+    } catch { /* no record */ }
+    return undefined;
+  }
+
+  /** @param {string} model @param {number} slot */
+  async unrecord(model, slot) {
+    const path = this.recordPath(model, slot);
+    if (!path && this.remote()) await this.api("POST", "/carl/cache/unrecord", { model, slot });
+    if (path) {
+      try {
+        fs.unlinkSync(path);
+      } catch { /* none */ }
+    }
+  }
+
+  /**
+   * Before the model stops (a router switch): save the sessions the clients on this Mac recorded in its
+   * slots, each only if its slot still holds that state.
+   * @param {string} model
+   */
+  async saveRecorded(model) {
+    if (this.settings().save === "turn") return;
+    if (this.remote()) {                            // the dashboard has the files: it saves them
+      await this.api("POST", "/carl/cache/save-recorded", { model });
+      return;
+    }
+    if (!this.local || !this.dirExists() || this.diskFull()) return;
+    const head = `.resident+${safeName(model, 60)}+`;
+    let names;
+    try {
+      names = fs.readdirSync(this.dir).filter((n) => n.startsWith(head) && n.endsWith(".json"));
+    } catch {
+      return;
+    }
+    if (!names.length) return;
+    const slots = await this.slots(model, true);
+    for (const n of names) {
+      try {
+        const r = JSON.parse(fs.readFileSync(join(this.dir, n), "utf8"));
+        const s = slots.find((x) => x.id === r.slot);
+        if (r.model !== model || !s || s.busy || s.task !== r.task || !String(r.file).startsWith("carl-session+")) continue;
+        await this.call("POST", `/slots/${r.slot}?action=save`, { filename: r.file, model });
+        fs.unlinkSync(join(this.dir, n));
+        this.log(`${r.file}: saved from slot ${r.slot} before ${model} stops`);
+      } catch { /* the next one */ }
     }
   }
 
@@ -660,18 +978,12 @@ export class CarlCache {
       this.log(`session ${session} not saved: less than 10 GB free on the disk`);
       return;
     }
-    if (settle || !(await this.stable(e.payload, model, router, m))) {
-      const r = await this.call("POST", "/apply-template", { messages: e.payload.messages, ...templateFields(e.payload),
-                                                            ...this.withModel(model, router) });
-      const toks = await this.tokens(String(r?.prompt ?? ""), model, router);
-      await this.call("POST", "/completion", { prompt: toks, n_predict: 0, cache_prompt: true, id_slot: e.slot,
-                                               ...this.withModel(model, router) }, 3_600_000);
-    }
-    const now = (await this.slots(model, router)).find((x) => x.id === e.slot) ?? s;
+    const now = settle || !(await this.stable(e.payload, model, router, m)) ? await this.settle(e) : s;
     const file = sessionFile(model, await this.serverKey(model, router, m), session);
     const r = await this.call("POST", `/slots/${e.slot}?action=save`, { filename: file, ...this.withModel(model, router) });
     e.saved = `${now.task}:${now.n}`;
-    this.log(`session ${session}: ${r?.n_saved ?? now.n} tokens saved from slot ${e.slot}${settle ? " (its slot is needed)" : ""}`);
+    e.savedN = Number(r?.n_saved) || now.n;
+    this.log(`session ${session}: ${e.savedN} tokens saved from slot ${e.slot}${settle ? " (its slot is needed)" : ""}`);
     this.wrote(file, "");
   }
 
@@ -687,10 +999,6 @@ export class CarlCache {
     const gone = group ? files.filter((f) => same(f.name) && f.name !== file).map((f) => f.name) : [];
     const rest = files.filter((f) => !gone.includes(f.name));
     gone.push(...overBudget(rest, this.settings().diskGb * 1e9, file));
-    for (const n of gone) {
-      try {
-        fs.unlinkSync(join(this.dir, n));
-      } catch { /* already gone */ }
-    }
+    for (const n of gone) removeState(this.dir, n);
   }
 }

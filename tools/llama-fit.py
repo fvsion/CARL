@@ -40,7 +40,7 @@ from carl_core.domain.autofit import (GOAL_TEXT, GOALS, SCOPES, AutoFit, Budget,
                                       as_scope, gib)
 from carl_core.domain.errors import ConfigError  # noqa: E402
 from carl_core.domain.fit import (DEFAULT_CTX, check_start, estimated_limit, max_ctx, need_bytes,  # noqa: E402
-                                  plan_slots, prompt_cache_mib, reserve_bytes, window_label)
+                                  prompt_cache_mib, reserve_bytes, swa_plan, window_label)
 from carl_core.domain.gguf import GIB, OVERHEAD, ModelShape, kv_bytes_per_token, model_shape  # noqa: E402
 from carl_core.domain.types import ModelInfo  # noqa: E402
 from carl_core.wiring import GPU  # noqa: E402
@@ -76,6 +76,7 @@ def parse_args(argv: List[str]) -> argparse.Namespace:
     ap.add_argument("--pick-default", action="store_true", help=argparse.SUPPRESS)  # auto fit's pick (catalogue)
     ap.add_argument("--want-slots", default="auto", help=argparse.SUPPRESS)
     ap.add_argument("--kv", default="q4_0", help=argparse.SUPPRESS)
+    ap.add_argument("--swa", default="auto", choices=("auto", "full", "window"), help=argparse.SUPPRESS)
     return ap.parse_args(argv)
 
 
@@ -92,13 +93,15 @@ def local_shape(path: str) -> Tuple[ModelShape, int]:
 
 
 def cmd_plan(args: argparse.Namespace, limit: int) -> None:
-    """Launcher plan: slots (auto = 2 when two full windows fit the GPU limit, else 1) and a
-    RAM prompt cache from what is left after a reserve for macOS + apps (+ the VM)."""
+    """Launcher plan, as "SLOTS CACHE_MIB SWA": slots (auto = 2 when two full windows fit the GPU
+    limit, else 1), a RAM prompt cache from what is left after a reserve for macOS + apps (+ the
+    VM), and for a model with sliding-window layers full or window (--swa; "-" for other models)."""
     shape, w = local_shape(args.plan)
     ctx = args.ctx or DEFAULT_CTX
-    slots = plan_slots(args.want_slots, need_bytes(shape, w, ctx, 2, args.kv) <= limit)
+    slots, full = swa_plan(args.swa, shape, w, ctx, args.want_slots, args.kv, limit)
     reserve = reserve_bytes(args.reserve_gb, vm_network_up())
-    print(slots, prompt_cache_mib(sysctl_int("hw.memsize"), need_bytes(shape, w, ctx, slots, args.kv), reserve))
+    need = need_bytes(shape, w, ctx, slots, args.kv, swa_full=full is not False)
+    print(slots, prompt_cache_mib(sysctl_int("hw.memsize"), need, reserve), "-" if full is None else "full" if full else "window")
 
 
 def start_hint(fit: AutoFit) -> str:
@@ -141,7 +144,7 @@ def cmd_check(args: argparse.Namespace, limit: int, how: str) -> int:
     """Refuse (exit 3, the reasons on stderr) a start that needs more than the GPU limit: it
     would fail to load or swap the Mac to a crawl."""
     shape, w = local_shape(args.check)
-    chk = check_start(shape, w, args.ctx or DEFAULT_CTX, args.slots, args.kv, limit)
+    chk = check_start(shape, w, args.ctx or DEFAULT_CTX, args.slots, args.kv, limit, swa_full=args.swa != "window")
     if chk.fits:
         return 0
     err = sys.stderr

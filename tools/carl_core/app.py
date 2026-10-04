@@ -319,7 +319,8 @@ class Carl:
         cache = ll["cache_ram"]
         common = Common(batch=int(str(ll["batch"])), ubatch=int(str(ll["ub"])), ckpt=int(str(ll["ckpt"])),
                         ckpt_step=int(str(ll["ckpt_step"])), cache_ram=cache if isinstance(cache, int) else None,
-                        slot_dir=os.path.join(self.home, ".config", "carl", "slots"))
+                        slot_dir=os.path.join(self.home, ".config", "carl", "slots"),
+                        swa_mode=str(cfg.cache.get("swa") or "auto"))
         limit = self.gpu.limit()[0]
         ram, vm = self.host.ram_bytes(), self.host.vm_network_up()
         preset = Preset()
@@ -374,7 +375,7 @@ class Carl:
         advice = dm.tune_advice(m, vals, src)
         note = "\n".join(n for n in (note, advice) if n) or None
         shape = self.shape_of(m)
-        return build_launch_env(m, vals, src, cfg, swa=bool(shape and shape.get("swa"))), note
+        return build_launch_env(m, vals, src, cfg, swa=bool(shape and shape.get("swa_window"))), note
 
     # ------------------------------------------------------------ Hugging Face + downloads
     def hf_files(self, repo: str, revision: str = "main") -> HfFileList:

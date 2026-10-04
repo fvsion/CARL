@@ -13,7 +13,9 @@ from .settings import Pending
 from .store import HFFile
 
 TABS = ["Overview", "Connect", "Requests", "Log", "Settings"]
-SUBPANELS = ["Server", "Models", "Auto fit", "Auto-tune", "Router", "Caching"]
+SUBPANELS = ["Server", "Models", "Auto fit", "Auto-tune", "Router", "Caching (exp.)"]
+CONNECT_SUBPANELS = ["Setup", "Clients"]
+TUNE_ALL = "*all*"                 # Auto-tune's choice "every downloaded model" (carl-tune.py all)
 SP_SERVER, SP_MODELS, SP_FIT, SP_TUNE, SP_ROUTER, SP_CACHE = range(len(SUBPANELS))
 
 
@@ -112,6 +114,7 @@ class UIState:
     tab: int = 0
     scroll: int = 0                 # Overview
     prev_scroll: int = 0            # Connect: the config preview
+    connect_sp: int = 0             # Connect: 0 Setup, 1 Clients (CONNECT_SUBPANELS)
     req_scroll: int = 0
     log_scroll: int = 0             # lines back from the end
     lines: int = 6                  # log lines on the Overview tab

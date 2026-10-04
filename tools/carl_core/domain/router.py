@@ -18,7 +18,7 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
 from .errors import ConfigError
-from .fit import check_start, need_bytes, plan_slots, prompt_cache_mib, window_label
+from .fit import check_start, prompt_cache_mib, swa_plan, window_label
 from .gguf import ModelShape
 from .types import Settings
 
@@ -35,7 +35,8 @@ class Common:
     ckpt: int
     ckpt_step: int
     cache_ram: Optional[int]    # MiB; None = sized per model from free RAM
-    slot_dir: str = ""          # --slot-save-path: the saved prompt prefixes (tools/monitor/prefix.py)
+    slot_dir: str = ""          # --slot-save-path: the disk cache of prompt states (client/shared/carl-cache.js)
+    swa_mode: str = "auto"      # cache.swa: sliding-window models at full length (full), the window, or auto
 
 
 @dataclass(frozen=True)
@@ -52,7 +53,7 @@ class ModelPlan:
     cache_mib: int
     template: Optional[str]
     need: float
-    swa: bool = False           # sliding-window layers: swa-full (saved prompt states restore; launch.py)
+    swa: bool = False           # sliding-window layers at full length: swa-full (saved prompt states restore)
 
     def label(self) -> str:
         return f"{self.slots} × {window_label(self.ctx)} {self.kv}"
@@ -75,8 +76,8 @@ def plan_model(name: str, path: str, vals: Settings, shape: ModelShape, weights:
     """(the model's section, "") or (None, why it is left out): its effective settings, slots
     auto = 2 when two windows fit, the same memory check a start makes."""
     ctx, kv = int(str(vals["ctx"])), str(vals["kv"])
-    slots = plan_slots(str(vals["slots"]), need_bytes(shape, weights, ctx, 2, kv) <= limit)
-    chk = check_start(shape, weights, ctx, slots, kv, limit)
+    slots, swa_full = swa_plan(common.swa_mode, shape, weights, ctx, str(vals["slots"]), kv, limit)
+    chk = check_start(shape, weights, ctx, slots, kv, limit, swa_full=swa_full is not False)
     if not chk.fits:
         largest = f"largest window {window_label(chk.largest)}" if chk.largest else "the weights alone don't fit"
         return None, f"needs {chk.need / 2**30:.1f} GiB for {slots} × {window_label(ctx)} {kv} ({largest})"
@@ -86,7 +87,7 @@ def plan_model(name: str, path: str, vals: Settings, shape: ModelShape, weights:
     cache = common.cache_ram if common.cache_ram is not None else prompt_cache_mib(ram, chk.need, reserve)
     sampling = tuple((key, float(str(vals[k]))) for k, key in SAMPLING_KEYS)
     return ModelPlan(name, path, ctx, slots, kv, str(vals["spec"]), int(str(vals["spec_n"])), sampling, cache,
-                     template, chk.need, bool(shape.get("swa"))), ""
+                     template, chk.need, bool(swa_full)), ""
 
 
 def _num(v: float) -> str:

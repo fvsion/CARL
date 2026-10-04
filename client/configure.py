@@ -119,6 +119,8 @@ MODEL_CHECK = "carl-model-check"
 CACHE = "carl-cache"                                    # the prompt cache: OpenCode plugin and Pi extension
 OLD_CACHE = "carl-prefix-cache"                         # its OpenCode plugin before 11.5 (removed)
 CACHE_CORE = "shared/carl-cache.js"                     # the code both carry
+PANEL = "carl-panel"                                    # the /carl panel: OpenCode TUI plugin and Pi extension
+PANEL_CORE = "shared/carl-panel.js"
 CODER = "coder"                                         # the coder subagent's name in both clients
 CODER_ALT = "carl-coder"                                # ... when the user has their own "coder"
 CODER_NAMES = (CODER, CODER_ALT, "llm-deploy-coder")    # every name CARL used (the last before 1.2.0)
@@ -168,6 +170,11 @@ class Options:
     @property
     def base_url(self) -> str:
         return f"http://{self.host}:{self.llama_port}/v1"
+
+    @property
+    def cache_api(self) -> str:
+        """The dashboard's cache API (tools/monitor/cacheapi.py): next to the server, port + 1."""
+        return f"http://{self.host}:{int(self.llama_port) + 1}"
 
 
 def host_arg(v: str) -> str:
@@ -705,7 +712,8 @@ class Installer:
         shutil.copytree(self.bundle_path(os.path.join("opencode/plugins", name)), dest)
         if name == CACHE:
             shutil.copy(self.bundle_path(CACHE_CORE), dest)
-        want = [entry, {"provider": provider_id}]
+            shutil.copy(self.bundle_path(PANEL_CORE), dest)
+        want = [entry, {"provider": provider_id, **({"cacheApi": self.o.cache_api} if name == CACHE else {})}]
         if had != [want]:
             self.report.add("updated" if had else "added", f"OpenCode plugin {name} ({what})")
         cfg["plugin"] = rest + [want]
@@ -821,12 +829,15 @@ class Installer:
         tui = load(tui_path, {})
         tplug = tui.setdefault("plugin", [])
         for name, label, want in (("subagents-sidebar", "OpenCode subagents sidebar", self.o.sidebar),
-                                  ("session-switcher", "OpenCode session switcher", self.o.switcher)):
+                                  ("session-switcher", "OpenCode session switcher", self.o.switcher),
+                                  (PANEL, "OpenCode /carl panel", True)):
             dest = os.path.join(oc, "plugins", name)
             entry = "file:" + dest
             if want:
                 shutil.rmtree(dest, ignore_errors=True)
                 shutil.copytree(self.bundle_path(os.path.join("opencode/plugins", name)), dest)
+                if name == PANEL:
+                    shutil.copy(self.bundle_path(PANEL_CORE), dest)
                 if entry not in tplug:
                     tplug.append(entry)
                     rep.add("added", f"{label} (tui.json)")
@@ -868,7 +879,12 @@ class Installer:
         self._pi_settings(st, ids, first_install, had_ours_before, renamed)
         self._pi_tools(st)
         self._pi_extensions_and_coder(st)
-        self._pi_cache(st)
+        self._pi_ext(CACHE, self.o.cache, [CACHE_CORE, PANEL_CORE], "the prompt cache", st, "cache_ext")
+        self._pi_ext(PANEL, True, [PANEL_CORE], "the /carl panel", st, "panel_ext")
+        if self.o.cache:
+            st["cache_api"] = self.o.cache_api
+        else:
+            st.pop("cache_api", None)
 
         st.update({"providers": ids, "base_url": self.o.base_url, "updated": self.stamp})
         self.save_state(pi, "Pi", st)
@@ -1028,29 +1044,30 @@ class Installer:
             self.save_text(asp, cur + "\n" if cur else "", mode=0o644)
 
 
-    def _pi_cache(self, st: JsonObj) -> None:
-        """The prompt cache extension (extensions/carl-cache, with the shared carl-cache.js); a folder
-        of that name that isn't ours stays."""
-        dest = os.path.join(self.o.pi_dir, "extensions", CACHE)
+    def _pi_ext(self, name: str, want: bool, shared: list[str], what: str, st: JsonObj, key: str) -> None:
+        """One of CARL's Pi extensions (extensions/NAME, with the shared files it imports); a folder of that
+        name that isn't ours stays."""
+        dest = os.path.join(self.o.pi_dir, "extensions", name)
         index = read_or_none(os.path.join(dest, "index.ts"))
         ours = index is None and not os.path.exists(dest) or index is not None and NAMES.ext_marker in index
         if not ours:
-            self.report.add("kept", f"Pi extensions/{CACHE} (yours)")
+            self.report.add("kept", f"Pi extensions/{name} (yours)")
             return
-        if not self.o.cache:
+        if not want:
             if os.path.isdir(dest):
                 shutil.rmtree(dest)
-                self.report.add("removed", f"Pi extension {CACHE}")
-            st.pop("cache_ext", None)
+                self.report.add("removed", f"Pi extension {name}")
+            st.pop(key, None)
             return
-        new = read_or_none(self.bundle_path(f"pi/extensions/{CACHE}/index.ts"))
-        changed = index != new or read_or_none(os.path.join(dest, "carl-cache.js")) != read_or_none(self.bundle_path(CACHE_CORE))
+        files = {"index.ts": f"pi/extensions/{name}/index.ts", **{os.path.basename(f): f for f in shared}}
+        changed = any(read_or_none(os.path.join(dest, n)) != read_or_none(self.bundle_path(src)) for n, src in files.items())
         shutil.rmtree(dest, ignore_errors=True)
-        shutil.copytree(self.bundle_path(f"pi/extensions/{CACHE}"), dest)
-        shutil.copy(self.bundle_path(CACHE_CORE), dest)
+        shutil.copytree(self.bundle_path(f"pi/extensions/{name}"), dest)
+        for f in shared:
+            shutil.copy(self.bundle_path(f), dest)
         if changed:
-            self.report.add("updated" if index is not None else "added", f"Pi extension {CACHE} (the prompt cache)")
-        st["cache_ext"] = True
+            self.report.add("updated" if index is not None else "added", f"Pi extension {name} ({what})")
+        st[key] = True
 
 
 def main(argv: list[str]) -> int:

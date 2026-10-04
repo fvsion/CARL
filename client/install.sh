@@ -5,7 +5,8 @@
 # defaults and agents are tracked in carl.json next to each config; a
 # backup is written before any change.
 #
-#   ./install.sh                     auto: on macOS = --local, on Linux = --vm
+#   ./install.sh                     the server in remote.json next to this script (the server
+#                                    writes it at every start), else auto: macOS = --local, Linux = --vm
 #   ./install.sh --vm [HOST]         server on the VM host (default 192.168.42.1)
 #   ./install.sh --local             server on this Mac: uses the address the
 #                                    running server listens on, else 127.0.0.1
@@ -57,6 +58,22 @@ if (( ${#pos[@]} >= 2 )); then
   echo "note: './install.sh HOST MTPLX_PORT LLAMA_PORT' is deprecated: MTPLX support was removed, '${pos[1]}' is ignored." >&2
   echo "      Use: ./install.sh --host HOST [--port LLAMA_PORT]" >&2
   [[ ${#pos[@]} -ge 3 && -z "$LLAMA_PORT" ]] && LLAMA_PORT="${pos[2]}"
+fi
+# remote.json (written next to this script at every server start: host/serve-llama.sh): the
+# server's address and port, for a copy of this folder on another computer given no address.
+if [[ -z "$MODE" && -s "$HERE/remote.json" ]]; then
+  if remote=$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(d["host"], int(d["port"]))' \
+                "$HERE/remote.json" 2>/dev/null); then
+    HOST="${remote% *}"; LLAMA_PORT="${LLAMA_PORT:-${remote#* }}"
+    # the server's own computer (its address is one of ours): local, no sync service
+    if [[ "$HOST" =~ ^(127\.0\.0\.1|localhost|::1)$ ]] || { command -v ifconfig >/dev/null && ifconfig 2>/dev/null | grep -qF "inet $HOST "; } \
+       || { command -v ip >/dev/null && ip -o addr 2>/dev/null | grep -qF "inet $HOST/"; }; then
+      MODE=local
+    else
+      MODE=host
+    fi
+    echo "server address from remote.json: $HOST:$LLAMA_PORT"
+  fi
 fi
 LLAMA_PORT="${LLAMA_PORT:-8080}"
 if [[ -z "$MODE" ]]; then
@@ -277,6 +294,78 @@ python3 "$HERE/configure.py" --bundle "$HERE" --home "$HOME" --host "$HOST" \
   --profile "$([[ "${NO_PROFILE:-0}" == 1 ]] && echo 0 || echo 1)" \
   --cache "$([[ "${NO_CACHE:-0}" == 1 || "${NO_PREFIX_CACHE:-0}" == 1 ]] && echo 0 || echo 1)" \
   --browser "$([[ "${NO_BROWSER:-0}" == 1 ]] && echo 0 || echo 1)" --browser-headed "$([[ "${BROWSER_HEADED:-0}" == 1 ]] && echo 1 || echo 0)"
+
+# --- Client config sync (carl-sync.py) -------------------------------------------
+# This install's switches, so a sync (a config pushed from the server's dashboard) applies them
+# again; and on a computer whose server is elsewhere (remote.json), the sync service: one outgoing
+# connection to the dashboard's API (no port opens here) that applies a pushed config with this
+# installer. launchd (macOS) or systemd --user (Linux) keeps it running. Off: NO_SYNC_SERVICE=1.
+SYNC_LABEL=dev.carl.sync
+sync_service() {   # sync_service on|off: install / remove the service; "on" fails without a service manager
+  local py plist unit
+  py="$(command -v python3)"
+  plist="$HOME/Library/LaunchAgents/$SYNC_LABEL.plist"
+  unit="$HOME/.config/systemd/user/carl-sync.service"
+  if [[ "$1" == off ]]; then
+    if [[ -f "$plist" ]]; then launchctl bootout "gui/$(id -u)" "$plist" 2>/dev/null || true; rm -f "$plist"; echo "  removed   the client sync service"; fi
+    if [[ -f "$unit" ]]; then systemctl --user disable --now carl-sync.service 2>/dev/null || true; rm -f "$unit"; echo "  removed   the client sync service"; fi
+    return 0
+  fi
+  if [[ "$OS" == Darwin ]]; then
+    mkdir -p "$(dirname "$plist")"
+    cat > "$plist" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>$SYNC_LABEL</string>
+  <key>ProgramArguments</key><array><string>$py</string><string>$HERE/carl-sync.py</string><string>watch</string></array>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>StandardErrorPath</key><string>$HOME/.config/carl/client-sync.err</string>
+</dict></plist>
+PLIST
+    launchctl bootout "gui/$(id -u)" "$plist" 2>/dev/null || true
+    launchctl bootstrap "gui/$(id -u)" "$plist"
+  elif command -v systemctl >/dev/null 2>&1 && systemctl --user show-environment >/dev/null 2>&1; then
+    mkdir -p "$(dirname "$unit")"
+    cat > "$unit" <<UNIT
+[Unit]
+Description=CARL client config sync (applies the config pushed from the CARL dashboard)
+After=network-online.target
+
+[Service]
+ExecStart=$py $HERE/carl-sync.py watch
+Restart=always
+RestartSec=30
+
+[Install]
+WantedBy=default.target
+UNIT
+    systemctl --user daemon-reload && systemctl --user enable --now carl-sync.service >/dev/null
+  else
+    return 1
+  fi
+}
+if [[ "${CARL_SYNC:-0}" != 1 ]]; then
+  ( umask 077; mkdir -p "$HOME/.config/carl"
+    for k in WEB_SEARCH NO_LSP LSP NO_BROWSER BROWSER_HEADED NO_SIDEBAR NO_SWITCHER NO_MODEL_CHECK \
+             NO_BACKGROUND_SUBAGENTS NO_CACHE LLAMA_CTX; do
+      [[ -n "${!k:-}" ]] && printf '%s=%s\n' "$k" "${!k}"
+    done > "$HOME/.config/carl/client-install.env" ) || true
+  if [[ "$MODE" == local || ! -s "$HERE/remote.json" || "${NO_SYNC_SERVICE:-0}" == 1 ]]; then
+    sync_service off
+    python3 "$HERE/carl-sync.py" register off 2>/dev/null || true
+    [[ "$MODE" != local && "${NO_SYNC_SERVICE:-0}" == 1 ]] && echo "client sync: no service (NO_SYNC_SERVICE=1): OpenCode and Pi check for a pushed config when they start"
+  elif sync_service on; then
+    python3 "$HERE/carl-sync.py" register on 2>/dev/null || true
+    echo "client sync: a background service ($([[ "$OS" == Darwin ]] && echo "launchd $SYNC_LABEL" || echo "systemd --user carl-sync")) keeps one"
+    echo "             connection to the server's dashboard and applies the config pushed from there (it"
+    echo "             opens no port here; /carl in OpenCode or Pi shows it). Off: NO_SYNC_SERVICE=1 ./install.sh"
+  else
+    python3 "$HERE/carl-sync.py" register off 2>/dev/null || true
+    echo "client sync: no service manager here: OpenCode and Pi check for a pushed config when they start"
+  fi
+fi
 
 # --- Smoke test ----------------------------------------------------------------
 echo

@@ -8,6 +8,8 @@ import os
 from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Optional, Tuple
 
+from .cacheapi import Client
+
 from .fmt import (B, CYN, DIM, GRN, MAG, NA, R, RED, YEL, Card, CardLine, Ln, Row, bar, buttons, draw_card, dur,
                   home_short, knum, lv, size, wrap)
 from .gguf import KV_BPE, kv_bytes_per_token
@@ -45,6 +47,10 @@ class View:
     log_scroll: int = 0                 # lines back from the end
     level_override: Dict[str, int] = field(default_factory=dict)
     cache: str = ""                     # what the disk cache holds (tools/monitor/diskcache.py)
+    api: str = ""                       # the dashboard's API for clients (host:port; "" when not running)
+    listeners: int = 0                  # clients holding its config event stream (their sync service)
+    pushed: str = ""                    # the last pushed client config: "VERSION at TIME"
+    clients: Tuple[Client, ...] = ()    # the clients that sync (cacheapi.Client), newest first
 
     def level(self, name: str) -> int:
         """A card's detail level: 0 collapsed, 1 normal, 2 full (1 for cards without one)."""

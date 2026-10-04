@@ -34,10 +34,18 @@ class PlanTest(unittest.TestCase):
         self.assertIsNone(p)
         self.assertIn("the weights alone don't fit", why)
 
-    def test_a_sliding_window_model_gets_swa_full(self) -> None:
-        p, why = plan_model("m", "/m.gguf", VALS, {**shape(), "swa": True}, GIB, 24 * GIB, 32 * GIB, 6 * GIB, COMMON, None)
+    def test_a_sliding_window_model_gets_swa_full_when_it_fits(self) -> None:
+        swa = {**shape(), "swa_window": 512, "kv_elems_per_token_swa": 32768}       # 18 KiB per token at full length
+        p, why = plan_model("m", "/m.gguf", VALS, swa, GIB, 24 * GIB, 32 * GIB, 6 * GIB, COMMON, None)
         assert p is not None, why
         self.assertIn("swa-full = true", preset_ini(Preset(models=[p]), COMMON))
+        tight, why = plan_model("m", "/m.gguf", VALS, swa, GIB, 6 * GIB, 32 * GIB, 6 * GIB, COMMON, None)
+        assert tight is not None, why                                                # fits only with the window
+        self.assertNotIn("swa-full", preset_ini(Preset(models=[tight]), COMMON))
+        window = Common(2048, 512, 8, 4096, cache_ram=None, swa_mode="window")
+        w, _ = plan_model("m", "/m.gguf", VALS, swa, GIB, 24 * GIB, 32 * GIB, 6 * GIB, window, None)
+        assert w is not None
+        self.assertNotIn("swa-full", preset_ini(Preset(models=[w]), window))
         q, _ = plan_model("m", "/m.gguf", VALS, shape(), GIB, 24 * GIB, 32 * GIB, 6 * GIB, COMMON, None)
         assert q is not None
         self.assertNotIn("swa-full", preset_ini(Preset(models=[q]), COMMON))

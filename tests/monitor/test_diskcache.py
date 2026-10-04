@@ -2,6 +2,7 @@
 which saved states go when the folder is over the limit."""
 from __future__ import annotations
 
+import json
 import os
 import tempfile
 import unittest
@@ -12,10 +13,27 @@ from monitor.diskcache import CacheFile
 
 
 class DiskCacheTest(unittest.TestCase):
-    def test_settings_default_to_5_gb_with_both_caches_on(self) -> None:
-        self.assertEqual(diskcache.config_of({}), diskcache.CacheConfig(5, True, True))
-        conf = diskcache.config_of({"cache": {"disk_gb": 20, "sessions": False}})
-        self.assertEqual((conf.disk_gb, conf.prefix, conf.sessions, conf.limit), (20, True, False, 20 * 10 ** 9))
+    def test_settings_default_to_10_gb_both_caches_on_auto_saves(self) -> None:
+        self.assertEqual(diskcache.config_of({}), diskcache.CacheConfig(10, True, True, "auto", "auto", 120))
+        conf = diskcache.config_of({"cache": {"disk_gb": 20, "sessions": False, "save": "stop", "swa": "window"}})
+        self.assertEqual((conf.disk_gb, conf.prefix, conf.sessions, conf.limit, conf.save, conf.swa),
+                         (20, True, False, 20 * 10 ** 9, "stop", "window"))
+        self.assertEqual(diskcache.config_of({"cache": {"save": "never"}}).save, "auto")
+
+    def test_slot_records(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            docs = {".resident+m+0.json": {"model": "m", "slot": 0, "file": "carl-session+m+k+a.bin", "task": 4},
+                    ".resident+m+1.json": {"model": "m", "slot": 1, "file": "../escape.bin", "task": 4},
+                    ".resident+other+0.json": {"model": "other", "slot": 0, "file": "carl-session+o+k+b.bin", "task": 1}}
+            for n, doc in docs.items():
+                with open(os.path.join(d, n), "w") as f:
+                    json.dump(doc, f)
+            with open(os.path.join(d, ".resident+m+2.json"), "w") as f:
+                f.write("not json")
+            rs = diskcache.residents(d, "m")
+            self.assertEqual([(r.slot, r.file, r.task) for r in rs], [(0, "carl-session+m+k+a.bin", 4)])
+            diskcache.drop_resident(rs[0])
+            self.assertEqual(diskcache.residents(d, "m"), [])
 
     def test_the_oldest_conversations_go_first_then_the_oldest_prompts(self) -> None:
         files = [CacheFile("carl-prefix+a+1.bin", 3, 1.0), CacheFile("carl-session+a+0.bin", 3, 2.0),

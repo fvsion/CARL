@@ -2,6 +2,7 @@
 """Auto-tune one model for this Mac: speculative decoding and context window.
 
   ./carl.sh tune NAME [--quick | --long] [--port 8093]
+  ./carl.sh tune all [...]      every downloaded model, one after another (a failure doesn't stop the rest)
 
 Steps (the model loads once per speculation mode, ~5-10 min in all):
   1. memory: the largest window that fits with 1 and 2 slots (tools/llama-fit.py's model)
@@ -32,7 +33,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import argparse  # noqa: E402
 import json  # noqa: E402
-from typing import List, Optional  # noqa: E402
+from typing import List  # noqa: E402
 
 import carl  # noqa: E402
 from carl_core.adapters import llama_server  # noqa: E402
@@ -51,7 +52,7 @@ DEFAULT_BIG_GB = 8
 
 def parse_args(argv: List[str]) -> argparse.Namespace:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("model")
+    ap.add_argument("model", help="a downloaded model, or all (every downloaded model in turn)")
     ap.add_argument("--port", type=int, default=8093)
     depth = ap.add_mutually_exclusive_group()
     depth.add_argument("--quick", action="store_true", help="skip the MTP modes at n=2 and the 64K read (~4 min)")
@@ -128,16 +129,45 @@ def run(args: argparse.Namespace, server: llama_server.LlamaServerControl, m: Mo
     print("DONE " + json.dumps(record.get("settings", {})), flush=True)
 
 
+def tune_one(args: argparse.Namespace, m: ModelInfo) -> None:
+    """Tune one model with its own test server (stopped at the end, also on an error)."""
+    server = llama_server.LlamaServerControl(
+        launcher=os.path.join(carl.REPO, "host", "serve-llama.sh"), model_path=m.get("path", ""), port=args.port,
+        api_key=read_key(key_file()), log_path=os.path.expanduser(f"~/models/logs/.tune-{args.port}.out"),
+        listening=listening_ports)
+    try:
+        run(args, server, m)
+    finally:
+        server.stop()
+
+
+def tune_all(args: argparse.Namespace) -> int:
+    """Every downloaded model in turn ("MODEL k/N NAME" before each); a model that fails is reported
+    and the rest still run. 0 when every one was tuned."""
+    models = [m for m in carl.all_models() if m.get("status") == "downloaded"]
+    if not models:
+        raise ConfigError("no model is downloaded (./carl.sh download NAME)")
+    failed = []
+    for k, m in enumerate(models, 1):
+        print(f"MODEL {k}/{len(models)} {m.get('name')}", flush=True)
+        try:
+            tune_one(args, m)
+        except KeyboardInterrupt:
+            raise
+        except Exception as e:                # the next model still runs
+            print(f"error: {m.get('name')}: {e}", flush=True)
+            failed.append(str(m.get("name")))
+    tuned = len(models) - len(failed)
+    print(f"DONE ALL {tuned} of {len(models)} tuned" + (f"; failed: {', '.join(failed)}" if failed else ""), flush=True)
+    return 0 if not failed else 1
+
+
 def main(argv: List[str]) -> int:
     args = parse_args(argv)
-    server: Optional[llama_server.LlamaServerControl] = None
     try:
-        m = downloaded_model(args.model)
-        server = llama_server.LlamaServerControl(
-            launcher=os.path.join(carl.REPO, "host", "serve-llama.sh"), model_path=m.get("path", ""), port=args.port,
-            api_key=read_key(key_file()), log_path=os.path.expanduser(f"~/models/logs/.tune-{args.port}.out"),
-            listening=listening_ports)
-        run(args, server, m)
+        if args.model == "all":
+            return tune_all(args)
+        tune_one(args, downloaded_model(args.model))
         return 0
     except KeyboardInterrupt:
         print("cancelled", flush=True)
@@ -145,9 +175,6 @@ def main(argv: List[str]) -> int:
     except Exception as e:                    # the monitor shows the last "error: ..." line
         print(f"error: {e}", flush=True)
         return 1
-    finally:
-        if server:
-            server.stop()
 
 
 if __name__ == "__main__":

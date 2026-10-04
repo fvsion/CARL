@@ -110,7 +110,7 @@ CARL_ENV="$(python3 "$HERE/../tools/carl.py" "${carl_args[@]}")" || exit 1
 CARL_SOURCES=""
 # MODEL, MODEL_NAME and CARL_SOURCES: carl.py resolved them (flag/env included);
 # for the other keys the environment wins.
-apply_settings "MODEL|MODEL_NAME|CARL_SOURCES|ALIAS|KV|CTX|SLOTS|SPEC|SPEC_N|TEMP|TOP_P|TOP_K|MIN_P|PRESENCE|REPEAT|NET|HOST|CACHE_RAM|UB|BATCH|CKPT|CKPT_STEP|THINK_TOGGLE|EXTRA_ARGS|LLAMA_MODE|SWA_FULL" \
+apply_settings "MODEL|MODEL_NAME|CARL_SOURCES|ALIAS|KV|CTX|SLOTS|SPEC|SPEC_N|TEMP|TOP_P|TOP_K|MIN_P|PRESENCE|REPEAT|NET|HOST|CACHE_RAM|UB|BATCH|CKPT|CKPT_STEP|THINK_TOGGLE|EXTRA_ARGS|LLAMA_MODE|SWA_MODE" \
   "MODEL|MODEL_NAME|CARL_SOURCES" <<< "$CARL_ENV"
 LLAMA_MODE="${MODE_FLAG:-${LLAMA_MODE:-single}}"
 case "$LLAMA_MODE" in single|router) ;; *) echo "error: LLAMA_MODE takes single or router, got '$LLAMA_MODE'" >&2; exit 2 ;; esac
@@ -186,6 +186,7 @@ fi
 guard_other_models               # a second model can crash the Mac (host/common.sh)
 
 ensure_api_key "$API_KEY_FILE"
+CARL_CLIENT_DIR="${CARL_CLIENT_DIR:-$HERE/../client}" write_client_package "$HOST" "$PORT" "$API_KEY_FILE"
 
 # The disk cache of prompt states (--slot-save-path): OpenCode and Pi save each agent's prompt and
 # each session's conversation here through the server (client/shared/carl-cache.js). Trimmed to
@@ -251,11 +252,15 @@ fi
 # clamped to 1-8 GiB. Parked states measured 2.1-2.3 GiB at 40-60K tokens (35B).
 reserve_args=()
 [[ -n "${RESERVE_GB:-}" ]] && reserve_args=(--reserve-gb "$RESERVE_GB")
+# A model with sliding-window layers (Gemma): SWA is full (every layer at full length: the prompt
+# states OpenCode and Pi save can be restored) or window (less memory, no restores); cache.swa =
+# auto picks full when it fits with these slots.
+SWA=-
 if plan=$(python3 "$HERE/../tools/llama-fit.py" --plan "$MODEL" --ctx "$CTX" --kv "$KV_K" \
-            --want-slots "$SLOTS" ${reserve_args[@]+"${reserve_args[@]}"} 2>/dev/null) \
-   && [[ "$plan" =~ ^([1-9])\ ([0-9]+)$ ]]; then
+            --want-slots "$SLOTS" --swa "${SWA_MODE:-auto}" ${reserve_args[@]+"${reserve_args[@]}"} 2>/dev/null) \
+   && [[ "$plan" =~ ^([1-9])\ ([0-9]+)\ (full|window|-)$ ]]; then
   if [[ "$SLOTS" == auto ]]; then SLOTS_NOTE="auto"; else SLOTS_NOTE="set"; fi
-  SLOTS="${BASH_REMATCH[1]}"; CACHE_RAM="${CACHE_RAM:-${BASH_REMATCH[2]}}"
+  SLOTS="${BASH_REMATCH[1]}"; CACHE_RAM="${CACHE_RAM:-${BASH_REMATCH[2]}}"; SWA="${BASH_REMATCH[3]}"
 else
   [[ "$SLOTS" == auto ]] && SLOTS=1
   SLOTS_NOTE="fallback"; CACHE_RAM="${CACHE_RAM:-4096}"
@@ -269,7 +274,7 @@ fi
 if [[ "${FIT_CHECK:-1}" != 0 ]]; then
   fit_rc=0
   python3 "$HERE/../tools/llama-fit.py" --check "$MODEL" --ctx "$CTX" --slots "$SLOTS" --kv "$KV_K" \
-    ${reserve_args[@]+"${reserve_args[@]}"} || fit_rc=$?
+    --swa "$([[ "$SWA" == window ]] && echo window || echo full)" ${reserve_args[@]+"${reserve_args[@]}"} || fit_rc=$?
   if (( fit_rc == 3 )); then
     exit 1
   elif (( fit_rc != 0 )); then
@@ -287,11 +292,14 @@ if [[ "${THINK_TOGGLE:-1}" != 0 ]]; then
   [[ -s "$TMPL" ]] && tmpl_args=(--chat-template-file "$TMPL")
 fi
 
-# A model with sliding-window layers (Gemma) keeps every layer's cache at full length, so the prompt
-# states OpenCode and Pi save can be restored (without it llama.cpp re-reads a restored prompt). The
-# memory check already counts every layer at full length.
+# The sliding-window layers at full length (SWA=full, above): without it llama.cpp re-reads a
+# restored prompt state on such a model.
 swa_args=()
-[[ "${SWA_FULL:-0}" == 1 ]] && swa_args=(--swa-full)
+if [[ "$SWA" == full ]]; then
+  swa_args=(--swa-full); echo "sliding-window cache: full (saved prompt states can be restored; cache.swa = ${SWA_MODE:-auto})"
+elif [[ "$SWA" == window ]]; then
+  echo "sliding-window cache: window only (less memory; saved prompt states can't be restored; cache.swa = ${SWA_MODE:-auto})"
+fi
 
 spec_args=()
 if [[ "$SPEC" != "none" ]]; then

@@ -110,12 +110,22 @@ LLAMA_KEYS: Dict[str, SettingSpec] = {
     "extra_args": SettingSpec("list", []),                  # passed to llama-server as-is
 }
 PATH_KEYS: Dict[str, SettingSpec] = {"models_dir": _str(DEFAULT_MODELS_DIR)}
-# The disk cache in ~/.config/carl/slots (the dashboard's Settings > Caching panel): OpenCode's
-# pre-read prompt and the saved conversations, within disk_gb (the oldest files go first).
+# The disk cache in ~/.config/carl/slots (the dashboard's Settings > Caching panel): each agent's
+# prompt and each session, saved by OpenCode and Pi (client/shared/carl-cache.js), within disk_gb
+# (the oldest files go first). save: when a session is saved (auto = when the part not saved yet
+# would take auto_s seconds to read again, and before it leaves the server). swa: the cache of models with
+# sliding-window layers (full = restores work, more memory; auto = full when it fits). share:
+# conversations stored as patches against their agent's prompt file (tools/monitor/slotpack.py).
+SAVE_CHOICES = ("auto", "turn", "switch", "stop")
+SWA_CHOICES = ("auto", "full", "window")
 CACHE_KEYS: Dict[str, SettingSpec] = {
-    "disk_gb": _int(5, 1, 1000),
+    "disk_gb": _int(10, 1, 1000),
     "prefix": SettingSpec("bool", True),
     "sessions": SettingSpec("bool", True),
+    "save": _choice("auto", SAVE_CHOICES),
+    "auto_s": _int(120, 10, 3600),
+    "share": SettingSpec("bool", True),
+    "swa": _choice("auto", SWA_CHOICES, "SWA_MODE"),
 }
 SECTIONS: Dict[str, Dict[str, SettingSpec]] = {"llama": LLAMA_KEYS, "paths": PATH_KEYS, "cache": CACHE_KEYS}
 

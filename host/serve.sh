@@ -16,6 +16,7 @@
 #   ./host/serve.sh config ...            the settings file (tools/carl.py config)
 #   ./host/serve.sh card NAME [set|unset]  a model's card (tools/carl.py card)
 #   ./host/serve.sh cache [show|trim|clear]   the disk cache of prompt states (tools/carl.py cache)
+#   ./host/serve.sh push                  publish the client config for the clients' sync service
 #
 # Binds to 127.0.0.1 or the vmnet8 host address (192.168.42.1), never 0.0.0.0:
 # with the macOS firewall off, 0.0.0.0 would expose the model on the LAN.
@@ -66,6 +67,7 @@ $(row "" "(card NAME set FIELD VALUE | unset FIELD; or e in the dashboard's Mode
 $(row "tune NAME [--quick]" "auto-tune a model for this Mac: speculation, context window, slots (~5-10 min)")
 $(row "config [show|set K V]" "the settings file ~/.config/carl/config.json (show lists every key)")
 $(row "cache [show|trim|clear]" "the disk cache OpenCode and Pi fill (~/.config/carl/slots; Settings > Caching)")
+$(row "push" "publish the client config (installed models) to the clients' sync service on other computers")
 $(row "help [TOPIC]" "this page, or: llama monitor fit models card download verify env tuning")
 
 NETWORK (llama, and $CMD without arguments)
@@ -293,7 +295,7 @@ LLAMA_PORT=8080
 # help, nor for a command that doesn't exist).
 case "${1:-}" in
   help|-h|--help|--help-adv|grant|pocket) ;;
-  ""|dashboard|--no-start|install|monitor|fit|models|config|cache|card|tune|download|verify|delete|llama|-*) migrate_conf_dir ;;
+  ""|dashboard|--no-start|install|monitor|fit|models|config|cache|push|card|tune|download|verify|delete|llama|-*) migrate_conf_dir ;;
 esac
 if [[ $# -eq 0 ]]; then
   # No arguments: the dashboard. Attach to a server that runs already (one model
@@ -345,6 +347,7 @@ case "$1" in
   models) shift; exec "$HERE/models.sh" list "$@" ;;
   config) shift; exec python3 "$HERE/../tools/carl.py" config "$@" ;;
   cache) shift; exec python3 "$HERE/../tools/carl.py" cache "$@" ;;
+  push) exec python3 "$HERE/../tools/carl.py" push ;;
   card) shift; exec python3 "$HERE/../tools/carl.py" card "$@" ;;
   tune) shift; exec python3 "$HERE/../tools/carl-tune.py" "$@" ;;
   download|verify|delete) exec "$HERE/models.sh" "$@" ;;

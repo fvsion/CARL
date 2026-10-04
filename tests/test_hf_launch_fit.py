@@ -93,8 +93,9 @@ class LaunchEnvTest(unittest.TestCase):
         self.assertEqual(env["THINK_TOGGLE"], False)
         self.assertEqual(env["EXTRA_ARGS"], "--no-mmap -fa on")
         self.assertEqual(env["CARL_SOURCES"], "ctx:auto-tune kv:catalogue spec:config slots:default")
-        self.assertNotIn("SWA_FULL", env)
-        self.assertIs(launch_env(m, vals, src, cfg, swa=True)["SWA_FULL"], True)     # sliding-window layers
+        self.assertNotIn("SWA_MODE", env)
+        self.assertEqual(launch_env(m, vals, src, cfg, swa=True)["SWA_MODE"], "auto")  # sliding-window layers
+        self.assertEqual(launch_env(m, vals, src, Config(cache={"swa": "window"}), swa=True)["SWA_MODE"], "window")
         self.assertIn("SPEC_N=2", shell_lines(env).splitlines())
 
 
@@ -182,8 +183,16 @@ class GgufTest(unittest.TestCase):
         self.assertEqual((shp["attn_layers"], shp["rec_layers"], shp["ftype"]), (10, 30, "IQ3_XXS"))
         self.assertEqual(shp["kv_elems_per_token"], 10 * 2 * 512)
         self.assertTrue(shp["thinking_switch"])
-        self.assertIs(shp.get("swa"), False)
-        self.assertIs(model_shape({"general.architecture": "gemma4", "gemma4.attention.sliding_window": 512})["swa"], True)
+        self.assertEqual(shp.get("swa_window"), 0)
+        gemma = {"general.architecture": "gemma4", "gemma4.block_count": 6, "gemma4.attention.head_count_kv": 2,
+                 "gemma4.attention.key_length": 512, "gemma4.attention.value_length": 512,
+                 "gemma4.attention.key_length_swa": 256, "gemma4.attention.value_length_swa": 256,
+                 "gemma4.attention.sliding_window": 512, "gemma4.attention.shared_kv_layers": 2,
+                 "gemma4.attention.sliding_window_pattern": "110110"}
+        g = model_shape(gemma)                       # own KV: the first 4 layers, 3 of them sliding-window
+        self.assertEqual((g["swa_window"], g["kv_elems_per_token"], g["kv_elems_per_token_swa"]), (512, 2048, 3072))
+        no_pattern = model_shape({k: v for k, v in gemma.items() if not k.endswith("pattern")})
+        self.assertEqual((no_pattern["kv_elems_per_token"], no_pattern["kv_elems_per_token_swa"]), (6 * 2048, 0))
 
     def test_truncated_or_foreign_headers(self) -> None:
         self.assertEqual(parse_meta(b"NOPE"), {})
@@ -194,3 +203,24 @@ class GgufTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SlidingWindowFitTest(unittest.TestCase):
+    """fit.py with sliding-window layers: the window only, or every layer at full length (--swa-full)."""
+    SWA = {**shape(kv_elems=2048, rs_bytes=0), "swa_window": 512, "kv_elems_per_token_swa": 8192}
+
+    def test_need_with_and_without_the_full_cache(self) -> None:
+        from carl_core.domain.fit import need_bytes
+        full = need_bytes(self.SWA, GIB, 98304, 2, "q4_0", swa_full=True)
+        window = need_bytes(self.SWA, GIB, 98304, 2, "q4_0", swa_full=False)
+        self.assertAlmostEqual(full - window, 8192 * 18 / 32 * (98304 - 1024) * 2)
+        self.assertEqual(need_bytes(shape(), GIB, 98304, 2), need_bytes(shape(), GIB, 98304, 2, swa_full=False))
+
+    def test_auto_takes_the_full_cache_when_it_fits_and_prefers_a_second_slot(self) -> None:
+        from carl_core.domain.fit import need_bytes, swa_plan
+        roomy, tight = 32 * GIB, need_bytes(self.SWA, GIB, 98304, 2, "q4_0", swa_full=False) + 1
+        self.assertEqual(swa_plan("auto", self.SWA, GIB, 98304, "auto", "q4_0", roomy), (2, True))
+        self.assertEqual(swa_plan("auto", self.SWA, GIB, 98304, "auto", "q4_0", tight), (2, False))
+        self.assertEqual(swa_plan("window", self.SWA, GIB, 98304, "auto", "q4_0", roomy), (2, False))
+        self.assertEqual(swa_plan("full", self.SWA, GIB, 98304, "auto", "q4_0", tight), (1, True))
+        self.assertEqual(swa_plan("auto", shape(), GIB, 98304, "auto", "q4_0", roomy), (2, None))

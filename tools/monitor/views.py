@@ -3,14 +3,15 @@ they draw from a View, the UI state and the snapshot (they clamp scroll position
 from __future__ import annotations
 
 import dataclasses
+import time
 from typing import List, Optional, Sequence, Tuple
 
 from .cards import REQ_HEAD, View, card_connect, card_requests, column, log_view, req_row
 from .fmt import (B, CYN, DIM, GRN, R, RED, YEL, Card, CardLine, Row, buttons, cwrap, draw_card, fit, home_short, indent,
-                  knum, side_by_side)
+                  knum, lv, side_by_side)
 from .model import ServerData, clean
 from .clients import Drift
-from .state import InstallRun, UIState
+from .state import CONNECT_SUBPANELS, InstallRun, UIState
 
 PREVIEW_TITLES = {"opencode": "OPENCODE CONFIG", "pi": "PI CONFIG", "curl": "CURL TEST"}
 PREVIEW_WHERE = {
@@ -48,6 +49,11 @@ def body_connect(v: View, ui: UIState, d: ServerData, cols: int, height: int,
     output or the selected config (preview text)."""
     w = cols - 1
     tw = w - 4
+    top: List[Row] = [connect_bar(ui.connect_sp), ("", [])]
+    height -= 2
+    if ui.connect_sp == 1:
+        return (top + indent(draw_card("clients", "CLIENTS", f"{DIM}{len(v.clients)} that sync · this Mac{R}",
+                                       clients_lines(v, here, stale, tw), w, 2)))[:height + 2]
     full = dataclasses.replace(v, level_override={"connect": 2})
     rows = _card(full, "connect", card_connect(full, d)._replace(title="CONNECTION"), w, 2)
     rows += draw_card("guide", "SET UP OPENCODE AND PI", "", setup_lines(v, ui, here, tw, stale, installed), w,
@@ -55,14 +61,61 @@ def body_connect(v: View, ui: UIState, d: ServerData, cols: int, height: int,
     room = max(height - len(rows) - 3, 3)
     if ui.install and ui.install_shown:
         rows += draw_card("install", "INSTALLER", install_summary(ui.install), install_lines(ui, room, tw), w, 2)
-        return indent(rows)[:height]
+        return (top + indent(rows))[:height + 2]
     kind = ui.preview
     note = f"{GRN}copied to the clipboard ✓{R}" if ui.copied == kind else f"{DIM}click its button (or o/p/t) to copy{R}"
     plines = preview.splitlines()
     ui.prev_scroll = min(ui.prev_scroll, max(len(plines) - room, 0))
     shown: List[CardLine] = [f"{DIM}{PREVIEW_WHERE[kind]}{R}", *plines[ui.prev_scroll:ui.prev_scroll + room - 1]]
     rows += draw_card("preview", PREVIEW_TITLES[kind], note, shown, w, v.level("preview"))
-    return indent(rows)[:height]
+    return (top + indent(rows))[:height + 2]
+
+
+def connect_bar(sp: int) -> Row:
+    """The Setup / Clients switch, the selected one in reverse video."""
+    text, spans, col = "", [], 0
+    for i, name in enumerate(CONNECT_SUBPANELS):
+        lab = f" {name} "
+        text += (f"\x1b[1;7m{lab}{R}" if i == sp else f"{DIM}{lab}{R}") + " "
+        spans.append((1 + col, 1 + col + len(lab), f"csp:{i}"))
+        col += len(lab) + 1
+    return " " + text + f"{DIM}  press [ or ] to switch{R}", spans
+
+
+def _ago(t: float, now: float) -> str:
+    s = max(0, int(now - t))
+    return f"{s} s" if s < 90 else f"{s // 60} min" if s < 5400 else f"{s // 3600} h" if s < 172800 else f"{s // 86400} days"
+
+
+def clients_lines(v: View, here: List[Tuple[str, str]], stale: Sequence[Drift], tw: int) -> List[CardLine]:
+    """Every client: this Mac's configs, then each one that syncs (connected or last seen, its config
+    against the pushed one), the push and its button."""
+    now = time.time()
+    pushed = v.pushed.split(" at ")[0] if v.pushed else ""
+    L: List[CardLine] = [*cwrap(f"{DIM}The clients this server knows: this Mac's OpenCode and Pi (their configs follow "
+                                f"./carl.sh install and the Connect tab's Update), and every computer whose installer "
+                                f"set up the sync (a copied client folder: it pulls the config you push).{R}", tw), "",
+                         lv("pushed", f"{v.pushed}" if v.pushed else f"{DIM}nothing yet{R}"),
+                         lv("API", f"{GRN}{v.api}{R}" if v.api else f"{YEL}not running{R}"), ""]
+    mac = (f"{GRN}configs up to date{R}" if here and not stale else f"{YEL}configs out of date: Setup, u{R}" if here
+           else f"{DIM}not set up for this server{R}")
+    L.append(f"  {B}this Mac{R}  {DIM}OpenCode, Pi{R}  {mac}")
+    for c in v.clients:
+        link = (f"{GRN}● connected{R}" if c.connected > 0 else
+                f"{DIM}○ last seen {_ago(c.last_seen, now)} ago{R}")
+        how = "sync service" if c.mode == "service" else "checks at start"
+        if not pushed:
+            conf = f"{DIM}nothing pushed{R}"
+        elif c.applied == pushed:
+            conf = f"{GRN}up to date ({pushed}){R}"
+        else:
+            conf = f"{YEL}has {c.applied or 'none'}, pushed {pushed}{' (auto-apply off: it waits)' if not c.auto_apply else ''}{R}"
+        L += cwrap(f"  {B}{c.host or c.id}{R}  {DIM}{c.user} · {c.os} · {c.address} · {how}{R}  {link}  {conf}", tw, "    ")
+    if not v.clients:
+        L += cwrap(f"  {DIM}no other computer yet: copy the client folder to it and run ./install-clients.sh && "
+                   f"./install.sh there (the folder carries the address and the key).{R}", tw, "  ")
+    L += ["", buttons("  ", [("Push config to clients (P)", "inspush"), ("Forget clients not seen for a week", "clforget")])]
+    return L
 
 
 def setup_lines(v: View, ui: UIState, here: List[Tuple[str, str]], tw: int, stale: Sequence[Drift] = (),
@@ -96,7 +149,13 @@ def setup_lines(v: View, ui: UIState, here: List[Tuple[str, str]], tw: int, stal
     L += cwrap(f"{B}In a VM:{R} {DIM}start the server for the VM with{R} {CYN}./carl.sh --vm{R} "
                + (f"{GRN}(it is: {v.host}){R}" if vm_ready else f"{YEL}(now it listens on this Mac only){R}")
                + f"{DIM}, copy the client folder into the VM, then run{R} {CYN}./install-clients.sh && ./install.sh{R} "
-               f"{DIM}there.{R}", tw)
+               f"{DIM}there. The folder carries the server's address and key (remote.json, api-key: written at every "
+               f"server start), so the installer needs no arguments.{R}", tw)
+    L += cwrap(f"{B}Clients on other computers:{R} {DIM}the installer there adds a sync service: it keeps one connection "
+               f"to this dashboard (it opens no port on the client) and applies the config you push, with backups. "
+               f"{R}" + (f"{GRN}{v.listeners} connected{R}" if v.api else f"{YEL}the dashboard's API is not running{R}")
+               + f"{DIM} · the Clients tab (]) lists them{R}", tw)
+    L.append(buttons("  ", [("Push config to clients (P)", "inspush")]))
     L += cwrap(f"{B}By hand:{R} {DIM}a provider block only (id carl), copied to the clipboard; it adds, never "
                f"replaces.{R}", tw)
     L.append(buttons("  ", [("OpenCode config (o)", "opencode"), ("Pi config (p)", "pi"), ("curl test (t)", "curl")]))

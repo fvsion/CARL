@@ -13,27 +13,40 @@ from dataclasses import dataclass
 from typing import Optional, Tuple
 
 from .errors import ConfigError
-from .gguf import GIB, OVERHEAD, ModelShape, ctx_train, kv_bytes_per_token
+from .gguf import GIB, OVERHEAD, ModelShape, ctx_train, kv_bytes_per_token, swa_bytes_per_token
 
 DEFAULT_CTX = 98304
 WINDOW_STEP = 4096                    # windows are offered in 4K steps
 MIB = 2 ** 20
 CACHE_MIN_MIB, CACHE_MAX_MIB, CACHE_STEP_MIB = 1024, 8192, 256
 RESERVE_GB, RESERVE_GB_WITH_VM = 6, 10      # RAM left for macOS and apps (+ the VM)
+SWA_UBATCH = 512                      # a window-only SWA cache holds window + one batch per slot
 
 
-def need_bytes(shape: ModelShape, weights: int, ctx: int, slots: int = 1, kv: str = "q4_0") -> float:
-    """GPU memory a model needs at `ctx` tokens per slot."""
-    return weights + kv_bytes_per_token(shape, kv) * ctx * slots + shape["rs_bytes"] * slots + OVERHEAD
+def swa_tokens(shape: ModelShape, ctx: int, swa_full: bool) -> int:
+    """Tokens per slot the sliding-window layers keep: all of them with --swa-full, else the window."""
+    win = shape.get("swa_window", 0)
+    return ctx if swa_full or not win else min(ctx, win + SWA_UBATCH)
 
 
-def max_ctx(shape: ModelShape, weights: int, limit: float, slots: int = 1, kv: str = "q4_0") -> int:
+def need_bytes(shape: ModelShape, weights: int, ctx: int, slots: int = 1, kv: str = "q4_0",
+               swa_full: bool = True) -> float:
+    """GPU memory a model needs at `ctx` tokens per slot (swa_full: its sliding-window layers, if
+    any, at full length too)."""
+    return (weights + kv_bytes_per_token(shape, kv) * ctx * slots
+            + swa_bytes_per_token(shape, kv) * swa_tokens(shape, ctx, swa_full) * slots + shape["rs_bytes"] * slots + OVERHEAD)
+
+
+def max_ctx(shape: ModelShape, weights: int, limit: float, slots: int = 1, kv: str = "q4_0",
+            swa_full: bool = True) -> int:
     """The largest window per slot (a 4K multiple, at most the trained length) that fits; 0
     when the weights alone don't."""
-    room = limit - weights - shape["rs_bytes"] * slots - OVERHEAD
+    swa = swa_bytes_per_token(shape, kv) * slots
+    win = shape.get("swa_window", 0)
+    room = limit - weights - shape["rs_bytes"] * slots - OVERHEAD - (0 if swa_full or not win else swa * (win + SWA_UBATCH))
     if room <= 0:
         return 0
-    per_token = kv_bytes_per_token(shape, kv) * slots
+    per_token = kv_bytes_per_token(shape, kv) * slots + (swa if swa_full or not win else 0)
     if per_token <= 0:                        # no KV cache at all: only the trained length limits it
         return ctx_train(shape)
     return min(int(room // per_token) // WINDOW_STEP * WINDOW_STEP, ctx_train(shape))
@@ -102,12 +115,28 @@ class StartCheck:
         return f"--ctx {window_label(self.ctx)}{per} ({self.kv} KV)"
 
 
-def check_start(shape: ModelShape, weights: int, ctx: int, slots: int, kv: str, limit: float) -> StartCheck:
+def check_start(shape: ModelShape, weights: int, ctx: int, slots: int, kv: str, limit: float,
+                swa_full: bool = True) -> StartCheck:
     """The memory a start needs against the GPU limit: a start over the limit won't work
     (it fails to load, or swaps the Mac to a crawl), so the launcher refuses it."""
     slots = max(slots, 1)
-    return StartCheck(need_bytes(shape, weights, ctx, slots, kv), limit, ctx, slots, kv,
-                      max_ctx(shape, weights, limit, slots, kv))
+    return StartCheck(need_bytes(shape, weights, ctx, slots, kv, swa_full), limit, ctx, slots, kv,
+                      max_ctx(shape, weights, limit, slots, kv, swa_full))
+
+
+def swa_plan(mode: str, shape: ModelShape, weights: int, ctx: int, want_slots: str, kv: str,
+             limit: float) -> Tuple[int, Optional[bool]]:
+    """(slots, swa_full) for a start: slots as plan_slots decides (two when two windows fit), and for
+    a model with sliding-window layers whether they keep full length (cache.swa: full; window; auto =
+    full when it fits with those slots: saved prompt states restore only then). swa_full is None for
+    other models. auto prefers a second slot over the full cache."""
+    if not shape.get("swa_window", 0):
+        return plan_slots(want_slots, need_bytes(shape, weights, ctx, 2, kv) <= limit), None
+    full_first = mode == "full"
+    slots = plan_slots(want_slots, need_bytes(shape, weights, ctx, 2, kv, swa_full=full_first) <= limit)
+    if mode in ("full", "window"):
+        return slots, mode == "full"
+    return slots, need_bytes(shape, weights, ctx, slots, kv, swa_full=True) <= limit
 
 
 def human_gb(n: float) -> str:

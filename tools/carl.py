@@ -39,6 +39,8 @@ CLI (./carl.sh models | download | verify use it through host/models.sh)
                                        catalogue models: read-only). FIELD like role, good_for, rank
   carl.py cache [show|trim|clear]      the disk cache of prompt states (~/.config/carl/slots): what it
                                        holds, trim it to cache.disk_gb, or remove every file
+  carl.py push                         publish the client config (the installed models) for the clients'
+                                       sync service on other computers (the dashboard's API serves it)
 
 This module is also the public API of the monitor (tools/llama-monitor.py): the functions
 below take and return plain dicts. The logic lives in tools/carl_core.
@@ -326,6 +328,11 @@ def cmd_cache(argv: Sequence[str]) -> None:
     conf = diskcache.config_of(load_config())
     if sub == "trim":
         diskcache.remove(folder, diskcache.legacy(folder))
+        if conf.share:
+            from monitor import slotpack
+            t = slotpack.tidy(folder)
+            if t.packed:
+                print(f"stored {t.packed} conversation(s) as patches against their prompt")
         gone = diskcache.over_budget(diskcache.listing(folder), conf.limit)
         diskcache.remove(folder, gone)
         print(f"removed {len(gone)} file(s) over the {conf.disk_gb} GB limit" if gone else "within the limit")
@@ -339,8 +346,11 @@ def cmd_cache(argv: Sequence[str]) -> None:
         raise ConfigError("usage: carl.py cache [show|trim|clear]")
     print(f"{folder}: {diskcache.gb(diskcache.used(files))} of {conf.disk_gb} GB, {len(files)} file(s) "
           f"(prompts {'on' if conf.prefix else 'off'}, conversations {'on' if conf.sessions else 'off'})")
+    if any(f.packed for f in files):
+        print(f"  shared pieces: {sum(f.packed for f in files)} conversation(s) stored as patches against their prompt, "
+              f"{diskcache.gb(diskcache.shared_saving(files))} saved")
     for f in sorted(files, key=lambda f: -f.mtime):
-        kind = "prompt" if f.kind == diskcache.PROMPT else "conversation"
+        kind = "prompt" if f.kind == diskcache.PROMPT else "patch" if f.packed else "conversation"
         print(f"  {kind:<12}  {diskcache.describe(f.name):<60} {f.bytes / 2**20:8.0f} MB")
 
 
@@ -447,6 +457,11 @@ def main(argv: List[str]) -> int:
             print(f"start {preset.start}")
     elif cmd == "client-models":
         print(json.dumps(client_models(), indent=2))
+    elif cmd == "push":
+        from monitor import clientsync         # the dashboard's module: its API serves what this writes
+        version = clientsync.publish(os.path.dirname(CONFIG_FILE), client_models())
+        print(f"client config {version} published: the dashboard's API sends it to the clients' sync service "
+              f"(while the dashboard runs); OpenCode and Pi use it at their next start")
     elif cmd == "launch-env":
         model = _arg(a, a.index("--model") + 1, "launch-env [--model NAME|PATH] [--no-config]") if "--model" in a else None
         env, note = launch_env(model, use_config="--no-config" not in a)

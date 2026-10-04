@@ -64,11 +64,18 @@ class ConfigureTests(unittest.TestCase):
         check = self.path(".config/opencode/plugins/carl-model-check")
         cache = self.path(".config/opencode/plugins/carl-cache")
         self.assertEqual(oc["plugin"], [["file:" + check, {"provider": "llamacpp"}],     # the model warnings
-                                        ["file:" + cache, {"provider": "llamacpp"}]])    # the prompt cache
+                                        ["file:" + cache, {"provider": "llamacpp",       # the prompt cache
+                                                           "cacheApi": "http://192.168.42.1:8081"}]])
+        self.assertEqual(self.read_json(".pi/agent/carl.json")["cache_api"], "http://192.168.42.1:8081")
         with open(os.path.join(cache, "package.json"), encoding="utf-8") as f:
             self.assertIn("./server", json.load(f)["exports"])
         for d in (cache, self.path(".pi/agent/extensions/carl-cache")):            # each carries the shared core
             self.assertTrue(os.path.isfile(os.path.join(d, "carl-cache.js")), d)
+            self.assertTrue(os.path.isfile(os.path.join(d, "carl-panel.js")), d)
+        panel = self.path(".config/opencode/plugins/carl-panel")                   # /carl in OpenCode and in Pi
+        self.assertIn("file:" + panel, self.read_json(".config/opencode/tui.json")["plugin"])
+        for d in (panel, self.path(".pi/agent/extensions/carl-panel")):
+            self.assertTrue(os.path.isfile(os.path.join(d, "carl-panel.js")), d)
         self.assertTrue(os.path.isfile(os.path.join(check, "check.js")))
         with open(os.path.join(check, "package.json"), encoding="utf-8") as f:     # OpenCode 1.18 loads exports["./server"]
             self.assertIn("./server", json.load(f)["exports"])
@@ -637,7 +644,9 @@ class InstallScriptTests(unittest.TestCase):
         self.home = self._tmp.name
         # a copied bundle, as in a VM (no ../tools/carl.py): nothing is written into the repo
         self.bundle = os.path.join(self.home, "client")
-        shutil.copytree(CLIENT, self.bundle, ignore=shutil.ignore_patterns("installed-models.json", "__pycache__"))
+        # (without this Mac's own server files: remote.json and api-key are written at every server start)
+        shutil.copytree(CLIENT, self.bundle, ignore=shutil.ignore_patterns("installed-models.json", "__pycache__",
+                                                                           "remote.json", "api-key"))
 
     def tearDown(self) -> None:
         self._tmp.cleanup()
@@ -647,8 +656,10 @@ class InstallScriptTests(unittest.TestCase):
             sock.bind(("127.0.0.1", 0))
             port = str(sock.getsockname()[1])
         env = {k: v for k, v in os.environ.items() if k not in ("CARL_API_KEY", "LLAMA_CTX", "CODER", "NO_CODER")}
+        # never a sync service: launchd / systemd would run it for the real user
         return subprocess.run(["bash", os.path.join(self.bundle, "install.sh"), "--host", "127.0.0.1", "--port", port],
-                              capture_output=True, text=True, stdin=subprocess.DEVNULL, env={**env, "HOME": self.home})
+                              capture_output=True, text=True, stdin=subprocess.DEVNULL,
+                              env={**env, "HOME": self.home, "NO_SYNC_SERVICE": "1"})
 
     def write(self, rel: str, text: str) -> None:
         os.makedirs(os.path.dirname(os.path.join(self.home, rel)), exist_ok=True)

@@ -25,8 +25,8 @@ from .logtail import LogTail
 from .model import JSONDict, ModelInfo, ServerData, clean
 from .settings import NUMERIC, Pending, SettingsService, parse_typed, step_choice
 from .arrange import FILTERS, SORTS
-from .settings_view import DISK_CHOICES, SettingsView
-from .state import (SP_CACHE, SP_FIT, SP_MODELS, SP_ROUTER, SP_SERVER, SP_TUNE, SUBPANELS, TABS, Confirm, PickItem, Picker, TextPrompt,
+from .settings_view import AUTO_CHOICES, DISK_CHOICES, SettingsView
+from .state import (CONNECT_SUBPANELS, TUNE_ALL, SP_CACHE, SP_FIT, SP_MODELS, SP_ROUTER, SP_SERVER, SP_TUNE, SUBPANELS, TABS, Confirm, PickItem, Picker, TextPrompt,
                     UIState)
 from .store import ModelList
 
@@ -40,7 +40,10 @@ MODEL_KEYS = {"\r": "museit", "\n": "museit", "d": "mdl", "v": "mverify", "x": "
               "S": "msort-", "F": "mfilter-"}
 ARRANGE_KEYS = {"s": "msort", "S": "msort-", "f": "mfilter", "F": "mfilter-"}   # every model list
 FIT_KEYS = {"\r": "fuse", "\n": "fuse", "d": "fdl", "g": "fgoal", "f": "fscope"}
-CACHE_KEYS = {"d": "cache:disk", "p": "cache:prefix", "s": "cache:sessions", "c": "cache:clear"}
+TUNE_ALL_LABEL = "all downloaded models, one after another"
+CACHE_KEYS = {"d": "cache:disk", "p": "cache:prefix", "s": "cache:sessions", "o": "cache:save", "t": "cache:auto",
+              "w": "cache:swa", "h": "cache:share",
+              "c": "cache:clear"}
 TUNE_KEYS = {"\r": "trun", "\n": "trun", RIGHT: "tnext", LEFTKEY: "tprev", "c": "tcancel", " ": "tquick"}
 SCROLL_KEYS = {UP: 1, DOWN: -1, PGUP: 10, PGDN: -10}
 PANEL_PASSTHROUGH = ("q", "Q", "\x03", "\t")       # keys the Models / Auto-tune panels leave to the app
@@ -123,6 +126,9 @@ class Controller:
         ui = self.ui
         ui.tab = 1
         running = bool(ui.install and not ui.install.done)
+        if act == "inspush":
+            self.jobs.push_client_config()
+            return
         if act in ("insall", "insconfig"):
             if running:
                 ui.install_shown = True
@@ -166,6 +172,11 @@ class Controller:
             self.show_config(action)
         elif action.startswith("ins"):
             self.install_action(action)
+        elif action.startswith("csp:"):
+            ui.connect_sp = int(action[4:])
+        elif action == "clforget":
+            n = self.jobs.forget_clients(7 * 86400)
+            ui.toast(f"forgot {n} client(s) not seen for a week", 6)
         elif action == "wrap":
             ui.wrap = not ui.wrap
         elif action == "errors":
@@ -182,6 +193,7 @@ class Controller:
         elif action == "stop":
             pid = d.target_pid
             if pid:
+                self.jobs.save_before_stop(d)           # the sessions in the slots (save = auto, switch, stop)
                 system.kill(pid, signal.SIGTERM)
                 ui.stopping = (pid, time.time() + 30)
             ui.quit = False
@@ -309,13 +321,14 @@ class Controller:
             return
         # ---- auto-tune panel
         if act in ("tprev", "tnext"):
-            names = [x["name"] for x in self.models.downloaded()]
-            if names:
+            names = [x["name"] for x in self.models.downloaded()] + [TUNE_ALL]
+            if len(names) > 1:
                 i = names.index(ui.tune_model) if ui.tune_model in names else 0
                 ui.tune_model = names[(i + (1 if act == "tnext" else -1)) % len(names)]
             return
         if act == "tpick":
-            ui.picker = Picker("AUTO-TUNE WHICH MODEL?", [(x["name"], x) for x in self.models.downloaded()], "picktune")
+            items: List[PickItem] = [(x["name"], x) for x in self.models.downloaded()]
+            ui.picker = Picker("AUTO-TUNE WHICH MODEL?", items + [(TUNE_ALL_LABEL, TUNE_ALL_LABEL)], "picktune")
             return
         if act == "tquick":                             # quick -> default -> long -> quick
             ui.tune_depth = DEPTHS[(DEPTHS.index(as_depth(ui.tune_depth)) + 1) % len(DEPTHS)]
@@ -441,11 +454,12 @@ class Controller:
                     self.jobs.start_install(config_only=True)
             return
         name = act.split(":", 1)[1]
-        self.jobs.router_load(name, unload=act.startswith("runload:"))
+        self.jobs.router_load(name, d, unload=act.startswith("runload:"))
 
     def cache_action(self, act: str) -> None:
-        """The Caching panel: disk[:GB] (the next limit, or that one), prefix[:on|off] and
-        sessions[:on|off] (switch, or set), saved to config.json "cache" at once; clear asks,
+        """The Caching panel: disk[:GB] (the next limit, or that one), prefix[:on|off],
+        sessions[:on|off], save[:MODE] and swa[:MODE] (the next one, or that one), saved to
+        config.json "cache" at once; clear asks,
         clearyes removes every saved state (diskcache.py)."""
         ui, jobs = self.ui, self.jobs
         folder = jobs.paths.slots
@@ -472,16 +486,25 @@ class Controller:
             gbs = sorted({*DISK_CHOICES, conf.disk_gb})
             new = int(value) if value.isdigit() else gbs[(gbs.index(conf.disk_gb) + 1) % len(gbs)]
             text = f"disk limit: {new} GB"
-        elif key in ("prefix", "sessions"):
-            cur = conf.prefix if key == "prefix" else conf.sessions
+        elif key in ("prefix", "sessions", "share"):
+            cur = {"prefix": conf.prefix, "sessions": conf.sessions, "share": conf.share}[key]
             new = value == "on" if value else not cur
-            text = f"{'pre-read' if key == 'prefix' else 'saved conversations'}: {'on' if new else 'off'}"
+            text = f"{dict(prefix='prompts', sessions='saved conversations', share='shared pieces')[key]}: {'on' if new else 'off'}"
+        elif key == "auto":
+            autos = sorted({*AUTO_CHOICES, conf.auto_s})
+            new = int(value) if value.isdigit() else autos[(autos.index(conf.auto_s) + 1) % len(autos)]
+            text = f"auto saves after {new} s of unsaved reading"
+        elif key in ("save", "swa"):
+            opts = diskcache.SAVES if key == "save" else diskcache.SWAS
+            mode = conf.save if key == "save" else conf.swa
+            new = value if value in opts else opts[(opts.index(mode) + 1) % len(opts)]
+            text = (f"save: {new}" if key == "save" else f"SWA models: {new} (applies at the next start)")
         else:
             return
         try:
             cfg = self.store.load_config()
             sec = cfg.setdefault("cache", {})
-            sec[{"disk": "disk_gb"}.get(key, key)] = new
+            sec[{"disk": "disk_gb", "auto": "auto_s"}.get(key, key)] = new
             self.store.save_config(cfg)
         except Exception as e:      # config.json unreadable or not writable: say so
             ui.toast(f"{RED}config.json: {e}{R}", 10)
@@ -594,7 +617,7 @@ class Controller:
         elif pk.on_pick == "pickhf" and ui.hf:
             self.jobs.start_download(f"hf:{ui.hf.repo}/{val}")
         elif pk.on_pick == "picktune":
-            ui.tune_model = val
+            ui.tune_model = TUNE_ALL if val == TUNE_ALL_LABEL else val
         elif pk.on_pick == "pickcard" and ui.card:
             ui.card.add_pick(str(val))
         elif pk.on_pick in ("picksort", "pickfilter"):
@@ -938,8 +961,10 @@ class Controller:
                 ui.tab = int(ch) - 1
             elif ui.tab == 1 and ui.install_ask and ch in "yYnN":
                 self.do("insyes" if ch in "yY" else "insno")
-            elif ui.tab == 1 and ch in "iux":
-                self.do({"i": "insall", "u": "insconfig", "x": "insclose"}[ch])
+            elif ui.tab == 1 and ch in "iuxP":
+                self.do({"i": "insall", "u": "insconfig", "x": "insclose", "P": "inspush"}[ch])
+            elif ui.tab == 1 and ch in "[]":
+                ui.connect_sp = (ui.connect_sp + 1) % len(CONNECT_SUBPANELS)
             elif ui.tab == 4 and ui.sp == SP_SERVER and ch in "arxA":
                 self.do({"a": "setapply", "r": "setrevert", "x": "setdefaults", "A": "setautofit"}[ch])
             elif ch == "\t":
