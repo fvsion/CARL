@@ -101,6 +101,8 @@ class CustomDefaultsTest(unittest.TestCase):
         self.assertEqual(dm.custom_defaults(shape(ctx_train=0))[0]["ctx"], 98304)
 
     def test_unreadable_header(self) -> None:
+        gem = dm.custom_defaults({**shape(experts=0, nextn=0), "arch": "gemma4"}, drafter=True)[0]
+        self.assertEqual((gem["spec"], gem["spec_n"]), ("draft-mtp,ngram-mod", 2))   # a custom Gemma 4 with its drafter
         tune, info = dm.custom_defaults(None)
         self.assertEqual((tune["spec"], tune["spec_n"], tune["ctx"]), ("ngram-mod", 2, 98304))
         self.assertEqual(info, {"arch": "dense", "mtp": False, "quant": "?"})

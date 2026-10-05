@@ -45,10 +45,16 @@ def custom_entry(name: str, path: str, entry: LocalEntry, files: ModelFolder) ->
     status: Status = status_of(path, hf.get("bytes"), files) if hf else ("downloaded" if have else "missing")
     summary = entry.get("summary") or ("Custom model from Hugging Face" if entry.get("source") == "hf"
                                        else "Custom model (found in the models folder)")
-    return {"name": name, "label": entry.get("label") or os.path.basename(path), "source": entry.get("source", "file"),
-            "path": path, "bytes": files.size(path) if have else hf.get("bytes", 0), "status": status, "hf": hf,
-            "summary": summary, "description": entry.get("description", ""),
-            "tune": {}, "why": {}, "ctx_zones": None, "measured": [], "local": entry, "custom": True}
+    info: ModelInfo = {"name": name, "label": entry.get("label") or os.path.basename(path),
+                       "source": entry.get("source", "file"), "path": path,
+                       "bytes": files.size(path) if have else hf.get("bytes", 0), "status": status, "hf": hf,
+                       "summary": summary, "description": entry.get("description", ""),
+                       "tune": {}, "why": {}, "ctx_zones": None, "measured": [], "local": entry, "custom": True}
+    draft = entry.get("draft")
+    if draft:                                # a Gemma 4 drafter CARL matched to it (domain/drafters.py)
+        dpath = os.path.join(os.path.dirname(path), local_file_name(draft.get("file", "")))
+        info.update({"draft": draft, "draft_path": dpath, "draft_status": status_of(dpath, draft.get("bytes"), files)})
+    return info
 
 
 def expand_home(path: str, home: str) -> str:
@@ -121,6 +127,8 @@ def build_models(catalog: Catalog, db: LocalDb, models_dir: str, files: ModelFol
             continue                        # a catalogue entry names this file now (adoptions)
         if os.path.dirname(path) == models_dir:
             seen_files.add(os.path.basename(path))
+        if e.get("draft"):
+            seen_files.add(local_file_name((e.get("draft") or {}).get("file", "")))   # not a model of its own
         out.append(custom_entry(name, path, e, files))
     for fn in sorted(f for f in files.gguf_names(models_dir) if not is_extra_part(f)):
         if fn not in seen_files:
@@ -175,9 +183,9 @@ def find_model(models: List[ModelInfo], name: str, as_path: str) -> Optional[Mod
         (m for m in models if os.path.basename(m.get("path", "")) == name or m.get("path") == as_path), None)
 
 
-def custom_defaults(shape: Optional[ModelShape]) -> Tuple[Settings, CustomInfo]:
+def custom_defaults(shape: Optional[ModelShape], drafter: bool = False) -> Tuple[Settings, CustomInfo]:
     """Starting tune for a model that is not in the catalogue, from its GGUF header (None:
-    the header couldn't be read)."""
+    the header couldn't be read). drafter: it has a recorded MTP drafter (a custom Gemma 4 model)."""
     tune: Settings = {"kv": "q4_0", "ctx": CUSTOM_CTX, "slots": "auto", "temp": 1.0, "top_p": 0.95, "top_k": 20,
                       "min_p": 0, "presence": 0}
     info: CustomInfo = {"arch": "dense", "mtp": False, "quant": "?"}
@@ -186,8 +194,10 @@ def custom_defaults(shape: Optional[ModelShape]) -> Tuple[Settings, CustomInfo]:
         return tune, info
     info = {"arch": "moe" if shape["experts"] else "dense", "mtp": bool(shape["nextn"]), "quant": shape["ftype"],
             "ctx_train": shape["ctx_train"], "thinking": "effort" if shape.get("effort_levels") else "on-off"}
-    # MTP + n-gram at n=1 measured best on Q4 and IQ3 alike; without an MTP head, n-gram only
-    tune["spec"], tune["spec_n"] = ("draft-mtp,ngram-mod", 1) if info["mtp"] else ("ngram-mod", 2)
+    # MTP + n-gram at n=1 measured best on Q4 and IQ3 alike (an MTP head); with a Gemma 4 drafter at n=2
+    # (Phase 20: the best on the E4B, 12B and 26B-A4B); without either, n-gram only
+    tune["spec"], tune["spec_n"] = (("draft-mtp,ngram-mod", 1) if info["mtp"] else
+                                    ("draft-mtp,ngram-mod", 2) if drafter else ("ngram-mod", 2))
     tune["ctx"] = min(CUSTOM_CTX, ctx_train(shape))
     return tune, info
 

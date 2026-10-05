@@ -12,6 +12,7 @@ from .domain import cards
 from .domain.clientlist import client_list
 from .domain.router import Common, Preset, plan_model
 from .domain import models as dm
+from .domain.drafters import matching_drafter
 from .domain.autofit import (AutoFit, Budget, Candidate, Goal, Plan, Scope, as_goal, as_scope, auto_fit,
                              best_downloaded, candidate)
 from .domain.errors import ConfigError
@@ -114,7 +115,54 @@ class Carl:
         renames = dm.adoptions(cat, db, mdir, self.home)
         if renames:
             self.adopt(db, renames)
-        return dm.build_models(cat, db, mdir, self.files, self.home)
+        models = dm.build_models(cat, db, mdir, self.files, self.home)
+        for m in models:                    # a custom Gemma 4 file: offer the catalogue drafter of its size
+            if m.get("custom") and m.get("status") == "downloaded" and not m.get("draft"):
+                match = matching_drafter(self.local_shape(m.get("path", "")), cat)
+                if match:
+                    m["draft_for"], m["draft_offer"] = match
+        return models
+
+    def add_drafter(self, m: ModelInfo) -> ModelInfo:
+        """Record the offered drafter (draft_offer) in the custom model's models.json entry, so start,
+        fit, verify, delete and Auto-tune use it; the model with its draft fields."""
+        offer = m.get("draft_offer")
+        if not offer:
+            return m
+        db = self.load_local()
+        entry = db["models"].setdefault(m.get("name", ""), {})
+        entry.setdefault("path", m.get("path", ""))
+        entry.setdefault("source", m.get("source", "file"))
+        entry["draft"] = offer
+        self.save_local(db)
+        dpath = os.path.join(os.path.dirname(m.get("path", "")), local_file_name(offer.get("file", "")))
+        out: ModelInfo = {**m, "draft": offer, "draft_path": dpath,
+                          "draft_status": dm.status_of(dpath, offer.get("bytes"), self.files)}
+        out.pop("draft_offer", None)
+        self.console.info(f"{m.get('name')} is a Gemma 4 model of the same size as {m.get('draft_for')}. CARL uses "
+                          f"the MTP drafter of {m.get('draft_for')} for it ({local_file_name(offer.get('file', ''))}, "
+                          f"{file_size(offer.get('bytes'))}). Auto-tune measures if it makes this model faster.")
+        return out
+
+    def download_drafter(self, m: ModelInfo) -> bool:
+        """Download a model's recorded MTP drafter next to its file (resumable, SHA-256 checked)."""
+        draft: HfRef = m.get("draft") or {}
+        if not draft:
+            return True
+        folder = os.path.dirname(m.get("path", ""))
+        dpath = os.path.join(folder, local_file_name(draft.get("file", "")))
+        if dm.status_of(dpath, draft.get("bytes"), self.files) == "downloaded":
+            self.console.info(f"The MTP drafter of {m.get('name')} is already downloaded: {dpath}")
+            return True
+        dlabel = f"{m.get('name')} MTP drafter"
+        got = self._fetch(dlabel, draft, folder)
+        if got is None:
+            return False
+        want = draft.get("sha256")
+        if want and not self._check_sha(dlabel, got, want):
+            self._bad_checksum(got)
+            return False
+        return True
 
     def adopt(self, db: LocalDb, renames: Dict[str, str]) -> None:
         """A catalogue entry took over custom models: their records and config.json profiles
@@ -149,13 +197,13 @@ class Carl:
         except (OSError, ValueError):
             return None
 
-    def custom_defaults(self, path: str) -> Tuple[Settings, CustomInfo]:
-        return dm.custom_defaults(self.local_shape(path))
+    def custom_defaults(self, path: str, drafter: bool = False) -> Tuple[Settings, CustomInfo]:
+        return dm.custom_defaults(self.local_shape(path), drafter)
 
     def effective_tune(self, m: ModelInfo, cfg: Config) -> Tuple[Settings, Dict[str, SettingSource]]:
         header = None
         if m.get("custom") and m.get("status") == "downloaded":
-            header = self.custom_defaults(m.get("path", ""))[0]
+            header = self.custom_defaults(m.get("path", ""), bool(m.get("draft")))[0]
         return dm.effective_tune(m, cfg, header)
 
     # ------------------------------------------------------------ model cards
@@ -499,15 +547,7 @@ class Carl:
                 return False
         if not need_draft:
             return True
-        dlabel = f"{name} MTP drafter"
-        got = self._fetch(dlabel, draft, models_dir)
-        if got is None:
-            return False
-        want = draft.get("sha256")
-        if want and not self._check_sha(dlabel, got, want):
-            self._bad_checksum(got)
-            return False
-        return True
+        return self.download_drafter({**m, "path": path})
 
     def download_hf(self, spec: str, name: Optional[str] = None) -> bool:
         """Any GGUF from Hugging Face: pin the revision, size and sha256, record it in
@@ -531,7 +571,12 @@ class Carl:
         entry.update({"source": "hf", "hf": ref, "path": os.path.join(mdir, local_file_name(file)),
                       "added": self.clock.today()})
         self.save_local(db)
-        return self.download({"name": name, "hf": ref}, mdir)
+        if not self.download({"name": name, "hf": ref}, mdir):
+            return False
+        m = self.find(name, self.all_models(self.load_config()))
+        if m and m.get("draft_offer"):                    # a Gemma 4 file: its drafter too, as for the catalogue
+            return self.download_drafter(self.add_drafter(m))
+        return True
 
     def delete(self, m: ModelInfo) -> None:
         """Delete a model's file and its MTP drafter's (and their part/bad copies), and forget its

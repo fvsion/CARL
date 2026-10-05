@@ -54,6 +54,7 @@ Google's Gemma 4 models joined the catalogue on 2026-10-04. Each one is the QAT 
   - A start gives the drafter to llama-server with `-md` when the speculation uses MTP (`--spec-type draft-mtp`). The drafter uses the KV cache of the model, so only its weights add memory. The fit checks count these weights.
   - If the drafter is not downloaded, the start uses n-gram speculation and tells you one time. `./carl.sh download NAME` then gets only the drafter.
   - The drafter file is not a model. The model list does not show it.
+  - **Custom Gemma 4 models** (another repository, a fine-tune) get the drafter of the catalogue model with the same size. CARL finds the size in the header: architecture `gemma4`, the layer count and the expert count (E4B 42, 12B 48, 26B-A4B 30 with 128 experts, 31B 60). `download hf:…` gets the drafter with the model. For a custom model that you have already, `./carl.sh download NAME` gets only the drafter. CARL records it as `draft` in the model's `models.json` entry, and the model then starts with MTP + n-gram, 2 guesses. A fine-tune can accept fewer guesses: Auto-tune measures it (`tools/carl_core/domain/drafters.py`).
 - **Speculation, measured 2026-10-04.** Three tasks for each mode: about 600 tokens of prose, 700 tokens of new code, and a 110-line file that the model writes again with one change (re-emit). Temperature 0, thinking off. The score is Auto-tune's weighted mean of the three speeds (tok/s).
 
   | Mode | Drafts | E4B (M2 Max) | 12B (M2 Max) | 26B-A4B (M3 Pro) |

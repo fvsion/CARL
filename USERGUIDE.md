@@ -399,6 +399,7 @@ The catalogue has four Gemma 4 models from Google. Each one is Google's QAT buil
 - **Speculation: MTP with a drafter.** Gemma 4 has no MTP head in the model file. Google gives a separate drafter file for each model (`mtp-gemma-4-*.gguf`, 60–280 MB). `./carl.sh download NAME` gets the model and its drafter. A start gives the drafter to llama.cpp (`-md`).
   - The catalogue uses MTP + n-gram with 2 guesses. MTP makes new text faster, and n-gram makes edits faster. Measured on the E4B, the 12B and the 26B-A4B: 55% to 83% faster than no speculation ([the numbers](reference/models.md#gemma-4)).
   - If the drafter is not downloaded, the start uses n-gram speculation and tells you. Run `./carl.sh download NAME` again to get the drafter.
+  - A Gemma 4 model from another Hugging Face repository (for example a fine-tune) also gets a drafter: the drafter of the catalogue model with the same size. `./carl.sh download hf:…` gets it with the model. For a custom Gemma 4 model that you have already, run `./carl.sh download NAME`, or press d on it in Settings > Models.
 - **Sampling:** Google's values: temperature 1.0, top_p 0.95, top_k 64.
 - **Thinking:** on or off only.
 - **Images:** the models can read images, but CARL starts them text-only.

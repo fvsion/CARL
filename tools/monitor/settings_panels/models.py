@@ -49,6 +49,15 @@ def drafter_line(m: ModelInfo, home: str, full: bool) -> str:
             f"uses n-gram only (slower on new text). Press d.{where}")
 
 
+def offer_line(m: ModelInfo, full: bool) -> str:
+    """A custom Gemma 4 model with no drafter yet: the catalogue drafter of its size fits it."""
+    offer = jdict(m.get("draft_offer"))
+    where = f" {DIM}{offer.get('repo', '')} · {offer.get('file', '')}{R}" if full else ""
+    return (f"MTP drafter: {YEL}none yet{R}. This is a Gemma 4 model of the same size as {m.get('draft_for')}, so its "
+            f"MTP drafter fits ({file_size(int(offer.get('bytes', 0)))}). With it, speculation is usually much faster. "
+            f"Press d to download it.{where}")
+
+
 class ModelsPanel:
     """Draws the Models panel."""
 
@@ -72,7 +81,8 @@ class ModelsPanel:
         here = sum(1 for x in all_ms if x["status"] == "downloaded")
 
         acts = [("Use it (Enter)" if m and m["status"] == "downloaded" else "Choose it (Enter)", "museit")]
-        if m and (m["status"] != "downloaded" or drafter_missing(m)) and (jdict(m.get("hf")).get("repo") or m.get("draft")):
+        if m and (m["status"] != "downloaded" or drafter_missing(m) or m.get("draft_offer")) and \
+                (jdict(m.get("hf")).get("repo") or m.get("draft") or m.get("draft_offer")):
             acts.append(("Download (d)", "mdl"))
         if m and m["status"] == "downloaded":
             acts += [("Check the file (v)", "mverify"), ("Auto-tune (u)", "mtune"), ("Delete (x)", "mdelete")]
@@ -161,6 +171,8 @@ class ModelsPanel:
             L += cwrap(speed, tw)
         if m.get("draft"):
             L += cwrap(drafter_line(m, self.home, full), tw)
+        elif m.get("draft_offer"):
+            L += cwrap(offer_line(m, full), tw)
         if m.get("custom"):
             has = bool(jdict(jdict(m.get("local")).get("card")))
             L += cwrap(f"Card: {GRN}your card{R}." if has else f"Card: {YEL}none yet{R}. Press e to write one.", tw)

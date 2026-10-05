@@ -3,6 +3,20 @@
 All notable changes to CARL. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Dates are local dates on the development Mac (M3 Pro, 36 GB).
 
+## 1.6.0 - 2026-10-04
+
+Phase 21.1: custom Gemma 4 models get the MTP drafter of their size.
+
+### Added
+- **An MTP drafter for custom Gemma 4 models.** A Gemma 4 file from another Hugging Face repository (for example a fine-tune, or an unsloth or bartowski build) now gets the MTP drafter of the catalogue model with the same size. CARL finds the size in the file's header: Gemma 4, the layer count and the expert count (E4B 42 layers, 12B 48, 26B-A4B 30 with 128 experts, 31B 60), the same in every repackaging (`tools/carl_core/domain/drafters.py`).
+  - `./carl.sh download hf:…` of a Gemma 4 file downloads its drafter too, as for a catalogue model. For a custom Gemma 4 model that you have already, `./carl.sh download NAME` downloads only the drafter. `./carl.sh models` tells you when a drafter fits.
+  - Dashboard: Settings > Models shows "MTP drafter: none yet … Press d to download it." for such a model.
+  - The drafter is recorded in the custom model's `models.json` entry (`draft`). Start (`-md`), fit, verify, delete and Auto-tune then use it as for a catalogue model. A custom model with a drafter starts with MTP + n-gram, 2 guesses.
+  - Checked live: a custom Gemma 4 E4B file got the E4B drafter (60 MB, SHA-256 checked) and wrote at 67.7 tok/s with 73% of the guesses correct.
+
+### Changed
+- **Gemma 4 31B: 2 guesses**, not 1. Three more runs of each gave the same numbers every time (the model is deterministic at temperature 0 on the M3 Pro), so the lead of 2 guesses (12.8 against 12.7) is real. 1.5.0 used 1 guess. The 12B: 2 guesses won all three repeat runs too.
+
 ## 1.5.0 - 2026-10-04
 
 Phase 21, the console rewrite: one name for each thing (`docs/phase21/glossary.md`) in the dashboard, the CLI, the launcher, `/carl` and the docs, one unit for each kind of number, and screens that say the state first in plain sentences.

@@ -26,7 +26,9 @@ CLI (./carl.sh models | download | verify use it through host/models.sh)
   carl.py list                         models: catalogue + models folder + custom
   carl.py download NAME|default|all    a catalogue model (pinned, verified; with its MTP drafter when it has
                                        one); default = auto fit's pick
-  carl.py download hf:REPO/FILE.gguf   any GGUF from Hugging Face (also a huggingface.co URL)
+  carl.py download hf:REPO/FILE.gguf   any GGUF from Hugging Face (also a huggingface.co URL); a Gemma 4
+                                       file also gets the catalogue's MTP drafter of its size
+  carl.py download NAME (custom)       a custom Gemma 4 model: its MTP drafter (domain/drafters.py)
   carl.py hf-files REPO                the GGUF files of a Hugging Face repo
   carl.py verify NAME... | delete NAME | path NAME | get NAME FIELD | default | downloaded
                                        (default: auto fit's pick for this Mac, everyday goal)
@@ -287,6 +289,9 @@ def cmd_list(models: List[ModelInfo]) -> None:
             notes.append("Auto-tune done on this Mac.")
         if m.get("draft") and m.get("status") == "downloaded" and m.get("draft_status") != "downloaded":
             notes.append(f"The MTP drafter is not downloaded: ./carl.sh download {name}")
+        if m.get("draft_offer"):
+            notes.append(f"A Gemma 4 MTP drafter fits this model (the one of {m.get('draft_for')}): "
+                         f"./carl.sh download {name}")
         text = " ".join([about.rstrip()] + notes).strip()
         row = (f"{name:<{nw}}  {human(m.get('bytes', 0)):>8}  {STATUS_TEXT.get(str(m.get('status')), str(m.get('status'))):<14}"
                f"  {SOURCE_TEXT.get(str(m.get('source')), str(m.get('source'))):<13}")
@@ -488,6 +493,9 @@ def cmd_download(names: List[str]) -> int:
             ok = download_hf(n) and ok
             continue
         m = find(n, models)
+        if m and m.get("custom") and m.get("status") == "downloaded" and (m.get("draft_offer") or m.get("draft")):
+            ok = app().download_drafter(app().add_drafter(m)) and ok      # a custom Gemma 4 model: its drafter
+            continue
         if not m or not m.get("hf"):
             raise ConfigError(UNKNOWN_MODEL.format(n))
         ok = download(m, models_dir()) and ok

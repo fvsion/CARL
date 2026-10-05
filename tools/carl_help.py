@@ -252,6 +252,10 @@ def topics(cmd: str) -> Dict[str, List[Block]]:
                                                              "address is also correct.")]),
             ("p", "A Gemma 4 model has an MTP drafter in a separate file (mtp-*.gguf). CARL downloads, checks and "
                   "deletes it with the model. Without the MTP drafter, the speculation is n-gram only."),
+            ("p", "A Gemma 4 file from another Hugging Face repository (for example a fine-tune) also gets an MTP "
+                  "drafter: the drafter of the catalogue model with the same size. CARL finds the size in the file. "
+                  f"For a custom Gemma 4 model that you have already, {c} download NAME downloads only its drafter. "
+                  "Auto-tune measures if the drafter makes the model faster."),
             ("p", "In the dashboard: Settings > Models, then h (Add from Hugging Face)."),
             ("h", "EXAMPLES"),
             ("c", [f"{c} download gemma-4-12b", f"{c} download hf:Qwen/Qwen3-0.6B-GGUF",

@@ -1074,7 +1074,7 @@
       "min_ram_gb": 32,
       "rank": 6,
       "tested": false,
-      "speed": {"prose": 8.9, "code": 9.5, "edit": 45.8, "machine": "M3 Pro 36 GB", "date": "2026-10-04", "mode": "draft-mtp,ngram-mod n=1"},
+      "speed": {"prose": 8.7, "code": 10.0, "edit": 46.2, "machine": "M3 Pro 36 GB", "date": "2026-10-04", "mode": "draft-mtp,ngram-mod n=2"},
       "summary": "Google's dense Gemma 4 31B (18 GB): the strongest Gemma; slow, and only the window cache fits.",
       "description": "Stock Gemma 4 31B instruction-tuned (Apache-2.0), Google's QAT weights quantized to Q4_0 by ggml-org (token embedding Q8_0). Dense: all 31B parameters are read for every token (~18 GB per token), so decode is bandwidth-bound and slow. 60 layers: 10 full-attention (4 KV heads x 512: 22.5 KiB/token at q4_0) and 50 sliding-window (window 1024, 16 KV heads x 256: 225 KiB/token at q4_0 at full length). The full-length cache (--swa-full) is out of reach below ~96 GB of RAM (2 x 96K: 64 GiB), so CARL runs it with the window-only cache: 2 x 96K needs ~22.6 GiB (36 GB and 32 GB Macs), but saved prompt states don't restore. Trained context 256K. Thinking is on / off only; llama-server turns it on by default. Text and images in the model; CARL starts it text-only.",
       "tune": {
@@ -1087,12 +1087,12 @@
         "min_p": 0,
         "presence": 0,
         "spec": "draft-mtp,ngram-mod",
-        "spec_n": 1
+        "spec_n": 2
       },
       "why": {
         "kv": "q4_0 K and V: with the window-only cache 2 x 96K needs 22.6 GiB at q4_0 and 27.0 GiB at q8_0 (only just under a 36 GB Mac's 28.1). Never mix K and V types.",
         "temp": "Google's model card: temperature 1.0, top_p 0.95, top_k 64 for all uses; min_p not given, 0.",
-        "spec": "MTP + n-gram, 1 guess. Measured 2026-10-04 on the M3 Pro 36 GB (llama.cpp 0.4.1; temperature 0, thinking off; ~600 tokens of prose, 700 of new code, a 110-line file re-emitted with one rename), prose / code / re-emit tok/s and Auto-tune's score: none 7.0 / 7.0 / 6.7 (6.9); n-gram n=2 7.1 / 7.0 / 43.8 (10.2); MTP n=1 8.9 / 9.5 / 9.4 (9.2), n=2 9.2 / 10.6 / 11.2 (10.1), n=4 5.6 / 7.4 / 8.7 (6.8); MTP + n-gram n=1 8.9 / 9.5 / 45.8 (12.7), n=2 8.7 / 10.0 / 46.2 (12.8), n=3 (11.9). n=1 and n=2 tie; Auto-tune takes the simpler one unless the other is 3% better. The drafter is ggml-org mtp-gemma-4-31B-it-Q4_0.gguf (0.28 GB, QAT): llama-server loads it with -md and it shares the target's context memory. Without the drafter downloaded, a start uses n-gram.",
+        "spec": "MTP + n-gram, 2 guesses. Measured 2026-10-04 on the M3 Pro 36 GB (llama.cpp 0.4.1; temperature 0, thinking off; ~600 tokens of prose, 700 of new code, a 110-line file re-emitted with one rename), prose / code / re-emit tok/s and Auto-tune's score: none 7.0 / 7.0 / 6.7 (6.9); n-gram n=2 7.1 / 7.0 / 43.8 (10.2); MTP n=1 8.9 / 9.5 / 9.4 (9.2), n=2 9.2 / 10.6 / 11.2 (10.1), n=4 5.6 / 7.4 / 8.7 (6.8); MTP + n-gram n=1 8.9 / 9.5 / 45.8 (12.7), n=2 8.7 / 10.0 / 46.2 (12.8), n=3 (11.9). n=2 is the best: three more runs of n=1 and n=2 gave the same numbers each time (this model is deterministic at temperature 0 here), so its 0.8% lead is real; Auto-tune's 3% margin (it guards against run-to-run noise) would keep n=1 on this Mac. The drafter is ggml-org mtp-gemma-4-31B-it-Q4_0.gguf (0.28 GB, QAT): llama-server loads it with -md and it shares the target's context memory. Without the drafter downloaded, a start uses n-gram.",
         "ctx": "96K per slot, the floor CARL keeps. With the window-only cache the largest window is ~220K per slot on a 36 GB Mac (2 slots), ~148K on a 32 GB Mac; with --swa-full it would be 20K (2 slots) / 40K (1 slot) on a 36 GB Mac.",
         "slots": "auto: 2 x 96K with the window-only cache (cache.swa auto picks it: the full cache does not fit) on 36 and 32 GB Macs; 1 slot on a 32 GB Mac with the VM up (22 GiB allowed)."
       },

@@ -72,6 +72,7 @@ class LocalEntry(TypedDict, total=False):
     path: str
     source: str
     hf: HfRef
+    draft: HfRef            # a custom Gemma 4 model's MTP drafter (domain/drafters.py)
     label: str
     alias: str
     summary: str
@@ -178,6 +179,8 @@ class ModelInfo(CatalogEntry, total=False):
     auto_fit: bool
     draft_path: str         # the drafter's file (a catalogue model with "draft")
     draft_status: Status
+    draft_offer: HfRef      # a custom Gemma 4 model: the catalogue drafter of its size, not recorded yet
+    draft_for: str          # the catalogue model whose drafter that is
 
 
 class CustomInfo(TypedDict, total=False):

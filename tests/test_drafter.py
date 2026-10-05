@@ -291,3 +291,70 @@ class TuneModesTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# ---------------------------------------------------------------- Phase 21.1: custom Gemma 4 models
+FINE_PATH = f"{MDIR}/Fine-12B-Q4_K_M.gguf"
+G12_SHAPE: ModelShape = {**with_window(shape(experts=0, nextn=0, kv_elems=4608), 1024, 92160), "arch": "gemma4",
+                         "blocks": 48}
+
+
+def gemma12_world(files: Optional[Dict[str, int]] = None, local: object = None) -> World:
+    g = gem("draft-mtp,ngram-mod")
+    g["name"] = "gemma-4-12b"
+    shapes = FakeShapes({FINE_PATH: G12_SHAPE, GEM_PATH: G12_SHAPE})
+    return World(catalog(g, QWEN, default="qwen"), files={FINE_PATH: 7 * GIB} if files is None else files,
+                 shapes=shapes, local=local, download_size=DRAFT_BYTES)
+
+
+class CustomGemmaDrafterTest(unittest.TestCase):
+    def test_the_size_class_picks_the_catalogue_drafter(self) -> None:
+        from carl_core.domain.drafters import matching_drafter
+        cat = parse_catalog(catalog(gem()), "c")                                # its Gemma entry is "gem"
+        g = gem()
+        g["name"] = "gemma-4-12b"
+        cat2 = parse_catalog(catalog(g), "c")
+        self.assertEqual(matching_drafter(G12_SHAPE, cat2), ("gemma-4-12b", draft_ref()))
+        self.assertIsNone(matching_drafter(G12_SHAPE, cat))                    # no gemma-4-12b entry
+        self.assertIsNone(matching_drafter({**G12_SHAPE, "arch": "qwen"}, cat2))
+        self.assertIsNone(matching_drafter({**G12_SHAPE, "blocks": 35}, cat2))  # an unknown size (E2B)
+        self.assertIsNone(matching_drafter(None, cat2))
+
+    def test_the_real_catalogue_has_a_drafter_for_every_size(self) -> None:
+        import json
+        import os
+        from carl_core.domain.drafters import GEMMA4_SIZES
+        with open(os.path.join(os.path.dirname(__file__), "..", "host", "catalog.json"), encoding="utf-8") as f:
+            names = {m["name"]: m for m in json.load(f)["models"]}
+        for name in GEMMA4_SIZES.values():
+            self.assertIn("draft", names[name], name)
+
+    def test_a_custom_gemma_file_is_offered_the_drafter(self) -> None:
+        w = gemma12_world()
+        m = model(w, "fine-12b-q4_k_m")
+        self.assertEqual((m.get("draft_for"), m.get("draft_offer")), ("gemma-4-12b", draft_ref()))
+        self.assertNotIn("draft", m)                        # offered, not recorded yet
+
+    def test_adding_records_it_and_the_download_fetches_only_the_drafter(self) -> None:
+        w = gemma12_world()
+        w.folder.hashes[f"{MDIR}/mtp-Gem-Q4_0.gguf"] = SHA_D
+        m = w.carl.add_drafter(model(w, "fine-12b-q4_k_m"))
+        self.assertEqual(m.get("draft_path"), f"{MDIR}/mtp-Gem-Q4_0.gguf")
+        saved = w.local.doc["models"]["fine-12b-q4_k_m"]       # type: ignore[index]
+        self.assertEqual((saved["draft"], saved["path"], saved["source"]), (draft_ref(), FINE_PATH, "file"))
+        self.assertTrue(any("same size as gemma-4-12b" in x for x in w.console.lines))
+        self.assertTrue(w.carl.download_drafter(m))
+        self.assertEqual([c[2] for c in w.downloader.calls], ["mtp-Gem-Q4_0.gguf"])
+        again = model(w, "fine-12b-q4_k_m")                    # recorded: start, fit and delete see it
+        self.assertEqual((again.get("draft_status"), again.get("draft_path")), ("downloaded", f"{MDIR}/mtp-Gem-Q4_0.gguf"))
+        self.assertNotIn("draft_offer", again)
+        names = [x["name"] for x in w.carl.all_models(Config())]
+        self.assertNotIn("mtp-gem-q4_0", names)               # the drafter is not a model of its own
+        self.assertEqual(dm.mtp_source(again, G12_SHAPE), "drafter")
+
+    def test_no_offer_for_other_models_or_a_recorded_drafter(self) -> None:
+        w = gemma12_world({FINE_PATH: 7 * GIB, QWEN_PATH: 10 * GIB})
+        self.assertNotIn("draft_offer", model(w, "qwen"))
+        w2 = gemma12_world(local={"schema": 1, "models": {"fine": {"path": FINE_PATH, "source": "file",
+                                                                    "draft": draft_ref()}}})
+        self.assertNotIn("draft_offer", model(w2, "fine"))

@@ -116,6 +116,25 @@ class DashboardTest(unittest.TestCase):
         self.assertIn("Press d to download its MTP drafter", text)
         self.assertIn("speculation uses n-gram only", drafter_line(self.store.models[0], "/home/u", False))
 
+    def test_a_custom_gemma_model_is_offered_its_drafter(self) -> None:
+        """Phase 21.1: a custom Gemma 4 file with no drafter yet: the offer line and Download (d)."""
+        custom: ModelInfo = {**gem(), "name": "my-gemma", "custom": True, "source": "file"}
+        for k in ("draft", "draft_path", "draft_status"):
+            custom.pop(k, None)                                     # type: ignore[misc]
+        custom["draft_offer"] = {"repo": "ggml-org/gemma-4-E4B-it-GGUF", "revision": "b" * 40,
+                                 "file": "mtp-gemma-4-E4B-it-Q4_0.gguf", "sha256": "d" * 64, "bytes": 59678240}
+        custom["draft_for"] = "gemma-4-e4b"
+        self.store.models[:] = [custom]
+        self.app.ctl.svc.models.get(refresh=True)                   # the list as the dashboard reads it again
+        self.keys("5", "]")
+        text = self.text()
+        self.assertIn("same size as gemma-4-e4b", text)
+        self.assertIn("Press d to download it", text)
+        self.assertIn("Download (d)", text)
+        with mock.patch("monitor.jobs.start_tool", return_value=FakeProc()) as start:
+            self.keys("d")
+        self.assertIn("my-gemma", " ".join(map(str, start.call_args[0][0])))
+
     def test_download_of_only_the_drafter(self) -> None:
         with mock.patch("monitor.jobs.start_tool", return_value=FakeProc()) as start:
             self.jobs.start_download("gem")
