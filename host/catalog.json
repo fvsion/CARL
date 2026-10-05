@@ -16,7 +16,7 @@
       "mtp": true,
       "min_ram_gb": 32,
       "tested": true,
-      "summary": "Default. Fast MoE: ~4x the decode and ~6x the prompt reading of the 27B, tiny KV cache.",
+      "summary": "Default. Fast MoE: ~4x the decode and ~6x the prompt reading of the 27B, tiny context memory.",
       "description": "Stock Qwen3.6-35B-A3B (not abliterated), unsloth dynamic Q4_K_M with the MTP head. Only 3B parameters are active per token, so decode is bandwidth-cheap (42-45 tok/s new text, 117 re-emitting code on an M3 Pro) and its KV cache is tiny (5.6 KiB/token at q4_0): two 96K slots cost under 1 GiB of KV. Thinking is on/off only (no effort levels). Needs a 32 GB+ Mac; 24 GB Macs get the IQ3 build.",
       "tune": {
         "kv": "q4_0",
@@ -64,7 +64,7 @@
         "agent coding",
         "chat & writing"
       ],
-      "why_use": "The fastest good model: only 3B parameters work per token, so it writes ~4x faster and reads prompts ~6x faster than the 27B, and its tiny KV cache fits two 96K slots (main session + subagent) in under 1 GiB.",
+      "why_use": "The fastest good model: only 3B parameters work per token, so it writes ~4x faster and reads prompts ~6x faster than the 27B, and its tiny context memory fits two 96K slots (main session + subagent) in under 1 GiB.",
       "trade_offs": "Weaker than the 27B on hard code (large refactors, subtle bugs, long reasoning); thinking is on/off only (no effort levels).",
       "pick_instead": [
         {
@@ -140,7 +140,7 @@
         "agent coding"
       ],
       "why_use": "The strongest stock model in CARL: all 27B parameters work on every token, so it handles harder code and reasoning than the A3B, and thinking has effort levels (low / medium / xhigh). The choice for quality agent coding when you can accept the speed.",
-      "trade_offs": "Slow: ~4x slower writing than the A3B and ~6x slower prompt reading (a cold read of a full 96K session takes many minutes); its KV cache is 3x the A3B's.",
+      "trade_offs": "Slow: ~4x slower writing than the A3B and ~6x slower prompt reading (a cold read of a full 96K session takes many minutes); its context memory is 3x the A3B's.",
       "pick_instead": [
         {
           "model": "qwen3.6-35b-a3b",
@@ -762,7 +762,7 @@
       "mtp": true,
       "min_ram_gb": 16,
       "tested": true,
-      "summary": "The small one (5.8 GB): 16 GB Macs, or more subagents at once.",
+      "summary": "A small distilled Qwen (5.8 GB): room for 3-4 subagent slots on larger Macs. On 16 GB Macs the Gemma 4 E4B and 12B are better.",
       "description": "empero-ai's Qwen3.8-9B-Distill: a community full-parameter distillation of Qwen3.8 (2.4T-A95B) into the Qwen3.5-9B hybrid architecture (Apache-2.0); not an official Qwen release (Qwen publishes no 9B in the 3.8 line). The publisher's Q4_K_M, with the MTP head. It thinks by default; thinking is on / off only (no effort levels). The hybrid layers decode slowly on Metal: ~25 tok/s on an M2 Max (llama-bench agrees: CARL's flags cost nothing), about half the 35B-A3B MoE, which reads only 3B parameters per token. Its small weights leave room for 2 x 96K on a 16 GB Mac, where no other catalogue model fits, or for 3-4 slots on larger Macs.",
       "tune": {
         "kv": "q4_0",
@@ -812,12 +812,12 @@
         "bytes": 5780090176
       },
       "rank": 10,
-      "role": "The small one: 16 GB Macs and more subagents at once",
+      "role": "A small distilled Qwen: more subagents at once",
       "good_for": [
         "chat & writing"
       ],
-      "why_use": "The smallest good model (5.8 GB): 2 x 96K slots fit a 16 GB Mac, where no other catalogue model fits, and on larger Macs it leaves room for 3-4 slots of subagents.",
-      "trade_offs": "A community distillation, not an official Qwen model, and only 9B: weaker than the 27B and the 35B-A3B on hard tasks, not tested at length for agent coding. Slow for its size on Metal (~25 tok/s): where the 35B-A3B IQ3 fits it is faster and better, also for several subagents at once (46 to 66 tok/s with 1 to 4 at once).",
+      "why_use": "Small (5.8 GB): 2 × 96K fits a 16 GB Mac, and on larger Macs it leaves room for 3-4 slots of subagents.",
+      "trade_offs": "A community distillation, not an official Qwen model, and only 9B. In CARL's code test (2026-10-04) it passed 5 of 18 tasks, the Gemma 4 E4B 13 of 18 at twice the speed. Slow for its size on Metal (~29 tok/s on an M2 Max). Phase 27 decides if it stays in the catalogue.",
       "pick_instead": [
         {
           "model": "qwen3.6-35b-a3b-iq3",
@@ -828,7 +828,7 @@
           "when": "hard code and you can wait"
         }
       ],
-      "hardware": "16 GB Macs (the one catalogue model that fits there with 2 x 96K); larger Macs for 3-4 slots"
+      "hardware": "Any Mac from 16 GB; larger Macs for 3-4 slots"
     },
     {
       "name": "gemma-4-e4b",
@@ -889,12 +889,12 @@
       "good_for": [
         "chat & writing"
       ],
-      "why_use": "About twice the decode speed of the Qwen3.8 9B on the same Mac (llama-bench, M2 Max: 46 vs 24 tok/s, no speculation) at a smaller size (4.6 GB): 2 x 96K slots fit a 16 GB Mac, and larger Macs have room for 3-4 slots. Google's QAT weights keep Q4_0 close to full precision.",
+      "why_use": "About twice the decode speed of the Qwen3.8 9B on the same Mac (llama-bench, M2 Max: 46 vs 24 tok/s, no speculation) at a smaller size (4.6 GB): 2 × 96K slots fit a 16 GB Mac, and larger Macs have room for 3-4 slots. Google's QAT weights keep Q4_0 close to full precision.",
       "trade_offs": "Only 4.5B effective parameters: well below the 26B-A4B and the Qwen models on code and agent tasks (Google: LiveCodeBench 52% vs 77% for the 26B-A4B, Tau2 42% vs 68%). Trained context 128K, not 256K. Not tested at length for agent coding.",
       "pick_instead": [
         {
-          "model": "qwen3.8-9b",
-          "when": "a 16 GB Mac and you want the stronger small model (slower)"
+          "model": "gemma-4-12b",
+          "when": "you want better code and can wait: it thinks much longer (Auto fit's hard-code choice on 16 GB)"
         },
         {
           "model": "qwen3.6-35b-a3b-iq3",
@@ -905,7 +905,7 @@
           "when": "a 32 GB+ Mac and you want Gemma 4 for real coding work"
         }
       ],
-      "hardware": "16 GB Macs and up (2 x 96K with the full cache ~8.2 GiB); larger Macs for 3-4 slots"
+      "hardware": "16 GB Macs and up (2 × 96K with the full cache ~8.2 GiB); larger Macs for 3-4 slots"
     },
     {
       "name": "gemma-4-12b",
@@ -921,7 +921,7 @@
       "rank": 8,
       "tested": false,
       "speed": {"prose": 28.2, "code": 34.3, "edit": 129.4, "machine": "M2 Max 32 GB", "date": "2026-10-04", "mode": "draft-mtp,ngram-mod n=2"},
-      "summary": "Google's dense Gemma 4 12B (7.2 GB): strong code for its size; 2 x 96K fits a 16 GB Mac with the window-only cache.",
+      "summary": "Google's dense Gemma 4 12B (7.2 GB): strong code for its size; 2 × 96K fits a 16 GB Mac with the window cache.",
       "description": "Stock Gemma 4 12B instruction-tuned (Apache-2.0), Google's quantization-aware-trained (QAT) weights quantized to Q4_0 by ggml-org; Q4_0 is the fastest 4-bit format on Metal. 48 layers, none sharing KV: 8 full-attention (1 KV head x 512: 4.5 KiB/token at q4_0) and 40 sliding-window (window 1024, 8 KV heads x 256: 90 KiB/token at q4_0 when kept at full length with --swa-full, which a restored prompt state needs). With its MTP drafter, 2 x 96K needs ~9.1 GiB with the window-only cache (fits a 16 GB Mac) and ~25.7 GiB with the full cache. Trained context 256K. Thinking is on / off only; llama-server turns it on by default. Text and images in the model; CARL starts it text-only (--no-mmproj).",
       "tune": {
         "kv": "q4_0",
@@ -966,12 +966,12 @@
         "agent coding",
         "chat & writing"
       ],
-      "why_use": "Much stronger than the E4B on Google's benchmarks and close to the 26B-A4B (LiveCodeBench v6 72.0% vs 52.0% for the E4B and 77.1% for the 26B-A4B; Codeforces ELO 1659 vs 940 and 1718; GPQA Diamond 78.8%, Tau2 69.0%, MMLU Pro 77.2%) at 7.2 GB: 2 x 96K with the window-only cache fits a 16 GB Mac. Google's QAT weights keep Q4_0 close to full precision.",
-      "trade_offs": "Not measured in CARL yet (speed, recall, agent coding). Dense, so each generated token reads all 7.2 GB: slower than the MoE models. Its full-length sliding-window cache is large (90 KiB/token), so on most Macs it runs with the window-only cache, and saved prompt states restore only with the full cache (25.7 GiB at 2 x 96K). Thinking is on/off only.",
+      "why_use": "Much stronger than the E4B on Google's benchmarks and close to the 26B-A4B (LiveCodeBench v6 72.0% vs 52.0% for the E4B and 77.1% for the 26B-A4B; Codeforces ELO 1659 vs 940 and 1718; GPQA Diamond 78.8%, Tau2 69.0%, MMLU Pro 77.2%) at 7.2 GB: 2 × 96K with the window cache fits a 16 GB Mac. Google's QAT weights keep Q4_0 close to full precision.",
+      "trade_offs": "Not measured in CARL yet (speed, recall, agent coding). Dense, so each generated token reads all 7.2 GB: slower than the MoE models. Its full-length sliding-window cache is large (90 KiB/token), so on most Macs it runs with the window cache, and saved prompt states restore only with the full cache (25.7 GiB at 2 × 96K). Thinking is on/off only.",
       "pick_instead": [
         {
-          "model": "qwen3.8-9b",
-          "when": "a 16 GB Mac and you want a model measured in CARL"
+          "model": "qwen3.6-35b-a3b-iq3",
+          "when": "it fits (24 GB and up): faster, and better at agent coding"
         },
         {
           "model": "gemma-4-26b-a4b",
@@ -982,7 +982,7 @@
           "when": "you want the fastest small model"
         }
       ],
-      "hardware": "16 GB Macs and up (2 x 96K with the window-only cache, 9.1 GiB); the full cache needs a 32 GB Mac or more for long windows"
+      "hardware": "16 GB Macs and up (2 × 96K with the window cache, 9.1 GiB); the full cache needs a 32 GB Mac or more for long windows"
     },
     {
       "name": "gemma-4-26b-a4b",
@@ -998,7 +998,7 @@
       "rank": 7,
       "tested": false,
       "speed": {"prose": 53.0, "code": 60.1, "edit": 232.9, "machine": "M3 Pro 36 GB", "date": "2026-10-04", "mode": "draft-mtp,ngram-mod n=2"},
-      "summary": "Google's Gemma 4 MoE (14.6 GB): 3.8B active per token; 2 x 96K with the full cache fits a 36 GB Mac.",
+      "summary": "Google's Gemma 4 MoE (14.6 GB): 3.8B active per token; 2 × 96K with the full cache fits a 36 GB Mac.",
       "description": "Stock Gemma 4 26B-A4B instruction-tuned (Apache-2.0): 128 experts, 8 active + 1 shared, 3.8B parameters per token. Google's QAT weights quantized to Q4_0 by ggml-org (token embedding Q8_0); Q4_0 is the fastest 4-bit format on Metal. 30 layers: 5 full-attention (2 KV heads x 512: 5.6 KiB/token at q4_0) and 25 sliding-window (window 1024, 8 KV heads x 256: 56 KiB/token at q4_0 at full length). With --swa-full (needed to restore a saved prompt state) 2 x 96K needs ~26.2 GiB: it fits a 36 GB Mac (28.1 GiB GPU limit), not a 32 GB one, where CARL keeps 2 slots and the window-only cache (~15.8 GiB; saved states don't restore). Trained context 256K. Thinking is on / off only; llama-server turns it on by default. Text and images in the model; CARL starts it text-only.",
       "tune": {
         "kv": "q4_0",
@@ -1044,11 +1044,11 @@
         "chat & writing"
       ],
       "why_use": "Google's MoE alternative to the Qwen 35B-A3B: 3.8B parameters per token keep decode fast, the QAT Q4_0 weights are 8 GB smaller than the Qwen build (14.6 vs 22.7 GB), and on a 36 GB Mac two 96K slots fit with the full sliding-window cache, so saved prompt states restore. Strong for its size on Google's benchmarks (LiveCodeBench 77%, GPQA 82%).",
-      "trade_offs": "Not measured in CARL yet (speed, recall, agent coding). Its full-length sliding-window cache is 10x the Qwen 35B-A3B's KV (62 vs 5.6 KiB/token), so above 2 x 108K or on a 32 GB Mac it runs with the window-only cache (saved prompt states don't restore). Thinking is on/off only.",
+      "trade_offs": "Not measured in CARL yet (speed, recall, agent coding). Its full-length sliding-window cache is 10x the Qwen 35B-A3B's KV (62 vs 5.6 KiB/token), so above 2 × 108K or on a 32 GB Mac it runs with the window cache (saved prompt states don't restore). Thinking is on/off only.",
       "pick_instead": [
         {
           "model": "qwen3.6-35b-a3b",
-          "when": "everyday agent coding: CARL's measured default (MTP speculation, tiny KV cache)"
+          "when": "everyday agent coding: CARL's measured default (MTP speculation, tiny context memory)"
         },
         {
           "model": "gemma-4-31b",
@@ -1059,7 +1059,7 @@
           "when": "a 16-24 GB Mac"
         }
       ],
-      "hardware": "36 GB Macs (2 x 96K with the full cache, 26.2 GiB); 32 GB Macs with the window-only cache (2 x 96K, 15.8 GiB)"
+      "hardware": "36 GB Macs (2 × 96K with the full cache, 26.2 GiB); 32 GB Macs with the window cache (2 × 96K, 15.8 GiB)"
     },
     {
       "name": "gemma-4-31b",
@@ -1074,7 +1074,8 @@
       "min_ram_gb": 32,
       "rank": 6,
       "tested": false,
-      "summary": "Google's dense Gemma 4 31B (18 GB): the strongest Gemma; slow, and only the window-only cache fits.",
+      "speed": {"prose": 8.9, "code": 9.5, "edit": 45.8, "machine": "M3 Pro 36 GB", "date": "2026-10-04", "mode": "draft-mtp,ngram-mod n=1"},
+      "summary": "Google's dense Gemma 4 31B (18 GB): the strongest Gemma; slow, and only the window cache fits.",
       "description": "Stock Gemma 4 31B instruction-tuned (Apache-2.0), Google's QAT weights quantized to Q4_0 by ggml-org (token embedding Q8_0). Dense: all 31B parameters are read for every token (~18 GB per token), so decode is bandwidth-bound and slow. 60 layers: 10 full-attention (4 KV heads x 512: 22.5 KiB/token at q4_0) and 50 sliding-window (window 1024, 16 KV heads x 256: 225 KiB/token at q4_0 at full length). The full-length cache (--swa-full) is out of reach below ~96 GB of RAM (2 x 96K: 64 GiB), so CARL runs it with the window-only cache: 2 x 96K needs ~22.6 GiB (36 GB and 32 GB Macs), but saved prompt states don't restore. Trained context 256K. Thinking is on / off only; llama-server turns it on by default. Text and images in the model; CARL starts it text-only.",
       "tune": {
         "kv": "q4_0",
@@ -1086,12 +1087,12 @@
         "min_p": 0,
         "presence": 0,
         "spec": "draft-mtp,ngram-mod",
-        "spec_n": 2
+        "spec_n": 1
       },
       "why": {
         "kv": "q4_0 K and V: with the window-only cache 2 x 96K needs 22.6 GiB at q4_0 and 27.0 GiB at q8_0 (only just under a 36 GB Mac's 28.1). Never mix K and V types.",
         "temp": "Google's model card: temperature 1.0, top_p 0.95, top_k 64 for all uses; min_p not given, 0.",
-        "spec": "MTP + n-gram, 2 draft tokens: not measured on this model (not downloaded); the best on the E4B, the 12B and the 26B-A4B (2026-10-04) (Auto-tune measures none, n-gram, MTP and MTP + n-gram at 1-4 drafts on each Mac). The drafter is ggml-org mtp-gemma-4-31B-it-Q4_0.gguf (0.28 GB, QAT): llama-server loads it with -md and it shares the target's KV cache. On the E4B, MTP with 2 drafts was the best (76.0 vs 61.1 tok/s without speculation, 600 tokens of code); n-gram is added for re-emitted code. On the dense Qwen 27B, MTP took decode from 7.4 to ~11 tok/s on an M3 Pro: expect the drafter to matter most here. Without the drafter downloaded, a start uses n-gram.",
+        "spec": "MTP + n-gram, 1 guess. Measured 2026-10-04 on the M3 Pro 36 GB (llama.cpp 0.4.1; temperature 0, thinking off; ~600 tokens of prose, 700 of new code, a 110-line file re-emitted with one rename), prose / code / re-emit tok/s and Auto-tune's score: none 7.0 / 7.0 / 6.7 (6.9); n-gram n=2 7.1 / 7.0 / 43.8 (10.2); MTP n=1 8.9 / 9.5 / 9.4 (9.2), n=2 9.2 / 10.6 / 11.2 (10.1), n=4 5.6 / 7.4 / 8.7 (6.8); MTP + n-gram n=1 8.9 / 9.5 / 45.8 (12.7), n=2 8.7 / 10.0 / 46.2 (12.8), n=3 (11.9). n=1 and n=2 tie; Auto-tune takes the simpler one unless the other is 3% better. The drafter is ggml-org mtp-gemma-4-31B-it-Q4_0.gguf (0.28 GB, QAT): llama-server loads it with -md and it shares the target's context memory. Without the drafter downloaded, a start uses n-gram.",
         "ctx": "96K per slot, the floor CARL keeps. With the window-only cache the largest window is ~220K per slot on a 36 GB Mac (2 slots), ~148K on a 32 GB Mac; with --swa-full it would be 20K (2 slots) / 40K (1 slot) on a 36 GB Mac.",
         "slots": "auto: 2 x 96K with the window-only cache (cache.swa auto picks it: the full cache does not fit) on 36 and 32 GB Macs; 1 slot on a 32 GB Mac with the VM up (22 GiB allowed)."
       },
@@ -1120,7 +1121,7 @@
         "agent coding"
       ],
       "why_use": "The strongest Gemma 4 and the largest stock dense model that fits a 32-36 GB Mac: Google reports LiveCodeBench 80%, Codeforces 2150, Tau2 77% (26B-A4B: 77% / 1718 / 68%), and the QAT Q4_0 weights keep it close to full precision.",
-      "trade_offs": "Slow: dense, ~18 GB read per generated token (MTP speculation with its drafter is not measured yet; expect below the Qwen 27B's ~11 tok/s on an M3 Pro). Runs only with the window-only sliding-window cache on these Macs, so saved prompt states don't restore after a restart or eviction. Not measured in CARL yet.",
+      "trade_offs": "Slow: dense, ~18 GB read per generated token (MTP speculation with its drafter is not measured yet; expect below the Qwen 27B's ~11 tok/s on an M3 Pro). Runs only with the window cache sliding-window cache on these Macs, so saved prompt states don't restore after a restart or eviction. Not measured in CARL yet.",
       "pick_instead": [
         {
           "model": "qwen3.8-27b",
@@ -1135,7 +1136,7 @@
           "when": "everyday agent coding (CARL's default)"
         }
       ],
-      "hardware": "36 GB Macs (2 x 96K, window-only cache: 22.6 GiB); also fits 32 GB Macs (2 x 96K; 1 slot with the VM up)"
+      "hardware": "36 GB Macs (2 × 96K, window cache: 22.6 GiB); also fits 32 GB Macs (2 × 96K; 1 slot with the VM up)"
     }
   ]
 }

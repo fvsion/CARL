@@ -111,8 +111,9 @@ class StartCheck:
         return self.need <= self.limit
 
     def setup(self) -> str:
-        per = f" x {self.slots} slots" if self.slots > 1 else ""
-        return f"--ctx {window_label(self.ctx)}{per} ({self.kv} KV)"
+        """The setup in words: 4 slots × 256K tokens (q8)."""
+        kv = {"q4_0": "q4", "q8_0": "q8"}.get(self.kv, self.kv)
+        return f"{self.slots} slot{'s' if self.slots != 1 else ''} × {window_label(self.ctx)} tokens ({kv})"
 
 
 def check_start(shape: ModelShape, weights: int, ctx: int, slots: int, kv: str, limit: float,
@@ -137,11 +138,6 @@ def swa_plan(mode: str, shape: ModelShape, weights: int, ctx: int, want_slots: s
     if mode in ("full", "window"):
         return slots, mode == "full"
     return slots, need_bytes(shape, weights, ctx, slots, kv, swa_full=True) <= limit
-
-
-def human_gb(n: float) -> str:
-    """Bytes as decimal GB, the way download sizes are quoted."""
-    return f"{n / 1e9:.1f} GB"
 
 
 def window_label(n: int) -> str:

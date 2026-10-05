@@ -18,7 +18,7 @@ from monitor.collector import Collector
 from monitor.fmt import ANSI, RED
 from monitor.jobs import Paths, ServerJobs
 from monitor.model import ModelInfo, draft_bytes, drafter_missing
-from monitor.settings import Schema, SettingsService, net_choices
+from monitor.settings import Schema, SettingsService, fit_sentence, net_choices
 from monitor.settings_panels.models import drafter_line
 from monitor.settings_view import SettingsView
 from monitor.state import SP_MODELS, Download, UIState
@@ -72,8 +72,9 @@ class ServiceTest(unittest.TestCase):
         self.assertEqual(svc.weights(m), 4 * GIB + DRAFT)
         self.assertEqual(svc.max_ctx(m), max_ctx(shape(), 4 * GIB + DRAFT, 8 * GIB, 1, "q4_0", False))
         p = dict(SCHEMA.defaults(), model="gem", ctx=65536, spec="draft-mtp", specn="2", kv="q4_0", slots="1")
-        need = ANSI.sub("", svc.fit_line(p)[1])
-        self.assertIn("gem needs", need)
+        f = svc.fit_line(p)
+        self.assertEqual((f.weights, f.drafter), (4 * GIB, DRAFT))           # the need counts both
+        self.assertIn("needs", ANSI.sub("", fit_sentence(f)))
 
 
 class DashboardTest(unittest.TestCase):
@@ -113,7 +114,7 @@ class DashboardTest(unittest.TestCase):
         self.assertIn("not downloaded", text)
         self.assertIn("Download (d)", text)
         self.assertIn("Press d to download its MTP drafter", text)
-        self.assertIn("without it, a start uses n-gram", drafter_line(self.store.models[0], "/home/u"))
+        self.assertIn("speculation uses n-gram only", drafter_line(self.store.models[0], "/home/u", False))
 
     def test_download_of_only_the_drafter(self) -> None:
         with mock.patch("monitor.jobs.start_tool", return_value=FakeProc()) as start:
@@ -151,7 +152,7 @@ class DashboardTest(unittest.TestCase):
         self.keys("5", "]", "x")
         confirm = self.ui.confirm2
         assert confirm is not None
-        self.assertIn("and its MTP drafter", " ".join(confirm.lines))
+        self.assertIn("Its MTP drafter goes too", " ".join(confirm.lines))
 
 
 if __name__ == "__main__":

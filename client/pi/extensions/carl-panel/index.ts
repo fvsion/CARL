@@ -1,32 +1,33 @@
 /**
- * CARL: the /carl panel for Pi (installed by CARL's client/install.sh): every CARL piece on this computer
- * with its state (carl-panel.js), one section per piece: the client config sync first (its auto-apply
- * switch, a config that waits, a check now), then the prompt cache, the coder, the subagent tool, the
- * browser and web search. Pi's dialogs are lists: the sections are a list, each one opens its own.
- * Without the sync service, a session start checks the server once for a pushed config.
+ * CARL: the /carl panel for Pi (installed by CARL's client/install.sh): every CARL part on this computer
+ * with its state (carl-panel.js), one section per part: the client config sync first (whether new configs
+ * are applied at once, a config that waits, a check now), then the disk cache, the coder, the subagent tool,
+ * the browser and web search. Pi's dialogs are lists: the sections are a list, each one opens its own (its
+ * actions and sentences, then the details under their own line, then "‹ back").
+ * Without the sync service, a session start checks the server once for a new config.
  */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { appliedSinceStart, checkOnce, run, sections } from "./carl-panel.js";
+import { appliedSinceStart, checkOnce, outcome, restartNotice, run, sections } from "./carl-panel.js";
 
-const BACK = "‹ back to every CARL piece";
+const BACK = "‹ back";
+const DETAILS = "── Details ──";
 
 export default function carlPanel(pi: ExtensionAPI) {
 	pi.on("session_start", async () => {
 		checkOnce();
 	});
 
-	// Pi reads its models when it starts: say once when a pushed config was applied since
+	// Pi reads its models when it starts: say once when a config from the dashboard was applied since
 	let told = false;
 	pi.on("agent_end", async (_event, ctx) => {
-		const v = appliedSinceStart();
-		if (v && !told) {
+		if (appliedSinceStart() && !told) {
 			told = true;
-			ctx.ui.notify(`CARL: the server's client config ${v} was applied (models, windows): restart Pi to use it.`, "info");
+			ctx.ui.notify(restartNotice("pi"), "info");
 		}
 	});
 
 	pi.registerCommand("carl", {
-		description: "Every CARL piece on this computer: the config sync, the prompt cache, the tools",
+		description: "The CARL parts on this computer and their state: config sync, disk cache, tools",
 		handler: async (_args, ctx) => {
 			for (;;) {
 				const all = sections("pi");
@@ -36,12 +37,14 @@ export default function carlPanel(pi: ExtensionAPI) {
 				for (;;) {
 					const cur = sections("pi").find((x) => x.id === s.id) ?? s;
 					const acts = cur.actions.map((a) => `▸ ${a.label}`);
-					const choice = await ctx.ui.select(`CARL · ${cur.title}`, [...acts, ...cur.lines, BACK]);
+					const details = cur.details.length ? [DETAILS, ...cur.details] : [];
+					const choice = await ctx.ui.select(`CARL · ${cur.title}`, [...acts, ...cur.lines, ...details, BACK]);
 					if (!choice || choice === BACK) break;
 					const a = cur.actions[acts.indexOf(choice)];
 					if (!a) continue;
-					const code = await run(a.args);
-					ctx.ui.notify(code === 0 ? "CARL: done" : `CARL: ${a.label.toLowerCase()} failed`, code === 0 ? "info" : "error");
+					if (a.busy) ctx.ui.notify(a.busy, "info");
+					const said = outcome(a, await run(a.args), "pi");
+					ctx.ui.notify(said.message, said.ok ? "info" : "error");
 				}
 			}
 		},

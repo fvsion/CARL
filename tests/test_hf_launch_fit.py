@@ -145,7 +145,7 @@ class FitTest(unittest.TestCase):
         big = fit.check_start(self.S, 10 * GIB, 262144, 4, "q8_0", 16 * GIB)
         self.assertFalse(big.fits)
         self.assertEqual(big.largest, fit.max_ctx(self.S, 10 * GIB, 16 * GIB, 4, "q8_0"))
-        self.assertEqual(big.setup(), "--ctx 256K x 4 slots (q8_0 KV)")
+        self.assertEqual(big.setup(), "4 slots × 256K tokens (q8)")
         self.assertEqual(fit.check_start(self.S, 20 * GIB, 4096, 0, "q4_0", 16 * GIB).largest, 0)
         self.assertEqual(fit.check_start(self.S, GIB, 4096, 0, "q4_0", 16 * GIB).slots, 1)
         self.assertEqual(fit.window_label(98304), "96K")

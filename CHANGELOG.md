@@ -3,6 +3,60 @@
 All notable changes to CARL. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Dates are local dates on the development Mac (M3 Pro, 36 GB).
 
+## 1.5.0 - 2026-10-04
+
+Phase 21, the console rewrite: one name for each thing (`docs/phase21/glossary.md`) in the dashboard, the CLI, the launcher, `/carl` and the docs, one unit for each kind of number, and screens that say the state first in plain sentences.
+
+### Added
+- **Dashboard: two detail levels.** `D` changes between simple and full detail on every screen (a click on `detail: simple (D)` does the same). The dashboard saves the level in `~/.config/carl/dashboard.json`, next to `config.json` (it never writes `config.json` for this). `--expand` gives full detail for one run.
+- **Dashboard: a message line** above the footer (at most 2 lines): the progress of a stop or a restart with its time, short messages, and the downloads, Auto-tune runs and installs that run in the background. The `?` card shows the last 5 messages.
+- **Dashboard: a "CARL STARTS" card** shows the progress of the first start (the server state, the model list, what fits this Mac).
+- **A refused start shows its reason** in the dashboard: the launcher's `error:` line, in the Memory section of Settings > Server and in the SERVER card of the Live tab.
+- **Live tab:** a SERVER card when no server runs (how to start it, what a start uses and if it fits, the last error, the log). `a` starts a stopped server.
+- **Settings > Server:** the columns **Your choice**, **Running now** and **Recommended** (with its source: Auto-tune, the catalogue, CARL's default); a **Memory** section (a sentence that tells if the setup fits, and a bar); **Auto fit suggests**; **More settings** in full detail, with the llama.cpp flag and the `config.json` key under each setting.
+- **Router panel keys:** `s` single model, `r` router mode, ↑ ↓ and Enter to load or unload a model, `u` to update the configs (before: the mouse only).
+- **Help for every command** (`tools/carl_help.py`): `./carl.sh help COMMAND`, `./carl.sh COMMAND --help` and `./carl.sh COMMAND -h`. The help wraps to the width of the terminal.
+- **`install.sh --help` and `install-clients.sh --help`** are real help pages (the options, the key sources, the switches).
+- **Legends** under `./carl.sh models`, `./carl.sh fit`, `./carl.sh cache show` and the Models panel. `./carl.sh config show` gives every key with what it does, its values and its default.
+- **Pi:** the result of a background subagent shows as `✓ Coder finished (42 s)` with its first 3 lines. Ctrl+O shows all of it. The model still reads the `<subagent …>` text.
+- **`/carl` panel:** a **Details** part in each section (the addresses, the config version, the installer's switches) and **‹ back**.
+- Code: `tools/carl_core/domain/units.py` (the units of every screen; it replaces `fit.human_gb` and the dashboard's `fmt.size`, `knum` and `dur`), `cards.card_rows()` (the rows of `./carl.sh card`), `tools/monitor/words.py` (the glossary's names for the values of the server and `config.json`), `tools/monitor/uiprefs.py` (the detail level).
+- Tests: `tests/monitor/test_screens.py` (every screen as text at 100, 140 and 200 columns, simple and full), `tests/scripts/test_cli_text.py` (each help page, the width, the names, the units, the start lines), `tests/test_units.py`, `tests/js/pi-subagent.test.mjs`.
+
+### Changed
+- **Names (the glossary):** tab 1 is **Live** (was Overview); the panel is **Caching** (no "(exp.)"); **disk cache** (was "prompt cache" in `/carl`, the plugins and the docs); **RAM cache**; **context memory** and **context memory type** (was KV cache, KV type); **window cache** / **full cache** (was window only / full-length); **guesses** (was draft tokens, `n=2`); **read speed** / **write speed** (was prompt processing, decode, generate); **reused** tokens (was cached); **Auto fit** and its **choice** (was auto fit's pick); **quality rank**; **send the config** (was push). The settings keys, the flags and the file names do not change.
+- **Units everywhere:** GB for files, downloads and the disk; GiB for memory; K = 1024 tokens; tok/s (was t/s); one style for times (`4.9 s`, `6 min`, `1 h 12 min`).
+- **Dashboard header:** the state words are STOPPED, LOADING, IDLE, READING, WRITING and BUSY ×N, with ● (a server runs) or ○ (was OFFLINE, EXITED, UP, GENERATING). The tab, the panel and each selected choice are in brackets (`[1 Live]`, `[Server]`, `[10 GB]`).
+- **Dashboard cards:** no detail dots. A click on a card title collapses the card to one ▸ line, or opens it. Text in a card wraps. The Live tab starts with a sentence ("No request runs. The 2 slots are free. Memory is normal."), then the cards SLOTS, SPEED, MEMORY, CONNECT and HEALTH (full detail: MODEL and LOG). The SPEED card gives the read and write speeds and "77% of the guesses are correct". Two columns from 120 columns, three from 180.
+- **Dashboard footer:** it always ends with `D detail · ? all keys · q quit`. A dialog shows only its own keys. `?` lists the keys that work on that screen.
+- **Dashboard keys:** the copy keys on Live and Connect are `o` / `p` / `c` (`t` still works); `e` / `c` (expand / collapse all cards) are gone (`D`, and a click on a title); `+` / `-` change the lines of the LOG card in full detail only (`--lines` sets the start value); the Quit dialog is `s` (stop the server and quit) / `l` (leave it running and quit) / Esc; the dialog **AN AGENT IS WORKING** is `w` (wait for the turn) / `s` (stop now) / Esc; the Caching panel uses ↑ ↓ ← → and `c` (no letter keys for the rows); `x` in the Auto-tune panel uses the recommended settings; the Auto-tune lengths are quick / normal / long; `w` and `f` work on the Log tab only.
+- **Settings > Server:** the buttons are **[ Apply and restart (a) ]**, **[ Undo my changes (r) ]** and **[ Use the recommended settings (x) ]**. One Speculation row holds the mode and its guesses (`MTP + n-gram, 1 guess`). `auto` always shows its choice (`auto (2)`, `auto (2.5 GiB)`). A ⚠ sentence under the table replaces the colour legend.
+- **Settings > Models:** the download size in GB, "Fits this Mac" (`yes, 2 × 96K` or `no (17.5 GiB)`), the speed in tok/s with ● (this Mac) / ○ (another Mac) / `not measured`, and a legend. Full detail shows the quality rank and the largest context. The buttons are **Use it**, **Check the file**, **Auto-tune**, **Delete**, **Edit its card** and **Add from Hugging Face**.
+- **Settings > Caching:** the rows are Disk limit, Saved prompts, Saved sessions, When to save (auto, every turn, when it leaves, before a stop), Save after, Shared storage and Gemma models.
+- **Connect tab:** **[ Install on this Mac (i) ]** (**Install again** when set up), **[ Update the model lists (u) ]**, **[ Send the config (P) ]**. The Clients sub-tab is a table (computer, user, syncs, last seen, config).
+- **`./carl.sh models`:** the glossary's status and source words (downloaded, not downloaded, partial; catalogue, models folder, Hugging Face), GB, and a legend. **`./carl.sh cache show`:** saved prompts and saved sessions, GB and MB, and a legend for `*`. **`./carl.sh card`:** the labels of the dashboard. `verify`, `download`, `card` and `delete` of an unknown model give the same error.
+- **`./carl.sh fit`:** a **Memory.** block in sentences; Auto fit's choice for each goal, with "(your goal)"; the columns rank, weights (GiB), per 1K tokens (MiB) and largest context with q4 and q8 (for Gemma: the cache that Auto fit plans, and a note with the other cache); a legend; the `sysctl` line is for experts only, with the risk first. The `--check` refusal is one `error:` sentence, then the advice.
+- **The launcher's start lines** are sentences with their sources: "CARL starts the server: NAME (FILE).", "Slots: 2 (from Auto-tune). Context: 96K tokens per slot (…).", "Context memory type: q4 (…). RAM cache: 8.0 GiB.", "Speculation: MTP + n-gram, 2 guesses (…).", the sliding-window line and the log line. The sources are your option, the environment, your settings, Auto-tune, the catalogue, the model file and Auto fit. Each refusal starts with `error:`. An unknown command gives one `error:` line and exits with 2.
+- **Router mode:** the start lines name the setup of each model, with the window cache or the full cache (`2 slots × 96K tokens, q4, window cache`).
+- **Auto fit wording:** "NAME (quality rank N) is dense: Auto fit keeps it for the hard code goal". A passed-over model that fits no pass says "does not fit" first. `Plan.label()` is "2 × 96K tokens, q4".
+- **`/carl` panel:** plain sentences, the state first. The actions are **Do not apply new configs at once** (was "Turn auto-apply off"), **Apply new configs at once**, **Apply the new config now** and **Check for a new config now**. The section of the cache is **Disk cache**.
+- **`install.sh`:** the smoke test says `OK: the server answers at http://HOST:PORT/v1. It has MODEL.` (or `Note: no server runs at …`). The output is in sentences.
+- **Catalogue:** the card texts use the glossary's names (context memory, window cache, 2 × 96K).
+
+- **Gemma 4 31B measured** (M3 Pro 36 GB): speculation MTP + n-gram scores 12.8 with 2 guesses and 12.7 with 1 (no speculation: 6.9), so the catalogue uses 1 guess (Auto-tune's rule: the simpler mode unless the other is 3% better). Code test at Google's sampling: 17 of 18 tasks, no answer stopped at the token limit, the shortest thinking of the Gemma models (about 1,800 tokens a task) at about 9.5 tok/s. With the window cache it reads a 14.5K-token prompt at 73 tok/s. It keeps quality rank 6, below the Qwen 27B.
+- **Catalogue card texts** use the glossary (context memory, window cache, 2 × 96K). The 9B's card says what Phase 20 measured; the E4B's and the 12B's "pick instead" no longer point at the 9B.
+- **Download sizes include the MTP drafter** in every dashboard view (the list, the selected model, Auto fit).
+- **Free disk for saves:** CARL and the clients stop saving below 10 GB of free disk (was 10 GiB, 10.7 GB).
+
+### Fixed
+- **A false error on every Gemma 4 start.** llama.cpp's own memory fitting probes the model, and its probe fails for the Gemma 4 MTP drafter ("Gemma4Assistant requires ctx_other"). The dashboard counted this as 1 error. The launcher now gives `--fit off`, and the router presets `fit = off`: CARL sets `-ngl` and `-c` and checks the memory itself.
+- **The launchers honour `CARL_CONF_DIR`**, as `tools/carl.py` does: the disk cache (`slots/`) and `router-presets.ini` go to that folder. Before, a run with a test folder wrote the real one. The API key stays in `~/.config/carl`.
+- **Two keys in one read** (for example `?3`) now work as two keys. A text that you type or paste stays one text.
+- **The source of the slots:** after `--slots 4`, the start line said `slots:auto-tune`. A flag and the environment are sources now ("Slots: 4 (from your option)").
+- **`CMD --help`** failed with "no help topic" for six commands (install, config, cache, push, tune, dashboard). Every command has a help page now.
+- **The help did not wrap** to the width of the terminal.
+- **Pi showed the raw `<subagent …>` text** of a background result. It now shows `✓ Coder finished (42 s)` and the first lines.
+
 ## 1.4.0 - 2026-10-04
 
 Gemma 4 done properly: MTP speculation with Google's separate drafters (measured: MTP + n-gram is 55-83% faster), the Gemma 4 12B, ranks from benchmarks and CARL's own code test, and auto fit for 16 GB Macs (the E4B for everyday work, the 12B for hard code).

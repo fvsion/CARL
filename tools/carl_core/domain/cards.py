@@ -33,7 +33,7 @@ class CardField:
 
 
 FIELDS: Tuple[CardField, ...] = (
-    CardField("label", "label", "text", "The name that the lists and the MODEL card show. Empty: the file name.",
+    CardField("label", "label", "text", "The name that the lists and the model card show. Empty: the file name.",
               limit=LABEL_MAX),
     CardField("role", "role", "text", f"A short headline that tells what this model is ({ROLE_MAX} characters maximum).",
               limit=ROLE_MAX),
@@ -42,19 +42,20 @@ FIELDS: Tuple[CardField, ...] = (
     CardField("why_use", "why use it", "text", "The reason to use this model and not a different model."),
     CardField("trade_offs", "trade-offs", "text", "When to use a different model: speed, quality, memory, refusals."),
     CardField("hardware", "hardware", "text", "The Macs (RAM) that the model is for, and what fits on them."),
-    CardField("abliterated", "abliterated", "bool", "The model has no refusals. The stock filter hides it, and auto "
-              "fit never picks it."),
+    CardField("abliterated", "abliterated", "bool", "The safety training is removed, so the model has no refusals. "
+              "The stock filter hides it, and Auto fit never chooses it."),
     CardField("uncensored", "uncensored", "text", "What uncensored means for this model (abliterated models only)."),
-    CardField("arch", "arch", "choice", "dense: all parameters work on each token (slower, stronger). MoE: a "
-              "few experts work on each token (fast). The dense / MoE filters and the auto fit goals use it.", choices=ARCHS),
-    CardField("quant", "quant", "text", "The quantization label, for example Q4_K_M or UD-IQ3_XXS.", limit=QUANT_MAX),
+    CardField("arch", "architecture", "choice", "dense: all weights work on each token (slower, stronger). MoE: a "
+              "few experts work on each token (fast). The dense and MoE filters and the goals of Auto fit use it.",
+              choices=ARCHS),
+    CardField("quant", "quantization", "text", "The quantization, for example Q4_K_M or UD-IQ3_XXS.", limit=QUANT_MAX),
     CardField("rank", "quality rank", "number", "The quality order: 1 is the best. The catalogue uses ranks 1-10. "
               "Sort by quality uses it. Type a whole number, or leave it empty."),
     CardField("thinking", "thinking", "choice", "How the model thinks: on / off only, or effort levels. OpenCode and "
               "Pi show the related options.", choices=THINKING),
-    CardField("auto_fit", "auto fit", "bool", "Lets auto fit pick this model for this Mac. The model must have a "
-              "rank and an arch, and it must not be abliterated. CARL does not measure your rank, so the default is "
-              "off."),
+    CardField("auto_fit", "Auto fit", "bool", "Auto fit can choose this model for this Mac. The model must have a "
+              "quality rank and an architecture, and it must not be abliterated. CARL does not measure your rank, so "
+              "the default is no."),
     CardField("pick_instead", "pick instead", "picks", "Similar models: a different model, and when it is the better "
               "pick."),
 )
@@ -68,7 +69,7 @@ def field(key: str) -> CardField:
     """A field by its key; ConfigError naming the fields when there is none."""
     f = FIELD.get(key)
     if f is None:
-        raise ConfigError(f"unknown card field '{key}' (fields: {', '.join(f.key for f in FIELDS)})")
+        raise ConfigError(f"unknown card field '{key}'. The fields: {', '.join(f.key for f in FIELDS)}")
     return f
 
 
@@ -78,27 +79,27 @@ def parse_value(f: CardField, args: Sequence[str]) -> JsonValue:
     (MODEL=WHEN, repeated, or a JSON list of {"model", "when"})."""
     text = " ".join(args).strip()
     if not text:
-        raise ConfigError(f"{f.key}: no value given (to remove it: unset {f.key})")
+        raise ConfigError(f"{f.key}: give a value (to remove the field: unset {f.key})")
     if f.kind == "text":
         return text
     if f.kind == "tags":
         tags = [t.strip() for a in args for t in a.split(",") if t.strip()]
         bad = [t for t in tags if t not in f.choices]
         if bad:
-            raise ConfigError(f"{f.key}: unknown tag {', '.join(bad)} (tags: {', '.join(f.choices)})")
+            raise ConfigError(f"{f.key}: unknown tag {', '.join(bad)}. The tags: {', '.join(f.choices)}")
         return cast(JsonValue, list(dict.fromkeys(tags)))
     if f.kind == "bool":
         if text.lower() in _TRUE + _FALSE:
             return text.lower() in _TRUE
-        raise ConfigError(f"{f.key}: yes or no")
+        raise ConfigError(f"{f.key}: type yes or no")
     if f.kind == "choice":
         v = text.lower()
         if v not in f.choices:
-            raise ConfigError(f"{f.key}: one of {', '.join(f.choices)}")
+            raise ConfigError(f"{f.key}: type one of {', '.join(f.choices)}")
         return v
     if f.kind == "number":
         if not text.isdigit():
-            raise ConfigError(f"{f.key}: a whole number >= 1 (1 = best quality)")
+            raise ConfigError(f"{f.key}: type a whole number, 1 or more (1 is the best quality)")
         return int(text)
     return cast(JsonValue, parse_picks(args))
 
@@ -180,29 +181,39 @@ def shown(f: CardField, v: object) -> str:
     return str(v)
 
 
-def describe(m: ModelInfo) -> List[str]:
-    """A model's card for the command line: whose card it is, then one line per field (a
-    custom model: every field, unset ones as -; a catalogue model: the fields it has)."""
+def card_rows(m: ModelInfo) -> Tuple[str, List[Tuple[str, str]], List[str]]:
+    """A model's card for the command line: whose card it is, (label, value) per field (a custom
+    model: every field, unset ones as -, with the key to set it; a catalogue model: the fields it
+    has), and for a custom model how to edit it."""
     name = m.get("name", "")
     rec = cast(Dict[str, object], m)
     if m.get("custom"):
         card = user_card(m)
-        head = (f"{name}: custom model, your card (models.json)" if card else
-                f"{name}: custom model, no card yet")
+        head = (f"{name} is a custom model. This is your card (models.json)." if card else
+                f"{name} is a custom model. It has no card yet.")
         keys = [f.key for f in FIELDS]
         src: Dict[str, object] = dict(cast(Dict[str, object], card))
     else:
-        head = f"{name}: catalogue model, read-only card (host/catalog.json)"
+        head = f"{name} is a catalogue model. You cannot change its card (host/catalog.json)."
         keys = [f.key for f in FIELDS if f.key in rec]
         src = rec
-    lines = [head]
+    rows = []
     for k in keys:
         f = FIELD[k]
-        lines.append(f"  {f.key:<13} {shown(f, src.get(k))}")
+        label = f"{f.label} ({f.key})" if m.get("custom") and f.label != f.key else f.label
+        rows.append((label, shown(f, src.get(k))))
+    hints: List[str] = []
     if m.get("custom"):
-        lines += ["", f"set a field:   ./carl.sh card {name} set FIELD VALUE",
-                  f"remove one:    ./carl.sh card {name} unset FIELD",
-                  f"tags:          good_for '{','.join(GOOD_FOR[:2])}' · yes / no: abliterated, auto_fit · "
-                  f"arch: {' | '.join(ARCHS)} · thinking: {' | '.join(THINKING)}",
-                  "pick_instead:  MODEL=WHEN (repeat for more), or a JSON list"]
-    return lines
+        hints = [f"To set a field: ./carl.sh card {name} set FIELD VALUE. To remove one: ./carl.sh card {name} unset "
+                 f"FIELD.",
+                 f"good_for takes tags with commas between them ({','.join(GOOD_FOR[:2])}). abliterated and auto_fit "
+                 f"take yes or no. arch takes {' or '.join(ARCHS)}. thinking takes {' or '.join(THINKING)}. "
+                 f"pick_instead takes MODEL=WHEN (one for each model) or a JSON list."]
+    return head, rows, hints
+
+
+def describe(m: ModelInfo) -> List[str]:
+    """A model's card for the command line, one line per field (card_rows)."""
+    head, rows, hints = card_rows(m)
+    tw = max((len(t) for t, _ in rows), default=0)
+    return [head] + [f"  {t:<{tw}}  {v}" for t, v in rows] + ([""] + hints if hints else [])

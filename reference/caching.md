@@ -1,6 +1,6 @@
 # CARL Reference: Caching
 
-[Index](README.md) · every cache that CARL uses: llama.cpp's slots and RAM prompt cache, the disk prompt cache of OpenCode and Pi, how a saved state is built, and how conversations share their prompt on the disk.
+[Index](README.md) · every cache that CARL uses: llama.cpp's slots and RAM cache, the disk cache of OpenCode and Pi, how a saved state is built, and how conversations share their prompt on the disk.
 
 ## The caches at a glance
 
@@ -10,20 +10,20 @@ A request reads its whole prompt unless a cache already holds the start of it. T
 |---|---|---|---|---|
 | A slot | GPU memory | The conversation that the slot runs now (its KV cache and, on Qwen, the recurrent state) | Another conversation takes the slot | `--parallel` (slots), the window per slot |
 | Context checkpoints | GPU memory | Points in a conversation that the server can go back to (Qwen) | The conversation leaves its slot | `--ctx-checkpoints` (8, at least 4K tokens apart) |
-| The RAM prompt cache | RAM | Conversations that left their slot | The server stops, a router switch, or the cache is full | `--cache-ram` (the launcher: 1–8 GiB) |
-| The disk prompt cache | `~/.config/carl/slots` | Each agent's prompt and each session of OpenCode and Pi | The disk limit removes the oldest files | The `carl-cache` plugin and extension; Settings > Caching |
+| The RAM cache | RAM | Conversations that left their slot | The server stops, a router switch, or the cache is full | `--cache-ram` (the launcher: 1–8 GiB) |
+| The disk cache | `~/.config/carl/slots` | Each agent's prompt (a saved prompt) and each session (a saved session) of OpenCode and Pi | The disk limit removes the oldest files | The `carl-cache` plugin and extension; Settings > Caching |
 
 ## llama.cpp's own caches
 
 - **Slots:** the server has 2 slots by default (up to 4 where they fit). Each slot keeps one conversation.
-- **RAM prompt cache** (`--cache-ram`): the launcher calculates its size from the free RAM after the model and a reserve. The reserve is 10 GiB with the VM network, else 6 GiB (`RESERVE_GB`). The size is 1–8 GiB, in 256 MiB steps. This cache holds conversations that are not in a slot.
+- **RAM cache** (`--cache-ram`): the launcher calculates its size from the free RAM after the model and a reserve. The reserve is 10 GiB with the VM network, else 6 GiB (`RESERVE_GB`). The size is 1–8 GiB, in 256 MiB steps. This cache holds conversations that are not in a slot.
 - On Apple Silicon, the RAM cache uses the same memory as "VRAM". macOS moves this memory to swap on the SSD when the memory pressure is high.
-- **Disk:** llama.cpp has no automatic disk tier. It has only a manual function (`--slot-save-path` and `/slots/{id}?action=save|restore`). CARL's clients use this function ([the disk prompt cache](#the-disk-prompt-cache-of-opencode-and-pi-measured-2026-10-03-and-2026-10-04)).
+- **Disk:** llama.cpp has no automatic disk tier. It has only a manual function (`--slot-save-path` and `/slots/{id}?action=save|restore`). CARL's clients use this function ([the disk cache](#the-disk-cache-of-opencode-and-pi-measured-2026-10-03-and-2026-10-04)).
 
-### The RAM prompt cache and checkpoints (measured 2026-10-02)
+### The RAM cache and checkpoints (measured 2026-10-02)
 
 - The server has 2 slots by default. When a third conversation starts, it takes the slot of the conversation that was used least recently.
-- The server keeps the removed prompt in the **RAM prompt cache** (`--cache-ram`).
+- The server keeps the removed prompt in the **RAM cache** (`--cache-ram`).
 - When that conversation continues, the server copies the prompt back from RAM. It does not read the prompt again.
 - **The launcher sets the cache size.** The size is the free memory after the model and a reserve for macOS (10 GiB when the VMware network is up, else 6 GiB). The limits are 1024 MiB and 8192 MiB.
 - **Test:** the 35B, 2 × 96K, M3 Pro. Three conversations of ~20K tokens each, then one follow-up in each conversation. Then a turn with thinking, and the turn after it.
@@ -36,16 +36,16 @@ A request reads its whole prompt unless a cache already holds the start of it. T
 | `--kv q8` (cache 1792 MiB) | 42–45 s (~470 tok/s) | 0.8–1.2 s | 26 tokens read | 1.26 GB |
 
 **Results:**
-- **The RAM prompt cache is necessary.** Without it, the server reads a removed conversation again in full: 40–45 s for 20K tokens, and minutes for a long session.
+- **The RAM cache is necessary.** Without it, the server reads a removed conversation again in full: 40–45 s for 20K tokens, and minutes for a long session.
 - **A larger cache gives no gain on the 35B.** 2560 MiB holds approximately 466K tokens of q4_0 KV. This is almost five full 96K windows.
 - **More checkpoints give no gain.** Each turn adds to the end of the conversation. The server keeps earlier reasoning (`preserve_thinking`). Thus, the cached prompt stays the start of the new prompt, and the server reads only the new tokens.
 - **q8_0 fits at 96K on 36 GB.** On the 35B, it reads approximately 4% faster, with the same decode speed and 0.36 GB more swap. q4_0 stays the default, because it uses less memory and has the recall tests.
 - NOTE: **The 27B with `--kv q8` has a small cache.** The automatic size is 1792 MiB. At 34 KiB for each token, this holds only ~54K tokens. Thus, the server reads a removed long 27B conversation again in full. With q4_0, the 27B gets 4864 MiB (~276K tokens), which is sufficient.
-- The RAM cache is lost when the server stops or when router mode changes the model. The disk prompt cache of OpenCode and Pi covers these cases ([below](#the-disk-prompt-cache-of-opencode-and-pi-measured-2026-10-03-and-2026-10-04)).
+- The RAM cache is lost when the server stops or when router mode changes the model. The disk cache of OpenCode and Pi covers these cases ([below](#the-disk-cache-of-opencode-and-pi-measured-2026-10-03-and-2026-10-04)).
 
-## The disk prompt cache of OpenCode and Pi (measured 2026-10-03 and 2026-10-04)
+## The disk cache of OpenCode and Pi (measured 2026-10-03 and 2026-10-04)
 
-The RAM prompt cache is lost when the server stops or when router mode changes the model. It also removes the oldest prompts when it is full. CARL's prompt cache keeps prompt states on disk with the slot API of llama.cpp.
+The RAM cache is lost when the server stops or when router mode changes the model. It also removes the oldest prompts when it is full. CARL's disk cache keeps saved prompts and saved sessions on disk with the slot API of llama.cpp. The dashboard and `/carl` call it **disk cache**.
 
 | Part | What it does |
 |---|---|
@@ -125,8 +125,8 @@ A state saved directly after a reply fits when the template renders the reply ag
 | `cache.swa` | Effect |
 |---|---|
 | `auto` (default) | `--swa-full` when it fits with the slots that `llama-fit.py --plan` gives. A second slot has priority. |
-| `full` | Always `--swa-full`. Restores work. More memory. |
-| `window` | Only the window. Less memory. Restores do not work. |
+| `full` | Always `--swa-full` (the full cache). Restores work. More memory. |
+| `window` | Only the window (the window cache). Less memory. Restores do not work. |
 
 - The router presets do the same for each model (`swa-full = true`).
 - The memory estimate reads these GGUF keys:
@@ -159,12 +159,12 @@ The table gives the wait before the answer starts: with the cache, and without i
 - After each save on this Mac, the client removes the oldest conversations first, then the oldest prompts. The file that it saved last stays, unless it alone is over the limit.
 - The older prompt files of the same agent go at once.
 - The dashboard checks the limit each minute. The launcher checks it at each start (for files written from a VM).
-- The client does not save when the disk has less than 10 GiB free.
+- The client does not save when the disk has less than 10 GB free.
 - The dashboard removes the files of Phase 11 (its pre-read and per-slot saves, with dashes in the names).
 
 ### The cache settings
 
-The `cache` section of `config.json` (the Caching panel of the dashboard). The clients on this Mac read it. A client on another computer reads it through the dashboard's API.
+The `cache` section of `config.json` (the Caching panel of the dashboard: **Disk limit**, **Saved prompts**, **Saved sessions**, **When to save**, **Save after**, **Shared storage**, **Gemma models**). The clients on this Mac read it. A client on another computer reads it through the dashboard's API.
 
 | Key | Default | Effect |
 |---|---|---|
@@ -174,12 +174,12 @@ The `cache` section of `config.json` (the Caching panel of the dashboard). The c
 | `save` | `auto` | When to save: `auto`, `turn`, `switch`, `stop` (see above) |
 | `auto_s` | 120 | `auto`: the seconds of unsaved reading before a save (10–3600) |
 | `share` | true | Store conversations as patches against their prompt file (see below) |
-| `swa` | `auto` | Sliding-window models: `auto`, `full`, `window` |
+| `swa` | `auto` | Sliding-window models (Caching panel: **Gemma models**): `auto`, `full` (the full cache), `window` (the window cache) |
 
 - With `prefix` and `sessions` both false, the cache does nothing.
 - In the environment of OpenCode or Pi, `CARL_CACHE=0` turns the cache off, and `CARL_CACHE_SAVE=MODE` overrides `save`.
 - `NO_CACHE=1 ./install.sh` leaves the OpenCode plugin and the Pi extension out.
-- `./carl.sh cache show` shows the contents. `./carl.sh cache trim` applies the limit. `./carl.sh cache clear` removes each file.
+- `./carl.sh cache show` lists the saved prompts and the saved sessions (sizes in GB and MB; `*` marks a session stored as the changes to its saved prompt). `./carl.sh cache trim` applies the limit. `./carl.sh cache clear` removes each file.
 
 ### When an agent's prompt changes
 

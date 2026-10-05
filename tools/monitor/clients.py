@@ -114,11 +114,16 @@ class Drift:
     window: Optional[str] = None    # "MODEL: 96K in the config, 128K on the server"
 
     def line(self, installed: int) -> str:
-        parts = ([f"added {', '.join(self.added)}"] if self.added else []) + (
-            [f"removed {', '.join(self.removed)}"] if self.removed else [])
-        lists = f"lists {self.listed} models; installed now: {installed} — {'; '.join(parts)}" if parts else ""
-        win = f"window of {self.window}" if self.window else ""
-        return f"{self.client} " + " · ".join(x for x in (lists, win) if x)
+        """The drift in sentences: what an update changes, and the key."""
+        parts: List[str] = []
+        if self.added or self.removed:
+            change = " and ".join(x for x in (f"adds {', '.join(self.added)}" if self.added else "",
+                                              f"removes {', '.join(self.removed)}" if self.removed else "") if x)
+            parts.append(f"{self.client} lists {self.listed} {'model' if self.listed == 1 else 'models'}, {installed} "
+                         f"{'is' if installed == 1 else 'are'} installed. An update {change}.")
+        if self.window:
+            parts.append(f"{self.client}: the context of {self.window}.")
+        return " ".join(parts) + " Press u."
 
 
 def drift(listed: Dict[str, Optional[Dict[str, int]]], installed: Sequence[str],
@@ -133,7 +138,7 @@ def drift(listed: Dict[str, Optional[Dict[str, int]]], installed: Sequence[str],
         removed = [m for m in ids if m not in installed]
         window = None
         if running and running[1] and ids.get(running[0]) not in (None, 0, running[1]):
-            window = f"{running[0]}: {ids[running[0]] // 1024}K in the config, {running[1] // 1024}K on the server"
+            window = f"{running[0]} is {ids[running[0]] // 1024}K in the config, {running[1] // 1024}K on the server"
         if added or removed or window:
             out.append(Drift(client, len(ids), added, removed, window))
     return out

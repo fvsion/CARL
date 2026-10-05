@@ -9,14 +9,13 @@ from carl_core.domain.cards import editable_card
 from carl_core.domain.types import ModelInfo as CoreModelInfo
 
 from .card_form import CardForm
-from .keys import BACKSPACE, DOWN, ENTER, ESC, LEFTKEY, PANEL_PASSTHROUGH, RIGHT, UP, strip_escapes
+from .keys import BACKSPACE, DOWN, ENTER, ESC, LEFTKEY, RIGHT, UP, strip_escapes
 from .model import JSONDict, ModelInfo
 from .settings import SettingsService
 from .settings_view import SettingsView
 from .state import PickItem, Picker, UIState
 
-READ_ONLY = ("You cannot edit a catalogue card. Only custom models (Hugging Face downloads and files in the models "
-             "folder) have a card to edit.")
+READ_ONLY = "A catalogue card is read-only. Only a custom model has a card that you can edit."
 
 
 class CardActions:
@@ -84,9 +83,9 @@ class CardActions:
         elif rest == "s":
             self.save(f)
         elif rest in ("[", "]"):
-            ui.toast("first press s to save the card, or Esc to cancel it", 5)
+            ui.toast("First save the card (s), or cancel it (Esc).", 5)
         else:
-            return rest not in PANEL_PASSTHROUGH and not rest.isdigit()
+            return False
         return True
 
     def button(self, act: str, f: CardForm) -> None:
@@ -111,15 +110,14 @@ class CardActions:
     def close(self, f: CardForm) -> None:
         """Esc / Cancel: leave the form; nothing is saved."""
         self.ui.card = None
-        self.ui.toast("card edit cancelled: nothing saved" if f.changed else "card edit closed", 5)
+        self.ui.toast("You cancelled the card. CARL saved nothing." if f.changed else "The card is closed.", 5)
 
     def open_picker(self, f: CardForm) -> None:
         """The model drop-down for a new pick-instead entry (every model but this one, in the lists'
         sort order, no filter)."""
         items: List[PickItem] = [(m["name"], m) for m in self.view.visible(self.ui.msort, 0) if m["name"] != f.model]
         self.ui.picker = Picker("PICK INSTEAD: WHICH MODEL?", items, "pickcard",
-                                foot="Press ↑ ↓ to select the alternative. Press Enter to choose it, then type when "
-                                     "it is the better pick. Press Esc to go back to the card.")
+                                foot="Select the other model. Then type when it is the better choice.")
 
     def save(self, f: CardForm) -> None:
         """s / Save: keep a text being typed, check and store the card; errors stay in the form.
@@ -136,4 +134,4 @@ class CardActions:
         ui.card = None
         self.svc.models.get(refresh=True)
         ui.mrow = next((i for i, x in enumerate(self.view.visible(ui.msort, ui.mfilter)) if x["name"] == f.model), ui.mrow)
-        ui.toast(f"card saved for {f.model}: the lists and its MODEL card show it", 6)
+        ui.toast(f"Saved the card of {f.model}. The lists and its MODEL card show it now.", 6)

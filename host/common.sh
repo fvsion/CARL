@@ -66,40 +66,41 @@ resolve_host() {
   local mode="${1:-${NET:-local}}" retired=""
   NET_NOTE=""
   if [[ "$mode" == auto ]]; then
-    mode=local; retired=" (NET=auto was removed in 1.3.0: --vm for the VM)"
+    mode=local; retired=" NET=auto was removed in 1.3.0: use --vm for a VM."
   fi
   if [[ -n "${HOST:-}" ]]; then
     case "$HOST" in
-      127.0.0.1|localhost|::1) NET_NOTE="$HOST (explicit): this Mac only" ;;
-      "$VM_HOST") NET_NOTE="$HOST (explicit): the VM network and this Mac" ;;
-      *) NET_NOTE="$HOST (explicit): CAUTION: every computer that reaches this address can use the server; only the API key protects it" ;;
+      127.0.0.1|localhost|::1) NET_NOTE="Only this Mac can use the server." ;;
+      "$VM_HOST") NET_NOTE="The VM and this Mac can use the server." ;;
+      *) NET_NOTE="CAUTION: every computer that can reach this address can use the server. Only the API key protects it." ;;
     esac
   else
     case "$mode" in
       vm)
         has_addr "$VM_HOST" || {
-          echo "error: --vm: no interface has $VM_HOST. Start VMware Fusion (vmnet8) first," >&2
-          echo "       or use --local to serve this Mac only." >&2
+          echo "error: --vm: no network interface has the address $VM_HOST. Start VMware Fusion first, or use --local to serve only this Mac." >&2
           exit 1; }
-        HOST="$VM_HOST"; NET_NOTE="VM network ($VM_HOST): reachable from the Fusion VM and this Mac" ;;
+        HOST="$VM_HOST"; NET_NOTE="The VM network: the VM and this Mac can use the server." ;;
       local)
-        HOST=127.0.0.1; NET_NOTE="local (127.0.0.1): this Mac only$retired"
+        HOST=127.0.0.1; NET_NOTE="Only this Mac can use the server.$retired"
         if [[ -z "$retired" ]] && has_addr "$VM_HOST"; then
-          NET_NOTE+=" (VMware's network is up: --vm serves a VM client)"
+          NET_NOTE+=" The VMware network is up: use --vm to serve a VM too."
         fi ;;
-      *) echo "error: unknown network mode '$mode' (vm | local)" >&2; exit 2 ;;
+      *) echo "error: unknown network mode '$mode'. Use vm or local." >&2; exit 2 ;;
     esac
   fi
   case "$HOST" in
-    0.0.0.0|0|::|"[::]"|"*") echo "error: refusing to bind $HOST (would expose the server to the LAN). Use --local, --vm or --host with one address of this Mac" >&2; exit 1 ;;
+    0.0.0.0|0|::|"[::]"|"*") echo "error: CARL is refusing to listen on $HOST: every computer on the LAN could use the server. Use --local, --vm or --host with one address of this Mac." >&2; exit 1 ;;
     127.0.0.1|localhost|::1) ;;
-    *) has_addr "$HOST" || { echo "error: no interface has $HOST (ifconfig shows the addresses of this Mac; or use --local)" >&2; exit 1; } ;;
+    *) has_addr "$HOST" || { echo "error: no network interface of this Mac has the address $HOST. ifconfig shows the addresses. Or use --local." >&2; exit 1; } ;;
   esac
 }
 
-# CARL's settings folder (config.json, models.json, api-key). tools/carl.py reads
-# CARL_CONF_DIR when set; the server's key stays in the default folder.
-CARL_CONF="$HOME/.config/carl"
+# CARL's settings folder (config.json, models.json, slots/, router-presets.ini): CARL_CONF_DIR
+# when set, like tools/carl.py (domain/confdir.py), so a run with a test folder never writes
+# the real one. The server's key stays in the default folder (HOME_CONF), as carl.py reads it.
+HOME_CONF="$HOME/.config/carl"
+CARL_CONF="${CARL_CONF_DIR:-$HOME_CONF}"
 OLD_CONF="$HOME/.config/llm-deploy"        # its name before 1.2.0 (CARL was called LLM-Deploy)
 
 # tilde PATH: PATH as ~/... for messages (bash 3.2 would print a quoted \~ as is).
@@ -128,7 +129,7 @@ migrate_conf_dir() {
 # CONNECT section. Its earlier places, newest first (LEGACY_KEY_FILES): the old
 # settings folder (when both folders exist), and MTPLX's folder (before 1.2.0).
 # The first start copies the newest one here once, so configured clients keep working.
-CARL_KEY_FILE="$CARL_CONF/api-key"
+CARL_KEY_FILE="$HOME_CONF/api-key"
 LEGACY_KEY_FILES=("$OLD_CONF/api-key" "$HOME/.mtplx/api-key")
 
 # ensure_api_key FILE: make sure FILE holds the key, readable by its owner only.
@@ -150,7 +151,7 @@ ensure_api_key() {
   # pipefail off here: head closing the pipe ends tr with SIGPIPE, which would
   # fail the subshell (and, under set -e, silently end the server start).
   ( set +o pipefail; umask 077; LC_ALL=C tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 40 > "$f" )
-  echo "created API key: $f (clients need it: ./carl.sh monitor shows it, or client/install.sh)" >&2
+  echo "CARL made the API key $(tilde "$f"). The clients need it: client/install.sh copies it, and the dashboard shows it (Connect, then k)." >&2
 }
 
 # write_client_package HOST PORT KEY_FILE: the client folder's connection file, so a copy of
@@ -183,9 +184,9 @@ ensure_deps() {
   command -v ansifilter >/dev/null || missing+=(ansifilter)
   command -v zstd >/dev/null || missing+=(zstd)
   (( ${#missing[@]} )) || return 0
-  echo "CARL needs: ${missing[*]} (not installed)"
+  echo "CARL needs these programs, and they are not installed: ${missing[*]}."
   if ! command -v brew >/dev/null; then
-    echo "Install Homebrew first (https://brew.sh), then run this again:" >&2
+    echo "Install Homebrew first (https://brew.sh), then run this command again:" >&2
     # shellcheck disable=SC2016  # the command is printed for the user, not run
     echo '  /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"' >&2
     exit 1
@@ -193,16 +194,16 @@ ensure_deps() {
   if [[ -t 0 && -t 1 ]]; then
     read -r -p "Install them now with Homebrew (brew install ${missing[*]})? [Y/n] " a
     if [[ ! "$a" =~ ^[Nn] ]]; then
-      brew install "${missing[@]}" || { echo "error: brew install failed (its output is above). Fix the cause, or run: brew install ${missing[*]}" >&2; exit 1; }
+      brew install "${missing[@]}" || { echo "error: brew install failed (its output is above). Correct the cause, or run: brew install ${missing[*]}" >&2; exit 1; }
       hash -r
-      command -v llama-server >/dev/null || { echo "error: llama-server still not found after brew install: open a new terminal, then run this again" >&2; exit 1; }
+      command -v llama-server >/dev/null || { echo "error: CARL cannot find llama-server after brew install. Open a new terminal, then run this command again." >&2; exit 1; }
       return 0
     fi
   fi
   if [[ " ${missing[*]} " == *" llama.cpp "* ]]; then
-    echo "error: llama-server not found. Run: brew install ${missing[*]}" >&2; exit 1
+    echo "error: CARL cannot find llama-server. Run: brew install ${missing[*]}" >&2; exit 1
   fi
-  echo "note: optional tools missing (downloads and logs work without them): brew install ${missing[*]}" >&2
+  echo "note: some optional programs are not installed. Downloads and logs work without them. To install them: brew install ${missing[*]}" >&2
 }
 
 # guard_other_models: refuse to load a second model. Two models do not fit in
@@ -219,12 +220,12 @@ guard_other_models() {
   local big=$(( 10#${BIG_GB:-8} * 1024 * 1024 )) found
   found="$(ps -axo pid=,rss=,comm= 2>/dev/null | awk -v big="$big" -v me="$$" '
     $1 != me && ($2 > big || $3 ~ /(^|\/)(llama-server|mtplx|ollama|LM Studio)/) {
-      printf "  pid %s, %.1f GB: %s\n", $1, $2 / 1048576, $3 }')"
+      printf "  pid %s, %.1f GiB: %s\n", $1, $2 / 1048576, $3 }')"
   [[ -z "$found" ]] && return 0
-  echo "error: another large process (probably a model) is in memory:" >&2
+  echo "error: another large process (possibly a model) is in memory. Two models do not fit, and the second one can stop the Mac." >&2
   echo "$found" >&2
-  echo "       Two models do not fit: the second one can crash the Mac. Stop it first" >&2
-  echo "       (its monitor: q then s), or set ALLOW_SECOND_MODEL=1 if it is not a model." >&2
+  echo "       Stop that process first. If it is a CARL server, open its dashboard (./carl.sh), press q, then s." >&2
+  echo "       If it is not a model, set ALLOW_SECOND_MODEL=1." >&2
   exit 1
 }
 

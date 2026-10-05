@@ -12,16 +12,18 @@ import os
 from dataclasses import dataclass
 from typing import Callable, Dict, List, NamedTuple, Optional, Sequence, Tuple, Union
 
-from carl_core.domain.autofit import AutoFit
-from carl_core.domain.fit import check_start, max_ctx, need_bytes, swa_plan
+from carl_core.domain.autofit import AutoFit, setup_text
+from carl_core.domain.fit import check_start, max_ctx, need_bytes, prompt_cache_mib, reserve_bytes, swa_plan, swa_tokens
+from carl_core.domain.gguf import OVERHEAD, kv_bytes_per_token, swa_bytes_per_token
+from carl_core.domain.units import MIB, memory, tokens
 
-from .fmt import GRN, R, RED, YEL, ctx_label, size
+from .fmt import GRN, R, RED, YEL, ctx_label
 from .model import JSONDict, ModelInfo, ServerData, Shape, draft_bytes, drafter_missing, flag, flag_int, jdict
 from .store import ModelList
+from .words import kv_name, net_name, plural, spec_name
 
 Value = Union[str, int]
 Pending = Dict[str, Value]      # the values chosen in the Server panel, by row key
-FitResult = Tuple[bool, str]    # (fits and is downloaded, the fit line)
 
 
 class SettingRow(NamedTuple):
@@ -34,22 +36,25 @@ class SettingRow(NamedTuple):
     default: Value
 
 
-ADV_ROW = SettingRow("adv", "advanced", ["hidden", "shown"], None, "hidden")
-LLAMA_ADV = [
-    SettingRow("top_k", "top_k", ["20", "40", "0"], "m:top_k", "20"),
-    SettingRow("top_p", "top_p", ["0.95", "0.9", "0.8", "1.0"], "m:top_p", "0.95"),
-    SettingRow("min_p", "min_p", ["0", "0.05", "0.1"], "m:min_p", "0"),
-    SettingRow("repeat", "repeat penalty", ["1.0", "1.05", "1.1"], "m:repeat", "1.0"),
-    SettingRow("ub", "-ub batch", ["512", "1024", "2048"], "llama:ub", "512"),
-    SettingRow("ckpt", "checkpoints", ["8", "4", "16"], "llama:ckpt", "8"),
-    SettingRow("ckstep", "ckpt step", ["4096", "1024", "2048", "8192"], "llama:ckpt_step", "4096"),
+LLAMA_ADV = [                       # the full detail level's rows (More settings)
+    SettingRow("top_k", "Top k", ["20", "40", "64", "0"], "m:top_k", "20"),
+    SettingRow("top_p", "Top p", ["0.95", "0.9", "0.8", "1.0"], "m:top_p", "0.95"),
+    SettingRow("min_p", "Min p", ["0", "0.05", "0.1"], "m:min_p", "0"),
+    SettingRow("repeat", "Repeat penalty", ["1.0", "1.05", "1.1"], "m:repeat", "1.0"),
+    SettingRow("ub", "Batch size", ["512", "1024", "2048"], "llama:ub", "512"),
+    SettingRow("ckpt", "Checkpoints", ["8", "4", "16"], "llama:ckpt", "8"),
+    SettingRow("ckstep", "Checkpoint step", ["4096", "1024", "2048", "8192"], "llama:ckpt_step", "4096"),
 ]
+MORE_SETTINGS = "presence, sampling, batch size, checkpoints"
+SPEC_COMBOS = ["none|1", "ngram-mod|1", "ngram-mod|2", "ngram-mod|3", "draft-mtp|1", "draft-mtp|2", "draft-mtp|3",
+               "draft-mtp|4", "draft-mtp,ngram-mod|1", "draft-mtp,ngram-mod|2", "draft-mtp,ngram-mod|3",
+               "draft-mtp,ngram-mod|4"]          # the Speculation row: a mode and its guesses together
 
 
 # Auto fit's goal and scope: chosen in the Auto fit panel (saved at once), not Server-panel rows.
 AUTO_ROWS = [
-    SettingRow("goal", "auto goal", ["everyday", "hard-code"], "llama:auto_goal", "everyday"),
-    SettingRow("scope", "auto from", ["catalogue", "downloaded"], "llama:auto_fit", "catalogue"),
+    SettingRow("goal", "Goal", ["everyday", "hard-code"], "llama:auto_goal", "everyday"),
+    SettingRow("scope", "Candidates", ["catalogue", "downloaded"], "llama:auto_fit", "catalogue"),
 ]
 
 
@@ -61,23 +66,23 @@ class Schema:
 
     @property
     def llama(self) -> List[SettingRow]:
-        """The llama.cpp rows (without the advanced ones)."""
+        """The llama.cpp rows (without the More settings rows of the full detail level)."""
         return [
-            SettingRow("model", "model", None, "llama:model", "auto"),      # choices: the model list
-            SettingRow("kv", "KV cache", ["q4_0", "q8_0"], "m:kv", "q4_0"),
-            SettingRow("ctx", "context/slot", [32768, 49152, 65536, 98304, 131072, 163840, 196608, 262144], "m:ctx", 98304),
-            SettingRow("slots", "slots", ["auto", "1", "2", "3", "4"], "m:slots", "auto"),   # 3-4 only where they fit (rows)
-            SettingRow("spec", "speculation", ["none", "ngram-mod", "draft-mtp", "draft-mtp,ngram-mod"], "m:spec",
+            SettingRow("model", "Model", None, "llama:model", "auto"),      # choices: the model list
+            SettingRow("ctx", "Context", [32768, 49152, 65536, 98304, 131072, 163840, 196608, 262144], "m:ctx", 98304),
+            SettingRow("slots", "Slots", ["auto", "1", "2", "3", "4"], "m:slots", "auto"),   # 3-4 only where they fit (rows)
+            SettingRow("spec", "Speculation", ["none", "ngram-mod", "draft-mtp", "draft-mtp,ngram-mod"], "m:spec",
                        "draft-mtp,ngram-mod"),
-            SettingRow("specn", "draft tokens", ["1", "2", "3"], "m:spec_n", "1"),
+            SettingRow("specn", "Guesses", ["1", "2", "3", "4"], "m:spec_n", "1"),    # shown inside Speculation
+            SettingRow("kv", "Context memory", ["q4_0", "q8_0"], "m:kv", "q4_0"),
             SettingRow("cache", "RAM cache", ["auto", 1024, 2560, 4096, 6144, 8192], "llama:cache_ram", "auto"),
-            SettingRow("net", "network", list(self.net_choices), "llama:net", "local"),
-            SettingRow("temp", "temperature", ["1.0", "0.6"], "m:temp", "1.0"),
-            SettingRow("presence", "presence", ["0", "1.5"], "m:presence", "0"),
+            SettingRow("net", "Network", list(self.net_choices), "llama:net", "local"),
+            SettingRow("temp", "Temperature", ["1.0", "0.6"], "m:temp", "1.0"),
+            SettingRow("presence", "Presence", ["0", "1.5"], "m:presence", "0"),
         ]
 
     def saved_rows(self) -> List[SettingRow]:
-        """The rows saved to config.json (the advanced ones and the Auto fit panel's included)."""
+        """The rows saved to config.json (the More settings rows and the Auto fit panel's included)."""
         return self.llama + LLAMA_ADV + AUTO_ROWS
 
     def defaults(self) -> Pending:
@@ -97,52 +102,49 @@ NUMERIC = {"ctx", "temp", "presence", "top_k", "top_p", "min_p", "repeat", "spec
 INT_KEYS = {"ctx", "cache", "top_k", "specn", "ub", "ckpt", "ckstep"}
 FROM_RUNNING = {"kv", "ctx", "temp", "presence", "spec", "specn", "top_k", "top_p", "min_p", "repeat", "ckpt", "ckstep",
                 "ub", "slots"}
-UNMARKED = {"slots", "cache", "net", "adv", "model", "goal", "scope"}   # no * when they differ
-NOT_RUNNING = {"adv", "goal", "scope"}                  # rows without a "running now" value
+NOT_RUNNING = {"goal", "scope"}                         # rows without a "running now" value
+FULL_ONLY = {"presence"} | {r.key for r in LLAMA_ADV}   # rows of the full detail level (More settings)
 REINSTALL = {"ctx", "slots"}         # clients need install.sh again when these change
 
-ADV_WARN = "CAUTION: Auto-tune and tests measured these values (reference/performance.md). A change can make the model " \
-           "slower or its answers worse. Press x to set the tuned values again."
-_NET_HELP = ("local = this Mac only (the default) · vm = this Mac and a VMware Fusion VM client (192.168.42.1) · "
-             "an address = only that interface "
-             "(LAN: other computers can connect)")
+ADV_WARN = ("Caution: Auto-tune and tests measured these values (reference/performance.md). A change can make the model "
+            "slower or its answers worse. Press x to use the recommended settings again.")
+_NET_HELP = ("Who can connect. This Mac only: the default. This Mac and the VM: a VMware Fusion VM can connect too "
+             "(192.168.42.1). An address: only that network interface. Other computers on that network can connect.")
 SET_HELP = {
-    "model": "The list shows all models: the catalogue, the models folder and the Hugging Face downloads. auto is "
-             "auto fit's pick for this Mac (★). The Auto fit panel tells why it picks that model and lets you set the "
-             "goal (everyday / hard code). Its Use this button sets the model, context, slots and KV cache in one "
-             "step. To add more models, use the Models panel: it downloads any GGUF from Hugging Face.",
-    "goal": "The goal of auto fit. everyday: the MoE builds first (fast, usually good enough). hard-code: the dense "
-            "builds first (better at code and hard tasks, but slower). Auto fit uses stock models only.",
-    "scope": "The models that auto fit picks from. catalogue: all catalogue models. Auto fit then offers the "
-             "download, and until the download is complete, a start uses the best downloaded model. downloaded: "
-             "only the models on this Mac.",
-    "kv": "q4_0 uses less memory and is the tested default. q8_0 recalls text far back more accurately, but uses "
-          "about 2x the KV memory.",
-    "ctx": "The number of tokens per slot. The colour shows how fast this Mac reads a full window cold: green = "
-           "fast, yellow = slow, red = very slow (see the context zones).",
-    "slots": "auto: 2 slots when two full windows fit (main session + coder subagent), else 1. 3-4: more subagents "
-             "at the same time. The row shows 3-4 only when they fit this Mac with this model, window and KV cache. "
-             "More slots give more tokens per second in total, but each slot is slower. The parallel step of "
-             "Auto-tune measures this.",
-    "spec": "Speculative decoding. n-gram copies repeated text. MTP makes drafts with the model's own head. "
-            "Auto-tune measures which mode is faster.",
-    "specn": "The number of draft tokens per speculation step. On Metal, more draft tokens do not make dense "
-             "models faster.",
-    "cache": "The RAM prompt cache in MiB. It keeps the prompts that leave the slots. When a session comes back, "
-             "the server does not read it again in full.",
+    "model": "The list has every model: the catalogue, the models folder and your Hugging Face downloads. auto = start "
+             "Auto fit's choice for this Mac. The Auto fit panel (A) tells why. To add a model, use the Models panel: "
+             "it downloads any GGUF file from Hugging Face.",
+    "goal": "The goal of Auto fit. everyday: the fast models first (MoE and small dense models). They are usually good "
+            "enough. hard code: the dense models first. They write better code, but they are slower.",
+    "scope": "The models that Auto fit looks at. catalogue: every catalogue model. Auto fit then offers the download. "
+             "Until the download is complete, a start uses the best downloaded model. downloaded only: only the models "
+             "on this Mac.",
+    "kv": "The memory that holds the context of all slots. q4 is smaller and is the tested default. q8 recalls text far "
+          "back more exactly, but it uses about 2 × the memory.",
+    "ctx": "How many tokens one slot can hold. The colour tells how fast this Mac reads a full context again: green is "
+           "fast, yellow is slow, red is very slow.",
+    "slots": "A slot is a place in the server for one session. auto: 2 slots when two fit (the main session and a "
+             "subagent at the same time), else 1. 3 or 4: more subagents at the same time. The list offers 3 and 4 only "
+             "when they fit this Mac. More slots write more tokens in total, but each slot is slower.",
+    "spec": "The server guesses tokens ahead and checks them: more speed, the same answer. n-gram copies text that is "
+            "in the context already (fast for edits). MTP: a small predictor guesses new text. Guesses: the tokens it "
+            "guesses for each step. Auto-tune measures the best choice.",
+    "specn": "The tokens the speculation guesses for each step. On Metal, more guesses do not make dense models faster.",
+    "cache": "The RAM cache: the server keeps sessions that leave a slot in RAM while it runs. When a session comes "
+             "back, the server does not read it all again. auto: CARL sizes it from the free memory at each start.",
     "net": _NET_HELP,
-    "temp": "1.0 = the Qwen value for thinking mode (the default) · 0.6 = more precise code (35B card)",
-    "presence": "0 = the default · 1.5 = fewer repeat loops (35B card, general use)",
-    "adv": "Shows more server settings: sampling, batch and checkpoints.",
-    "top_k": "The model samples from the k most likely tokens. Qwen: 20 · 0 = off.",
-    "top_p": "Nucleus sampling. Qwen: 0.95 with thinking, 0.8 without thinking (the client sends this value).",
-    "min_p": "The model ignores the tokens below min_p × the top probability. Qwen: 0.",
+    "temp": "How random the answers are. The recommended value comes from the model card (Qwen in thinking mode and "
+            "Gemma 4: 1.0). 0.6 gives more exact code on some models.",
+    "presence": "0 is the default. 1.5 gives fewer repeat loops (the Qwen card, for general use).",
+    "top_k": "The model picks from the k most likely tokens. Qwen: 20. Gemma 4: 64. 0 = off.",
+    "top_p": "The model picks from the most likely tokens up to this total probability. 0.95 for most models.",
+    "min_p": "The model ignores the tokens below min p × the top probability. Qwen: 0.",
     "repeat": "The repeat penalty. Qwen: 1.0 (off). Use presence instead.",
-    "ub": "The -ub physical batch. On Metal, 512 is the fastest: 90.5 tok/s, against 88.6 / 86.1 tok/s for "
-          "1024 / 2048.",
-    "ckpt": "The context checkpoints per slot. Each one uses about 63 MiB on the 35B and 150 MiB on the 27B. More "
-            "checkpoints did not help in the Phase 6 test.",
-    "ckstep": "The minimum number of tokens between checkpoints. In the Phase 6 test, 1024 and 4096 gave the same "
+    "ub": "The batch that the GPU works on in one step (-ub). On Metal, 512 is the fastest: 90.5 tok/s, against 88.6 "
+          "and 86.1 tok/s for 1024 and 2048.",
+    "ckpt": "Saved points of the recurrent state, per slot. Each one uses about 63 MiB on the 35B and 150 MiB on the "
+            "27B. More checkpoints did not help in the Phase 6 test.",
+    "ckstep": "The smallest number of tokens between two checkpoints. In the Phase 6 test, 1024 and 4096 gave the same "
               "result.",
 }
 
@@ -150,20 +152,26 @@ SET_HELP = {
 def row_instruction(key: str) -> str:
     """How to change a Settings row, for someone new to the dashboard."""
     if key == "model":
-        return ("Press Enter to choose a model from the list, or click a model. Press A to see auto fit's pick "
-                "and the reason.")
-    if key == "adv":
-        return "Press ← → to show or hide the advanced settings."
+        return "Press Enter to choose a model from the list. Press A to see Auto fit's choice and why."
     if key in NUMERIC:
-        return "Type a number, then press Enter. To go through the usual values, press ← →."
+        return "Press ← → for the usual values. Or type a number, then press Enter."
     return "Press ← → to change the value."
 
 
-def rows(p: Pending, schema: Schema, model_choices: Callable[[], List[str]]) -> List[SettingRow]:
-    """The rows shown (the advanced ones when shown); the model row offers model_choices()."""
-    adv = LLAMA_ADV if p.get("adv") == "shown" else []
-    base = [r._replace(choices=list(model_choices())) if r.key == "model" else r for r in schema.llama]
-    return base + [ADV_ROW] + adv
+def rows(p: Pending, schema: Schema, model_choices: Callable[[], List[str]], full: bool = False) -> List[SettingRow]:
+    """The rows shown: the Speculation row holds its guesses; the full detail level adds presence and the
+    More settings rows. The model row offers model_choices(); the speculation row the mode and guesses
+    together (SPEC_COMBOS)."""
+    out: List[SettingRow] = []
+    for r in schema.llama:
+        if r.key == "specn" or (r.key in FULL_ONLY and not full):
+            continue
+        if r.key == "model":
+            r = r._replace(choices=list(model_choices()))
+        elif r.key == "spec":
+            r = r._replace(choices=list(SPEC_COMBOS))
+        out.append(r)
+    return out + (LLAMA_ADV if full else [])
 
 
 def _is_number(v: object) -> bool:
@@ -181,9 +189,25 @@ def fmt_val(key: str, v: object) -> Value:
     return str(v)
 
 
-def shown_value(key: str, v: object) -> str:
-    """A row value on screen: contexts as 96K."""
-    return ctx_label(v) if key == "ctx" else str(v)
+def shown_value(key: str, v: object, long: bool = False) -> str:
+    """A row value on screen in the glossary's words: contexts as 96K (long: '96K tokens per slot'), the
+    context memory type as q4 (small), the RAM cache in GiB, the network as who can connect."""
+    if key == "ctx":
+        return ctx_label(v) + (" tokens per slot" if long and str(v).isdigit() else "")
+    if key == "kv":
+        return kv_name(v, short=not long)
+    if key == "cache":
+        return memory(int(str(v)) * MIB) if str(v).isdigit() and int(str(v)) else str(v)
+    if key == "net":
+        return net_name(v)
+    if key == "spec":
+        return spec_name(v)
+    return str(v)
+
+
+def spec_value(p: Pending) -> str:
+    """The Speculation row's value: the mode and its guesses ("draft-mtp|1")."""
+    return f"{p.get('spec', 'none')}|{p.get('specn', '1')}"
 
 
 def parse_typed(key: str, text: str) -> Tuple[Optional[Value], str]:
@@ -193,9 +217,10 @@ def parse_typed(key: str, text: str) -> Tuple[Optional[Value], str]:
         num = float(v[:-1]) * 1024 if v.endswith("k") else float(v)
         whole = int(num)
     except (ValueError, OverflowError):
-        return None, f"not a number: {v!r}"
+        return None, f"That is not a number: {v}."
     if num < 0 or (key == "ctx" and not 4096 <= num <= 262144) or (key in ("top_p", "min_p") and num > 1):
-        return None, f"{v} is out of range for {key}"
+        label = next((r.label for r in Schema(()).llama + LLAMA_ADV if r.key == key), key)
+        return None, f"{v} is out of range for {label}."
     if key in INT_KEYS:
         return (whole if key in ("ctx", "cache") else str(whole)), ""
     return (f"{num:g}" if num != whole else f"{num:.1f}" if key in ("temp", "repeat") else f"{whole}"), ""
@@ -278,45 +303,113 @@ def env_from_cmd(cmd: str) -> Dict[str, str]:
 
 
 # ---------------------------------------------------------------- fit maths
-def _fits(ok: bool) -> str:
-    return f"{GRN if ok else RED}{'fits' if ok else 'does not fit'}{R}"
+@dataclass(frozen=True)
+class FitInfo:
+    """Does a setup fit the GPU memory limit? The parts of the memory it needs (bytes), the slots a start
+    uses (auto resolved), the sliding-window cache (full: True, window: False, None: no such layers),
+    the largest context per slot that fits with these slots. ok = known, downloaded and fits."""
+    name: str
+    known: bool = True
+    downloaded: bool = True
+    need: float = 0
+    limit: float = 0
+    ctx: int = 0
+    slots: int = 0
+    kv: str = ""
+    full: Optional[bool] = None
+    largest: int = 0
+    weights: int = 0
+    drafter: int = 0
+    context: float = 0
+    state: float = 0
+    buffers: float = 0
+    error: str = ""
+
+    @property
+    def fits(self) -> bool:
+        return self.known and self.downloaded and not self.error and self.need <= self.limit
+
+    @property
+    def ok(self) -> bool:
+        return self.fits
+
+
+def gib_pair(need: float, limit: float) -> Tuple[str, str]:
+    """need and limit in GiB with one decimal, two when they round to the same text but differ."""
+    a, b = memory(need), memory(limit)
+    if a == b and need != limit:
+        return f"{need / 2**30:.2f} GiB", f"{limit / 2**30:.2f} GiB"
+    return a, b
+
+
+def plan_words(slots: int, ctx: int) -> str:
+    """'2 slots × 96K tokens' (carl_core's words, as the CLI says it)."""
+    return setup_text(slots, ctx)
+
+
+def fit_sentence(f: FitInfo) -> str:
+    """The Memory status as plain sentences (coloured ✓ / ✗)."""
+    if not f.known:
+        return f"{RED}✗{R} {f.name} is not a known model."
+    if not f.downloaded:
+        return f"{RED}✗{R} {f.name} is not downloaded. To download it: the Models panel (]), then d."
+    if f.error:
+        return f"{RED}✗{R} CARL cannot check the memory: {f.error}."
+    need, limit = gib_pair(f.need, f.limit)
+    plan = plan_words(f.slots, f.ctx)
+    if f.fits:
+        return f"{GRN}✓{R} It fits. This model with {plan} needs {need}. This Mac gives the GPU {limit}."
+    more = (f" With {plural(f.slots, 'slot')}, at most {tokens(f.largest)} tokens per slot fit." if f.largest
+            else " The weights alone do not fit.")
+    return f"{RED}✗{R} It does not fit. This model with {plan} needs {need}. This Mac gives the GPU {limit}.{more}"
+
+
+def swa_sentence(f: FitInfo) -> str:
+    """A Gemma model's sliding-window cache in one sentence ('' for other models)."""
+    if f.full is None:
+        return ""
+    if f.full:
+        return "This Gemma model keeps its full cache: CARL can restore saved sessions and prompts."
+    return (f"This Gemma model uses the {YEL}window cache{R}: it uses less memory, but CARL cannot restore saved "
+            f"sessions and prompts (Settings > Caching).")
 
 
 def llama_fit(name: str, weights: int, shape: Shape, kv: str, ctx: int, slots: str, limit: int,
-              swa: str = "auto") -> FitResult:
+              swa: str = "auto", drafter: int = 0) -> FitInfo:
     """Does the model fit with these settings? Slots and, for a model with sliding-window layers, the
     full or the window cache as the launcher decides (fit.swa_plan with cache.swa); the same check the
-    launcher refuses a start with (carl_core.domain.fit.check_start)."""
+    launcher refuses a start with (carl_core.domain.fit.check_start). weights include the drafter."""
     n, full = swa_plan(swa, shape, weights, ctx, slots, kv, limit)
     chk = check_start(shape, weights, ctx, n, kv, limit, full is not False)
-    text = f"{_fits(chk.fits)}: {name} needs {size(chk.need)} for {n} × {ctx_label(ctx)} ({kv}) of {size(limit)} GPU memory"
-    if full is not None:
-        text += (" · sliding-window layers: full cache (CARL can restore saved prompts)" if full
-                 else f" · sliding-window layers: {YEL}window only{R} (CARL cannot restore saved prompts: Settings > "
-                      f"Caching)")
-    if not chk.fits:
-        text += (f" · largest window: {ctx_label(chk.largest)}" if chk.largest else " · the weights alone do not fit")
-    return chk.fits, text
+    sw = full is not False
+    context = kv_bytes_per_token(shape, kv) * ctx * n + swa_bytes_per_token(shape, kv) * swa_tokens(shape, ctx, sw) * n
+    return FitInfo(name=name, need=chk.need, limit=limit, ctx=ctx, slots=n, kv=kv, full=full, largest=chk.largest,
+                   weights=weights - drafter, drafter=drafter, context=context, state=shape["rs_bytes"] * n,
+                   buffers=OVERHEAD)
 
 
 class SettingsService:
     """Settings logic that needs the models and config.json (through the ModelStore port)."""
 
-    def __init__(self, models: ModelList, schema: Schema, vm_addr: str, gpu_limit: Callable[[], int]) -> None:
+    def __init__(self, models: ModelList, schema: Schema, vm_addr: str, gpu_limit: Callable[[], int],
+                 ram: int = 0) -> None:
         self.models = models
+        self.ram = ram                      # this Mac's RAM, bytes (the RAM cache's auto size; 0 = unknown)
+        self.full = False                   # the detail level is full (the More settings rows are shown)
         self.store = models.store
         self.schema = schema
         self.vm_addr = vm_addr
         self.gpu_limit = gpu_limit          # bytes; the collector's cached value when it has one
         self._fit_key: Optional[Tuple[Tuple[str, str], ...]] = None
-        self._fit: FitResult = (False, "")
+        self._fit: FitInfo = FitInfo("")
         self._max: Dict[str, Tuple[float, Optional[int]]] = {}     # model -> (list time, largest window)
+        self._plans: Dict[str, Tuple[float, Optional[FitInfo]]] = {}  # model -> (list time, its plan here)
         self._slots: Dict[Tuple[str, str, str, str], int] = {}      # (model, ctx, kv, swa) -> most slots that fit
 
     def rows(self, p: Pending) -> List[SettingRow]:
         """The rows shown for p (the model row offers every model; the slots row 3 and 4 only when
         they fit this Mac with the pending model, window and KV cache)."""
-        out = rows(p, self.schema, self.models.choices)
+        out = rows(p, self.schema, self.models.choices, self.full)
         most = self.max_slots(p)
         return [r._replace(choices=[c for c in (r.choices or []) if not str(c).isdigit() or int(str(c)) <= max(most, 2)])
                 if r.key == "slots" else r for r in out]
@@ -416,7 +509,7 @@ class SettingsService:
     def pending_init(self, d: ServerData, cfg: JSONDict) -> Pending:
         """Start from config.json and the running server (so Apply without changes restarts the same setup)."""
         run = self.running(d)
-        p: Pending = {"adv": "hidden"}
+        p: Pending = {}
         for key, _, _, loc, default in self.schema.saved_rows():
             if not loc or loc.startswith("m:"):
                 continue
@@ -439,9 +532,10 @@ class SettingsService:
         return p
 
     def defaults_for(self, p: Pending) -> Pending:
-        """Every row at its default, advanced / model kept, the model rows at its tune."""
+        """Every row at its default, the model (and Auto fit's goal and candidates) kept, the model rows at its
+        recommended values."""
         q = self.schema.defaults()
-        q.update(adv=p.get("adv", "hidden"), model=p.get("model", "auto"), goal=p.get("goal", "everyday"),
+        q.update(model=p.get("model", "auto"), goal=p.get("goal", "everyday"),
                  scope=p.get("scope", "catalogue"))
         vals = self.recommended(self.resolved_model(q))[0]           # the model's tune, without my overrides
         for key, pk in MODEL_ROW_KEYS.items():
@@ -471,27 +565,75 @@ class SettingsService:
             return GRN if str(fmt_val(key, rec)) == str(p[key]) else YEL
         return ""
 
-    def fit_line(self, p: Pending) -> FitResult:
-        """(ok, text): does the pending setup fit the GPU limit, and is the model downloaded?"""
+    def value_note(self, key: str, p: Pending) -> str:
+        """Why a value is red (value_color), in one sentence ('' when it is not)."""
+        if self.value_color(key, p) != RED:
+            return ""
+        if key == "ctx":
+            m = self.models.by_name(self.resolved_model(p))
+            slow = self.store.ctx_zones(m)[1] if m else 0
+            return (f"Context: this Mac reads more than {tokens(slow)} tokens again very slowly (the context zones of "
+                    f"this model).")
+        if key == "spec" and str(p.get("specn")) != "1" and "draft-mtp" in str(p.get("spec")):
+            m = self.models.by_name(self.resolved_model(p))
+            info = self.store.header_info(m["path"]) if m and m["status"] == "downloaded" else {}
+            if info.get("mtp") or (m and m.get("draft") and not drafter_missing(m)):
+                return "Speculation: MTP with more than 1 guess is about 15% slower on IQ quantizations (measured)."
+        if key == "spec":
+            return ("Speculation: this model has no MTP head and no downloaded MTP drafter. The server uses n-gram "
+                    "only.")
+        return ""
+
+    def fit_line(self, p: Pending) -> FitInfo:
+        """Does the pending setup fit the GPU limit, and is the model downloaded?"""
         name = self.resolved_model(p)
         m = self.models.by_name(name)
         if not m:
-            return False, f"{RED}unknown model {name}{R}"
+            return FitInfo(name, known=False)
         if m["status"] != "downloaded":
-            return False, (f"{RED}{name} is not downloaded{R}. To download it, press ] for the Models panel, then d "
-                           f"(or run ./carl.sh download {name}).")
+            return FitInfo(name, downloaded=False, weights=int(m.get("bytes", 0)), drafter=draft_bytes(m))
         try:
             return llama_fit(name, self.weights(m), self.store.shape_of(m["path"]), str(p["kv"]),
-                             int(p["ctx"]), str(p["slots"]), self.gpu_limit(), self.swa_mode())
+                             int(p["ctx"]), str(p["slots"]), self.gpu_limit(), self.swa_mode(), draft_bytes(m))
         except Exception as e:      # a GGUF that can't be read, a value that is not a number, ...: say so
-            return False, f"{RED}fit check failed: {e}{R}"
+            return FitInfo(name, error=str(e))
 
-    def fit_cached(self, p: Pending) -> FitResult:
+    def fit_cached(self, p: Pending) -> FitInfo:
         """fit_line, recomputed only when a pending value changes (it reads the GGUF header)."""
         key = tuple(sorted((k, str(v)) for k, v in p.items())) + (("swa", self.swa_mode()),)
         if self._fit_key != key:
             self._fit_key, self._fit = key, self.fit_line(p)
         return self._fit
+
+    def auto_cache_mib(self, p: Pending) -> Optional[int]:
+        """The RAM cache that auto gives a start with these settings (MiB), as the launcher sizes it; None
+        when RAM or the memory needed is unknown."""
+        f = self.fit_cached(p)
+        if not self.ram or not f.fits:
+            return None
+        return prompt_cache_mib(self.ram, f.need, reserve_bytes(None, False))
+
+    def plan_of(self, m: ModelInfo) -> Optional[FitInfo]:
+        """How a model runs on this Mac with its recommended context and slots (auto: 2 when two fit),
+        cached per model list; None when its size is unknown. Downloaded or not (the header from
+        Hugging Face, cached)."""
+        hit = self._plans.get(m["name"])
+        if hit is None or hit[0] != self.models.t:
+            hit = self._plans[m["name"]] = (self.models.t, self._plan_of(m))
+        return hit[1]
+
+    def _plan_of(self, m: ModelInfo) -> Optional[FitInfo]:
+        try:
+            shape = self.store.shape_of(m["path"]) if m["status"] == "downloaded" else self.store.model_shape(m)
+            if shape is None:
+                return None
+            weights = (self.store.file_size(m["path"]) if m["status"] == "downloaded" else int(m.get("bytes", 0)))
+            vals = self.recommended(m["name"])[0]
+            ctx = int(vals.get("ctx") or 98304)
+            return llama_fit(m["name"], weights + draft_bytes(m), shape, str(vals.get("kv") or "q4_0"), ctx,
+                             str(vals.get("slots") or "auto"), self.gpu_limit(), self.swa_mode(), draft_bytes(m))
+        except Exception:           # an unreadable header, a value that is not a number: unknown
+            return None
 
     def weights(self, m: ModelInfo) -> int:
         """A downloaded model's weights: its file and its MTP drafter's (a start with MTP loads both)."""

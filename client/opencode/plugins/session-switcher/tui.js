@@ -11,7 +11,7 @@
 // Data: api.client.session.list() once, then session.* events. Read-only.
 import { createElement, insert, setProp } from "@opentui/solid";
 import { createSignal } from "solid-js";
-import { asElement, cut, nodes, routeSessionID, rows } from "./carl-tui.js";
+import { asElement, cut, duration, nodes, routeSessionID, rows } from "./carl-tui.js";
 
 /** @typedef {import("@opencode-ai/plugin/tui").TuiPluginModule} TuiPluginModule */
 /** @typedef {import("./carl-tui.js").Theme} Theme */
@@ -27,10 +27,9 @@ const TITLE_W = 22;                     // columns for the title in the prompt b
 
 const { box, text } = nodes({ createElement, insert, setProp });
 
-/** @param {number} ms @param {number} now @returns {string} */
+/** @param {number} ms @param {number} now @returns {string} e.g. "now", "12 min ago", "3 h ago", "2 days ago" */
 function ago(ms, now) {
-  const m = Math.max(0, Math.floor((now - ms) / 60000));
-  return m < 1 ? "now" : m < 60 ? `${m}m ago` : m < 1440 ? `${Math.floor(m / 60)}h ago` : `${Math.floor(m / 1440)}d ago`;
+  return now - ms < 60_000 ? "now" : `${duration(now - ms)} ago`;
 }
 
 /** @param {SessionState} st @param {Theme} theme @returns {[string, Color]} */

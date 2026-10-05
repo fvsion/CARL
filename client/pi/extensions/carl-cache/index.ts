@@ -1,5 +1,5 @@
 /**
- * CARL: the prompt cache for Pi (installed by CARL's client/install.sh). Each session's conversation is
+ * CARL: the disk cache for Pi (installed by CARL's client/install.sh). Each session's conversation is
  * saved on the CARL server's disk after its turn and restored before its next request when the server no
  * longer holds it (after a restart, a model switch, or many other sessions); each agent's prompt is read
  * once and saved. The work is in carl-cache.js (shared with the OpenCode plugin).
@@ -13,7 +13,7 @@ import { join } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { CarlCache, debugLog, errorText, obj, splitPi } from "./carl-cache.js";
 
-/** CARL's state for Pi (carl.json in Pi's agent folder): our provider ids and the dashboard's cache API. */
+/** CARL's state for Pi (carl.json in Pi's agent folder): our provider ids and the dashboard API. */
 function carlState(): { providers: Set<string>; cacheApi?: string } {
 	try {
 		const dir = process.env.PI_CODING_AGENT_DIR || join(homedir(), ".pi", "agent");

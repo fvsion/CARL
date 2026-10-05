@@ -15,7 +15,7 @@ from .domain import models as dm
 from .domain.autofit import (AutoFit, Budget, Candidate, Goal, Plan, Scope, as_goal, as_scope, auto_fit,
                              best_downloaded, candidate)
 from .domain.errors import ConfigError
-from .domain.fit import estimated_limit, human_gb, offline_default, reserve_bytes
+from .domain.fit import estimated_limit, offline_default, reserve_bytes
 from .domain.gguf import GIB, ModelShape
 from .domain.hf import (commit_sha, download_url, gguf_files, local_file_name, model_name, parse_hf,
                         revision_api_path, tree_api_path, validate_repo)
@@ -26,6 +26,7 @@ from .domain.records import parse_catalog, parse_custom_card, parse_local_db
 from .domain.settings import LLAMA_KEYS, SCHEMA, Config, migrate_config, migrate_env, models_dir_setting, validate_config
 from .domain.types import (Catalog, CustomCard, CustomInfo, HfFileList, HfRef, JsonObject, LocalDb, ModelInfo,
                            SettingSource, SettingValue, Settings)
+from .domain.units import file_size
 
 DOWNLOAD_HEADROOM = 5e9                    # free disk space to keep beyond the file
 
@@ -136,7 +137,7 @@ class Carl:
                 changed = True
         if changed:
             self.save_config(cfg)
-            self.console.error("note: config.json now names them by their catalogue names")
+            self.console.error("note: config.json now uses their catalogue names.")
 
     def find(self, name: str, models: List[ModelInfo]) -> Optional[ModelInfo]:
         return dm.find_model(models, name, self.expand(name))
@@ -172,9 +173,9 @@ class Carl:
         m, models = self.card_model(name)
         key = m.get("name", "")
         if not m.get("custom"):
-            raise ConfigError(f"{key} is a catalogue model: its card is read-only (host/catalog.json). "
-                              f"Cards can be edited for custom models only (Hugging Face downloads, files in the "
-                              f"models folder)")
+            raise ConfigError(f"{key} is a catalogue model, so you cannot change its card (host/catalog.json). "
+                              f"You can edit the cards of custom models only: Hugging Face downloads and files in the "
+                              f"models folder.")
         checked = parse_custom_card(card, {x.get("name", "") for x in models}, f"{key}: card", key)
         db = self.load_local()
         entry = db["models"].setdefault(key, {})
@@ -259,7 +260,7 @@ class Carl:
             default = cat.get("default", "")
             m = self.find(default, models)
             return offline_default(default, cat.get("default_small"), m.get("bytes") if m else None, b.allowed)
-        raise ConfigError(f"auto fit: {fit.because()} (./carl.sh fit shows every model)")
+        raise ConfigError(f"Auto fit: {fit.because()}. ./carl.sh fit shows every model.")
 
     def auto_launch(self, models: List[ModelInfo], cfg: Config) -> Tuple[ModelInfo, Optional[str], Plan]:
         """The model llama.model = auto starts: auto fit's pick when it is downloaded, else
@@ -269,18 +270,19 @@ class Carl:
         fit = auto_fit(cands, self.budget(), goal, scope)
         start = best_downloaded(fit, cands)
         if not any(m.get("status") == "downloaded" for m in models):
-            raise ConfigError("no model is downloaded. Download this Mac's auto-fit pick: ./carl.sh download default")
+            raise ConfigError("no model is downloaded. To download the model that Auto fit chooses for this Mac: "
+                              "./carl.sh download default")
         if start.pick is None or start.plan is None:
-            want = f"download {fit.name} (./carl.sh download {fit.name}), or " if fit.name else ""
-            raise ConfigError(f"auto fit: no downloaded stock model fits this Mac ({start.because()}); "
-                              f"{want}choose a model by name: ./carl.sh config set llama.model NAME")
+            want = f"Download {fit.name} (./carl.sh download {fit.name}), or c" if fit.name else "C"
+            raise ConfigError(f"Auto fit: {start.because()}. "
+                              f"{want}hoose a model by name: ./carl.sh config set llama.model NAME")
         m = self.find(start.pick.name, models)
         if m is None:                          # the candidates came from these models
-            raise ConfigError(f"auto fit: {start.pick.name} is not in the model list")
+            raise ConfigError(f"Auto fit: {start.pick.name} is not in the model list")
         note = None
         if start is not fit and fit.name:
-            note = (f"auto fit picks {fit.name} for this Mac, but it is not downloaded (./carl.sh download {fit.name}); "
-                    f"starting {start.pick.name}, the best downloaded model that fits")
+            note = (f"Auto fit chooses {fit.name} for this Mac, but it is not downloaded (./carl.sh download {fit.name}). "
+                    f"CARL starts {start.pick.name}, the best downloaded model that fits.")
         return m, note, start.plan
 
     def resolve_launch(self, name: Optional[str], cfg: Config) -> Tuple[ModelInfo, List[ModelInfo], Optional[str]]:
@@ -401,12 +403,12 @@ class Carl:
 
     def _check_sha(self, label: str, path: str, want: str) -> bool:
         """A file against its pinned SHA-256 (progress and the result on the console)."""
-        self.console.info(f"  {label}: verifying sha256 ({human_gb(self.files.size(path))})...")
+        self.console.info(f"  {label}: CARL checks the SHA-256 of {file_size(self.files.size(path))}...")
         got = self.files.sha256(path)
         if got != want:
-            self.console.error(f"  {label}: MISMATCH got {got} want {want}")
+            self.console.error(f"  {label}: bad file. The SHA-256 is {got}, not {want}.")
             return False
-        self.console.info(f"  {label}: OK {got}")
+        self.console.info(f"  {label}: the file is correct (SHA-256 {got}).")
         return True
 
     def verify(self, m: ModelInfo) -> bool:
@@ -418,10 +420,10 @@ class Carl:
         name, path = m.get("name", ""), m.get("path", "")
         want = (m.get("hf") or {}).get("sha256")
         if m.get("status") != "downloaded" and not (path and self.files.exists(path)):
-            self.console.error(f"  {name}: not downloaded")
+            self.console.error(f"  {name}: not downloaded.")
             return False
         if not want:
-            self.console.info(f"  {name}: no checksum known (a local file): skipped")
+            self.console.info(f"  {name}: not checked. CARL does not know the SHA-256 of a local file.")
             return True
         if not self._check_sha(name, path, want):
             return False
@@ -438,8 +440,8 @@ class Carl:
             return True
         name = m.get("name", "")
         if dm.status_of(dpath, draft.get("bytes"), self.files) != "downloaded":
-            self.console.info(f"  {name}: its MTP drafter is not downloaded (./carl.sh download {name} gets it; "
-                              f"until then a start uses n-gram speculation)")
+            self.console.info(f"  {name}: the MTP drafter is not downloaded, so a start uses n-gram speculation only. "
+                              f"To download it: ./carl.sh download {name}")
             return True
         want = draft.get("sha256")
         return self._check_sha(f"{name} MTP drafter", dpath, want) if want else True
@@ -453,21 +455,22 @@ class Carl:
         free = self.files.free_bytes(models_dir) or 0
         have = self.files.size(path) if self.files.exists(path) else 0
         if free < size + DOWNLOAD_HEADROOM - have:
-            self.console.error(f"error: {label} needs {human_gb(size)} + 5 GB headroom; only {human_gb(free)} free")
+            self.console.error(f"error: {label} needs {file_size(size)} and 5 GB more on the disk, but only "
+                               f"{file_size(free)} is free.")
             return None
-        self.console.info(f"== {label}: {human_gb(size)} -> {path}")
+        self.console.info(f"{label}: CARL downloads {file_size(size)} to {path}.")
         rc = self.downloader.fetch(download_url(ref), models_dir, file)
         if rc != 0 or not self.files.exists(path):
-            self.console.error(f"error: download failed (exit {rc}); run it again to resume")
+            self.console.error(f"error: the download failed (exit {rc}). Run the command again to continue it.")
             return None
         if size and self.files.size(path) != size:
-            self.console.error(f"error: size mismatch for {path}")
+            self.console.error(f"error: {path} does not have the correct size.")
             return None
         return path
 
     def _bad_checksum(self, path: str) -> None:
         self.files.rename(path, path + dm.BAD_SUFFIX)
-        self.console.error(f"error: bad checksum; moved to {path}{dm.BAD_SUFFIX}")
+        self.console.error(f"error: the SHA-256 is not correct. CARL renamed the file to {path}{dm.BAD_SUFFIX}.")
 
     def download(self, m: ModelInfo, models_dir: str) -> bool:
         """Download a pinned file into the models folder (resumable), then verify it; then its MTP
@@ -484,7 +487,7 @@ class Carl:
         if draft:
             done["draft_path"] = dpath
         if dm.status_of(path, size, self.files) == "downloaded":
-            self.console.info(f"== {name} already downloaded: {path}")
+            self.console.info(f"{name} is already downloaded: {path}")
             if not need_draft:
                 return self.verify(done)
         else:
@@ -511,14 +514,14 @@ class Carl:
         models.json, download. A repo without a file lists its GGUF files instead."""
         repo, file, rev = parse_hf(spec)
         if not file:
-            self.console.info(f"{repo}: pick a file (./carl.sh download hf:{repo}/FILE.gguf):")
+            self.console.info(f"The GGUF files of {repo}. To download one: ./carl.sh download hf:{repo}/FILE.gguf")
             for f, b, _ in self.hf_files(repo, rev):
-                self.console.info(f"  {f:60} {human_gb(b)}")
+                self.console.info(f"  {f:60} {file_size(b):>8}")
             return False
         pinned = commit_sha(self.hub.get(revision_api_path(repo, rev)), rev)
         match = [x for x in self.hf_files(repo, pinned) if x[0] == file]
         if not match:
-            raise ConfigError(f"{repo} has no file {file}")
+            raise ConfigError(f"{repo} has no file {file}. To see its files: ./carl.sh download hf:{repo}")
         _, size, sha = match[0]
         name = name or model_name(file)
         mdir = self.models_dir(self.load_config())
@@ -536,7 +539,7 @@ class Carl:
         paths = [m.get("path", "")] + ([m.get("draft_path", "")] if m.get("draft_path") else [])
         for path in paths:
             if not path.endswith(".gguf"):
-                raise ConfigError(f"{m.get('name')}: refusing to delete {path!r} (not a .gguf file)")
+                raise ConfigError(f"{m.get('name')}: CARL does not delete {path!r}, because it is not a .gguf file")
         for path in paths:
             for p in (path, path + dm.PART_SUFFIX, path + dm.BAD_SUFFIX):
                 self.files.remove(p)

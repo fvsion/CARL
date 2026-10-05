@@ -30,39 +30,54 @@ sys.dont_write_bytecode = True                    # keep the shared folder free 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import argparse  # noqa: E402
+import re  # noqa: E402
 from dataclasses import dataclass  # noqa: E402
 from typing import List, Optional, Tuple  # noqa: E402
 
 import carl  # noqa: E402
 from carl_core.adapters.gguf_reader import local_meta  # noqa: E402
 from carl_core.adapters.system import sysctl_int, vm_network_up  # noqa: E402
-from carl_core.domain.autofit import (GOAL_TEXT, GOALS, SCOPES, AutoFit, Budget, Goal, Scope, as_goal,  # noqa: E402
-                                      as_scope, gib)
+from carl_core.domain.autofit import (GOAL_NAME, GOALS, SCOPE_TEXT, SCOPES, AutoFit, Budget,  # noqa: E402
+                                      Goal, Scope, as_goal, as_scope, gib)
 from carl_core.domain.errors import ConfigError  # noqa: E402
 from carl_core.domain.fit import (DEFAULT_CTX, check_start, estimated_limit, max_ctx, need_bytes,  # noqa: E402
                                   prompt_cache_mib, reserve_bytes, swa_plan, window_label)
-from carl_core.domain.gguf import GIB, OVERHEAD, ModelShape, kv_bytes_per_token, model_shape  # noqa: E402
+from carl_core.domain.gguf import GIB, ModelShape, kv_bytes_per_token, model_shape  # noqa: E402
 from carl_core.domain.models import draft_bytes  # noqa: E402
 from carl_core.domain.types import ModelInfo  # noqa: E402
 from carl_core.wiring import GPU  # noqa: E402
+from carl_help import columns, render, width, wrap  # noqa: E402
 
 TTY = sys.stdout.isatty()
 B, DIM, R, GRN, YEL, RED, CYN = ("\x1b[1m", "\x1b[2m", "\x1b[0m", "\x1b[32m", "\x1b[33m", "\x1b[31m", "\x1b[36m") \
     if TTY else ("",) * 7
+ANSI = re.compile(r"\x1b\[[0-9;]*m")
 REFUSED = 3                                     # --check: the start needs more than the GPU limit
 
 
 def parse_ctx(v: str) -> int:
-    """A window size: tokens or Nk."""
+    """A context size: tokens or Nk."""
     v = v.lower()
     try:
         return int(v[:-1]) * 1024 if v.endswith("k") else int(v)
     except ValueError:
-        raise argparse.ArgumentTypeError(f"not a window size: {v!r}") from None
+        raise argparse.ArgumentTypeError(f"not a context size: {v!r} (use tokens or Nk, for example 96k)") from None
+
+
+class HelpAction(argparse.Action):
+    """-h / --help: the same help as ./carl.sh help fit (tools/carl_help.py)."""
+    def __init__(self, option_strings: List[str], dest: str = argparse.SUPPRESS, **kw: object) -> None:
+        super().__init__(option_strings, dest, nargs=0, default=argparse.SUPPRESS, help="show this help")
+
+    def __call__(self, parser: argparse.ArgumentParser, ns: argparse.Namespace, values: object,
+                 option_string: Optional[str] = None) -> None:
+        print(render("fit"))
+        parser.exit()
 
 
 def parse_args(argv: List[str]) -> argparse.Namespace:
-    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = argparse.ArgumentParser(prog="./carl.sh fit", add_help=False)
+    ap.add_argument("-h", "--help", action=HelpAction)
     ap.add_argument("--ram", type=float, help="pretend this Mac has N GB of RAM (estimated GPU limit)")
     ap.add_argument("--ctx", type=parse_ctx, help="check this window size (tokens or Nk)")
     ap.add_argument("--slots", type=int, default=1,
@@ -86,8 +101,16 @@ def gpu_limit(ram_gb: Optional[float]) -> Tuple[int, str]:
     """(limit, how): this Mac's, or the estimate for a Mac with ram_gb of RAM."""
     if ram_gb:
         limit, frac = estimated_limit(ram_gb * GIB)
-        return limit, f"estimate for a {ram_gb:g} GB Mac ({frac:.0%} of RAM)"
-    return GPU.limit()
+        return limit, f"an estimate for a Mac with {ram_gb:g} GB of RAM: {frac:.0%} of the RAM"
+    limit, how = GPU.limit()
+    return limit, ("macOS sets it" if "recommendedMaxWorkingSetSize" in how else
+                   f"your setting {how}" if "wired_limit" in how else how)
+
+
+def pair(a: float, b: float) -> Tuple[str, str]:
+    """Two memory sizes in GiB that do not look equal when they are not (two decimals then)."""
+    one = (f"{a / GIB:.1f} GiB", f"{b / GIB:.1f} GiB")
+    return one if one[0] != one[1] or a == b else (f"{a / GIB:.2f} GiB", f"{b / GIB:.2f} GiB")
 
 
 def local_shape(path: str, draft: Optional[str] = None) -> Tuple[ModelShape, int]:
@@ -126,12 +149,14 @@ def alternatives(budget: Budget) -> List[str]:
         here = carl.app().auto_fit(models, goal, "downloaded", budget)
         best = carl.app().auto_fit(models, goal, "catalogue", budget)
     except (ConfigError, OSError) as e:
-        return [f"(auto fit unavailable: {e})"]
+        return [f"CARL cannot get the choice of Auto fit: {e}."]
     out = []
     if here.pick and here.plan:
-        out.append(f"Auto fit for this Mac ({goal}): {here.pick.name}, {here.plan.label()}: {start_hint(here)}")
+        out.append(f"Auto fit chooses {here.pick.name} with {here.plan.describe()} for this Mac (goal "
+                   f"{GOAL_NAME[goal]}). To start it: {start_hint(here)}")
     if best.pick and best.plan and best.name != here.name:
-        out.append(f"Best for this Mac: {best.pick.name}, {best.plan.label()} (download: ./carl.sh download {best.pick.name})")
+        out.append(f"The best model for this Mac is {best.pick.name} with {best.plan.describe()}. To download it: "
+                   f"./carl.sh download {best.pick.name}")
     return out
 
 
@@ -146,25 +171,30 @@ def model_label(path: str) -> str:
 
 def cmd_check(args: argparse.Namespace, limit: int, how: str) -> int:
     """Refuse (exit 3, the reasons on stderr) a start that needs more than the GPU limit: it
-    would fail to load or swap the Mac to a crawl."""
+    would fail to load or swap the Mac to a crawl. The first line is one whole "error:" sentence
+    (the dashboard shows the launcher's error lines); the advice follows, indented."""
     shape, w = local_shape(args.check, args.draft)
     chk = check_start(shape, w, args.ctx or DEFAULT_CTX, args.slots, args.kv, limit, swa_full=args.swa != "window")
     if chk.fits:
         return 0
     err = sys.stderr
     pad = "       "
-    print(f"{RED}error:{R} {model_label(args.check)} needs {gib(chk.need)} of GPU memory at {chk.setup()}, "
-          f"but this Mac allows {gib(limit)} ({how}).", file=err)
-    print(f"{pad}A start over the limit fails to load or swaps the Mac to a crawl, so it is refused.", file=err)
+    need, lim = pair(chk.need, limit)
+    print(f"{RED}error:{R} {model_label(args.check)} does not fit this Mac with {chk.setup()}: it needs {need}, "
+          f"and the GPU memory limit is {lim}. CARL refuses the start, because the model would fail to load or "
+          f"the Mac would become very slow.", file=err)
     if chk.largest:
         one = max_ctx(shape, w, limit, 1, args.kv) if chk.slots > 1 else 0
-        print(f"{pad}Largest window that fits this model: --ctx {window_label(chk.largest).lower()}"
-              + (f" with {chk.slots} slots, --ctx {window_label(one).lower()} with 1 slot" if one else "") + ".", file=err)
+        text = (f"With {chk.slots} slot{'s' if chk.slots != 1 else ''}, the largest context that fits is "
+                f"{window_label(chk.largest)} tokens (--ctx {window_label(chk.largest).lower()}).")
+        if one:
+            text += f" With 1 slot, it is {window_label(one)} tokens (--ctx {window_label(one).lower()} --slots 1)."
+        print(pad + text, file=err)
     else:
-        print(f"{pad}The weights alone don't fit this Mac: use a smaller model.", file=err)
+        print(f"{pad}The weights alone do not fit this Mac. Use a smaller model.", file=err)
     for line in alternatives(carl.app().budget(reserve_gb=args.reserve_gb)):
         print(pad + line, file=err)
-    print(f"{pad}What fits: ./carl.sh fit · expert override (it may not load, or swap): FIT_CHECK=0", file=err)
+    print(f"{pad}./carl.sh fit shows what fits. To start anyway (the model can fail to load): FIT_CHECK=0", file=err)
     return REFUSED
 
 
@@ -199,31 +229,39 @@ def model_rows(models: List[ModelInfo]) -> List[Row]:
     return rows
 
 
-def auto_lines(fits: List[AutoFit], shown: Goal, mine: Tuple[Goal, Scope], here: Optional[AutoFit]) -> List[str]:
-    """Auto fit's pick per goal, then the reasons for one goal."""
-    out = [f"{B}Auto fit{R} {DIM}(ranked stock models only; abliterated ones are picked by hand){R}"]
+def auto_lines(fits: List[AutoFit], shown: Goal, mine: Tuple[Goal, Scope], here: Optional[AutoFit],
+               w: int) -> List[str]:
+    """Auto fit's choice for each goal, then the reasons for one goal, wrapped to w columns."""
+    out = [f"{B}AUTO FIT{R}"]
+    out += wrap(f"Auto fit chooses from the stock models with a quality rank ({SCOPE_TEXT[fits[0].scope]}). "
+                "It never chooses an abliterated model. The goal everyday takes the fast models first (MoE and "
+                "small dense). The goal hard code takes the dense models first: better code, but slower.", w, "  ")
     for f in fits:
-        star = "*" if (f.goal, f.scope) == mine else " "
+        yours = " (your goal)" if f.goal == mine[0] else ""
         if f.pick and f.plan:
-            where = "" if f.pick.downloaded else f"  {YEL}not downloaded{R}: ./carl.sh download {f.pick.name}"
-            out.append(f" {star}{GOAL_TEXT[f.goal]:<40} {GRN}{f.pick.name}{R}, {f.plan.label()}, "
-                       f"needs {gib(f.plan.need)}{where}")
+            where = ("" if f.pick.downloaded else
+                     f" It is not downloaded. To download it: ./carl.sh download {f.pick.name}")
+            text = (f"Goal {GOAL_NAME[f.goal]}{yours}: {f.pick.name} with {f.plan.describe()}. It needs "
+                    f"{gib(f.plan.need)}.{where}")
         else:
-            out.append(f" {star}{GOAL_TEXT[f.goal]:<40} {RED}nothing fits{R}")
+            text = f"Goal {GOAL_NAME[f.goal]}{yours}: no model fits."
+        out += wrap(text, w, "  ", "    ")
     sel = next(f for f in fits if f.goal == shown)
-    out.append(f"  {DIM}why ({shown}, {sel.scope}): {sel.because()}{R}")
-    if sel.rejected:
-        out.append(f"  {DIM}passed over (better rank first):{R}")
-        out += [f"    {r.line()}" for r in sel.rejected]
+    out += wrap(f"Why ({GOAL_NAME[shown]}): {sel.because()}.", w, "  ", "    ")
     if here and here.pick and sel.pick and not sel.pick.downloaded:
-        out.append(f"  {DIM}until it is downloaded, llama.model = auto starts {here.pick.name}, "
-                   f"{here.plan.label() if here.plan else ''}: the best downloaded model that fits{R}")
-    out.append(f"  {DIM}* = your setting: llama.auto_goal {mine[0]}, llama.auto_fit {mine[1]} (change it: ./carl.sh "
-               f"config set llama.auto_goal everyday|hard-code, llama.auto_fit catalogue|downloaded){R}")
+        out += wrap(f"Until {sel.pick.name} is downloaded, the model auto starts {here.pick.name} with "
+                    f"{here.plan.describe() if here.plan else ''}: the best downloaded model that fits.", w, "  ", "    ")
+    if sel.rejected:
+        out += wrap("Models with a better quality rank that Auto fit did not choose:", w, "  ")
+        for r in sel.rejected:
+            out += wrap(r.line() + ".", w, "    ", "      ")
+    out += wrap("To change your goal: ./carl.sh config set llama.auto_goal everyday or hard-code. To choose only "
+                "from the downloaded models: ./carl.sh config set llama.auto_fit downloaded.", w, "  ")
     return out
 
 
 def cmd_table(args: argparse.Namespace, limit: int, how: str) -> None:
+    w = width()
     slots = max(args.slots, 1)
     app = carl.app()
     cfg = app.load_config()
@@ -236,38 +274,75 @@ def cmd_table(args: argparse.Namespace, limit: int, how: str) -> None:
     sel = next(f for f in fits if f.goal == shown)
     here = (app.auto_fit(models, shown, "downloaded", budget)          # this Mac only: what a start uses
             if sel.pick and not sel.pick.downloaded and not args.ram else None)
-    print(f"{B}GPU memory limit:{R} {limit / GIB:.1f} GiB  {DIM}({how}){R}"
-          + (f"   {B}slots:{R} {slots} (windows are per slot)" if slots > 1 else ""))
-    print(f"{B}Auto fit allows:{R} {budget.describe()}\n")
-    print("\n".join(auto_lines(fits, shown, mine, here)) + "\n")
-    print(f"{DIM}need = weights (+ MTP drafter) + KV cache + recurrent state + ~{OVERHEAD / GIB:.0f} GiB buffers; "
-          f"max window per KV type (full cache; a sliding-window model also shows its window-only cache); "
-          f"rank 1 = best quality{R}\n")
-    hdr = f"{'model':22} {'rank':>4} {'weights':>8} {'KV/token q4':>11}  {'max ctx q4':>10} {'max ctx q8':>10}"
-    if args.ctx:
-        hdr += f"  {'need @' + window_label(args.ctx):>10}"
-    print(B + hdr + R)
+    mac = "a Mac with " + f"{args.ram:g} GB of RAM" if args.ram else "this Mac"
+    print("\n".join(wrap(f"{B}Memory.{R} The GPU memory limit of {mac} is {limit / GIB:.1f} GiB ({how}). "
+                         f"{budget.explain()} (GiB is memory: 1 GiB = 1.07 GB.)", w)))
+    print()
+    print("\n".join(auto_lines(fits, shown, (mine[0], scope), here, w)))
+    print()
+    swa_full = budget.swa_full
+    cache = "the full cache" if swa_full else "the window cache"
+    print("\n".join(wrap(f"{B}ALL MODELS{R}", w)))
+    print("\n".join(wrap(f"The largest context of each slot that fits the GPU memory limit, with {slots} "
+                         f"slot{'s' if slots != 1 else ''}, for each context memory type (q4 and q8).", w, "  ")))
+    rows = model_rows(models)
+    nw = max([len("model")] + [len(r.name) for r in rows])
+    extra = f"  {'needed ' + window_label(args.ctx):>11}" if args.ctx else ""
+    head1 = f"  {'':{nw}}  {'':>4}  {'':>9}  {'per 1K':>8}  {'largest context':>15}"
+    head2 = f"  {'model':{nw}}  {'rank':>4}  {'weights':>9}  {'tokens':>8}  {'q4':>7} {'q8':>7}{extra}  status"
+    print(B + head1.rstrip() + R)
+    print(B + head2 + R)
     picks = {f.name for f in fits if f.name}
-    for row in model_rows(models):
+    for row in rows:
         mark = f"{CYN}★{R}" if row.name in picks else " "
         rank = f"{row.rank:>4}" if row.rank else f"{'–':>4}"
-        name = f"{mark}{row.name:21}"
+        lead = f"{mark} {row.name:{nw}}  {rank}  {row.size / GIB:5.1f} GiB"
         if not row.shape:
-            print(f"{name} {rank} {row.size / GIB:7.1f}G  {RED}(header unavailable: {row.status}){R}")
+            print(f"{lead}  {RED}CARL cannot read its GGUF header: {row.status}{R}")
             continue
-        m4, m8 = max_ctx(row.shape, row.size, limit, slots, "q4_0"), max_ctx(row.shape, row.size, limit, slots, "q8_0")
+        m4 = max_ctx(row.shape, row.size, limit, slots, "q4_0", swa_full)
+        m8 = max_ctx(row.shape, row.size, limit, slots, "q8_0", swa_full)
         col = RED if not m4 else YEL if m4 < 65536 else GRN
-        line = (f"{name} {rank} {row.size / GIB:7.1f}G {kv_bytes_per_token(row.shape, 'q4_0') / 1024:9.1f}K  "
-                f"{col}{window_label(m4):>10}{R} {window_label(m8):>10}")
+        per_k = kv_bytes_per_token(row.shape, "q4_0") * 1024 / 2 ** 20
+        line = f"{lead}  {per_k:4.1f} MiB  {col}{window_label(m4):>7}{R} {window_label(m8):>7}"
         if args.ctx:
-            nd = need_bytes(row.shape, row.size, args.ctx, slots, "q4_0")
-            line += f"  {(GRN if nd <= limit else RED)}{nd / GIB:9.1f}G{R}"
-        win = ""
-        if row.shape.get("swa_window"):              # sliding-window layers: the window-only cache holds more
-            win = f" · window cache: {window_label(max_ctx(row.shape, row.size, limit, slots, 'q4_0', swa_full=False))} q4"
-        print(line + f"  {DIM}{row.status}{' · abliterated' if row.abliterated else ''}{win}{row.note}{R}")
-    print(f"\n{DIM}★ = an auto-fit pick · Raise the limit (resets at reboot; leave >= 6 GB for macOS):  "
-          f"sudo sysctl iogpu.wired_limit_mb=<MB>{R}")
+            nd = need_bytes(row.shape, row.size, args.ctx, slots, "q4_0", swa_full)
+            line += f"  {(GRN if nd <= limit else RED)}{nd / GIB:7.1f} GiB{R}"
+        notes = []
+        if row.abliterated:
+            notes.append("abliterated")
+        if row.shape.get("swa_window"):              # sliding-window layers: the other cache, for comparison
+            other = max_ctx(row.shape, row.size, limit, slots, "q4_0", swa_full=not swa_full)
+            notes.append(f"{'window' if swa_full else 'full'} cache: {window_label(other)}")
+        if row.note:
+            notes.append(row.note)
+        status = f"  {DIM}{row.status}{R}"
+        tail = f"  {DIM}{' · '.join(notes)}{R}" if notes else ""
+        if len(ANSI.sub("", line + status + tail)) <= w:
+            print(line + status + tail)
+        else:
+            print(line + status)
+            if notes:
+                print(f"    {DIM}{' · '.join(notes)}{R}")
+    print()
+    legend = [("★", "Auto fit chooses this model for a goal."),
+              ("rank", "The quality rank: 1 is the best. Models with the same rank have the same base model."),
+              ("weights", "The memory of the model file, with its MTP drafter (Gemma 4)."),
+              ("per 1K tokens", "The context memory for 1K tokens (q4)."),
+              ("largest context", f"The largest context of each slot that fits, in K tokens (K = 1024). "
+                                  f"For Gemma models it is the context with {cache}, as Auto fit plans it (your "
+                                  f"setting cache.swa is {budget.swa}). The note gives the context with the other "
+                                  f"cache. – means that the model does not fit."),
+              ("colours", "Green: 64K or more. Yellow: less than 64K. Red: the model does not fit.")]
+    if args.ctx:
+        legend.append((f"needed {window_label(args.ctx)}", f"The memory needed for {window_label(args.ctx)} tokens "
+                                                          f"in each slot (q4)."))
+    print("\n".join(columns(legend, w, max_term=16)))
+    print()
+    print("\n".join(wrap("Memory needed = weights + context memory + recurrent state + about 1 GiB of buffers. "
+                         "These are estimates: keep some memory free.", w)))
+    print("\n".join(wrap("Experts only: sudo sysctl iogpu.wired_limit_mb=MB gives the GPU more memory until the next "
+                         "restart. Keep at least 6 GiB for macOS, or the Mac can stop.", w)))
 
 
 def main(argv: List[str]) -> int:

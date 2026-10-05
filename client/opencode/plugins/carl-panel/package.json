@@ -1,7 +1,7 @@
 {
   "name": "carl-panel",
   "version": "1.0.0",
-  "description": "The /carl panel in OpenCode: every CARL piece on this computer with its state, and the client config sync (auto-apply, a config that waits, check now).",
+  "description": "The /carl panel in OpenCode. It shows every CARL part on this computer and its state, and the client config sync.",
   "type": "module",
   "license": "MIT",
   "exports": {

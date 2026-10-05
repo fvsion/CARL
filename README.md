@@ -39,10 +39,10 @@ cd ~/path/to/your/project
 opencode
 ```
 
-- **The first time,** CARL starts the model that **auto fit** picks for your Mac: the best stock model that holds two 96K windows. `./carl.sh fit` shows the pick and why.
+- **The first time,** CARL starts the model that **Auto fit** chooses for your Mac: the best stock model that holds two slots of 96K tokens. `./carl.sh fit` shows the choice and why.
 - **The next time,** it starts llama.cpp with the settings that you saved.
 - **If a server runs already,** the dashboard attaches to it.
-- `./carl.sh -h` shows all commands.
+- `./carl.sh -h` shows all commands. `./carl.sh help COMMAND` (or `./carl.sh COMMAND --help`) shows the help for one command.
 
 ## Models
 
@@ -63,13 +63,14 @@ opencode
 
 ## The dashboard
 
-The live state of the server: what it does now, the speed, the context, the memory, and the requests.
+The live state of the server: what it does now, the slots, the speed, the memory, and the requests.
 
 ![The CARL dashboard](assets/dashboard.gif)
 
-- **Tabs:** Overview, Connect (install the clients, push their config), Requests, Log, Settings.
+- **Tabs:** Live, Connect (install the clients, send their config), Requests, Log, Settings.
 - **Settings (tab 5):** six panels: Server, Models, Auto fit, Auto-tune, Router, Caching. Push `[` or `]` to change the panel.
-- The footer shows the keys of the panel that you see. `?` shows all keys.
+- **Detail:** push `D` to change between simple and full detail. The dashboard keeps your choice.
+- The footer shows the keys of the screen that you see. `?` shows all keys of that screen.
 - More: [The dashboard](USERGUIDE.md#10-the-dashboard).
 
 ![The Settings tab](assets/settings.png)
@@ -87,7 +88,7 @@ The live state of the server: what it does now, the speed, the context, the memo
 
 `./carl.sh install` adds CARL's plugins to OpenCode and Pi:
 
-- **Prompt cache:** fast starts; sessions come back after a restart (OpenCode, Pi).
+- **Disk cache:** fast starts; sessions come back after a restart (OpenCode, Pi).
 - **Coder subagent, in the background:** large tasks go to a specialist coder while the main session stays free (OpenCode, Pi).
 - **Subagents panel** and **session switcher** in OpenCode's sidebar and prompt box.
 - **Model check:** a warning when the model you pick is not the one the server runs (OpenCode).

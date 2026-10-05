@@ -118,7 +118,7 @@ class ModelRecordTest(unittest.TestCase):
         self.assertEqual(dm.mtp_fallback(m, "ngram-mod", "none"), ("ngram-mod", None))
         spec, note = dm.mtp_fallback(lone, "draft-mtp,ngram-mod", "none")
         self.assertEqual(spec, "ngram-mod")
-        self.assertIn("drafter is not downloaded (./carl.sh download gem gets it)", str(note))
+        self.assertIn("drafter is not downloaded (./carl.sh download gem downloads it)", str(note))
         _, note = dm.mtp_fallback({"name": "q"}, "draft-mtp", "none")
         self.assertIn("its file has no MTP head", str(note))
 
@@ -133,7 +133,7 @@ class LaunchEnvTest(unittest.TestCase):
     def test_drafter_missing_falls_back_to_ngram_once(self) -> None:
         env, note = world({GEM_PATH: 4 * GIB}).carl.launch_env("gem", use_config=True)
         self.assertEqual((env["SPEC"], env["MTP_SOURCE"], "DRAFT" in env), ("ngram-mod", "none", False))
-        self.assertEqual(str(note).count("uses n-gram"), 1)
+        self.assertEqual(str(note).count("n-gram only"), 1)
 
     def test_a_drafter_is_passed_for_an_ngram_spec_too(self) -> None:
         """The launcher passes -md only when SPEC uses MTP, also a SPEC from the environment (Auto-tune)."""
@@ -167,14 +167,14 @@ class DownloadTest(unittest.TestCase):
         self.assertEqual([c[2] for c in w.downloader.calls], ["Gem-Q4_0.gguf", "mtp-Gem-Q4_0.gguf"])
         self.assertEqual(w.downloader.calls[1][0],
                          f"https://huggingface.co/ggml-org/gem-GGUF/resolve/{'1' * 40}/mtp-Gem-Q4_0.gguf")
-        self.assertIn(f"  gem MTP drafter: OK {SHA_D}", w.console.lines)
+        self.assertIn(f"  gem MTP drafter: the file is correct (SHA-256 {SHA_D}).", w.console.lines)
 
     def test_only_the_missing_drafter(self) -> None:
         w = world({GEM_PATH: 4 * GIB}, download_size=DRAFT_BYTES)
         w.folder.hashes[DRAFT_PATH] = SHA_D
         self.assertTrue(w.carl.download(model(w), MDIR))
         self.assertEqual([c[2] for c in w.downloader.calls], ["mtp-Gem-Q4_0.gguf"])
-        self.assertNotIn(f"  gem: OK {SHA_A}", w.console.lines)          # the 4 GB model is not hashed again
+        self.assertNotIn(f"  gem: the file is correct (SHA-256 {SHA_A}).", w.console.lines)          # the 4 GB model is not hashed again
 
     def test_a_bad_drafter_is_moved_aside(self) -> None:
         w = world({GEM_PATH: 4 * GIB}, download_size=DRAFT_BYTES)
@@ -188,14 +188,14 @@ class DownloadTest(unittest.TestCase):
         w.folder.hashes[DRAFT_PATH] = SHA_D
         self.assertTrue(w.carl.download(model(w), MDIR))
         self.assertEqual(w.downloader.calls, [])
-        self.assertIn(f"  gem: OK {SHA_A}", w.console.lines)
-        self.assertIn(f"  gem MTP drafter: OK {SHA_D}", w.console.lines)
+        self.assertIn(f"  gem: the file is correct (SHA-256 {SHA_A}).", w.console.lines)
+        self.assertIn(f"  gem MTP drafter: the file is correct (SHA-256 {SHA_D}).", w.console.lines)
 
     def test_disk_space_for_the_drafter(self) -> None:
         w = world({GEM_PATH: 4 * GIB})
         w.folder.free = 1 * GIB
         self.assertFalse(w.carl.download(model(w), MDIR))
-        self.assertIn("gem MTP drafter needs 0.1 GB + 5 GB headroom", w.console.errors[0])
+        self.assertIn("gem MTP drafter needs 63 MB and 5 GB more on the disk", w.console.errors[0])
 
 
 class VerifyDeleteTest(unittest.TestCase):
@@ -205,12 +205,12 @@ class VerifyDeleteTest(unittest.TestCase):
         self.assertTrue(w.carl.verify(model(w)))
         w.folder.hashes[DRAFT_PATH] = "e" * 64
         self.assertFalse(w.carl.verify(model(w)))
-        self.assertIn("gem MTP drafter: MISMATCH", w.console.errors[-1])
+        self.assertIn("gem MTP drafter: bad file. The SHA-256 is", w.console.errors[-1])
 
     def test_a_missing_drafter_is_reported_not_an_error(self) -> None:
         w = world({GEM_PATH: 4 * GIB})
         self.assertTrue(w.carl.verify(model(w)))
-        self.assertIn("its MTP drafter is not downloaded", w.console.lines[-1])
+        self.assertIn("the MTP drafter is not downloaded, so a start uses n-gram speculation only", w.console.lines[-1])
 
     def test_delete_removes_both(self) -> None:
         w = world({**BOTH, DRAFT_PATH + ".bad": 1})
@@ -221,7 +221,7 @@ class VerifyDeleteTest(unittest.TestCase):
         m = model(world())
         m["draft_path"] = "/etc/passwd"
         w = world()
-        with self.assertRaisesRegex(ConfigError, "refusing to delete"):
+        with self.assertRaisesRegex(ConfigError, "CARL does not delete"):
             w.carl.delete(m)
         self.assertEqual(w.folder.removed, [])
 

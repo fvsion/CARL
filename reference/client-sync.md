@@ -1,6 +1,6 @@
 # CARL Reference: Clients on other computers
 
-[Index](README.md) · the client folder's connection file, the dashboard's API, the config push and the sync service.
+[Index](README.md) · the client folder's connection file, the dashboard API, how the dashboard sends the config, and the sync service.
 
 ## The client folder carries the connection
 
@@ -33,14 +33,14 @@ The dashboard serves a small API while it runs (`tools/monitor/cacheapi.py`). It
 - The claims and the records are the same files that the clients on this Mac use. Every client sees the same state.
 - The API checks every input: names, slot numbers and the body size.
 
-## Push a config to the clients
+## Send the config to the clients
 
-The server decides some parts of the client config: the installed models, their windows and the default model. When these change, push them:
+The server decides some parts of the client config: the installed models, their contexts and the default model. When these change, send them:
 
 1. On the Mac, open the dashboard. Push `2` for the Connect tab.
-2. Push `P` (or click **Push config to clients**). Or run `./carl.sh push`.
+2. Push `P` (or click **[ Send the config (P) ]**; in the Clients sub-tab: **[ Send the config to them (P) ]**). Or run `./carl.sh push`.
 
-The dashboard writes the config to `~/.config/carl/client-config.json`, with a version. A push of the same config gives the same version. The clients then do not apply it again.
+The dashboard writes the config to `~/.config/carl/client-config.json`, with a version. The same config gives the same version. The clients then do not apply it again.
 
 ## The sync service
 
@@ -54,17 +54,18 @@ The dashboard writes the config to `~/.config/carl/client-config.json`, with a v
 - When the dashboard is not running, the service tries again: after 5 s, 10 s, 30 s, then each minute.
 - `NO_SYNC_SERVICE=1 ./install.sh` removes the service. Without the service, OpenCode and Pi check for a new config one time when they start.
 
-## Auto-apply and the /carl panel
+## Apply at once, and the /carl panel
 
-- A new config is applied at once. To keep it waiting, turn auto-apply off: type `/carl` in OpenCode or Pi, select **Config sync**, then **Turn auto-apply off**. Or run `carl-sync.py auto off`.
-- With auto-apply off, the panel shows the waiting version and **Apply now**.
+- A new config is applied at once. To keep it waiting, type `/carl` in OpenCode or Pi, select **Config sync**, then **Do not apply new configs at once**. Or run `carl-sync.py auto off`. **Apply new configs at once** (`carl-sync.py auto on`) turns it back on.
+- When a new config waits, the panel says "A new config from the dashboard waits." and offers **Apply the new config now**. **Check for a new config now** asks the dashboard.
+- The section uses plain sentences, for example "Last config from the dashboard: today 10:53.". Its **Details** part holds the server address, the dashboard API address and the config version. **‹ back** goes back to the list.
 - OpenCode and Pi read their configs when they start. After a config is applied, OpenCode shows a message and Pi shows a notice: restart it to use the new config.
-- `/carl` also shows every CARL piece on this computer with its state: the prompt cache, the model check, the session switcher, the subagents sidebar, the coder, the browser, web search and LSP.
+- `/carl` also shows every CARL piece on this computer with its state: the disk cache, the model check, the session switcher, the subagents sidebar, the coder, the browser, web search and LSP.
 
 ## The Clients tab
 
 The Connect tab has two sub-tabs: **Setup** and **Clients**. Push `[` or `]` to change between them.
 
 - **Clients** lists this Mac (its OpenCode and Pi configs) and each computer that syncs.
-- For each computer: the host name, the user, the system, the address, the service or the start check, connected or the last time seen, and its config against the pushed config.
-- The dashboard keeps the list in `~/.config/carl/clients.json`. **Forget clients not seen for a week** removes old rows.
+- For each computer: the name, the user, how it syncs (the service, or a check at the start), when it was last seen (or connected), and its config against the config that the dashboard sent. Full detail adds the system and the address.
+- The dashboard keeps the list in `~/.config/carl/clients.json`. **[ Forget the computers not seen for a week ]** removes old rows.

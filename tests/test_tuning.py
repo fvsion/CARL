@@ -32,6 +32,18 @@ class ScoringTest(unittest.TestCase):
         with self.assertRaises(ConfigError):
             t.best_mode({})
 
+    def test_n1_is_never_dropped(self) -> None:
+        """One guess (n = 1) is always measured: it sometimes wins (user, 2026-10-04). MTP and MTP +
+        n-gram at n = 1 for an MTP head and for a drafter, quick and default; n-gram at n = 1 without MTP."""
+        for has_mtp, drafter in ((True, False), (False, True), (True, True)):
+            for quick in (True, False):
+                modes = t.speculation_modes(has_mtp, quick, drafter)
+                with self.subTest(has_mtp=has_mtp, drafter=drafter, quick=quick):
+                    self.assertIn(("draft-mtp", 1), modes)
+                    self.assertIn(("draft-mtp,ngram-mod", 1), modes)
+        for quick in (True, False):
+            self.assertIn(("ngram-mod", 1), t.speculation_modes(False, quick, False))
+
     def test_modes_and_depths(self) -> None:
         self.assertEqual(t.speculation_modes(False, False), [("none", 1), ("ngram-mod", 2), ("ngram-mod", 1)])
         self.assertEqual(t.speculation_modes(False, True), [("none", 1), ("ngram-mod", 2), ("ngram-mod", 1)])
@@ -161,7 +173,7 @@ class AutoTunerTest(unittest.TestCase):
         self.assertEqual(rec["settings"]["slots"], "1")
 
     def test_refuses_without_a_16k_window(self) -> None:
-        with self.assertRaisesRegex(ConfigError, "16K window"):
+        with self.assertRaisesRegex(ConfigError, "a context of 16K tokens"):
             t.AutoTuner(FakeServer(self.SPEEDS), Steps()).run(plan(limit=15 * GIB))
 
     def test_no_mtp_head_measures_ngram_with_1_and_2_drafts(self) -> None:
@@ -183,9 +195,9 @@ class LongTest(unittest.TestCase):
             self.assertAlmostEqual(got, want, delta=64)
         self.assertEqual(len(rec["results"]["decode_at_depth"]), 5)
         self.assertEqual([p[0] for p in rec["results"]["parallel"]], [1, 2, 3, 4])         # not quick: measured
-        self.assertTrue(any("decoding in total: 1 at once 25 tok/s" in x for x in steps.lines))
+        self.assertTrue(any("Write speed in total: 1 at the same time 25 tok/s" in x for x in steps.lines))
         self.assertEqual(server.started[-1][2], t.LONG_READ_CTX)            # the reading server holds 192K + room
-        self.assertTrue(any("the deep reads (128K, 192K) take about" in x for x in steps.lines))
+        self.assertTrue(any("The long reads (128K, 192K) take about" in x for x in steps.lines))
         self.assertEqual((rec["depth"], len(rec["results"]["speculation"])), ("long", 6))   # the default modes too
 
     def test_long_stops_at_the_largest_window_that_fits(self) -> None:
@@ -194,7 +206,7 @@ class LongTest(unittest.TestCase):
         m1 = rec["max_ctx"]["1"]
         self.assertLess(m1, 196608)
         self.assertTrue(all(g + t.READ_ROOM <= m1 for g, _ in rec["results"]["prompt_read"]))
-        self.assertTrue(any("skipped (the largest window that fits" in x for x in steps.lines))
+        self.assertTrue(any("not measured. The largest context that fits" in x for x in steps.lines))
 
     def test_depths_and_the_fit(self) -> None:
         self.assertEqual(t.read_depths("quick"), [8192, 32768])
@@ -214,7 +226,7 @@ class GuardTest(unittest.TestCase):
         procs = [t.ProcessInfo(1, 9 * 2 ** 20, "/usr/bin/big"), t.ProcessInfo(2, 1000, "/opt/bin/llama-server"),
                  t.ProcessInfo(3, 1000, "zsh"), t.ProcessInfo(4, 9 * 2 ** 20, "/me")]
         self.assertEqual(t.blocking_processes(procs, 8 * 2 ** 20, own_pid=4),
-                         ["pid 1 (big, 9.0 GB)", "pid 2 (llama-server, 0.0 GB)"])
+                         ["pid 1 (big, 9.0 GiB)", "pid 2 (llama-server, 0.0 GiB)"])
 
 
 if __name__ == "__main__":

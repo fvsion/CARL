@@ -76,14 +76,15 @@ class AppTest(unittest.TestCase):
         self.assertEqual(self.ui.lines, 6)              # no "-" / "+" taken from the report's digits
 
     def test_card_levels_lines_help_and_refresh(self) -> None:
-        self.keys("e")
-        self.assertEqual(set(self.ui.levels.values()), {2})
-        self.keys("c")
-        self.assertEqual(set(self.ui.levels.values()), {0})
+        from monitor.model import ServerData
+        self.ctl.data = ServerData(up=True, slots=True)
+        self.app.frame(self.ctl.data)
         title = next(r for r in self.ctl.regions if r.action == "level:connect")
         self.keys(click(title.x0 + 3, title.y))
-        self.assertEqual(self.ui.levels["connect"], 1)
-        self.keys("++-?")
+        self.assertEqual(self.ui.levels["connect"], 0)          # a click collapses the card
+        self.keys(click(title.x0 + 3, title.y))
+        self.assertEqual(self.ui.levels["connect"], 1)          # and opens it again
+        self.keys("D", "++-?")                                  # the log lines: full detail; one read, key by key
         self.assertEqual((self.ui.lines, self.ui.help), (8, True))
         self.assertTrue(self.ctl.handle_input(" "))
 
@@ -111,16 +112,18 @@ class AppTest(unittest.TestCase):
         self.keys(DOWN, DOWN, "\r")                     # auto -> big -> iq
         self.assertIsNone(self.ui.picker)
         self.assertEqual(p["model"], "iq")
-        self.keys(DOWN, DOWN, "\r")                     # model, KV cache, context: type a value
+        self.keys(DOWN, "\r")                           # model, context: type a value
         self.assertEqual(self.ui.edit, "")
         self.keys("6", "4", "k", "\r")
         self.assertEqual(p["ctx"], 65536)
         self.keys("\r", "1", "\r")                      # out of range: kept, and said
         self.assertEqual(p["ctx"], 65536)
         self.assertIn("out of range", self.ui.toast_msg[0])
-        self.keys(UP, "\x1b[C")                         # KV cache: next choice
+        self.keys(DOWN, DOWN, DOWN, "\x1b[C")           # slots, speculation, context memory: the next choice
         self.assertEqual(p["kv"], "q8_0")
-        self.keys("x")                                  # tuned values
+        self.keys(UP, "\x1b[C")                         # speculation: the mode and its guesses together
+        self.assertEqual((p["spec"], p["specn"]), ("draft-mtp,ngram-mod", "2"))
+        self.keys("x")                                  # the recommended settings
         self.assertEqual(self.ui.pending and self.ui.pending["kv"], "q4_0")
         self.keys("r")                                  # revert: from config.json again on the next frame
         self.assertEqual(self.ui.pending and self.ui.pending["model"], "auto")
@@ -163,9 +166,10 @@ class AppTest(unittest.TestCase):
         """A half-updated catalogue (or models.json) once crashed the Settings tab: every
         panel must draw, say what is wrong, and take keys."""
         self.store.broken = "host/catalog.json: models.x.rank: not a number"
+        self.app.svc.models.get(refresh=True)
         self.keys("5")
         text = self.screen()
-        self.assertIn("model list unavailable", text)
+        self.assertIn("The model list is not available", text)
         self.assertIn("models.x.rank: not a number", text)
         self.keys(DOWN, "\x1b[C", UP, "\r", ESC, "x", "r")       # rows, a choice, the picker, defaults, revert
         self.keys("]")
@@ -181,7 +185,7 @@ class AppTest(unittest.TestCase):
         self.app.svc.models.get(refresh=True)
         self.assertIsNone(self.app.svc.models.error)
         self.keys("[", "[", "[")
-        self.assertNotIn("model list unavailable", self.screen())
+        self.assertNotIn("The model list is not available", self.screen())
 
     def test_settings_panel_error_is_shown_not_raised(self) -> None:
         def boom(*_: object) -> list:
@@ -253,22 +257,22 @@ class AppTest(unittest.TestCase):
         self.keys("A")                                          # the Server panel's A opens the Auto fit panel
         self.assertEqual(self.ui.sp, SP_FIT)
         text = self.screen()
-        for part in ("AUTO FIT", "This Mac", "The pick", "Use this (Enter)", "Ranking"):
+        for part in ("AUTO FIT", "This Mac", "Auto fit suggests", "Use this (Enter)", "Ranking"):
             self.assertIn(part, text)
         self.keys("\r")                                         # Use this: the pick (big) is here, back to Server
         self.assertEqual((p["model"], p["ctx"], p["slots"]), ("big", 98304, "auto"))
         self.assertEqual(self.ui.sp, SP_SERVER)
-        self.assertIn("press a to start it", self.ui.toast_msg[0])
+        self.assertIn("Press a to start it", self.ui.toast_msg[0])
         self.store.pick = ("remote", False)                    # not downloaded: asked first
         self.app.svc.models._fit.clear()
         self.keys("A", "\r")
         c = self.ui.confirm2
         assert c is not None
-        self.assertEqual((c.title, c.yes, c.model), ("DOWNLOAD?", "mautodl", "remote"))
+        self.assertEqual((c.title, c.yes, c.model), ("DOWNLOAD AUTO FIT'S CHOICE?", "mautodl", "remote"))
         self.keys("n")                                          # no download (it would start a process)
         self.assertIsNone(self.ui.confirm2)
         self.assertEqual(p["model"], "remote")
-        self.assertTrue(any("Auto fit" in x and "picked remote" in x for x in self.server_text(160)))
+        self.assertTrue(any("remote" in x and "the model that you chose" in x for x in self.server_text(160)))
 
     def fake_serve(self, body: str) -> None:
         """A host/serve.sh in the test repo that the Connect tab's installer runs instead."""
@@ -290,14 +294,15 @@ class AppTest(unittest.TestCase):
         self.keys("2")
         text = " ".join(self.screen().split())
         for part in ("SET UP OPENCODE AND PI", "./carl.sh install", "[ Install on this Mac (i) ]",
-                     "[ Update configs only (u) ]", "./carl.sh --vm", "(now: this Mac only)"):
+                     "[ Update the model lists (u) ]", "./carl.sh --vm", "(now: this Mac only)"):
             self.assertIn(part, text)
 
     def test_connect_install_asks_first_then_runs_and_shows_its_output(self) -> None:
         self.fake_serve('echo "args: $*"; echo "CARL_CMD=$CARL_CMD"\n')
         self.keys("2", "i")
         self.assertEqual(self.ui.install_ask, "all")
-        self.assertIn("Yes, run it (y)", self.screen())
+        self.assertIn("Run it (y)", self.screen())
+        self.assertIn("y run the installer", ANSI.sub("", self.app.footer(120)))     # the question's keys in the footer
         self.keys("n")                                  # cancelled: nothing runs
         self.assertIsNone(self.ui.install_ask)
         self.assertIsNone(self.ui.install)
@@ -320,9 +325,9 @@ class AppTest(unittest.TestCase):
         self.keys("2")
         text = " ".join(" ".join(x.strip(" │") for x in ANSI.sub("", self.screen()).splitlines()).split())
         installed = [m["name"] for m in self.store.models if m["status"] == "downloaded"]
-        self.assertIn(f"Out of date: OpenCode lists 1 models; installed now: {len(installed)}", text)
-        self.assertIn("removed gone", text)
-        self.assertIn("Press u to list the installed models", text)          # the quick tip
+        self.assertIn(f"OpenCode lists 1 model, {len(installed)} are installed. An update adds", text)
+        self.assertIn("removes gone", text)
+        self.assertIn("Press u to put the installed models", text)          # the quick tip
 
     def test_connect_install_failure_is_shown(self) -> None:
         self.fake_serve('echo "npm: network down"; exit 3\n')
@@ -330,9 +335,9 @@ class AppTest(unittest.TestCase):
         self.ctl.do("insyes")
         self.finish_install()
         text = self.screen()
-        self.assertIn("failed (exit 3)", text)
+        self.assertIn("stopped with an error (exit code 3)", text)
         self.assertIn("npm: network down", text)
-        self.assertIn("installer failed", self.ui.toast_msg[0])
+        self.assertIn("The installer stopped with an error", self.ui.toast_msg[0])
 
     def test_auto_fit_panel_goal_and_scope_are_saved_at_once(self) -> None:
         self.keys("5", "A")
@@ -365,15 +370,18 @@ class AppTest(unittest.TestCase):
         self.keys("5", "[")                                     # back from the first panel: the last, Caching
         self.assertEqual(self.ui.sp, SP_CACHE)
         text = " ".join(ANSI.sub("", self.screen()).split())
-        for part in ("CACHING", "Disk limit", "10 GB", "Prompts", "save conversations", "m · build", "m · ses_1"):
+        for part in ("CACHING", "Disk limit", "[10 GB]", "Saved prompts", "Saved sessions", "saved prompt", "build",
+                     "ses_1"):
             self.assertIn(part, text)
-        self.keys("d", "p")                                     # the next limit after the default 10; prompts off
+        self.keys("\x1b[C", DOWN, "\x1b[C")                    # the next limit after the default 10; prompts off
         self.assertEqual(self.store.config["cache"], {"disk_gb": 20, "prefix": False})
         self.assertEqual(self.app.jobs.cache_conf().disk_gb, 20)
         self.ctl.do("cache:disk:50")
         self.assertEqual(self.store.config["cache"]["disk_gb"], 50)
-        self.keys("o", "w")                                     # when to save: the next after auto; SWA: next after auto
+        self.keys(DOWN, DOWN, "\x1b[C", DOWN, DOWN, DOWN, "\x1b[C")   # when to save: after auto; Gemma: after auto
         self.assertEqual((self.store.config["cache"]["save"], self.store.config["cache"]["swa"]), ("turn", "full"))
+        self.keys("\x1b[D")                                     # ← goes back
+        self.assertEqual(self.store.config["cache"]["swa"], "auto")
         self.ctl.do("cache:save:stop")
         self.assertEqual(self.app.jobs.cache_conf(fresh=True).save, "stop")
         self.keys("c")
@@ -428,7 +436,7 @@ class AppTest(unittest.TestCase):
                 mock.patch("monitor.system.kill") as kill:
             self.ctl.do("stop")
             self.assertIsNotNone(self.ui.drain)
-            self.assertIn("A TURN IS RUNNING", "\n".join(self.app.frame(d)))
+            self.assertIn("AN AGENT IS WORKING", "\n".join(self.app.frame(d)))
             self.keys("w")                                          # wait for the end of the turn
             self.assertTrue(self.ui.drain and self.ui.drain.waiting)
             live[1]["is_processing"] = False                        # the reply ended, the agent runs a tool
@@ -468,7 +476,7 @@ class AppTest(unittest.TestCase):
         self.assertEqual(self.ui.connect_sp, 1)
         text = " ".join(ANSI.sub("", self.screen()).split())
         self.assertIn("CLIENTS", text)
-        self.assertIn("no other computer yet", text)
+        self.assertIn("No other computer yet", text)
         self.store.client_models = lambda: {"schema": 1, "models": [{"id": "m"}]}   # type: ignore[method-assign]
         self.keys("P")                                                  # push
         self.assertTrue(self.app.jobs.pushed())
@@ -483,25 +491,25 @@ class AppTest(unittest.TestCase):
                              Client("ba9876543210", host="vm-2", applied="old", mode="check", auto_apply=False)))
         lines = " ".join(ANSI.sub("", x if isinstance(x, str) else x.text) for x in clients_lines(view, [], [], 400))
         self.assertIn("vm-1", lines)
-        self.assertIn(f"up to date ({version})", lines)
-        self.assertIn(f"has old, pushed {version} (auto-apply off: it waits)", lines)
+        self.assertIn("up to date", lines)
+        self.assertIn("waits for you to apply it", lines)
 
     def test_router_panel_switches_the_mode_after_a_question(self) -> None:
         self.keys("5", "[", "[")                                # back from the first panel: Caching, then Router
         self.assertEqual(self.ui.sp, SP_ROUTER)
         text = " ".join(" ".join(x.strip(" │") for x in ANSI.sub("", self.screen()).splitlines()).split())
-        for part in ("ROUTER", "Dashboard only (single model)", "OpenCode / Pi switch models (router)",
-                     "change models during their work", "Each switch empties the prompt cache",
-                     "Update the OpenCode / Pi configs"):
+        for part in ("ROUTER", "Single model (s)", "Router mode: OpenCode and Pi switch (r)",
+                     "Each switch costs time", "Update the OpenCode and Pi configs (u)"):
             self.assertIn(part, text)
-        self.ctl.do("rmode:router")
+        self.assertNotIn("prompt cache", text)
+        self.keys("r")                                          # the key asks, as a click does
         c = self.ui.confirm2
         assert c is not None
-        self.assertEqual((c.title, c.yes, c.model), ("MODEL SWITCHING?", "rmodeyes", "router"))
-        self.assertTrue(any("empties the prompt cache" in x for x in c.lines))
+        self.assertEqual((c.title, c.yes, c.model), ("SWITCH TO ROUTER MODE?", "rmodeyes", "router"))
+        self.assertTrue(any("loads the model again" in x for x in c.lines))
         self.keys("y")                                          # no server runs: saved for the next start
         self.assertEqual(self.store.saved[-1]["llama"]["mode"], "router")
-        self.assertIn("the next start uses it", self.ui.toast_msg[0])
+        self.assertIn("The next start uses it", self.ui.toast_msg[0])
         self.assertIsNone(self.ui.install)                      # CARL didn't set up clients here: nothing to update
         self.ctl.do("rmode:single")
         self.keys("y")
@@ -534,30 +542,33 @@ class AppTest(unittest.TestCase):
         self.assertNotIn("Connect ⚠", self.screen())
 
     def test_server_card_sections_at_80_160_and_200_columns(self) -> None:
-        """The table and the buttons; the quick tip, About this setting and Status under their own headers (beside
-        the table when the card is wide, under it else); no key list in the card (the footer and ? have it)."""
+        """The state, the table and the buttons, Memory, Auto fit suggests; the Quick tip, About and the model
+        list beside them when the card is wide, under them else; no key list in the card (the footer and ? have
+        it)."""
         self.keys("5")
         for cols in (80, 160, 200):
             with self.subTest(cols=cols):
                 text = self.server_text(cols)
                 heads = {h: next(i for i, x in enumerate(text) if f" {h} ─" in x)
-                         for h in ("Quick tip", "About this setting", "Status")}
-                self.assertLess(heads["Quick tip"], heads["About this setting"])
-                self.assertLess(heads["About this setting"], heads["Status"])
+                         for h in ("Quick tip", "About: Model", "Choose a model", "Memory", "Auto fit suggests")}
+                self.assertLess(heads["Quick tip"], heads["About: Model"])
+                self.assertLess(heads["Memory"], heads["Auto fit suggests"])
                 self.assertFalse(any(" Keys ─" in x for x in text))
-                buttons = [i for i, x in enumerate(text) if "[ Start server (a) ]" in x]
+                buttons = [i for i, x in enumerate(text) if "[ Start the server (a) ]" in x]
                 self.assertEqual(len(buttons), 1)
-                advanced = next(i for i, x in enumerate(text) if "advanced" in x)
-                if cols == 200:                     # beside the table
-                    self.assertLess(heads["Quick tip"], advanced)
+                if cols >= 160:                     # beside the table
+                    self.assertLess(heads["Quick tip"], buttons[0])
                 else:
                     self.assertGreater(heads["Quick tip"], buttons[0])
                 card = text[:next(i for i, x in enumerate(text) if "╰" in x)]
-                self.assertFalse(any("…" in x for x in card), [x for x in card if "…" in x])
                 joined = " ".join(" ".join(x.strip(" │").split()) for x in card)
-                self.assertIn("GGUF from Hugging Face.", joined.replace("│ ", ""))   # the help, in full
-        self.assertIn("start", self.app.footer())
-        self.assertIn("all keys", self.app.footer())
+                if cols == 80:
+                    self.assertIn("GGUF file from Hugging Face.", joined)                 # the help, in full
+                self.assertIn("The server is not running. Press a to start it", joined)  # the state, the next action
+                self.assertIn("✓ It fits.", joined)
+        footer = ANSI.sub("", self.app.footer(100))
+        self.assertIn("a apply", footer)
+        self.assertTrue(footer.endswith("D detail · ? all keys · q quit"))
 
     def test_every_panel_has_its_keys_a_quick_tip_and_fits(self) -> None:
         """Every Settings panel and Connect sub-tab, at 100, 140 and 200 columns: a quick tip, its own keys
@@ -588,10 +599,10 @@ class AppTest(unittest.TestCase):
         self.ui.tab, self.ui.sp = 4, 0
         self.keys("?")
         text = ANSI.sub("", self.screen())
-        for part in ("KEYS", "This panel", "Every tab", "tuned values", "quit (asks)"):
+        for part in ("KEYS", "This screen", "Every screen", "recommended", "quit (CARL asks first)"):
             self.assertIn(part, text)
         self.keys("?")
-        self.assertNotIn("Every tab", ANSI.sub("", self.screen()))
+        self.assertNotIn("Every screen", ANSI.sub("", self.screen()))
 
 
 if __name__ == "__main__":

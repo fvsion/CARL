@@ -48,26 +48,27 @@ export function verdict(wanted, s) {
     return {
       key: `single:${wanted}:${running}`,
       variant: "warning",
-      message: `CARL is running ${running}, not ${wanted}: the answers come from ${running}. ` +
-        `Switch the model in the CARL dashboard (Settings), or turn on router mode there (Settings → Router) ` +
-        `to switch from OpenCode.`,
+      message: `The server runs ${running}, not ${wanted}. The answers come from ${running}. ` +
+        `Change the model in the CARL dashboard (Settings > Server). ` +
+        `To switch models from OpenCode, turn on router mode (Settings > Router).`,
     };
   }
   const m = s.models.find((x) => x.id === wanted);
   if (!m) {
-    const have = s.models.map((x) => x.id).join(", ");
+    const have = s.models.map((x) => x.id).join(", ") || "no models";
     return {
       key: `missing:${wanted}`,
       variant: "error",
-      message: `${wanted} is not installed on the CARL server (it answers "not found"). Installed: ${have}. ` +
-        `Update OpenCode's list: ./carl.sh install --config-only (or the dashboard's Connect tab, u).`,
+      message: `The server does not have ${wanted}. It has ${have}. ` +
+        `To update the model list of OpenCode, use the Connect tab of the dashboard, ` +
+        `or run ./carl.sh install --config-only.`,
     };
   }
   if (m.status === "loaded" || m.status === "sleeping") return undefined;
   return {
     key: `loading:${wanted}`,
     variant: "info",
-    message: `CARL is loading ${wanted} for you (the other model stops first): 30 s to 2 min.`,
+    message: `CARL loads ${wanted} for you. The other model stops first. This takes 30 s to 2 min.`,
   };
 }
 

@@ -65,7 +65,7 @@ Google's Gemma 4 models joined the catalogue on 2026-10-04. Each one is the QAT 
   | `draft-mtp,ngram-mod` | 2 | **77.0** | **41.4** | **74.9** |
   | `draft-mtp,ngram-mod` | 3 | – | 40.8 | 70.8 |
 
-  - MTP + n-gram with 2 draft tokens is the best on each model: 55% to 83% faster than no speculation. The catalogue uses it for all four Gemma models. The 31B is not measured.
+  - MTP + n-gram with 2 guesses is the best on each model: 55% to 83% faster than no speculation. The catalogue uses it for all four Gemma models. The 31B is not measured.
   - MTP makes new text faster: 63% to 84% of its drafted tokens are correct. On the 26B-A4B, new code goes from 41.4 to 61.1 tok/s.
   - n-gram makes re-emitted text faster: 130 tok/s on the 12B, 233 tok/s on the 26B-A4B. On new text it finds nothing to copy and does nothing.
   - More than 2 MTP drafts makes prose slower, because fewer drafts are correct.
@@ -84,7 +84,7 @@ Google's Gemma 4 models joined the catalogue on 2026-10-04. Each one is the QAT 
   - Auto-tune reads the header, and tests MTP only if the head is there or the drafter is downloaded.
   - unsloth also publishes the head as a separate file (`MTP/mtp-Qwen3.8-27B-Q4_0.gguf`). The main unsloth files include the head, so you do not need that file.
 - **The model names.** Each build has its own name, also in the client configs (since 1.3.0). Before 1.3.0, a Q3 build used the name of its Q4 build.
-- **The default model.** With `llama.model = auto`, a start uses auto fit's pick for this Mac. If the pick is not downloaded, the start uses the best downloaded stock model that fits. `./carl.sh fit` shows which model this Mac gets, and why.
+- **The default model.** With `llama.model = auto`, a start uses Auto fit's choice for this Mac. If the choice is not downloaded, the start uses the best downloaded stock model that fits. `./carl.sh fit` shows which model this Mac gets, and why.
 - The catalogue `default` (`qwen3.6-35b-a3b`) and `default_small` (`qwen3.6-35b-a3b-iq3`) are only the offline fallback, when CARL cannot read the GGUF headers.
 
 **Policy:** Use only models with a known and documented uncensoring method. Do not use "uncensored" fine-tunes with an undisclosed method, also when they are popular.
@@ -157,7 +157,7 @@ IQ3_M is a good choice only where no larger file fits, for example on a 24 GB Ma
 - **2 drafts lose on IQ3.** On the 35B IQ3, MTP n=2 is about 15% slower on new text than no speculation.
 - **MTP + n-gram with 1 draft is the best on both models.** The Auto-tune score is a weighted geometric mean (prose 0.4, code 0.4, re-emit 0.2). With this score, MTP + n-gram is about 4–5% better than n-gram alone on the 35B IQ3. On the 27B IQ3, it is about 9% better. n-gram alone is better only on a code re-emit on the 35B (117 vs 93 tok/s).
 - **Thus, the catalogue tune for both stock IQ3 builds is `draft-mtp,ngram-mod` with n=1.** The earlier setting of the 35B IQ3 (MTP + n-gram, n=2, copied from the Q4) was the second slowest mode on new text. The Q4 35B keeps n=2 (measured on the M3 Pro).
-- The Settings tab shows MTP with more than 1 draft on an IQ quant in red. To measure a model on your own Mac, run `./carl.sh tune NAME`.
+- The Server panel warns about MTP with more than 1 guess on an IQ quant: `⚠ Speculation: MTP with more than 1 guess is about 15% slower on IQ quantizations (measured).` To measure a model on your own Mac, run `./carl.sh tune NAME`.
 
 **The abliterated IQ3 builds** (the same setup, 2026-10-03):
 

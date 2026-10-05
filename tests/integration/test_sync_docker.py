@@ -253,7 +253,7 @@ class SyncServiceTest(unittest.TestCase):
     def test_1_install_starts_the_service(self) -> None:
         c = self.new_container("/home/carl/CARL client")       # a space in the path: the unit must quote it
         out = c.install()
-        self.assertIn("client sync: a background service (systemd --user carl-sync)", out)
+        self.assertIn("Client sync: a background service (systemd --user carl-sync)", out)
         self.assertIn("[Service]", c.read("/home/carl/.config/systemd/user/carl-sync.service"))
         self.assertEqual(c.unit_state("is-enabled"), "enabled")
         wait("the unit active", lambda: c.unit_state("is-active") == "active", 15)

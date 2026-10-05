@@ -12,8 +12,9 @@ from .model import ModelInfo
 from .settings import Pending
 from .store import HFFile
 
-TABS = ["Overview", "Connect", "Requests", "Log", "Settings"]
-SUBPANELS = ["Server", "Models", "Auto fit", "Auto-tune", "Router", "Caching (exp.)"]
+TABS = ["Live", "Connect", "Requests", "Log", "Settings"]
+SUBPANELS = ["Server", "Models", "Auto fit", "Auto-tune", "Router", "Caching"]
+DETAILS = ("simple", "full")       # the detail level (D): simple = the state, the next action, one sentence per number
 CONNECT_SUBPANELS = ["Setup", "Clients"]
 TUNE_ALL = "*all*"                 # Auto-tune's choice "every downloaded model" (carl-tune.py all)
 SP_SERVER, SP_MODELS, SP_FIT, SP_TUNE, SP_ROUTER, SP_CACHE = range(len(SUBPANELS))
@@ -53,6 +54,7 @@ class Confirm:
     lines: List[str]
     yes: str                        # the action Yes runs
     model: Optional[str] = None
+    yes_label: str = "Yes"          # the Yes button's verb ("Delete", "Download", ...)
 
 
 @dataclass
@@ -130,12 +132,13 @@ class InstallRun:
 class UIState:
     """Everything the screen shows besides the snapshot: tab, scroll, dialogs, Settings, jobs."""
     tab: int = 0
-    scroll: int = 0                 # Overview
+    detail: str = "simple"          # simple | full (D; saved in the dashboard's own file, uiprefs.py)
+    scroll: int = 0                 # Live
     prev_scroll: int = 0            # Connect: the config preview
     connect_sp: int = 0             # Connect: 0 Setup, 1 Clients (CONNECT_SUBPANELS)
     req_scroll: int = 0
     log_scroll: int = 0             # lines back from the end
-    lines: int = 6                  # log lines on the Overview tab
+    lines: int = 6                  # log lines on the Live tab (full detail)
     wrap: bool = False
     errors_only: bool = False
     key_shown: bool = False
@@ -145,10 +148,12 @@ class UIState:
     quit: bool = False              # the quit dialog is open
     stopping: Optional[Tuple[int, float]] = None    # (server pid, SIGKILL deadline)
     exit_msg: str = ""
-    toast_msg: Tuple[str, float] = ("", 0.0)        # (message, shown until)
+    toast_msg: Tuple[str, float] = ("", 0.0)        # (message, shown until): the message line
+    messages: List[Tuple[float, str]] = field(default_factory=list)   # the last messages (the ? card)
+    start_error: List[str] = field(default_factory=list)   # the launcher's "error:" lines of a start that failed
     preview: str = "opencode"       # Connect: opencode | pi | curl
     copied: Optional[str] = None
-    levels: Dict[str, int] = field(default_factory=lambda: {x: 1 for x in LEVEL_NAMES})
+    levels: Dict[str, int] = field(default_factory=lambda: {x: 1 for x in LEVEL_NAMES})   # 0 collapsed, 1 open
     # Settings
     sp: int = SP_SERVER             # panel: Server, Models, Auto fit, Auto-tune, Router
     pending: Optional[Pending] = None               # Server panel: the values being chosen
@@ -158,12 +163,15 @@ class UIState:
     edit: Optional[str] = None      # a number being typed into the selected row
     confirm: bool = False           # Apply: "restart?" asked
     restart: Optional[str] = None   # what a restart is doing now
+    restart_t: float = 0.0          # when it began
     mrow: int = 0                   # Models panel: the selected model (in the sorted, filtered list)
     msort: int = 0                  # model lists: index into arrange.SORTS
     slist: bool = False             # Server panel: the model list beside the settings has the keys
     srow: int = 0                   # Server panel: the cursor in that list
     mfilter: int = 0                # model lists: index into arrange.FILTERS
     fit_scroll: int = 0             # Auto fit panel: lines scrolled off the top
+    cache_row: int = 0              # Caching panel: the selected row
+    router_row: int = 0             # Router panel: the selected model
     card: Optional[CardForm] = None # Models panel: a custom model's card being edited (e)
     picker: Optional[Picker] = None
     confirm2: Optional[Confirm] = None
@@ -180,6 +188,12 @@ class UIState:
     install_shown: bool = False     # its output replaces the config preview until a copy button
     install_after_restart: bool = False             # a mode switch: update this Mac's configs once it is up
 
-    def toast(self, msg: str, secs: float = 4) -> None:
-        """Show msg in the footer for secs seconds."""
+    @property
+    def full(self) -> bool:
+        """The full detail level: the reasons, the figures, the flags and keys too."""
+        return self.detail == "full"
+
+    def toast(self, msg: str, secs: float = 6) -> None:
+        """Show msg on the message line (above the keys) for secs seconds; the ? card keeps the last ones."""
         self.toast_msg = (msg, time.time() + secs)
+        self.messages = [*self.messages[-7:], (time.time(), msg)]

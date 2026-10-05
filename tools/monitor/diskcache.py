@@ -27,7 +27,7 @@ DEFAULT_GB = 10                 # a 74K-token session on the 35B is ~1 GB
 SAVES = ("auto", "turn", "switch", "stop")
 SWAS = ("auto", "full", "window")
 AUTO_S = 120                    # save = auto: after this much unsaved reading (a crash costs at most that)
-MIN_FREE_BYTES = 10 * 2 ** 30   # no saves below this much free disk (the clients' rule too)
+MIN_FREE_BYTES = 10 * 1000 ** 3  # no saves below 10 GB of free disk (the clients' rule too)
 PROMPT, CONVERSATION = "prompt", "conversation"
 
 

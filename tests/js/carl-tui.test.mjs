@@ -2,7 +2,7 @@
 // Run: node --test tests/js (tests/scripts/test_js.py runs it with the other suites).
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { cut, nodes, routeSessionID, rows } from "../../client/shared/carl-tui.js";
+import { cut, duration, nodes, routeSessionID, rows } from "../../client/shared/carl-tui.js";
 
 test("cut: one line of at most n columns, with an ellipsis when cut", () => {
   assert.equal(cut("fix  the\nparser ", 20), "fix the parser");
@@ -39,4 +39,9 @@ test("nodes: props without undefined values, children without empty ones", () =>
   assert.deepEqual(b.props, { width: "100%" });
   assert.deepEqual(b.kids, [t, "plain"]);
   assert.equal(made.length, 2);
+});
+
+test("duration: the time format of every CARL screen (the switcher's ages, the sidebar's times)", () => {
+  assert.deepEqual([42_000, 68_000, 3 * 3_600_000, 4_320_000, 49 * 3_600_000].map(duration),
+                   ["42 s", "1 min", "3 h", "1 h 12 min", "2 days"]);
 });

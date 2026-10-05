@@ -1,5 +1,5 @@
 // @ts-check
-// OpenCode server plugin (installed by CARL's client/install.sh): CARL's prompt cache (carl-cache.js) for
+// OpenCode server plugin (installed by CARL's client/install.sh): CARL's disk cache (carl-cache.js) for
 // the requests OpenCode sends to CARL's provider. Each session's conversation is saved on the server's
 // disk after its turn and restored before its next request when the server no longer holds it (after a
 // restart, a model switch, or many other sessions); each agent's prompt is read once and saved.
@@ -8,16 +8,16 @@
 // subagent; a wrapper around fetch (the AI SDK calls the global fetch) reads those marks, takes them off
 // and lets carl-cache.js prepare the request body; when a reply that ends the turn has streamed, the
 // session is saved before OpenCode sees the end.
-// Options: { provider: "<our provider id>", cacheApi: "<the dashboard's cache API>" } (configure.py).
+// Options: { provider: "<our provider id>", cacheApi: "<the dashboard API>" } (configure.py).
 // Export nothing else from this file: older OpenCode versions call every export of the entry module as
 // a plugin function.
 import { CarlCache, debugLog, errorText, obj, splitOpenCode } from "./carl-cache.js";
-import { checkOnce, watchApplied } from "./carl-panel.js";
+import { checkOnce, restartNotice, watchApplied } from "./carl-panel.js";
 
 /** @typedef {import("./carl-cache.js").Meta} Meta */
 /**
  * One per OpenCode process (the plugin can load more than once): the fetch before the wrapper, a cache
- * for each server, the dashboard's cache API.
+ * for each server, the dashboard API.
  * @typedef {{ original: typeof fetch, caches: Map<string, CarlCache>, cacheApi?: string }} Shared
  */
 
@@ -73,9 +73,9 @@ export default {
   id: "carl-cache",
   server: async ({ client }, options) => {
     const ours = typeof options?.provider === "string" ? options.provider : "llamacpp";
-    checkOnce();                  // without the sync service: a config pushed from the server, applied once
-    watchApplied((v) => {         // OpenCode reads its config when it starts
-      const message = `CARL: the server's client config ${v} was applied (models, windows): restart OpenCode to use it.`;
+    checkOnce();                  // without the sync service: a config the dashboard sent, applied once
+    watchApplied(() => {          // OpenCode reads its config when it starts
+      const message = restartNotice("opencode");
       void client.app.log({ body: { service: "carl-cache", level: "info", message } }).catch(() => {});
       void client.tui.showToast({ body: { title: "CARL", message, variant: "info", duration: 15000 } }).catch(() => {});
     });

@@ -76,7 +76,7 @@ macOS sets a maximum for the memory that the GPU can use: the Metal value `recom
 
 - The default is **96K tokens for each slot**, for all models.
 - **96K is the minimum:** users need that much context to work. The catalogue, the custom-model defaults and Auto-tune never select less if 96K fits.
-- The Settings tab shows a warning colour (yellow, red) only for windows above 96K.
+- The Server panel warns (a ⚠ sentence under the table) only about a context in the very slow zone. A context of 96K or less never gets a warning.
 - You can select a larger window. Longer windows work. But each cold read of a long session is slower, and each new token is slower.
 
 The table shows measurements on the 35B (q4_0 KV, 2 slots, M3 Pro 36 GB, `tools/llama-kv-longctx.py`, 2026-10-01):
@@ -121,7 +121,7 @@ Qwen3.8 (`qwen35`) and Qwen3.6-35B-A3B (`qwen35moe`) are **hybrid** models:
 | KV at 256K, q4_0 | 4.5 GiB | 1.41 GiB |
 | Recurrent state (for each sequence) | ~150 MiB | ~63 MiB |
 | Context checkpoints (up to 8) | ≤ 8 × ~150 MiB = 1.2 GiB | ≤ 8 × ~63 MiB = 0.5 GiB |
-| Prompt cache (`--cache-ram`, auto at 2 × 96K, M3 Pro) | q4_0 4864 MiB (~276K tokens), q8_0 1792 MiB (~54K tokens) | q4_0 2560 MiB (~466K tokens), q8_0 1792 MiB (~173K tokens) |
+| RAM cache (`--cache-ram`, auto at 2 × 96K, M3 Pro) | q4_0 4864 MiB (~276K tokens), q8_0 1792 MiB (~54K tokens) | q4_0 2560 MiB (~466K tokens), q8_0 1792 MiB (~173K tokens) |
 
 **Cross-checks:**
 - The 2.25 and 4.25 GiB of the 27B at 128K agree with earlier measurements.
@@ -133,6 +133,6 @@ Qwen3.8 (`qwen35`) and Qwen3.6-35B-A3B (`qwen35moe`) are **hybrid** models:
 - **35B:** the KV cache costs little memory. At 128K, `--kv q8` costs approximately 0.6 GiB more. A 256K q4 window costs approximately 0.7 GiB more than 128K. With q8 at 96K, the 35B read prompts approximately 4% faster, with the same decode speed (see the next section).
 - **27B:** the KV cache is the largest part of the context cost. For this reason, q4_0 is the default (−2 GiB at 128K against q8_0).
 
-## The RAM prompt cache
+## The RAM cache
 
-The RAM prompt cache and its measurements are on the page [Caching](caching.md#llamacpps-own-caches).
+The RAM cache (`--cache-ram`) and its measurements are on the page [Caching](caching.md#llamacpps-own-caches).

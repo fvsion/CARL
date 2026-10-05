@@ -33,7 +33,7 @@ The installer writes these settings into `~/.config/opencode/opencode.json` (tem
 
 | Item | Where | What it does |
 |---|---|---|
-| `carl-cache` | `plugin` in `opencode.json` | The disk prompt cache ([Caching](caching.md)). `NO_CACHE=1` leaves it out. |
+| `carl-cache` | `plugin` in `opencode.json` | The disk cache ([Caching](caching.md)). `NO_CACHE=1` leaves it out. |
 | `carl-model-check` | `plugin` in `opencode.json` | Warns when the selected model is not the one that the server runs, is not installed, or loads. `NO_MODEL_CHECK=1` leaves it out. |
 | `subagents-sidebar` | `~/.config/opencode/tui.json` | A live list of the subagents. `NO_SIDEBAR=1` leaves it out. |
 | `session-switcher` | `~/.config/opencode/tui.json` | A session switcher in the prompt box, and `/switch`. `NO_SWITCHER=1` leaves it out. |

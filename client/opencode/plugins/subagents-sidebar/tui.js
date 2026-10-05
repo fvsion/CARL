@@ -20,7 +20,7 @@
 // Read-only; no network or file access.
 import { createElement, insert, setProp } from "@opentui/solid";
 import { createSignal } from "solid-js";
-import { asElement, cut, nodes, routeSessionID, rows } from "./carl-tui.js";
+import { asElement, cut, duration, nodes, routeSessionID, rows } from "./carl-tui.js";
 
 /** @typedef {import("@opencode-ai/plugin/tui").TuiPluginModule} TuiPluginModule */
 /** @typedef {import("./carl-tui.js").Theme} Theme */
@@ -56,12 +56,6 @@ const SPIN = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "�
 
 const { box, text } = nodes({ createElement, insert, setProp });
 
-/** @param {number} ms @returns {string} e.g. 42s, 1m08s, 2h05m */
-function dur(ms) {
-  const s = Math.max(0, Math.floor(ms / 1000));
-  return s >= 3600 ? `${Math.floor(s / 3600)}h${String(Math.floor((s % 3600) / 60)).padStart(2, "0")}m`
-       : s >= 60 ? `${Math.floor(s / 60)}m${String(s % 60).padStart(2, "0")}s` : `${s}s`;
-}
 /** @param {number} n @returns {string} e.g. 950, 5.1k, 12k */
 function kfmt(n) {
   return n >= 1000 ? `${(n / 1000).toFixed(n >= 10000 ? 0 : 1)}k` : String(n || 0);
@@ -345,7 +339,7 @@ const plugin = {
 
       /** first line: icon, agent, task, time on the right @param {Subagent} s @param {string} icon @param {Color} col @param {number} ms */
       const line = (s, icon, col, ms) => {
-        const right = " " + dur(ms);
+        const right = " " + duration(ms);
         const first = `${icon} ${s.agent || "agent"}`;
         return box({ width: "100%", flexDirection: "row" }, [
           text(col, first),

@@ -11,12 +11,12 @@
 | API | The OpenAI API (`/v1/chat/completions`, `/v1/models`) and the Bearer key `~/.config/carl/api-key` |
 | Weights | GGUF files in `~/models/gguf/`: the catalogue models and any other GGUF |
 | Catalogue | Qwen3.6-35B-A3B (Q4 and IQ3), Qwen3.8-27B stock (Q4, Q3, IQ3), Qwen3.8-27B abliterated (orcarouter: Q4, Q3, IQ3), Heretic 35B-A3B abliterated (Q4, IQ3), Qwen3.8-9B Distill ([Models](models.md)) |
-| Default model | Auto fit's pick for this Mac (`llama.model = auto`) |
-| KV cache | Real q4_0 (default) or q8_0, allocated one time with no bf16 copy. `--kv` sets it. |
+| Default model | Auto fit's choice for this Mac (`llama.model = auto`) |
+| Context memory (KV cache) | Real q4_0 (default) or q8_0, allocated one time with no bf16 copy. `--kv` sets it. |
 | Usable context | 96K for each slot by default, from 4K to 256K (`--ctx`) |
 | Memory | The server allocates the full KV cache at start. The memory stays flat during a session (measured from 56K to 81K tokens). |
-| Prompt reuse | Context checkpoints (8, at least 4K tokens apart) at user-message boundaries. A RAM prompt cache of 1–8 GiB ([RAM prompt cache](caching.md#the-ram-prompt-cache-and-checkpoints-measured-2026-10-02)). A disk prompt cache for OpenCode and Pi ([Caching](caching.md)). |
-| Speculation | MTP head + n-gram (`draft-mtp,ngram-mod`). The draft count is set for each model. |
+| Prompt reuse | Context checkpoints (8, at least 4K tokens apart) at user-message boundaries. A RAM cache of 1–8 GiB ([RAM cache](caching.md#the-ram-cache-and-checkpoints-measured-2026-10-02)). A disk cache for OpenCode and Pi ([Caching](caching.md)). |
+| Speculation | MTP head + n-gram (`draft-mtp,ngram-mod`). The number of guesses is set for each model. |
 | Decode (27B, M3 Pro) | 10.5–11 tok/s on new text, 27 tok/s when the model writes text again |
 | Prompt read (27B, cold, M3 Pro) | ~85–90 tok/s at 2–9K, ~56–65 tok/s at 66K |
 | Thinking off from OpenCode | Yes: the `none` variant (patched template) |
@@ -41,9 +41,24 @@
 - `host/serve.sh` gives the `llama` command to `host/serve-llama.sh`.
 - `./carl.sh` with no arguments opens the dashboard. If a server runs on port 8080, the dashboard attaches to it.
 - If no server runs, `./carl.sh` starts llama.cpp with the saved settings.
-- If no model is downloaded, `./carl.sh` first offers to download auto fit's pick for this Mac (`llama-fit.py --pick-default`: the whole catalogue, the everyday goal).
+- If no model is downloaded, `./carl.sh` first offers to download Auto fit's choice for this Mac (`llama-fit.py --pick-default`: the whole catalogue, the everyday goal).
 - If you answer no, or no model fits, the dashboard opens without a server.
-- `./carl.sh -h` shows the help. [Server flags](#server-flags) lists the flags of `serve-llama.sh`.
+- `./carl.sh -h` shows the help. `./carl.sh help COMMAND`, `./carl.sh COMMAND --help` and `./carl.sh COMMAND -h` show the help of one command (`tools/carl_help.py`; it wraps to the width of the terminal). [Server flags](#server-flags) lists the flags of `serve-llama.sh`.
+
+**The start lines.** Before the model loads, the launcher writes one sentence for each setting, with its unit and its source:
+
+| Line | Example |
+|---|---|
+| The model | `CARL starts the server: NAME (FILE).` |
+| The address | `Address: http://127.0.0.1:8080. Only this Mac can use the server.` |
+| Slots and context | `Slots: 2 (from Auto-tune). Context: 96K tokens per slot (from Auto-tune).` With `--slots auto`: `Slots: 2 (auto: two slots fit).` |
+| Context memory and RAM cache | `Context memory type: q4 (from Auto-tune). RAM cache: 8.0 GiB.` |
+| Speculation | `Speculation: MTP + n-gram, 2 guesses (from Auto-tune).` With a drafter: `The MTP drafter is FILE.` |
+| Sliding window (Gemma) | `Sliding window: full cache. CARL can restore saved sessions and prompts (cache.swa = auto).` or `Sliding window: window cache. It uses less memory, but CARL cannot restore saved sessions and prompts (cache.swa = auto).` |
+| The log | `Log file: PATH. Batch: -ub 512. Your settings: ./carl.sh config show.` |
+
+- The sources (`CARL_SOURCES`) are: `from your option` (a flag), `from the environment`, `from your settings` (`config.json`), `from Auto-tune`, `from the catalogue`, `from the model file`, `from Auto fit: the largest context that fits`, and `CARL's default`.
+- Each refusal starts with `error:`. The dashboard shows these lines when a start fails.
 
 ### Slots
 
@@ -59,7 +74,7 @@
 
 ### The caches
 
-The slots, the RAM prompt cache (`--cache-ram`, 1–8 GiB from the free RAM) and the disk prompt cache of OpenCode and Pi (`--slot-save-path`) are on the page [Caching](caching.md).
+The slots, the RAM cache (`--cache-ram`, 1–8 GiB from the free RAM) and the disk cache of OpenCode and Pi (`--slot-save-path`) are on the page [Caching](caching.md).
 
 ### Two models at the same time do not fit
 
@@ -87,7 +102,7 @@ The slots, the RAM prompt cache (`--cache-ram`, 1–8 GiB from the free RAM) and
 
 The catalogue (`tune.spec`, `tune.spec_n`) or the Auto-tune result sets the speculation:
 
-| Model | Speculation | Draft tokens |
+| Model | Speculation | Guesses |
 |---|---|---|
 | 27B dense (Q4, Q3) | MTP + n-gram | 1 |
 | 35B MoE (Q4, stock and Heretic) | MTP + n-gram | 2 |
@@ -98,16 +113,16 @@ The catalogue (`tune.spec`, `tune.spec_n`) or the Auto-tune result sets the spec
 | Gemma 4 E4B (MTP drafter) | MTP | 2 (measured: [Gemma 4](models.md#gemma-4)) |
 | Gemma 4 12B, 26B-A4B, 31B (MTP drafter) | MTP + n-gram | 2 (a default, not measured) |
 
-- More drafts help a MoE: with 3B active parameters, it costs little to verify more tokens.
-- 2 drafts lose on IQ quants ([IQ3 speculation](models.md#iq3-speculation-measured-2026-10-03)).
-- A custom model gets MTP + n-gram with 1 draft when its GGUF has an MTP head, else n-gram with 2 drafts.
+- More guesses help a MoE: with 3B active parameters, it costs little to verify more tokens.
+- 2 guesses lose on IQ quants ([IQ3 speculation](models.md#iq3-speculation-measured-2026-10-03)).
+- A custom model gets MTP + n-gram with 1 guess when its GGUF has an MTP head, else n-gram with 2 guesses.
 - **A separate MTP drafter (Gemma 4).** The model file has no MTP head. The catalogue entry names a drafter file (`draft`). `tools/carl.py launch-env` gives `MTP_SOURCE=drafter` and `DRAFT=<the drafter's path>` when the drafter is downloaded. The launcher adds `-md "$DRAFT"` when `SPEC` contains `draft-mtp`, also when `SPEC` comes from the environment. The drafter uses the KV cache of the model, so only its weights add memory: `llama-fit.py --plan` and `--check` get `--draft "$DRAFT"` and count them.
 - **No MTP available.** `MTP_SOURCE=none` means that the file has no MTP head and that no drafter is downloaded. If the speculation uses MTP, the start uses `ngram-mod` instead and tells you one time (`launch-env` for a configured `SPEC`, the launcher for a `SPEC` from the environment).
 - `DRAFT` and `MTP_SOURCE` always come from `tools/carl.py`. The launcher ignores them in the environment.
 
 ### The dashboard and the launch model
 
-- The dashboard is `tools/llama-monitor.py` (since 2026-10-01). It has the tabs Overview, Connect, Requests, Log and Settings ([The dashboard](architecture.md#the-dashboard)).
+- The dashboard is `tools/llama-monitor.py` (since 2026-10-01). It has the tabs Live, Connect, Requests, Log and Settings ([The dashboard](architecture.md#the-dashboard)). Each screen has two detail levels: simple and full (`D`).
 - Use only the left click. The dashboard does not use the right click, because terminals such as iTerm2 show their own context menu.
 - A config that you copy from the Connect tab contains the API key. On the screen, the key stays masked until you show it.
 
@@ -133,6 +148,7 @@ When you start from a terminal, `run_server` (`host/common.sh`) does these steps
 - If both folders exist, CARL uses `~/.config/carl` and does not change the old folder.
 - Until the move, the readers use the old folder. The key order is `API_KEY_FILE` > `~/.config/carl/api-key` > `~/.config/llm-deploy/api-key` > `~/.mtplx/api-key`.
 - `CARL_CONF_DIR` turns the move off.
+- **`CARL_CONF_DIR`** sets a different settings folder. `tools/carl.py` (`domain/confdir.py`) and the launchers (`host/common.sh`) both use it: `config.json`, `models.json`, the disk cache (`slots/`) and `router-presets.ini` go there. The API key stays in `~/.config/carl`. Before this change, the launchers always used `~/.config/carl`, so a test run with a different folder wrote the real one.
 - On the client side, `client/install.sh` moves the same folder. `configure.py` (`OLD_NAMES`) renames CARL's own pieces:
 
 | Before | Now |
@@ -150,7 +166,7 @@ When you start from a terminal, `run_server` (`host/common.sh`) does these steps
 Router mode is opt-in: `llama.mode = router`, `LLAMA_MODE=router` or `--router` (`carl_core/domain/router.py`, the router branch of `serve-llama.sh`).
 - The router of llama.cpp 0.5.0 (`llama-server --models-preset FILE --models-max 1`, no `-m`) starts one child `llama-server` for the loaded model on a free port. It sends each request to the child by the `model` field.
 - The presets file is `~/.config/carl/router-presets.ini`. The launcher writes it again at each router start.
-- The start banner lists the models that the router offers, the models that it leaves out, and the model that it loads first.
+- The start lines list the models that the router offers, each with its setup (for example `2 slots × 96K tokens, q4, window cache`), the models that it leaves out (with the reason), and the model that it loads first.
 
 Measured on 2026-10-03 (M2 Max):
 - `--models-max 1`: a request for a different model stops the loaded model ("evicting idle LRU"). The router waits until it **exits**, then starts the new model. Two models are never in memory. A busy model completes its request first, and the new request waits.
@@ -164,7 +180,7 @@ The presets INI:
 
 | Section | Contents |
 |---|---|
-| `[*]` | CARL's shared flags: jinja, the reasoning format, `preserve_thinking`, `-ngl 999`, `-fa on`, batch, ubatch, checkpoints, metrics, no mmproj, `slot-save-path` |
+| `[*]` | CARL's shared flags: jinja, the reasoning format, `preserve_thinking`, `-ngl 999`, `-fa on`, `fit = off`, batch, ubatch, checkpoints, metrics, no mmproj, `slot-save-path` |
 | One section for each downloaded model | Its effective settings: `ctx-size` (slots × window), `parallel`, KV types, `cache-ram`, sampling, `spec-type` and `spec-draft-n-max`, the thinking-toggle `chat-template-file` |
 | A model with a downloaded MTP drafter, speculation with MTP | `spec-draft-model = <the drafter's path>` (the `-md` of a single start) |
 | With 2 or more slots | `kv-unified`, `kv-unified-per-slot`, `cache-idle-slots = false`, `slot-prompt-similarity = 0.5` |
@@ -175,7 +191,7 @@ The presets INI:
 - A model that fails the start check is left out. A comment in the file and the banner tell why.
 - The command-line arguments of the router override every preset. Thus, the router gets only the host, the port, the key file and the log flags (and `llama.extra_args`).
 - The log of the router holds the lines of its children as `[PORT] M.SS.mmm.uuu L ...`, with the clock of the child. The dashboard removes the prefix and moves the time by the "spawning server instance ... on port PORT" line. It hides the "proxying request" lines of the router (one for each dashboard poll).
-- **Disadvantage:** each switch empties the prompt cache. The new child starts cold. OpenCode and Pi put a session back from the disk cache. Other clients read the whole conversation again, also when you switch back.
+- **Disadvantage:** each switch empties the RAM cache. The new child starts cold. OpenCode and Pi put a session back from the disk cache. Other clients read the whole conversation again, also when you switch back.
 
 ### Network modes
 
@@ -227,26 +243,27 @@ The installer takes the API key from the first of these sources:
 | Memory check | `tools/llama-fit.py --check` (see below) |
 
 - **Port guard history:** before this guard, a second `serve.sh` (10:08 on 2026-10-01) failed to bind. But it had already pointed the `latest` symlink to its own 4-line failure log.
-- **Memory check:** `check_start()` in `carl_core/domain/fit.py` compares weights + KV + buffers with the GPU limit ([GPU memory limit](memory.md#gpu-memory-limit-and-what-fits)). The dashboard uses the same function.
+- **Memory check:** `check_start()` in `carl_core/domain/fit.py` compares weights + context memory + buffers with the GPU memory limit ([GPU memory limit](memory.md#gpu-memory-limit-and-what-fits)). The dashboard uses the same function.
   - Over the limit, the start is **refused** (exit 3, then the launcher exits 1). Such a start does not load, or it makes the Mac swap and become very slow.
-  - The message gives the need and the limit.
-  - It gives the largest window that fits, with these slots and with 1 slot.
-  - It gives auto fit's alternative: the best downloaded model, and a better catalogue model to download.
+  - The first line is one `error:` sentence with the need and the limit: `error: NAME does not fit this Mac with 4 slots × 256K tokens (q8): it needs 24.97 GiB, and the GPU memory limit is 24.96 GiB. …`. Two decimals show when the two values round to the same number.
+  - It gives the largest context that fits, with these slots and with 1 slot.
+  - It gives Auto fit's choice: the best downloaded model, and a better catalogue model to download.
   - `FIT_CHECK=0` is the expert override. A check that cannot run (an unreadable header) only shows a warning.
 - **`/metrics` gauges reset at each read** (`--metrics` turns on this Prometheus endpoint). `prompt_tokens_seconds` and `predicted_tokens_seconds` cover only the time since the last read. Thus, calculate averages from the `*_total` counters. The dashboard does this.
 - **The server does not log its KV cache size** at the default log level. Thus, the dashboard calculates it ([Context memory](memory.md#context-memory-kv-cache-and-recurrent-state)).
 
 ### Auto fit and the start model
 
-- With `llama.model = auto`, `tools/carl.py` (`resolve_launch`) starts auto fit's pick (`llama.auto_goal`, `llama.auto_fit`).
-- If the pick is not downloaded, it starts the best downloaded stock model that fits, and tells you. It never selects an abliterated model.
+- With `llama.model = auto`, `tools/carl.py` (`resolve_launch`) starts Auto fit's choice (`llama.auto_goal`, `llama.auto_fit`).
+- If the choice is not downloaded, it starts the best downloaded stock model that fits, and tells you. It never selects an abliterated model.
 
 **Auto fit** (`carl_core/domain/autofit.py`, pure, with unit tests):
 - The candidates are the ranked stock models: a rank, and not abliterated. A custom model is a candidate only when its card says `auto_fit: true`.
 - The goal selects the family first: `everyday` = the fast builds (`arch: moe`, and a dense build with `fast: true`, the Gemma 4 E4B), `hard-code` = `arch: dense`. The other builds are the fallback.
 - The passes, in this order: 2 × 96K, then 1 × 96K, then 1 × the largest window ≥ 32K. The first pass that a candidate of the family meets wins, best rank first.
 - The memory allowed is min(GPU limit, RAM − reserve). The reserve is as for the RAM cache: 6 GiB, 10 GiB with the VM network, or `RESERVE_GB`.
-- The result gives each better-ranked candidate that was not selected, and why. Examples: "needs X GiB for 2 × 96K, this Mac allows Y", "not downloaded", "for the other goal", "header unreadable".
+- The result gives each candidate with a better quality rank that was not selected, and why (`Rejection.line()`). Examples: `qwen3.8-27b (quality rank 1) is dense: Auto fit keeps it for the hard code goal`, and for a model that fits no pass, a reason that starts with `does not fit:`.
+- `Plan.label()` gives the plan in short (`2 × 96K tokens, q4`), `Plan.describe()` in words (`2 slots × 96K tokens (q4)`).
 - If the window of the pick is less than 96K, an `auto` start uses that window, unless `config.json` sets one. `CARL_SOURCES` then shows `ctx:auto-fit`.
 - Offline (no header can be read), the download offer and `./carl.sh download default` use the catalogue `default`. If the weights of the default alone do not fit, they use `default_small`.
 
@@ -388,18 +405,19 @@ This table shows the flags that `host/serve-llama.sh` gives to `llama-server` (s
 | Model name | `--alias NAME` | The CARL name of the model |
 | Offload | `-ngl 999` | The whole model is on the GPU (Metal). |
 | Flash attention | `-fa on` | Necessary for a quantized V cache. It was on for each measurement. |
-| KV cache | `-ctk q4_0 -ctv q4_0` (`--kv q8` → q8_0) | q4 against q8: +16% prefill, about 2 GB less memory, the same decode speed, 8/8 needle recall at 66K. Do not mix K and V types (prefill is about 5× slower). |
+| Memory fitting | `--fit off` (router presets: `fit = off`) | CARL sets `-ngl` and `-c`, and checks the memory itself (`llama-fit.py --check`). llama.cpp's own memory fitting only probes here. Its probe fails for the Gemma 4 MTP drafter ("Gemma4Assistant requires ctx_other"), and that showed as 1 error on every Gemma start. |
+| Context memory (KV cache) | `-ctk q4_0 -ctv q4_0` (`--kv q8` → q8_0) | q4 against q8: +16% prefill, about 2 GB less memory, the same decode speed, 8/8 needle recall at 66K. Do not mix K and V types (prefill is about 5× slower). |
 | Context | `-c` = slots × 96K (`--ctx` sets the window for each slot) | Long windows read cold prompts and decode much more slowly ([Context length](memory.md#context-length-what-longer-windows-cost)). The model maximum is 262144. The server allocates the whole KV cache at start. |
 | Batching | `-b 2048 -ub 512` | `-ub 512` gave the best measured result (90.5 tok/s vs 88.6 and 86.1 for 1024 and 2048). |
 | Slots | `--parallel N`; with 2 or more: `--kv-unified --kv-unified-per-slot CTX --no-cache-idle-slots -sps 0.5` | The main OpenCode session and a subagent each keep their own slot and cache. |
-| Prompt cache | `--ctx-checkpoints 8 --checkpoint-min-step 4096 --cache-ram N` | Checkpoints let follow-up turns use the cache again, because the recurrent layers of Qwen cannot trim it. The RAM cache holds conversations that are not in a slot (each held state is 2–2.5 GiB). N = RAM − the model's need − the reserve, 1–8 GiB. If the size calculation fails, N is 4096. |
-| Disk cache | `--slot-save-path ~/.config/carl/slots` | OpenCode and Pi save and restore prompt states here ([Caching](caching.md)). |
+| RAM cache and checkpoints | `--ctx-checkpoints 8 --checkpoint-min-step 4096 --cache-ram N` | Checkpoints let follow-up turns use the cache again, because the recurrent layers of Qwen cannot trim it. The RAM cache holds conversations that are not in a slot (each held state is 2–2.5 GiB). N = RAM − the model's need − the reserve, 1–8 GiB. If the size calculation fails, N is 4096. |
+| Disk cache | `--slot-save-path ~/.config/carl/slots` (`CARL_CONF_DIR/slots` when it is set) | OpenCode and Pi save and restore prompts and sessions here ([Caching](caching.md)). |
 | Sliding window | `--swa-full` (only for a sliding-window model, when `cache.swa` gives full) | A restored state needs every layer at full length ([Sliding-window models](caching.md#sliding-window-models)). |
 | Projector | `--no-mmproj` | CARL uses text only. |
 | Templates | `--jinja --reasoning-format deepseek`, `--chat-template-kwargs '{"preserve_thinking":true}'`, `--chat-template-file` (patched) | The server sends the reasoning to `reasoning_content`. `reasoning_effort: none` turns off thinking ([How thinking works](thinking.md#how-thinking-works)). |
 | Sampling | `--temp 1.0 --top-p 0.95 --top-k 20 --min-p 0 --presence-penalty 0 --repeat-penalty 1.0` | The Qwen values for thinking mode ([Sampling](sampling.md#sampling-and-output-limits)). `TEMP`, `TOP_P`, `TOP_K`, `MIN_P`, `PRESENCE`, `REPEAT` override them. |
 | Speculation | `--spec-type TYPE --spec-draft-n-max N` (from the tune of each model; none with `SPEC=none`) | The best of the modes that were measured on each model ([Performance](performance.md#performance-measured), [IQ3 speculation](models.md#iq3-speculation-measured-2026-10-03)). |
-| MTP drafter | `-md DRAFT` (only a model with a separate drafter, Gemma 4, when `--spec-type` contains `draft-mtp`) | The drafter gives MTP speculation to a model file without an MTP head. On the Gemma 4 E4B: 76.0 tok/s with 2 drafts, 61.1 without speculation. |
+| MTP drafter | `-md DRAFT` (only a model with a separate drafter, Gemma 4, when `--spec-type` contains `draft-mtp`) | The drafter gives MTP speculation to a model file without an MTP head. On the Gemma 4 E4B: 76.0 tok/s with 2 guesses, 61.1 without speculation. |
 | Logging | `--log-file ~/models/logs/llama-server-<ts>.log --log-timestamps --log-prefix` | `llama-server-latest.log` points to the newest log. Use `tools/llama-log.sh` to read it. `LOG_FILE=none` turns the file off. |
 | Metrics | `--metrics` | A Prometheus endpoint at `/metrics` |
 | Keep awake | `caffeinate -i -w <server pid>` | If the Mac goes to sleep, requests stop in the middle of the prompt. |
@@ -412,4 +430,4 @@ This table shows the flags that `host/serve-llama.sh` gives to `llama-server` (s
 - These environment variables override the settings: `CTX`, `KV`, `KV_K`, `KV_V`, `SLOTS`, `UB`, `BATCH`, `CKPT`, `CKPT_STEP`, `CACHE_RAM`, `RESERVE_GB`, `SPEC`, `SPEC_N`, the sampling variables, `MODEL`, `ALIAS`, `HOST`, `PORT`, `NET`, `LLAMA_MODE`, `SWA_MODE`, `API_KEY_FILE`, `LOG_FILE`, `THINK_TOGGLE`, `KEEP_AWAKE`, `MONITOR`, `FIT_CHECK`.
 - `config.json` can hold the same settings ([Settings](#settings-configjson-auto-tune-and-the-catalogue)).
 - Extra arguments go directly to `llama-server`. `llama.extra_args` in `config.json` does the same.
-- `./carl.sh -h` lists the commands. `./carl.sh help llama` lists the flags and the variables with the current defaults.
+- `./carl.sh -h` lists the commands. `./carl.sh help llama` lists the options. `./carl.sh help env` lists the environment variables.

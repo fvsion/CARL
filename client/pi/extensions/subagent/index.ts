@@ -12,7 +12,9 @@
 //   coder gets web search when it is installed, but no nested subagents;
 // - background: true starts a subagent and returns at once; its result comes
 //   back to the session as a message when it ends (/subagents lists and stops
-//   the running ones). CARL's coder runs there unless the call says false.
+//   the running ones). CARL's coder runs there unless the call says false;
+// - a message renderer shows that result as "Coder finished (42 s)" and its
+//   text, collapsed (result.js); the model still reads the <subagent> text.
 /**
  * Subagent Tool - Delegate tasks to specialized agents
  *
@@ -42,9 +44,10 @@ import {
 	type ThemeColor,
 	withFileMutationQueue,
 } from "@earendil-works/pi-coding-agent";
-import { Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
+import { Box, Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { type AgentConfig, type AgentScope, discoverAgents } from "./agents.ts";
+import { duration, parseResult, resultBody, resultTitle } from "./result.js";
 
 const MAX_PARALLEL_TASKS = 8;
 const MAX_CONCURRENCY = 4;
@@ -181,6 +184,8 @@ interface SubagentDetails {
 	agentScope: AgentScope;
 	projectAgentsDir: string | null;
 	results: SingleResult[];
+	// CARL: a background result's facts, for its message renderer (result.js)
+	background?: { id: string; agent: string; state: "done" | "failed" | "stopped"; took: string };
 }
 
 function getFinalOutput(messages: Message[]): string {
@@ -574,9 +579,9 @@ function backgroundGuideline(coder: string): string {
 	return `Start "${coder}" tasks with background: true, so you and the user can go on while it works; check its result when the message comes back.`;
 }
 
+// CARL: the time since t, as CARL writes times everywhere (42 s, 3 min, 1 h 12 min)
 function ago(t: number): string {
-	const s = Math.round((Date.now() - t) / 1000);
-	return s < 90 ? `${s} s` : `${Math.round(s / 60)} min`;
+	return duration(Date.now() - t);
 }
 
 export default function (pi: ExtensionAPI) {
@@ -611,12 +616,14 @@ export default function (pi: ExtensionAPI) {
 			if (closing) return;
 			showJobs();
 			const body = text.length > PER_TASK_OUTPUT_CAP ? `${text.slice(0, PER_TASK_OUTPUT_CAP)}\n... (cut)` : text;
+			const took = ago(job.started);
 			pi.sendMessage(
 				{
 					customType: "subagent-result",
-					content: `<subagent id="${job.id}" agent="${job.agent}" state="${state}" took="${ago(job.started)}">\n${body || "(no output)"}\n</subagent>`,
+					// the model reads this; the screen shows it through the renderer below
+					content: `<subagent id="${job.id}" agent="${job.agent}" state="${state}" took="${took}">\n${body || "(no output)"}\n</subagent>`,
 					display: true,
-					details: details(results),
+					details: { ...details(results), background: { id: job.id, agent: job.agent, state, took } },
 				},
 				{ triggerTurn: true, deliverAs: "followUp" },
 			);
@@ -626,6 +633,26 @@ export default function (pi: ExtensionAPI) {
 			.catch((e: unknown) => finish(job.abort.signal.aborted ? "stopped" : "failed", e instanceof Error ? e.message : String(e), []));
 		return job;
 	};
+
+	// CARL: a background result as "Coder finished (42 s)" and its text (the first lines; Ctrl+O shows all)
+	pi.registerMessageRenderer<SubagentDetails>("subagent-result", (message, { expanded, outputPad }, theme) => {
+		const r = parseResult(message.content, message.details);
+		const icon =
+			r.state === "done" ? theme.fg("success", "✓") : r.state === "failed" ? theme.fg("error", "✗") : theme.fg("warning", "■");
+		const body = resultBody(r.text, expanded);
+		const box = new Box(outputPad, 1, (t) => theme.bg("customMessageBg", t));
+		box.addChild(new Text(`${icon} ${theme.fg("toolTitle", theme.bold(resultTitle(r)))}`, 0, 0));
+		if (body.lines.length === 0) box.addChild(new Text(theme.fg("muted", "No output."), 0, 0));
+		else if (expanded) box.addChild(new Markdown(r.text, 0, 0, getMarkdownTheme()));
+		else box.addChild(new Text(theme.fg("toolOutput", body.lines.join("\n")), 0, 0));
+		if (body.more) box.addChild(new Text(theme.fg("muted", `${body.more} more lines (Ctrl+O to expand)`), 0, 0));
+		if (expanded) {
+			const run = message.details?.results?.[0];
+			const usage = run ? formatUsageStats(run.usage, run.model) : "";
+			box.addChild(new Text(theme.fg("dim", [r.id && `background job ${r.id}`, usage].filter(Boolean).join(" · ")), 0, 0));
+		}
+		return box;
+	});
 
 	pi.on("session_shutdown", async () => {
 		closing = true;
@@ -640,9 +667,9 @@ export default function (pi: ExtensionAPI) {
 				return;
 			}
 			const rows = [...jobs.values()].map((j) => `${j.id} · ${j.agent} · ${ago(j.started)} · ${j.task.replace(/\s+/g, " ").slice(0, 60)}`);
-			const pick = await ctx.ui.select("Subagents in the background (select one to stop it)", rows);
+			const pick = await ctx.ui.select("Subagents in the background. Select one to stop it.", rows);
 			const job = pick ? jobs.get(pick.split(" · ")[0]) : undefined;
-			if (job && (await ctx.ui.confirm(`Stop ${job.id} (${job.agent})?`, "Its work so far stays on disk; its result says it was stopped."))) {
+			if (job && (await ctx.ui.confirm(`Stop ${job.id} (${job.agent})?`, "Its work so far stays on the disk. Its result says that it was stopped."))) {
 				job.abort.abort();
 			}
 		},

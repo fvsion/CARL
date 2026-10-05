@@ -35,7 +35,7 @@ class ConnectActions:
     def preview_text(self, kind: str, d: ServerData, mask: bool = False) -> str:
         """Config text for the running server. mask=True hides the key (on-screen preview)."""
         if not d.up:
-            return "(no connection to the server yet: the config shows after the model loads)"
+            return "(No server runs. The config shows when the model is loaded.)"
         ep = self.endpoint
         rel = TEMPLATES.get(kind)
         templates = {}
@@ -58,11 +58,12 @@ class ConnectActions:
         ui.preview, ui.prev_scroll, ui.tab = kind, 0, 1
         ui.install_shown = False                # the preview takes the installer's place
         if not d.up:
-            ui.toast("no connection to the server: nothing copied")
+            ui.toast("No server runs: CARL copied nothing.")
             return
         ok = system.copy_to_clipboard(self.preview_text(kind, d))
         ui.copied = kind if ok else None
-        ui.toast(LABELS[kind] + (" copied to the clipboard" if ok else ": no clipboard. Select the text on the screen."))
+        ui.toast(LABELS[kind] + (" copied to the clipboard." if ok else ": CARL cannot use the clipboard here. Select the "
+                                                                        "text on the screen."))
 
     def install_action(self, act: str) -> None:
         """The Connect tab's installer: insall / insconfig ask first, insyes runs it, insno cancels
@@ -77,7 +78,7 @@ class ConnectActions:
         if act in ("insall", "insconfig"):
             if running:
                 ui.install_shown = True
-                ui.toast("the installer runs already: its output is below", 5)
+                ui.toast("The installer runs already. Its output is below.", 5)
             else:
                 ui.install_ask = "all" if act == "insall" else "config"
         elif act == "insyes" and ui.install_ask:
@@ -91,9 +92,9 @@ class ConnectActions:
             ui.install_shown = False
         elif act == "inscancel" and running:
             self.jobs.cancel_install()
-            ui.toast("installer stopped: you can safely run it again (the backups stay)", 8)
+            ui.toast("You stopped the installer. It is safe to run it again: the backups stay.", 8)
 
     def forget_clients(self) -> None:
         """The Clients panel's Forget: drop the clients not seen for a week."""
         n = self.jobs.forget_clients(FORGET_AFTER_S)
-        self.ui.toast(f"forgot {n} client(s) not seen for a week", 6)
+        self.ui.toast(f"CARL forgot {n} {'computer' if n == 1 else 'computers'} not seen for a week.", 6)

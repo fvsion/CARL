@@ -21,9 +21,12 @@
       ~/.config/carl/config.json      your settings (Settings tab, ./carl.sh config)
       ~/.config/carl/models.json      custom models, their cards, Auto-tune results (this Mac)
       ~/.config/carl/api-key          the shared API key (server and clients; made at the first start)
-      ~/.config/carl/slots/           the disk prompt cache (--slot-save-path)
+      ~/.config/carl/slots/           the disk cache (--slot-save-path)
       ~/.config/carl/router-presets.ini   the router presets (router mode only)
+      ~/.config/carl/dashboard.json   the dashboard's detail level (simple / full)
 ```
+
+`CARL_CONF_DIR` moves the files of `~/.config/carl` (not the API key) to a different folder. `tools/carl.py`, the launchers and the dashboard use it.
 
 | Fact | Detail |
 |---|---|
@@ -66,7 +69,7 @@
 | `fit`, `models`, `download`, `verify`, `delete`, `card` | The models and what fits this Mac |
 | `tune NAME` | Auto-tune ([Auto-tune](server.md#auto-tune)) |
 | `config`, `cache`, `push` | The settings file, the disk cache, the client config push |
-| `help [TOPIC]`, `-h` | The help. `--help-adv` lists every `llama-server` flag. |
+| `help COMMAND`, `COMMAND --help`, `COMMAND -h`, `-h` | The help of each command, from `tools/carl_help.py`. `--help-adv` lists every `llama-server` flag. An unknown command gives one `error:` line (exit 2). |
 
 `host/common.sh` functions:
 
@@ -95,14 +98,14 @@
 | `why` | The reason for each tuned value |
 | `ctx_zones`, `measured` | The context zones and the reference measurements |
 
-The top-level keys `default` and `default_small` are the offline fallback of auto fit. CARL uses them only when it cannot read the GGUF headers.
+The top-level keys `default` and `default_small` are the offline fallback of Auto fit. CARL uses them only when it cannot read the GGUF headers.
 
 ### `client/`
 
 | Path | What it is |
 |---|---|
-| `client/install-clients.sh` | Installs OpenCode and Pi from npm into `~/.local`. If necessary, it also installs a private Node 22 (Linux or macOS). It does not use sudo. |
-| `client/install.sh` | Writes the OpenCode and Pi configs. It reads `remote.json` first. Without it, the default is `--local` on macOS and `--vm` on Linux. It stores the API key, makes backups, sets the context limits and does a smoke test. |
+| `client/install-clients.sh` | Installs OpenCode and Pi from npm into `~/.local`. If necessary, it also installs a private Node 22 (Linux or macOS). It does not use sudo. `--help` shows its help page. |
+| `client/install.sh` | Writes the OpenCode and Pi configs. `--help` shows its help page (the options, the key sources, the switches). It reads `remote.json` first. Without it, the default is `--local` on macOS and `--vm` on Linux. It stores the API key, makes backups, sets the context limits and does a smoke test. |
 | `client/configure.py` | The non-destructive merge that `install.sh` uses (USERGUIDE.md, "Updating the client configs") |
 | `client/carl_models.py` | The OpenCode and Pi model entries, one for each installed model. It uses only the standard library. Its input is `client/installed-models.json` (git-ignored) or the server's `/v1/models` ids. |
 | `client/carl-sync.py` | The client config sync: `watch`, `once`, `apply`, `auto on\|off`, `status`, `register on\|off`. It runs `install.sh` again with the last switches. |
@@ -111,14 +114,14 @@ The top-level keys `default` and `default_small` are the offline fallback of aut
 | `client/pi/models.json` | The Pi config template |
 | `client/agents/coder.md`, `client/agents/delegation.md` | The **coder** subagent and the delegation rule for the main agent ([The coder subagent](models.md#the-coder-subagent)) |
 | `client/agents/browser.md` | The **browser** subagent of OpenCode (the Playwright MCP tools) |
-| `client/shared/carl-cache.js` | The prompt cache core ([Caching](caching.md)). `configure.py` copies it next to the plugin and the extension. |
-| `client/shared/carl-panel.js` | The `/carl` panel core |
-| `client/opencode/plugins/carl-cache/`, `client/pi/extensions/carl-cache/` | The prompt cache in OpenCode (it wraps `fetch`; `chat.headers` marks the session and the agent) and in Pi (`before_provider_request`, `message_end`) |
-| `client/opencode/plugins/carl-panel/`, `client/pi/extensions/carl-panel/` | The `/carl` panel: each CARL piece on this computer with its state, and the auto-apply switch of the config sync ([Clients on other computers](client-sync.md)) |
+| `client/shared/carl-cache.js` | The disk cache core ([Caching](caching.md)). `configure.py` copies it next to the plugin and the extension. |
+| `client/shared/carl-panel.js` | The `/carl` panel core: for each section, its lines (plain sentences), its details and its actions |
+| `client/opencode/plugins/carl-cache/`, `client/pi/extensions/carl-cache/` | The disk cache in OpenCode (it wraps `fetch`; `chat.headers` marks the session and the agent) and in Pi (`before_provider_request`, `message_end`) |
+| `client/opencode/plugins/carl-panel/`, `client/pi/extensions/carl-panel/` | The `/carl` panel: each CARL piece on this computer with its state, and the actions of the config sync ([Clients on other computers](client-sync.md)) |
 | `client/opencode/plugins/carl-model-check/` | An OpenCode server plugin (see below) |
 | `client/opencode/plugins/subagents-sidebar/` | An OpenCode TUI plugin: a live list of the subagents in the sidebar. `install.sh` adds it to `tui.json`. |
 | `client/opencode/plugins/session-switcher/` | An OpenCode TUI plugin: a session switcher in the prompt box (`‹ 2/3 ● title ›`), and `/switch` for a list of the recent sessions. `install.sh` adds it to `tui.json`. |
-| `client/pi/extensions/subagent/` | The official subagent extension of Pi (vendored, MIT). A patch adds the installed agents to the tool description. Thus, the model can delegate without help. |
+| `client/pi/extensions/subagent/` | The official subagent extension of Pi (vendored, MIT). A patch adds the installed agents to the tool description. Thus, the model can delegate without help. `result.js` formats the result of a background subagent for the screen (`✓ Coder finished (42 s)`, the first 3 lines). |
 
 **`carl-model-check`** (the `chat.params` hook):
 - Before each request to CARL's provider, it reads the server's `/v1/models`. The cache time is 5 s and the timeout is 1.5 s. It ignores errors.
@@ -137,14 +140,17 @@ The top-level keys `default` and `default_small` are the offline fallback of aut
 
 | Path | What it is |
 |---|---|
-| `tools/carl_core/domain/` | Pure logic (no I/O): `types`, `errors`, `settings`, `gguf`, `fit`, `autofit`, `models`, `cards`, `records`, `hf`, `launch`, `router`, `tuning`, `clientlist`, `apikey`, `confdir`, `ports` |
+| `tools/carl_core/domain/` | Pure logic (no I/O): `types`, `errors`, `settings`, `gguf`, `fit`, `autofit`, `models`, `cards`, `records`, `hf`, `launch`, `router`, `tuning`, `clientlist`, `apikey`, `confdir`, `ports`, `units` |
+| `tools/carl_core/domain/units.py` | The units of every screen: GB and MB for files, GiB and MiB for memory, K = 1024 tokens, tok/s, the durations. It replaces `fit.human_gb` and the `fmt.size`, `knum` and `dur` of the dashboard. |
+| `tools/carl_core/domain/cards.py` | The model cards. `card_rows()` gives the rows of `./carl.sh card` (the labels of the dashboard; for a custom model, every field with the key to set it). |
 | `tools/carl_core/adapters/` | The I/O: `json_files`, `filesystem`, `gguf_reader`, `system` (sysctl, the GPU limit, `netstat`), `huggingface`, `downloader`, `llama_server`, `api_key`, `console` |
 | `tools/carl_core/app.py`, `wiring.py` | The use cases, and the connection of the adapters |
 | `tools/carl.py` | A thin facade over `tools/carl_core`: its CLI and the API of the dashboard (see below) |
+| `tools/carl_help.py` | The help of `./carl.sh` and of each command (`help COMMAND`, `COMMAND --help`, `COMMAND -h`), and the text layout of the CLI: it wraps to `COLUMNS`, else to the width of the terminal, else to 80 columns (40 to 120). `tools/carl.py`, `tools/llama-fit.py` and `tools/carl-tune.py` use it. |
 | `tools/carl-tune.py` | Auto-tune (`./carl.sh tune NAME\|all [--quick\|--long]`). It saves the result in `~/.config/carl/models.json`. |
 | `tools/llama-monitor.py` | The dashboard. A thin launcher over the `tools/monitor/` package. |
 | `tools/monitor/` | The dashboard's code (see below) |
-| `tools/llama-fit.py` | `./carl.sh fit`: auto fit's picks and reasons, and the largest window of each model. Also the memory check that refuses a start over the GPU limit. |
+| `tools/llama-fit.py` | `./carl.sh fit`: Auto fit's choices and why, and the largest context of each model. Also the memory check that refuses a start over the GPU memory limit (one `error:` sentence first). |
 | `tools/gguf_shape.py` | A thin facade over `carl_core`: the GGUF metadata and the KV and state calculation |
 | `tools/metal-limit.swift` | Reads the GPU memory limit of the Mac |
 | `tools/prompt-size.py` | Counts the tokens of the system prompt and of each tool in a captured request |
@@ -169,8 +175,8 @@ The `tools/monitor/` package:
 
 | Layer | Modules |
 |---|---|
-| Pure: formats, state, settings, views | `fmt`, `model`, `keys`, `state`, `settings`, `cards`, `arrange`, `logbook`, `clients`, `views`, `settings_view`, `card_form`, `card_view` |
-| Adapters | `system` (ps, netstat, sysctl, pmset), `api`, `collector`, `logtail`, `store` (over `carl.py`), `gguf`, `fsio`, `jobs` (restart, Auto-tune, downloads, the disk limit), `terminal` |
+| Pure: formats, state, settings, views | `fmt`, `words` (the glossary's names for the values of the server and `config.json`), `model`, `keys`, `state`, `settings`, `cards`, `arrange`, `logbook`, `clients`, `views`, `settings_view`, `card_form`, `card_view` |
+| Adapters | `system` (ps, netstat, sysctl, pmset), `api`, `collector`, `logtail`, `store` (over `carl.py`), `gguf`, `fsio`, `jobs` (restart, Auto-tune, downloads, the disk limit), `terminal`, `uiprefs` (the detail level in `dashboard.json`) |
 | The disk cache | `diskcache` (the limit), `slotpack` (conversations stored as patches) |
 | Other computers | `cacheapi` (the dashboard's API), `clientsync` (the pushed client config) |
 | Wiring | `app`, `controller`, `cli` |
@@ -179,8 +185,8 @@ The `tools/monitor/` package:
 
 | Tab | What it does |
 |---|---|
-| Overview | The live state of the server and the Mac |
-| Connect | The URL, the key and the client configs to copy. Sub-tabs: **Setup** and **Clients**. `i` installs the clients on this Mac (`u`: configs only). `P` pushes the client config. |
+| Live | The live state of the server and the Mac |
+| Connect | The address, the key and the client configs to copy. Sub-tabs: **Setup** and **Clients**. `i` installs the clients on this Mac (`u`: the model lists only). `P` sends the client config. |
 | Requests | Each finished request with its speeds |
 | Log | The server log |
 | Settings | Six panels: Server, Models, Auto fit, Auto-tune, Router, Caching |
@@ -189,11 +195,12 @@ The `tools/monitor/` package:
 |---|---|
 | Server | The model and its settings, with the reason for each tuned value. A change restarts the server. |
 | Models | Download, verify, delete, add from Hugging Face, edit the card of a custom model |
-| Auto fit | The pick for this Mac, the goal and scope, the budget, the reasons and the ranking. **Use this** applies the pick. |
+| Auto fit | The choice for this Mac, the goal and the candidates, the memory that a model can use, the reasons and the ranking. **Use this** applies the choice. |
 | Auto-tune | Stops the server, measures a model, and starts the server again |
 | Router | Router mode, and Load / Unload of a model |
 | Caching | The disk cache: the limit, the switches, **Clear** |
 
+- Each screen has two detail levels, simple and full. `D` changes the level, and `uiprefs` saves it in `dashboard.json` (never in `config.json`). `--expand` starts in full detail for one run.
 - The dashboard keeps the disk cache in its limit. OpenCode and Pi fill the cache.
 - The Connect tab runs `host/serve.sh install --local --port N` in the background, after a question. Its output shows in the tab.
 
@@ -206,9 +213,9 @@ The `tools/monitor/` package:
 
 | Command | What it tests |
 |---|---|
-| `python3 -m unittest discover -s tests` | The `carl_core` domain, the app and the adapters |
-| `python3 -m unittest discover -s tests/scripts` | The shell helpers, `client/configure.py`, the small tools, and `tests/js` (the prompt cache's JavaScript, with node) |
-| `python3 -m unittest discover -s tests/monitor -t tests/monitor` | The dashboard |
+| `python3 -m unittest discover -s tests` | The `carl_core` domain, the app and the adapters (`tests/test_units.py`: the units) |
+| `python3 -m unittest discover -s tests/scripts` | The shell helpers, `client/configure.py`, the small tools, the text of the CLI (`tests/scripts/test_cli_text.py`: each help page, the width, the glossary's names, the units, the start lines), and `tests/js` (the JavaScript of the clients, with node; `pi-subagent.test.mjs`: the result of a background subagent in Pi) |
+| `python3 -m unittest discover -s tests/monitor -t tests/monitor` | The dashboard (`tests/monitor/test_screens.py`: every screen as text at 100, 140 and 200 columns, in simple and full detail) |
 | `CARL_DOCKER_TESTS=1 python3 -m unittest -v tests/integration/test_sync_docker.py` | The sync service under systemd, in Docker containers (opt-in) |
 
 For the use of each tool, see USERGUIDE.md, "Benchmarking and testing".

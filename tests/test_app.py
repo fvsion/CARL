@@ -100,8 +100,8 @@ class LaunchTest(unittest.TestCase):
         w = self.world(gpu=48 * GIB)
         m, _, note = w.carl.resolve_launch(None, w.carl.load_config())
         self.assertEqual(m["name"], "small")
-        self.assertEqual(note, "auto fit picks big for this Mac, but it is not downloaded (./carl.sh download big); "
-                               "starting small, the best downloaded model that fits")
+        self.assertEqual(note, "Auto fit chooses big for this Mac, but it is not downloaded (./carl.sh download big). "
+                               "CARL starts small, the best downloaded model that fits.")
 
     def test_auto_pick_downloaded_has_no_note(self) -> None:
         w = self.world(gpu=48 * GIB, config={"llama": {"auto_fit": "downloaded"}})
@@ -130,9 +130,9 @@ class LaunchTest(unittest.TestCase):
 
     def test_nothing_fits(self) -> None:
         w = self.world(gpu=8 * GIB)
-        with self.assertRaisesRegex(ConfigError, "no ranked stock model fits"):
+        with self.assertRaisesRegex(ConfigError, "No stock model with a quality rank fits"):
             w.carl.pick_default(w.carl.all_models(Config()))
-        with self.assertRaisesRegex(ConfigError, "no downloaded stock model fits"):
+        with self.assertRaisesRegex(ConfigError, "No stock model with a quality rank fits.*Choose a model by name"):
             w.carl.resolve_launch(None, Config())
 
     def test_never_an_abliterated_model(self) -> None:
@@ -140,7 +140,7 @@ class LaunchTest(unittest.TestCase):
         path = f"{MDIR}/Ablit.gguf"
         w = World(catalog(BIG, ablit), files={path: 5 * GIB}, gpu=48 * GIB,
                   shapes=FakeShapes(local={path: shape()}, remote={"Big-Q4.gguf": shape()}))
-        with self.assertRaisesRegex(ConfigError, r"download big \(./carl.sh download big\)"):
+        with self.assertRaisesRegex(ConfigError, r"Download big \(./carl.sh download big\)"):
             w.carl.resolve_launch(None, Config())
         m, _, _ = w.carl.resolve_launch("ablit", Config())                  # by hand: fine
         self.assertEqual(m["name"], "ablit")
@@ -200,7 +200,7 @@ class DownloadTest(unittest.TestCase):
         self.assertEqual(saved.get("path"), f"{MDIR}/Custom-Q4.gguf")
         self.assertEqual(saved.get("hf", {}).get("revision"), "c" * 40)
         self.assertEqual(saved.get("added"), "2026-10-03")
-        self.assertIn("  custom-q4: OK " + SHA_A, w.console.lines)
+        self.assertIn(f"  custom-q4: the file is correct (SHA-256 {SHA_A}).", w.console.lines)
 
     def test_traversal_never_reaches_the_downloader(self) -> None:
         w = World(catalog(BIG))
@@ -216,14 +216,14 @@ class DownloadTest(unittest.TestCase):
         w.folder.free = 10 * GIB
         m = w.carl.all_models(Config())[0]
         self.assertFalse(w.carl.download(m, MDIR))
-        self.assertIn("needs 21.5 GB + 5 GB headroom", w.console.errors[0])
+        self.assertIn("needs 21.5 GB and 5 GB more on the disk", w.console.errors[0])
 
     def test_bad_checksum_moves_the_file_aside(self) -> None:
         w = World(catalog(SMALL), download_size=10 * GIB)
         w.folder.hashes[SMALL_PATH] = "b" * 64
         self.assertFalse(w.carl.download(w.carl.all_models(Config())[0], MDIR))
         self.assertIn(SMALL_PATH + ".bad", w.folder.files)
-        self.assertIn("MISMATCH", w.console.errors[0])
+        self.assertIn("bad file. The SHA-256 is", w.console.errors[0])
 
     def test_repo_listing_without_a_file(self) -> None:
         hub = FakeHub({"models/o/r/tree/main?recursive=true": self.TREE})
@@ -245,7 +245,7 @@ class DeleteVerifyTest(unittest.TestCase):
 
     def test_delete_refuses_non_gguf_paths(self) -> None:
         w = World(catalog(BIG), files={"/etc/passwd": 1})
-        with self.assertRaisesRegex(ConfigError, "refusing to delete"):
+        with self.assertRaisesRegex(ConfigError, "CARL does not delete"):
             w.carl.delete({"name": "x", "path": "/etc/passwd", "custom": True})
         self.assertEqual(w.folder.removed, [])
 
@@ -255,7 +255,7 @@ class DeleteVerifyTest(unittest.TestCase):
         self.assertTrue(w.carl.verify(ms["small"]))
         self.assertTrue(w.carl.verify(ms["local"]))                 # no checksum known: skipped
         self.assertFalse(w.carl.verify({"name": "gone", "status": "missing", "path": ""}))
-        self.assertIn("  local: no checksum known (a local file): skipped", w.console.lines)
+        self.assertIn("  local: not checked. CARL does not know the SHA-256 of a local file.", w.console.lines)
 
 
 if __name__ == "__main__":

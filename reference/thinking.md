@@ -10,7 +10,7 @@ Qwen models write hidden reasoning between `<think>` and `</think>`, before the 
 |---|---|
 | `enable_thinking` | `false` → the template writes an empty, closed `<think></think>`, and the model answers directly. Not set or `true` → thinking on. |
 | `reasoning_effort` | Qwen3.8 27B only: sets how much the model thinks. The Qwen3.6 35B and the 9B do not use it. |
-| `preserve_thinking` | `true` → the reasoning of earlier turns stays in the prompt. The prompt cache needs this. |
+| `preserve_thinking` | `true` → the reasoning of earlier turns stays in the prompt. The RAM cache and the disk cache need this. |
 
 llama.cpp gives these request fields to the template:
 - the top-level `reasoning_effort`

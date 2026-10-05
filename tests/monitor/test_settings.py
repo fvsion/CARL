@@ -8,9 +8,10 @@ from carl_core.domain.fit import max_ctx
 from mon_support import GIB, FakeStore, model, model_list, shape
 from monitor.fmt import GRN, RED, YEL
 from monitor.model import ServerData
-from monitor.settings import (LLAMA_ADV, MODEL_ROW_KEYS, SET_HELP, Schema, SettingsService, env_from_cmd, fmt_val,
-                              llama_fit, net_choices, parse_typed, row_instruction, rows,
-                              running_settings, settings_to_config, shown_value, step_choice)
+from monitor.fmt import ANSI
+from monitor.settings import (LLAMA_ADV, MODEL_ROW_KEYS, SET_HELP, SPEC_COMBOS, Schema, SettingsService, env_from_cmd,
+                              fit_sentence, fmt_val, llama_fit, net_choices, parse_typed, row_instruction, rows,
+                              running_settings, settings_to_config, shown_value, step_choice, swa_sentence)
 
 SCHEMA = Schema(net_choices(["192.168.1.5"]))
 LLAMA_CMD = ("/opt/llama-server -m /m/big.gguf --host 127.0.0.1 -c 196608 --parallel 2 -ctk q4_0 -ctv q4_0 "
@@ -34,8 +35,13 @@ class ValuesTest(unittest.TestCase):
 
     def test_shown_value(self) -> None:
         self.assertEqual(shown_value("ctx", 65536), "64K")
-        self.assertEqual(shown_value("kv", "q4_0"), "q4_0")
-        self.assertEqual(shown_value("cache", 4096), "4096")
+        self.assertEqual(shown_value("ctx", 98304, long=True), "96K tokens per slot")
+        self.assertEqual(shown_value("kv", "q4_0"), "q4")
+        self.assertEqual(shown_value("kv", "q8_0", long=True), "q8 (large)")
+        self.assertEqual(shown_value("cache", 4096), "4.0 GiB")
+        self.assertEqual(shown_value("cache", 2560), "2.5 GiB")
+        self.assertEqual(shown_value("net", "local"), "this Mac only")
+        self.assertEqual(shown_value("spec", "draft-mtp,ngram-mod"), "MTP + n-gram")
 
     def test_parse_typed(self) -> None:
         self.assertEqual(parse_typed("ctx", "64k"), (65536, ""))
@@ -44,10 +50,10 @@ class ValuesTest(unittest.TestCase):
         self.assertEqual(parse_typed("temp", "0.65"), ("0.65", ""))
         self.assertEqual(parse_typed("top_k", "40"), ("40", ""))
         self.assertEqual(parse_typed("cache", "2k"), (2048, ""))
-        self.assertEqual(parse_typed("ctx", "1k"), (None, "1k is out of range for ctx"))
-        self.assertEqual(parse_typed("top_p", "1.5"), (None, "1.5 is out of range for top_p"))
-        self.assertEqual(parse_typed("ctx", "1.2.3"), (None, "not a number: '1.2.3'"))
-        self.assertEqual(parse_typed("ctx", ""), (None, "not a number: ''"))
+        self.assertEqual(parse_typed("ctx", "1k"), (None, "1k is out of range for Context."))
+        self.assertEqual(parse_typed("top_p", "1.5"), (None, "1.5 is out of range for Top p."))
+        self.assertEqual(parse_typed("ctx", "1.2.3"), (None, "That is not a number: 1.2.3."))
+        self.assertEqual(parse_typed("ctx", ""), (None, "That is not a number: ."))
 
     def test_step_choice_cycles(self) -> None:
         self.assertEqual(step_choice(["a", "b", "c"], "c", 1), "a")
@@ -56,13 +62,15 @@ class ValuesTest(unittest.TestCase):
         self.assertEqual(step_choice(["a", "b"], "zzz", 1), "b")         # not a choice: from the first
 
     def test_rows(self) -> None:
-        llama = rows({"adv": "hidden"}, SCHEMA, lambda: ["auto", "big"])
-        self.assertEqual(llama[0].key, "model")                    # no backend row: llama.cpp only
-        self.assertEqual([r.key for r in llama][-2:], ["presence", "adv"])
+        llama = rows({}, SCHEMA, lambda: ["auto", "big"])
+        self.assertEqual([r.key for r in llama], ["model", "ctx", "slots", "spec", "kv", "cache", "net", "temp"])
+        self.assertEqual([r.label for r in llama][:5], ["Model", "Context", "Slots", "Speculation", "Context memory"])
         self.assertEqual(llama[0].choices, ["auto", "big"])
+        self.assertEqual(next(r for r in llama if r.key == "spec").choices, SPEC_COMBOS)   # the mode with its guesses
         self.assertIn("192.168.1.5", next(r for r in llama if r.key == "net").choices or [])
-        shown = rows({"adv": "shown"}, SCHEMA, lambda: [])
+        shown = rows({}, SCHEMA, lambda: [], full=True)               # full detail: presence and More settings
         self.assertEqual(shown[-len(LLAMA_ADV):], LLAMA_ADV)
+        self.assertIn("presence", [r.key for r in shown])
         self.assertEqual(set(SCHEMA.defaults()), {r.key for r in SCHEMA.llama + LLAMA_ADV} | {"goal", "scope"})
         self.assertNotIn("goal", [r.key for r in llama])                # the Auto fit panel has them
         self.assertEqual(next(r for r in llama if r.key == "net").default, "local")
@@ -86,7 +94,7 @@ class RunningTest(unittest.TestCase):
 
 class ConfigMappingTest(unittest.TestCase):
     def pending(self, **kw: object) -> dict:
-        p = dict(SCHEMA.defaults(), adv="hidden", **{k: v for k, v in kw.items()})
+        p = dict(SCHEMA.defaults(), **{k: v for k, v in kw.items()})
         return p
 
     def test_defaults_are_not_saved_and_an_address_is_a_host(self) -> None:
@@ -123,28 +131,38 @@ class FitMathTest(unittest.TestCase):
     def test_llama_need_and_auto_slots(self) -> None:
         shp = shape(kv_elems=10240, rs_bytes=0)
         per_tok = 10240 * 18 / 32
-        ok, text = llama_fit("m", 10 * GIB, shp, "q4_0", 65536, "auto", 25 * GIB)
-        self.assertTrue(ok)
-        self.assertIn("for 2 × 64K (q4_0)", text)
+        f = llama_fit("m", 10 * GIB, shp, "q4_0", 65536, "auto", 25 * GIB)
+        self.assertTrue(f.fits)
+        self.assertEqual((f.slots, f.ctx), (2, 65536))
+        self.assertEqual(ANSI.sub("", fit_sentence(f)),
+                         "✓ It fits. This model with 2 slots × 64K tokens needs 11.7 GiB. This Mac gives the GPU 25.0 GiB.")
         need2 = 10 * GIB + per_tok * 65536 * 2 + GIB
-        ok1, text1 = llama_fit("m", 10 * GIB, shp, "q4_0", 65536, "auto", int(need2) - 1)
-        self.assertTrue(ok1)
-        self.assertIn("for 1 ×", text1)
-        self.assertFalse(llama_fit("m", 30 * GIB, shp, "q4_0", 65536, "1", 25 * GIB)[0])
+        f1 = llama_fit("m", 10 * GIB, shp, "q4_0", 65536, "auto", int(need2) - 1)
+        self.assertTrue(f1.fits)
+        self.assertEqual(f1.slots, 1)
+        self.assertFalse(llama_fit("m", 30 * GIB, shp, "q4_0", 65536, "1", 25 * GIB).fits)
+
+    def test_need_and_limit_that_round_alike_get_two_decimals(self) -> None:
+        shp = shape(kv_elems=10240, rs_bytes=0)
+        f = llama_fit("m", 10 * GIB, shp, "q4_0", 65536, "1", 25 * GIB)
+        f = f.__class__(**{**f.__dict__, "need": 25.04 * GIB, "limit": 25.0 * GIB, "largest": 61440})
+        text = ANSI.sub("", fit_sentence(f))
+        self.assertIn("needs 25.04 GiB. This Mac gives the GPU 25.00 GiB", text)
+        self.assertIn("With 1 slot, at most 60K tokens per slot fit.", text)
 
     def test_sliding_window_models(self) -> None:
-        """A model with sliding-window layers: the fit line plans the cache as the launcher does (cache.swa)
-        and says which; auto takes the full cache only when it fits."""
+        """A model with sliding-window layers: the fit plans the cache as the launcher does (cache.swa) and
+        says which; auto takes the full cache only when it fits."""
         swa = {**shape(kv_elems=2048, rs_bytes=0), "swa_window": 1024, "kv_elems_per_token_swa": 204800}
-        ok, text = llama_fit("g", 10 * GIB, swa, "q4_0", 98304, "2", 40 * GIB)
-        self.assertTrue(ok)
-        self.assertIn("full cache (CARL can restore saved prompts)", text)
-        ok, text = llama_fit("g", 10 * GIB, swa, "q4_0", 98304, "2", 16 * GIB)          # only the window fits
-        self.assertTrue(ok)
-        self.assertIn("window only", text)
-        self.assertFalse(llama_fit("g", 10 * GIB, swa, "q4_0", 98304, "2", 16 * GIB, swa="full")[0])
+        f = llama_fit("g", 10 * GIB, swa, "q4_0", 98304, "2", 40 * GIB)
+        self.assertTrue(f.fits)
+        self.assertIn("keeps its full cache", swa_sentence(f))
+        f = llama_fit("g", 10 * GIB, swa, "q4_0", 98304, "2", 16 * GIB)          # only the window fits
+        self.assertTrue(f.fits)
+        self.assertIn("window cache", ANSI.sub("", swa_sentence(f)))
+        self.assertFalse(llama_fit("g", 10 * GIB, swa, "q4_0", 98304, "2", 16 * GIB, swa="full").fits)
         self.assertGreater(max_ctx(swa, 10 * GIB, 16 * GIB, swa_full=False), max_ctx(swa, 10 * GIB, 16 * GIB))
-        self.assertNotIn("sliding-window", llama_fit("m", 10 * GIB, shape(), "q4_0", 65536, "1", 25 * GIB)[1])
+        self.assertEqual(swa_sentence(llama_fit("m", 10 * GIB, shape(), "q4_0", 65536, "1", 25 * GIB)), "")
 
     def test_max_ctx_is_carl_cores_for_one_q4_0_slot(self) -> None:
         """The lists' "fits" column: carl_core's largest window with 1 slot and a q4_0 KV cache."""
@@ -179,24 +197,32 @@ class ServiceTest(unittest.TestCase):
         self.assertEqual((p2["model"], p2["temp"], p2["net"]), ("auto", "0.6", "local"))
 
     def test_slots_3_and_4_only_when_they_fit(self) -> None:
-        p = dict(SCHEMA.defaults(), adv="hidden", model="big")
+        p = dict(SCHEMA.defaults(), model="big")
         choices = next(r for r in self.svc.rows(p) if r.key == "slots").choices
         most = self.svc.max_slots(p)
         self.assertEqual(choices, ["auto", "1", "2", "3", "4"][: 3 + max(most - 2, 0)])
         tiny = SettingsService(self.svc.models, SCHEMA, "192.168.42.1", lambda: 1)   # nothing fits
         self.assertEqual(next(r for r in tiny.rows(p) if r.key == "slots").choices, ["auto", "1", "2"])
 
-    def test_defaults_for_keeps_model_and_advanced(self) -> None:
-        q = self.svc.defaults_for(dict(SCHEMA.defaults(), model="big", adv="shown", kv="q8_0", cache=8192))
-        self.assertEqual((q["model"], q["adv"], q["kv"], q["cache"]), ("big", "shown", "q4_0", "auto"))
+    def test_defaults_for_keeps_the_model(self) -> None:
+        q = self.svc.defaults_for(dict(SCHEMA.defaults(), model="big", kv="q8_0", cache=8192))
+        self.assertEqual((q["model"], q["kv"], q["cache"]), ("big", "q4_0", "auto"))
 
     def test_fit_line(self) -> None:
-        p = dict(SCHEMA.defaults(), adv="hidden", model="remote")
-        self.assertIn("is not downloaded", self.svc.fit_line(p)[1])
-        self.assertIn("unknown model", self.svc.fit_line(dict(p, model="nope"))[1])
-        ok, text = self.svc.fit_cached(dict(p, model="big", ctx=65536, slots="1"))
-        self.assertTrue(ok)
-        self.assertIn("big needs", text)
+        p = dict(SCHEMA.defaults(), model="remote")
+        self.assertIn("is not downloaded", fit_sentence(self.svc.fit_line(p)))
+        self.assertIn("is not a known model", fit_sentence(self.svc.fit_line(dict(p, model="nope"))))
+        f = self.svc.fit_cached(dict(p, model="big", ctx=65536, slots="1"))
+        self.assertTrue(f.fits)
+        self.assertIn("It fits. This model with 1 slot × 64K tokens needs", fit_sentence(f))
+
+    def test_plan_of_a_model_and_auto_never_alone(self) -> None:
+        plan = self.svc.plan_of(self.store.models[0])
+        assert plan is not None
+        self.assertTrue(plan.fits)
+        self.assertEqual(plan.slots, 2)
+        self.svc.ram = 32 * GIB
+        self.assertGreater(self.svc.auto_cache_mib(dict(SCHEMA.defaults(), model="big")) or 0, 0)
 
     def test_save_writes_the_mapping(self) -> None:
         p = self.svc.pending_init(ServerData(), self.store.load_config())
@@ -215,7 +241,7 @@ class ServiceTest(unittest.TestCase):
         self.assertEqual(svc.resolved_model({"model": "auto"}), "auto")
         p = svc.pending_init(ServerData(cmd=LLAMA_CMD, n_ctx=98304), self.store.load_config())
         self.assertEqual(p["model"], "auto")
-        self.assertIn("unknown model", svc.fit_line(p)[1])
+        self.assertFalse(svc.fit_line(p).known)
         self.assertEqual(svc.recommended("big")[1], {})
 
         class BadConfig(FakeStore):
@@ -242,10 +268,10 @@ class AutoFitTest(unittest.TestCase):
         self.svc = service(self.store)
 
     def test_goal_and_scope_are_saved_to_llama(self) -> None:
-        p = dict(SCHEMA.defaults(), adv="hidden", goal="hard-code", scope="downloaded")
+        p = dict(SCHEMA.defaults(), goal="hard-code", scope="downloaded")
         cfg = settings_to_config(p, {"schema": 1}, SCHEMA, None, None)
         self.assertEqual((cfg["llama"]["auto_goal"], cfg["llama"]["auto_fit"]), ("hard-code", "downloaded"))
-        cfg = settings_to_config(dict(SCHEMA.defaults(), adv="hidden"), cfg, SCHEMA, None, None)
+        cfg = settings_to_config(dict(SCHEMA.defaults()), cfg, SCHEMA, None, None)
         self.assertNotIn("auto_goal", cfg["llama"])                     # defaults are not saved
 
     def test_panel_choice_is_saved_at_once(self) -> None:
@@ -274,26 +300,26 @@ class AutoFitTest(unittest.TestCase):
         self.assertEqual((fit.goal if fit else None, self.store.fit_calls[-1]), ("hard-code", ("hard-code", "catalogue")))
 
     def test_apply_auto_fit_sets_model_ctx_slots_kv(self) -> None:
-        p = dict(SCHEMA.defaults(), adv="hidden", model="iq", ctx=32768, kv="q8_0", slots="1")
+        p = dict(SCHEMA.defaults(), model="iq", ctx=32768, kv="q8_0", slots="1")
         fit = self.svc.apply_auto_fit(p)
         self.assertIsNotNone(fit)
         self.assertEqual((p["model"], p["ctx"], p["kv"], p["slots"]), ("big", 98304, "q4_0", "auto"))
         self.store.pick = None                                          # nothing fits: p unchanged
-        q = dict(SCHEMA.defaults(), adv="hidden", model="iq")
+        q = dict(SCHEMA.defaults(), model="iq")
         none = service(self.store).apply_auto_fit(q)
         self.assertIsNone(none.pick if none else "no answer")
         self.assertEqual(q["model"], "iq")
 
     def test_fit_line_names_the_largest_window_when_too_big(self) -> None:
-        ok, text = llama_fit("m", 20 * GIB, shape(), "q4_0", 262144, "2", 22 * GIB)
-        self.assertFalse(ok)
-        self.assertIn("largest window", text)
-        ok, text = llama_fit("m", 30 * GIB, shape(), "q4_0", 4096, "1", 22 * GIB)
-        self.assertIn("the weights alone do not fit", text)
+        f = llama_fit("m", 20 * GIB, shape(), "q4_0", 262144, "2", 22 * GIB)
+        self.assertFalse(f.fits)
+        self.assertIn("With 2 slots, at most", fit_sentence(f))
+        f = llama_fit("m", 30 * GIB, shape(), "q4_0", 4096, "1", 22 * GIB)
+        self.assertIn("The weights alone do not fit", fit_sentence(f))
 
     def test_row_instructions_are_for_new_users(self) -> None:
         self.assertTrue(row_instruction("model").startswith("Press Enter"))
-        self.assertTrue(row_instruction("ctx").startswith("Type a number, then press Enter"))
+        self.assertIn("type a number, then press Enter", row_instruction("ctx"))
         self.assertTrue(row_instruction("kv").startswith("Press ← →"))
         for key, text in SET_HELP.items():
             with self.subTest(key=key):

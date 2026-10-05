@@ -77,15 +77,15 @@ class CardEditTest(unittest.TestCase):
         self.select("big")
         self.keys("e")
         self.assertIsNone(self.ui.card)
-        self.assertIn("You cannot edit a catalogue card", self.ui.toast_msg[0])
-        self.assertNotIn("Edit card (e)", self.screen())
+        self.assertIn("A catalogue card is read-only", self.ui.toast_msg[0])
+        self.assertNotIn("Edit its card (e)", self.screen())
         self.select("mine")
-        self.assertIn("Edit card (e)", self.screen())
+        self.assertIn("Edit its card (e)", self.screen())
 
     def test_open_edit_toggle_save_and_every_reader_sees_it(self) -> None:
         f = self.open_mine()
         self.assertEqual(f.values, {"arch": "moe", "quant": "Q4_K_M"})            # from the GGUF header
-        self.assertIn("EDIT CARD", self.screen())
+        self.assertIn("EDIT THE CARD", self.screen())
         self.go(ROLE)
         self.keys("\r", "Fast local coder", "\r")
         self.assertEqual(f.values["role"], "Fast local coder")
@@ -97,8 +97,8 @@ class CardEditTest(unittest.TestCase):
         self.assertIsNone(self.ui.card)
         self.assertEqual(self.store.cards["mine"], {"arch": "moe", "quant": "Q4_K_M", "role": "Fast local coder",
                                                     "good_for": ["agent coding"], "rank": 1})
-        self.assertIn("card saved for mine", self.ui.toast_msg[0])
-        self.assertIn("Fast local coder [agent coding]", self.screen())         # the list's role and tags
+        self.assertIn("Saved the card of mine", self.ui.toast_msg[0])
+        self.assertIn("Fast local coder", self.screen())                        # the list shows its role
         self.ctl.settings.set_arrangement("filter", FILTERS.index("agent coding"))
         self.assertEqual([m["name"] for m in self.ctl.settings.visible()], ["mine"])     # the fakes have no tags
         self.ctl.settings.set_arrangement("filter", 0)
@@ -108,7 +108,7 @@ class CardEditTest(unittest.TestCase):
         self.keys("\r")                                                          # use it: the Server panel's MODEL card
         text = self.screen()
         self.assertIn("Fast local coder", text)
-        self.assertIn("custom · your card", text)
+        self.assertIn("custom model, your card", text)
         self.keys("]", "e")                                                      # the saved card opens again
         self.assertEqual(self.form().values["role"], "Fast local coder")
 
@@ -117,8 +117,8 @@ class CardEditTest(unittest.TestCase):
         self.go(UNCENSORED)
         self.keys(" ", "s")
         self.assertIs(self.ui.card, f)                                           # still open
-        self.assertEqual(f.error, "only abliterated models may be tagged uncensored")
-        self.assertIn("only abliterated models may be tagged uncensored", self.screen())
+        self.assertEqual(f.error, "only an abliterated model can have the tag uncensored")
+        self.assertIn("only an abliterated model can have the tag uncensored", self.screen())
         self.assertEqual(self.store.cards, {})
         self.go(RANK)
         self.keys("\r", "0", "\r")                                               # not a rank: typing goes on
@@ -135,7 +135,7 @@ class CardEditTest(unittest.TestCase):
         self.keys("\r", "kept", "\r", ESC)
         self.assertIsNone(self.ui.card)
         self.assertEqual(self.store.cards, {})
-        self.assertIn("nothing saved", self.ui.toast_msg[0])
+        self.assertIn("CARL saved nothing", self.ui.toast_msg[0])
 
     def test_typing_takes_every_key_and_a_paste(self) -> None:
         f = self.open_mine()
@@ -160,7 +160,7 @@ class CardEditTest(unittest.TestCase):
         self.assertNotIn("arch", f.values)
         self.keys("]")
         self.assertEqual(self.ui.sp, 1)                                          # stays: save or cancel first
-        self.assertIn("press s to save", self.ui.toast_msg[0])
+        self.assertIn("First save the card (s)", self.ui.toast_msg[0])
         self.keys("2")                                                           # tabs still switch
         self.assertEqual(self.ui.tab, 1)
 
@@ -199,7 +199,7 @@ class CardEditTest(unittest.TestCase):
         f.row = len(form_items(f.values)) - 1
         text = ANSI.sub("", "\n".join(t for t, _ in draw_form(f, 80, 24)))
         self.assertIn("+ add a model", text)
-        self.assertIn("more line(s) above", text)
+        self.assertIn("more lines above", text)
         self.assertLessEqual(len(draw_form(f, 80, 24)), 24)
 
 

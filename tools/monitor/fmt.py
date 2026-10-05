@@ -1,5 +1,6 @@
-"""Terminal text: ANSI colours, column-exact cutting and padding, bars, human-readable
-numbers, and the bordered cards every tab is drawn from. Pure functions."""
+"""Terminal text: ANSI colours, column-exact cutting and padding, bars, and the bordered cards
+every tab is drawn from. Numbers on screen use carl_core.domain.units (one formatter per kind of
+number). Pure functions."""
 from __future__ import annotations
 
 import re
@@ -8,10 +9,12 @@ import unicodedata
 from dataclasses import dataclass, field
 from typing import Callable, NamedTuple, Sequence, Union
 
+from carl_core.domain.units import tokens
+
 ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
 R, DIM, B = "\x1b[0m", "\x1b[2m", "\x1b[1m"
 GRN, YEL, RED, CYN, MAG = "\x1b[32m", "\x1b[33m", "\x1b[31m", "\x1b[36m", "\x1b[35m"
-NA = f"{DIM}N/A{R}"     # a value that is not known yet: cards keep their height
+NA = f"{DIM}–{R}"       # a value that is not known yet
 
 Span = tuple[int, int, str]     # clickable columns of a row: (first, end exclusive, action), 0-based
 Row = tuple[str, list[Span]]    # one screen row and its clickable parts
@@ -51,9 +54,24 @@ def fit(s: str, w: int) -> str:
 
 
 def wrap(s: str, w: int) -> list[str]:
-    """Hard-wrap the plain text of s every w characters (log lines)."""
+    """Wrap the plain text of s to w columns (log lines): before a space or after a "/", inside a
+    word only when the word is wider than a line."""
     plain = ANSI.sub("", s)
-    return [plain[i:i + w] for i in range(0, max(len(plain), 1), w)]
+    w = max(w, 1)
+    out: list[str] = []
+    line = ""
+    for piece in re.split(r"(?<=/)|(?= )", plain):
+        if len(line) + len(piece) <= w:
+            line += piece
+            continue
+        if line.strip():
+            out.append(line.rstrip())
+        line = piece.lstrip() if line.strip() else line + piece
+        while len(line) > w:
+            out.append(line[:w])
+            line = line[w:]
+    out.append(line)
+    return out
 
 
 def wwrap(text: str | None, w: int) -> list[str]:
@@ -124,33 +142,9 @@ def bar(frac: float | None, w: int = 18) -> str:
     return f"{col}{'█' * n}{DIM}{'░' * (w - n)}{R}"
 
 
-def size(b: float | None) -> str:
-    """Bytes as 1.5G / 300.0M / 12K / 7B."""
-    if b is None:
-        return "?"
-    for unit, div in (("G", 2**30), ("M", 2**20), ("K", 2**10)):
-        if abs(b) >= div:
-            return f"{b / div:.0f}{unit}" if unit == "K" else f"{b / div:.1f}{unit}"
-    return f"{b:.0f}B"
-
-
-def knum(n: float | None) -> str:
-    """A token count as 12.3K or 950 (None counts as 0)."""
-    v = n or 0
-    return f"{v / 1000:.1f}K" if v >= 1000 else f"{v:.0f}"
-
-
-def dur(s: float | None) -> str:
-    """Seconds as 1h02m / 3m05s / 42s; None as a dash."""
-    if s is None:
-        return "–"
-    n = int(s)
-    return f"{n // 3600}h{n % 3600 // 60:02d}m" if n >= 3600 else f"{n // 60}m{n % 60:02d}s" if n >= 60 else f"{n}s"
-
-
 def ctx_label(v: object) -> str:
-    """A context size in tokens as 96K; anything that is not a whole number as itself."""
-    return f"{int(str(v)) // 1024}K" if str(v).isdigit() else str(v)
+    """A context size in tokens as 96K (K = 1024); anything that is not a whole number as itself."""
+    return tokens(int(str(v))) if str(v).isdigit() else str(v)
 
 
 def home_short(path: str, home: str) -> str:
@@ -214,22 +208,21 @@ def button_rows(prefix: str, items: Sequence[tuple[str, str]], w: int) -> list[L
 
 
 def draw_card(name: str, title: str, summary: str, lines: Sequence[CardLine], w: int, lvl: int) -> list[Row]:
-    """Rows of a bordered card w columns wide. Its header (clickable: "level:<name>") shows
-    the detail level as dots: ○○ collapsed (the lines are hidden), ●○ normal, ●● full."""
-    arrow = "▾" if lvl else "▸"
-    dots = f"{CYN}{'●' * lvl}{DIM}{'○' * (2 - lvl)}{R}"
-    head = f"{DIM}╭─{R} {B}{CYN}{arrow} {title}{R} {dots} "
-    if summary:
-        head += f"{summary} "
+    """Rows of a bordered card w columns wide. Its title row is clickable ("level:<name>"): lvl 0 =
+    collapsed (one row: ▸, the title and its summary), else open (the lines in a box)."""
+    if not lvl:
+        head = f"{DIM}──{R} {B}{CYN}▸ {title}{R}  {summary} " if summary else f"{DIM}──{R} {B}{CYN}▸ {title}{R} "
+        fill = max(w - vlen(head), 0)
+        return [(fit(head + DIM + "─" * fill, w), [(0, w, f"level:{name}")])]
+    head = f"{DIM}╭─{R} {B}{CYN}{title}{R}  {summary} " if summary else f"{DIM}╭─{R} {B}{CYN}{title}{R} "
     fill = max(w - vlen(head) - 1, 0)
     rows: list[Row] = [(fit(head + DIM + "─" * fill, w - 1) + f"{DIM}╮{R}", [(0, w, f"level:{name}")])]
-    if lvl:
-        for item in lines:
-            ln = item if isinstance(item, Ln) else Ln(item)
-            spans = [(2 + a, 2 + b, act) for a, b, act in ln.spans]
-            if ln.act:
-                spans.append((2, w - 2, ln.act))
-            rows.append((f"{DIM}│{R} " + fit(ln.text, w - 4) + f" {DIM}│{R}", spans))
+    for item in lines:
+        ln = item if isinstance(item, Ln) else Ln(item)
+        spans = [(2 + a, 2 + b, act) for a, b, act in ln.spans]
+        if ln.act:
+            spans.append((2, w - 2, ln.act))
+        rows.append((f"{DIM}│{R} " + fit(ln.text, w - 4) + f" {DIM}│{R}", spans))
     rows.append((f"{DIM}╰{'─' * (w - 2)}╯{R}", []))
     return rows
 
@@ -308,6 +301,15 @@ def with_side(main: Callable[[int], list[CardLine]], tip: str, sections: Sequenc
 def key_hint(keys: Sequence[Key]) -> str:
     """The footer's keys: "↑↓ select · a apply · ..." (key bold, what it does dim)."""
     return f"{DIM} · {R}".join(f"{B}{k}{R}{DIM} {what}{R}" for k, what in keys)
+
+
+def footer_keys(keys: Sequence[Key], tail: Sequence[Key], w: int) -> str:
+    """The footer within w columns: the screen's keys, then tail (D detail, ? all keys, q quit),
+    which always stays; the screen's last keys go first when the line is too long."""
+    ks = list(keys)
+    while ks and vlen(key_hint([*ks, *tail])) > w:
+        ks.pop()
+    return key_hint([*ks, *tail])
 
 
 def side_by_side(left: Sequence[Row], right: Sequence[Row], lw: int, pad_left: bool = True) -> list[Row]:

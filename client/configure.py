@@ -44,9 +44,9 @@ Rules
   for the main agents and on for a "browser" subagent ("carl-browser" next to a user's own
   "browser"), so the main prompt stays under 10.5K tokens (measured: the 26 browser tools
   are ~4.8K); in Pi a deferred MCP server (tool_search loads its tools when needed).
-- The prompt cache (client/shared/carl-cache.js): the OpenCode plugin carl-cache (the same kind
-  of entry; it replaces carl-prefix-cache) and the Pi extension carl-cache save each session's
-  conversation and each agent's prompt on the server's disk and restore them before a request.
+- The disk cache (client/shared/carl-cache.js): the OpenCode plugin carl-cache (the same kind
+  of entry; it replaces carl-prefix-cache) and the Pi extension carl-cache save each session
+  and each agent's prompt on the server's disk and restore them before a request.
   NO_CACHE=1 leaves both out.
 - OpenCode plugin carl-model-check (opencode.json "plugin", with our provider id as its
   option): warns when the model picked isn't the one the server runs, isn't installed, or
@@ -66,6 +66,7 @@ import os
 import re
 import shutil
 import sys
+import textwrap
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -125,7 +126,7 @@ BROWSER_OFF = ("bash", "edit", "write", "lsp", "task", "todowrite", "question", 
 CHROME_APP = "/Applications/Google Chrome.app"
 MODEL_CHECK = "carl-model-check"
 BACKGROUND = "carl-background"                          # the coder in the background (OpenCode plugin)
-CACHE = "carl-cache"                                    # the prompt cache: OpenCode plugin and Pi extension
+CACHE = "carl-cache"                                    # the disk cache: OpenCode plugin and Pi extension
 OLD_CACHE = "carl-prefix-cache"                         # its OpenCode plugin before 11.5 (removed)
 CACHE_CORE = "shared/carl-cache.js"                     # the code both carry
 PANEL = "carl-panel"                                    # the /carl panel: OpenCode TUI plugin and Pi extension
@@ -205,7 +206,7 @@ def ctx_arg(v: str) -> int:
     except ValueError:
         raise argparse.ArgumentTypeError(f"not a token count: {v!r}") from None
     if n < 1024:
-        raise argparse.ArgumentTypeError(f"context window too small: {n}")
+        raise argparse.ArgumentTypeError(f"context too small: {n} tokens")
     return n
 
 
@@ -257,8 +258,18 @@ class Report:
     def add(self, kind: str, line: str) -> None:
         self.entries[kind].append(line)
 
-    def lines(self) -> list[str]:
-        return [f"  {k:9s} {line}" for k in REPORT_KINDS for line in self.entries[k]]
+    def lines(self, width: int = 0) -> list[str]:
+        """Each entry as "  kind      text", wrapped to `width` (default: the terminal's, else 80); a line
+        after a newline in an entry (a command to copy) is indented, not wrapped."""
+        width = width or shutil.get_terminal_size((80, 24)).columns
+        out: list[str] = []
+        for k in REPORT_KINDS:
+            for entry in self.entries[k]:
+                first, *literal = entry.split("\n")
+                out += textwrap.wrap(first, max(width, 50), initial_indent=f"  {k:9s} ", subsequent_indent=" " * 12,
+                                     break_long_words=False, break_on_hyphens=False) or [f"  {k:9s}"]
+                out += [" " * 12 + line for line in literal]
+        return out
 
 
 def name_agent(text: str, name: str) -> str:
@@ -1011,7 +1022,7 @@ class Installer:
         self._oc_remove_old_plugin(cfg)
         self._oc_server_plugin(cfg, MODEL_CHECK, o.model_check, new_id, "model warnings")
         self._oc_server_plugin(cfg, OLD_CACHE, False, new_id, "")
-        self._oc_server_plugin(cfg, CACHE, o.cache, new_id, "the prompt cache")
+        self._oc_server_plugin(cfg, CACHE, o.cache, new_id, "the disk cache")
         self._oc_server_plugin(cfg, BACKGROUND, o.background and o.coder, new_id, "the coder in the background")
         old_specs = os.path.join(o.home, ".config", "carl", "prefix")    # what carl-prefix-cache recorded
         if self.fs.isdir(old_specs):
@@ -1136,8 +1147,8 @@ class Installer:
         With neither file, the report says which line to add."""
         if not self.o.profile:
             if want:
-                self.report.add("kept", f"your shell profile (NO_PROFILE=1): add this line to it for OpenCode's tool "
-                                        f"switches: {PROFILE_LINE}")
+                self.report.add("kept", f"your shell profile (NO_PROFILE=1). For the tool switches of OpenCode, "
+                                        f"add this line to it:\n{PROFILE_LINE}")
             return
         found = False
         for name in PROFILES:
@@ -1155,8 +1166,8 @@ class Installer:
                                 f"~/{name}{where}: {'sources' if want else 'no longer sources'} "
                                 f"~/.config/carl/{ENV_FILE} (open a new terminal)")
         if want and not found:
-            self.report.add("kept", f"no ~/.zshrc or ~/.bashrc: add this line to your shell profile for OpenCode's "
-                                    f"tool switches: {PROFILE_LINE}")
+            self.report.add("kept", f"no ~/.zshrc or ~/.bashrc. For the tool switches of OpenCode, add this line "
+                                    f"to your shell profile:\n{PROFILE_LINE}")
 
     def _oc_browser(self, cfg: JsonObj, st: JsonObj, agent: JsonObj) -> None:
         """The browser MCP server (its tools off globally), and the subagent that has them."""
@@ -1228,7 +1239,7 @@ class Installer:
             self.cf.save(mp, mcp)
 
         self._pi_extensions_and_coder(st)
-        self._pi_ext(CACHE, o.cache, (CACHE_CORE, PANEL_CORE), "the prompt cache", st, "cache_ext")
+        self._pi_ext(CACHE, o.cache, (CACHE_CORE, PANEL_CORE), "the disk cache", st, "cache_ext")
         self._pi_ext(PANEL, True, (PANEL_CORE,), "the /carl panel", st, "panel_ext")
         if o.cache:
             st["cache_api"] = o.cache_api
@@ -1330,8 +1341,8 @@ def main(argv: list[str]) -> int:
         return 1
     for line in inst.report.lines():
         print(line)
-    print(f"OpenCode: {opts.oc_dir}/opencode.json (providers: {', '.join(oc_ids.values())})")
-    print(f"Pi:       {opts.pi_dir}/models.json (providers: {', '.join(pi_ids.values())})")
+    print(f"OpenCode: {inst.short(opts.oc_dir)}/opencode.json, CARL provider {', '.join(oc_ids.values())}")
+    print(f"Pi:       {inst.short(opts.pi_dir)}/models.json, CARL provider {', '.join(pi_ids.values())}")
     return 0
 
 

@@ -61,7 +61,6 @@ from carl_core.domain.router import preset_ini  # noqa: E402
 from carl_core.domain import models as _dm  # noqa: E402
 from carl_core.domain.autofit import AutoFit as AutoFit, as_goal, as_scope  # noqa: E402
 from carl_core.domain.errors import ConfigError as ConfigError  # noqa: E402  (re-exported)
-from carl_core.domain.fit import human_gb  # noqa: E402
 from carl_core.domain.gguf import ModelShape  # noqa: E402
 from carl_core.domain.hf import parse_hf as parse_hf  # noqa: E402
 from carl_core.domain.launch import shell_lines as shell_lines  # noqa: E402
@@ -70,7 +69,9 @@ from carl_core.domain.settings import (MODEL_KEYS as _MODEL, SCHEMA as SCHEMA, S
                                        validate_config as _validate)
 from carl_core.domain.types import (Catalog, CustomCard, CustomInfo, HfFileList, JsonObject, JsonValue,  # noqa: E402
                                     LocalDb, ModelInfo, SettingSource, SettingValue, Settings, Zone)
+from carl_core.domain.units import file_size  # noqa: E402
 from carl_core.wiring import REPO as REPO, CarlPaths, build_carl  # noqa: E402
+from carl_help import columns, width, wrap  # noqa: E402
 
 # The names this module imports only for its users (tools/monitor/store.py, tools/carl-tune.py).
 __all__ = ["REPO", "SCHEMA", "ConfigError", "parse_hf"]
@@ -224,7 +225,8 @@ def hf_files(repo: str, revision: str = "main") -> HfFileList:
 
 
 def human(b: float) -> str:
-    return human_gb(b)
+    """A file size (GB, 1000-based: glossary section 9)."""
+    return file_size(b)
 
 
 def verify(m: ModelInfo) -> bool:
@@ -250,53 +252,149 @@ def _arg(a: Sequence[str], i: int, usage: str) -> str:
     return a[i]
 
 
+UNKNOWN_MODEL = "unknown model '{}'. ./carl.sh models lists the models."
+
+
 def _known(name: str, models: Optional[List[ModelInfo]] = None) -> ModelInfo:
     m = find(name, models)
     if not m:
-        raise ConfigError(f"unknown model '{name}' (see: ./carl.sh models)")
+        raise ConfigError(UNKNOWN_MODEL.format(name))
     return m
 
 
+STATUS_TEXT = {"downloaded": "downloaded", "missing": "not downloaded", "partial": "partial"}
+SOURCE_TEXT = {"catalog": "catalogue", "hf": "Hugging Face", "file": "models folder"}
+
+
+def _tilde(path: str) -> str:
+    home = os.path.expanduser("~")
+    return "~" + path[len(home):] if path == home or path.startswith(home + os.sep) else path
+
+
 def cmd_list(models: List[ModelInfo]) -> None:
+    """Every model: name, file size (GB), download status, source, and what it is (wrapped to the width)."""
     cfg = app().load_config()
-    default = load_catalog().get("default")
-    print(f"{'NAME':28} {'SIZE':>8}  {'STATUS':11} {'SOURCE':8} SUMMARY")
+    w = width()
+    nw = max([len("model")] + [len(m.get("name", "")) for m in models])
+    head = f"{'model':<{nw}}  {'size':>8}  {'status':<14}  {'source':<13}"
+    side = w - len(head) - 2 >= 40                  # the description beside the row, else below it
+    print((head + "  about") if side else head.rstrip())
     for m in models:
-        tuned = " [auto-tuned]" if (m.get("local") or {}).get("tune") else ""
-        mark = " [default]" if m.get("name") == default else ""
+        name = m.get("name", "")
+        about = f"{m.get('role')} (your card)" if m.get("custom") and m.get("role") else str(m.get("summary", ""))
+        notes = []
+        if (m.get("local") or {}).get("tune"):
+            notes.append("Auto-tune done on this Mac.")
         if m.get("draft") and m.get("status") == "downloaded" and m.get("draft_status") != "downloaded":
-            mark += " [MTP drafter missing: download it]"
-        about = (f"{m.get('role')} (your card)" if m.get("custom") and m.get("role") else m.get("summary", ""))
-        print(f"{m.get('name', ''):28} {human(m.get('bytes', 0)):>8}  {m.get('status', ''):11} "
-              f"{m.get('source', ''):8} {about}{mark}{tuned}")
+            notes.append(f"The MTP drafter is not downloaded: ./carl.sh download {name}")
+        text = " ".join([about.rstrip()] + notes).strip()
+        row = (f"{name:<{nw}}  {human(m.get('bytes', 0)):>8}  {STATUS_TEXT.get(str(m.get('status')), str(m.get('status'))):<14}"
+               f"  {SOURCE_TEXT.get(str(m.get('source')), str(m.get('source'))):<13}")
+        if side:
+            print("\n".join(wrap(text, w, row + "  ", " " * (len(head) + 2))))
+        else:
+            print(row.rstrip())
+            if text:
+                print("\n".join(wrap(text, w, "    ")))
     d = app().models_dir(cfg)
     free = app().files.free_bytes(d)
-    print(f"\ndir: {d}   free: {human(free) if free is not None else '?'}")
-    print("download any GGUF: ./carl.sh download hf:OWNER/REPO/FILE.gguf   (files: ./carl.sh download hf:OWNER/REPO)")
+    print()
+    for line in (f"The models folder is {_tilde(d)}. The disk has {human(free) if free is not None else 'an unknown size'} "
+                 f"free.",
+                 "Status: downloaded, not downloaded, or partial (the download stopped: run it again to continue).",
+                 "To download a model from Hugging Face: ./carl.sh download hf:OWNER/REPO/FILE.gguf. To see the files "
+                 "of a repository: ./carl.sh download hf:OWNER/REPO."):
+        print("\n".join(wrap(line, w)))
     if any(m.get("custom") for m in models):
-        print("describe a custom model (role, good for, rank, ...): ./carl.sh card NAME, or e in the dashboard's "
-              "Models panel")
+        print("\n".join(wrap("To describe a custom model (its role, what it is good for, its quality rank): "
+                             "./carl.sh card NAME, or e in Settings > Models of the dashboard.", w)))
+
+
+# What each setting does, and its name in the dashboard (./carl.sh config show).
+KEY_HELP: Dict[str, str] = {
+    "llama.model": "The model that the server starts (Settings > Server). auto: the model that Auto fit chooses.",
+    "llama.auto_goal": "The goal of Auto fit: everyday (fast models first) or hard-code (dense models first: "
+                       "better code, slower).",
+    "llama.auto_fit": "The candidates of Auto fit: catalogue (all catalogue models) or downloaded (downloaded "
+                      "models only).",
+    "llama.mode": "single (single model: you change it in the dashboard) or router (router mode: OpenCode and Pi "
+                  "switch the model). Settings > Router.",
+    "llama.net": "The network: local (only this Mac can use the server) or vm (the VM network too).",
+    "llama.host": "One address of this Mac to listen on. It wins over llama.net. Empty: llama.net decides.",
+    "llama.cache_ram": "The size of the RAM cache in MiB. auto: the free memory after the model, from 1 GiB to "
+                       "8 GiB.",
+    "llama.ub": "The physical batch size of llama-server (-ub).",
+    "llama.batch": "The logical batch size of llama-server (-b).",
+    "llama.ckpt": "The number of context checkpoints for each slot (--ctx-checkpoints). Models with a recurrent "
+                  "state (Qwen3.6, Qwen3.8) use them.",
+    "llama.ckpt_step": "The smallest number of tokens between two checkpoints.",
+    "llama.think_toggle": "A chat template that lets OpenCode turn thinking off. false: the template of the model "
+                          "file.",
+    "llama.extra_args": "More flags for llama-server, as a list of words.",
+    "paths.models_dir": "The models folder. MODELS_DIR wins over it.",
+    "cache.disk_gb": "The largest size of the disk cache, in GB (Settings > Caching).",
+    "cache.prefix": "Save the prompt of each agent (saved prompts).",
+    "cache.sessions": "Save the sessions (saved sessions).",
+    "cache.save": "When CARL saves a session: auto (when it would take cache.auto_s seconds to read again), turn "
+                  "(after each turn), switch or stop (CARL writes only a record).",
+    "cache.auto_s": "For cache.save auto: the seconds of reading that make CARL save a session.",
+    "cache.share": "Store a saved session as the changes to its saved prompt (less disk).",
+    "cache.swa": "Sliding-window models (Gemma): full (full cache), window (window cache) or auto (the full cache "
+                 "when it fits).",
+    "models.NAME.kv": "The context memory type: q4_0 (q4), q8_0 (q8) or f16.",
+    "models.NAME.ctx": "The context of each slot in tokens (96k = 98304).",
+    "models.NAME.slots": "The number of slots, or auto (2 slots when they fit).",
+    "models.NAME.spec": "The speculation: none, ngram-mod (n-gram), draft-mtp (MTP) or draft-mtp,ngram-mod "
+                        "(MTP + n-gram).",
+    "models.NAME.spec_n": "The number of guesses for each step of the speculation.",
+    "models.NAME.temp": "The sampling temperature.",
+    "models.NAME.top_p": "The sampling top_p.",
+    "models.NAME.top_k": "The sampling top_k.",
+    "models.NAME.min_p": "The sampling min_p.",
+    "models.NAME.presence": "The presence penalty.",
+    "models.NAME.repeat": "The repetition penalty (1.0 = off).",
+    "models.NAME.alias": "The model name that the server shows to the clients. Empty: the model name.",
+}
+
+
+def _value_text(spec: SettingSpec) -> str:
+    """The values a key takes and its default, in words."""
+    kinds = {"int": "a whole number", "float": "a number", "intauto": "a whole number or auto", "bool": "true or false",
+             "list": "a list", "str": "text", "choice": " | ".join(spec.choices)}
+    text = kinds.get(spec.kind, spec.kind)
+    if spec.min is not None and spec.max is not None and spec.kind in ("int", "float", "intauto"):
+        text += f" from {spec.min} to {spec.max}"
+    default = spec.default
+    shown = ("empty" if default in ("", [], None) else "true" if default is True else "false" if default is False
+             else str(default))
+    return f"{text}. Default: {shown}."
 
 
 def cmd_config(argv: Sequence[str]) -> None:
-    usage = "config [show|path|get KEY|set KEY VALUE|unset KEY]"
+    usage = "config [show|path|get KEY|set KEY VALUE|unset KEY]"   # ConfigError("usage: carl.py ...")
     sub = argv[0] if argv else "show"
     if sub == "path":
         print(CONFIG_FILE)
         return
     cfg = load_config()
     if sub == "show":
-        for w in app().config_warnings():
-            print(f"warning: {w}", file=sys.stderr)
-        print(f"# {CONFIG_FILE}")
+        for warn in app().config_warnings():
+            print(f"warning: {warn}", file=sys.stderr)
+        w = width()
+        print(f"Your settings ({_tilde(CONFIG_FILE)}):")
         print(json.dumps(cfg, indent=2))
-        print("\n# keys (section.key: type, default)")
+        print()
+        print("\n".join(wrap("Every setting: what it does, its values and its default. To change one: ./carl.sh config "
+                             "set KEY VALUE. A setting of one model: models.NAME.KEY (for example "
+                             "models.gemma-4-12b.ctx).", w)))
+        rows: List[Tuple[str, str]] = []
         for sec, keys in _SECTIONS.items():
-            for k, s in keys.items():
-                choices = " " + "|".join(s.choices) if s.choices else ""
-                print(f"  {sec}.{k}: {s.kind}{choices}, default {s.default!r}")
-        for k, s in _MODEL.items():
-            print(f"  models.NAME.{k}: {s.kind}{' ' + '|'.join(s.choices) if s.choices else ''}")
+            for k, spec in keys.items():
+                rows.append((f"{sec}.{k}", f"{KEY_HELP.get(f'{sec}.{k}', '')} Values: {_value_text(spec)}".strip()))
+        for k, spec in _MODEL.items():
+            rows.append((f"models.NAME.{k}", f"{KEY_HELP.get(f'models.NAME.{k}', '')} Values: "
+                                             f"{_value_text(spec).split('. Default')[0]}.".strip()))
+        print("\n".join(columns(rows, w, max_term=20)))
         return
     if sub not in ("get", "set", "unset"):
         raise ConfigError(f"usage: carl.py {usage}")
@@ -313,6 +411,11 @@ def cmd_config(argv: Sequence[str]) -> None:
         save_config(cfg)
 
 
+def _count(n: int, one: str, many: str = "") -> str:
+    """1 file, 2 files."""
+    return f"{n} {one if n == 1 else (many or one + 's')}"
+
+
 def cmd_cache(argv: Sequence[str]) -> None:
     """The disk cache OpenCode and Pi fill (monitor.diskcache): show, trim to the limit, or clear."""
     from monitor import diskcache          # the dashboard's module: the same rules as its Caching panel
@@ -325,31 +428,54 @@ def cmd_cache(argv: Sequence[str]) -> None:
             from monitor import slotpack
             t = slotpack.tidy(folder)
             if t.packed:
-                print(f"stored {t.packed} conversation(s) as patches against their prompt")
+                print(f"CARL stored {_count(t.packed, 'saved session')} as the changes to its saved prompt.")
         gone = diskcache.over_budget(diskcache.listing(folder), conf.limit)
         diskcache.remove(folder, gone)
-        print(f"removed {len(gone)} file(s) over the {conf.disk_gb} GB limit" if gone else "within the limit")
+        print(f"CARL removed {_count(len(gone), 'file')}: the disk cache was larger than its limit of "
+              f"{conf.disk_gb} GB." if gone else f"The disk cache is in its limit of {conf.disk_gb} GB.")
         return
     files = diskcache.listing(folder)
     if sub == "clear":
         diskcache.remove(folder, [f.name for f in files])
-        print(f"removed {len(files)} file(s) from {folder}")
+        print(f"CARL removed {_count(len(files), 'file')} from the disk cache ({_tilde(folder)}).")
         return
     if sub != "show":
-        raise ConfigError("usage: carl.py cache [show|trim|clear]")
-    print(f"{folder}: {diskcache.gb(diskcache.used(files))} of {conf.disk_gb} GB, {len(files)} file(s) "
-          f"(prompts {'on' if conf.prefix else 'off'}, conversations {'on' if conf.sessions else 'off'})")
-    if any(f.packed for f in files):
-        print(f"  patches: {sum(f.packed for f in files)} conversation(s) stored as patches against their prompt, "
-              f"{diskcache.gb(diskcache.shared_saving(files))} saved")
+        raise ConfigError("cache takes show, trim or clear. ./carl.sh cache --help tells more.")
+    w = width()
+    prompts = sum(1 for f in files if f.kind == diskcache.PROMPT)
+    head = (f"The disk cache ({_tilde(folder)}) uses {file_size(diskcache.used(files))} of its limit of "
+            f"{conf.disk_gb} GB. It holds {_count(prompts, 'saved prompt')} and "
+            f"{_count(len(files) - prompts, 'saved session')}. Saved prompts: {'on' if conf.prefix else 'off'}. "
+            f"Saved sessions: {'on' if conf.sessions else 'off'}.")
+    print("\n".join(wrap(head, w)))
+    packed = sum(f.packed for f in files)
+    if packed:
+        print("\n".join(wrap(f"{_count(packed, 'saved session')} {'is' if packed == 1 else 'are'} stored as the "
+                             f"changes to {'its' if packed == 1 else 'their'} saved prompt. This saves "
+                             f"{file_size(diskcache.shared_saving(files))}.", w)))
+    if not files:
+        return
+    print()
+    rows = []
     for f in sorted(files, key=lambda f: -f.mtime):
-        kind = "prompt" if f.kind == diskcache.PROMPT else "patch" if f.packed else "conversation"
-        print(f"  {kind:<12}  {diskcache.describe(f.name):<60} {f.bytes / 2**20:8.0f} MB")
+        kind = ("saved prompt" if f.kind == diskcache.PROMPT else
+                "saved session*" if f.packed else "saved session")
+        rows.append((kind, diskcache.describe(f.name), file_size(f.bytes)))
+    kw = max(len(r[0]) for r in rows)
+    sw = max(len(r[2]) for r in rows)
+    nw = max(10, w - kw - sw - 6)
+    print(f"  {'kind':<{kw}}  {'model · agent or session':<{nw}}  {'size':>{sw}}"[:w].rstrip())
+    for kind, what, size in rows:
+        what = what if len(what) <= nw else what[:nw - 1] + "…"
+        print(f"  {kind:<{kw}}  {what:<{nw}}  {size:>{sw}}")
+    if packed:
+        print("  * stored as the changes to its saved prompt")
 
 
 def cmd_download(names: List[str]) -> int:
     if not names:
-        raise ConfigError("usage: download NAME...|default|all|hf:OWNER/REPO/FILE.gguf")
+        raise ConfigError("download needs a model: NAME, default, all or hf:OWNER/REPO/FILE.gguf. "
+                          "./carl.sh download --help tells more.")
     models = all_models()
     if names == ["all"]:
         names = [m.get("name", "") for m in models if m.get("source") == "catalog"]
@@ -357,13 +483,13 @@ def cmd_download(names: List[str]) -> int:
     for n in names:
         if n == "default":
             n = pick_default(models)
-            print(f"== this Mac's auto-fit pick: {n}")
+            print(f"Auto fit chooses {n} for this Mac.")
         if n.startswith(("hf:", "http")) or (n.count("/") >= 1 and not find(n, models)):
             ok = download_hf(n) and ok
             continue
         m = find(n, models)
         if not m or not m.get("hf"):
-            raise ConfigError(f"unknown model '{n}' (see: ./carl.sh models)")
+            raise ConfigError(UNKNOWN_MODEL.format(n))
         ok = download(m, models_dir()) and ok
     return 0 if ok else 1
 
@@ -382,7 +508,16 @@ def cmd_card(argv: Sequence[str]) -> None:
         unset_card_field(name, argv[2])
     elif sub != "show" or len(argv) > 2:
         raise ConfigError(f"usage: carl.py {usage}")
-    print("\n".join(_cards.describe(_known(name))))
+    print("\n".join(card_lines(_known(name), width())))
+
+
+def card_lines(m: ModelInfo, w: int) -> List[str]:
+    """A model's card for the command line (cards.card_rows), wrapped to w columns."""
+    head, rows, hints = _cards.card_rows(m)
+    out = wrap(head, w) + columns(rows, w, max_term=27)
+    for h in hints:
+        out += [""] + wrap(h, w)
+    return out
 
 
 def cmd_get(name: str, field: str) -> None:
@@ -410,19 +545,25 @@ def main(argv: List[str]) -> int:
     elif cmd == "verify":
         models = all_models()
         names = a or [m.get("name", "") for m in models if m.get("status") == "downloaded"]  # none: every downloaded model
-        results = [verify(find(n, models) or {"name": n, "status": "missing", "path": ""}) for n in names]
+        unknown = [n for n in names if not find(n, models)]
+        if unknown:
+            raise ConfigError(UNKNOWN_MODEL.format(unknown[0]))
+        if not names:
+            print("No model is downloaded, so there is nothing to check.")
+        results = [verify(_known(n, models)) for n in names]
         return 0 if all(results) else 1
     elif cmd == "delete":
-        m = find(_arg(a, 0, "delete NAME"))
-        if not m:
-            raise ConfigError(f"unknown model '{a[0]}'")
+        m = _known(_arg(a, 0, "delete NAME"))
+        if m.get("status") != "downloaded" and not m.get("draft_path"):
+            raise ConfigError(f"{m.get('name')} is not downloaded, so there is nothing to delete.")
         delete(m)
-        print(f"deleted {m.get('path')}" + (f" and its MTP drafter {m.get('draft_path')}" if m.get("draft_path") else ""))
+        print(f"CARL deleted {_tilde(m.get('path', ''))}"
+              + (f" and its MTP drafter {_tilde(m.get('draft_path', ''))}." if m.get("draft_path") else "."))
     elif cmd == "path":
         name = _arg(a, 0, "path NAME")
         m = _known(name)
         if m.get("status") != "downloaded":
-            raise ConfigError(f"{name} not downloaded (run: ./carl.sh download {name})")
+            raise ConfigError(f"{name} is not downloaded. To download it: ./carl.sh download {name}")
         print(m.get("path"))
     elif cmd == "get":
         cmd_get(_arg(a, 0, "get NAME FIELD"), _arg(a, 1, "get NAME FIELD"))
@@ -440,7 +581,7 @@ def main(argv: List[str]) -> int:
         with open(out, "w", encoding="utf-8") as fh:
             fh.write(preset_ini(preset, common))
         for p in preset.models:
-            print(f"model {p.name} {p.label()}")
+            print(f"model {p.name} {p.describe()}")
         for n, why in preset.skipped:
             print(f"skip {n}: {why}")
         if preset.start:
@@ -450,8 +591,9 @@ def main(argv: List[str]) -> int:
     elif cmd == "push":
         from monitor import clientsync         # the dashboard's module: its API serves what this writes
         version = clientsync.publish(os.path.dirname(CONFIG_FILE), client_models())
-        print(f"client config {version} published: the dashboard's API sends it to the clients' sync service "
-              f"(while the dashboard runs); OpenCode and Pi use it at their next start")
+        print("\n".join(wrap(f"CARL is ready to send the client config to other computers (version {version}). "
+                             "The dashboard sends it while it runs. OpenCode and Pi apply it at their next start.",
+                             width())))
     elif cmd == "launch-env":
         model = _arg(a, a.index("--model") + 1, "launch-env [--model NAME|PATH] [--no-config]") if "--model" in a else None
         env, note = launch_env(model, use_config="--no-config" not in a)
@@ -467,7 +609,7 @@ def main(argv: List[str]) -> int:
     elif cmd in ("-h", "--help", "help"):
         print(__doc__)
     else:
-        raise ConfigError(f"unknown command '{cmd}' (carl.py --help)")
+        raise ConfigError(f"unknown command '{cmd}'. carl.py --help lists the commands.")
     return 0
 
 

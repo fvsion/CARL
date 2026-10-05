@@ -56,9 +56,16 @@ class ModelPlan:
     need: float
     swa: bool = False           # sliding-window layers at full length: swa-full (saved prompt states restore)
     draft: Optional[str] = None  # the MTP drafter (spec-draft-model, the -md of a single start)
+    window: bool = False        # sliding-window layers that keep only the window (the window cache)
 
     def label(self) -> str:
         return f"{self.slots} × {window_label(self.ctx)} {self.kv}"
+
+    def describe(self) -> str:
+        """The setup in words (the router's start lines): 2 slots × 96K tokens, q4, window cache."""
+        kv = {"q4_0": "q4", "q8_0": "q8"}.get(self.kv, self.kv)
+        cache = ", full cache" if self.swa else ", window cache" if self.window else ""
+        return f"{self.slots} slot{'s' if self.slots != 1 else ''} × {window_label(self.ctx)} tokens, {kv}{cache}"
 
 
 @dataclass
@@ -83,15 +90,18 @@ def plan_model(name: str, path: str, vals: Settings, shape: ModelShape, weights:
     slots, swa_full = swa_plan(common.swa_mode, shape, weights, ctx, str(vals["slots"]), kv, limit)
     chk = check_start(shape, weights, ctx, slots, kv, limit, swa_full=swa_full is not False)
     if not chk.fits:
-        largest = f"largest window {window_label(chk.largest)}" if chk.largest else "the weights alone don't fit"
-        return None, f"needs {chk.need / 2**30:.1f} GiB for {slots} × {window_label(ctx)} {kv} ({largest})"
+        largest = (f"The largest context that fits is {window_label(chk.largest)} tokens per slot."
+                   if chk.largest else "The weights alone do not fit.")
+        return None, (f"It needs {chk.need / 2**30:.1f} GiB for {slots} slot{'s' if slots != 1 else ''} × "
+                      f"{window_label(ctx)} tokens, more than the GPU memory limit "
+                      f"({limit / 2**30:.1f} GiB). {largest}")
     for ch in "\r\n":
         if ch in path or (template and ch in template) or (draft and ch in draft):
             raise ConfigError(f"{name}: a file path with a line break can't go into the presets file")
     cache = common.cache_ram if common.cache_ram is not None else prompt_cache_mib(ram, chk.need, reserve)
     sampling = tuple((key, float(str(vals[k]))) for k, key in SAMPLING_KEYS)
     return ModelPlan(name, path, ctx, slots, kv, str(vals["spec"]), int(str(vals["spec_n"])), sampling, cache,
-                     template, chk.need, bool(swa_full), draft), ""
+                     template, chk.need, bool(swa_full), draft, swa_full is False), ""
 
 
 def _num(v: float) -> str:
@@ -103,7 +113,9 @@ def preset_ini(preset: Preset, common: Common) -> str:
     out = [HEADER, "version = 1", "", "[*]"]
     shared: Dict[str, str] = {
         "jinja": "true", "reasoning-format": "deepseek", "chat-template-kwargs": '{"preserve_thinking":true}',
-        "n-gpu-layers": "999", "flash-attn": "on", "no-mmproj": "true", "metrics": "true",
+        # fit off: CARL sizes each model itself (plan_model); llama.cpp's own memory fitting only probes,
+        # and its probe logs a false error for Gemma 4's MTP drafter
+        "n-gpu-layers": "999", "flash-attn": "on", "fit": "off", "no-mmproj": "true", "metrics": "true",
         "batch-size": str(common.batch), "ubatch-size": str(common.ubatch),
         "ctx-checkpoints": str(common.ckpt), "checkpoint-min-step": str(common.ckpt_step),
         **({"slot-save-path": common.slot_dir} if common.slot_dir and "\n" not in common.slot_dir else {})}

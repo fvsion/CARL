@@ -1,7 +1,7 @@
 // client/shared/carl-panel.js: the /carl panel's sections, read from a temporary HOME's config files.
 // Run: node --test tests/js (tests/scripts/test_js.py runs it with the other suites).
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -9,7 +9,8 @@ import { test } from "node:test";
 const HOME = mkdtempSync(join(tmpdir(), "carl-panel-"));
 process.env.HOME = HOME;                     // read when the module loads
 delete process.env.PI_CODING_AGENT_DIR;
-const { openCodeSearch, piSearch, sections } = await import("../../client/shared/carl-panel.js");
+const { duration, openCodeSearch, outcome, piSearch, restartNotice, sections, when, wrap } =
+  await import("../../client/shared/carl-panel.js");
 const CARL = join(HOME, ".config", "carl");
 const PI = join(HOME, ".pi", "agent");
 mkdirSync(CARL, { recursive: true });
@@ -33,7 +34,7 @@ test("OpenCode web search: the provider that is on, off only when neither is set
     writeFileSync(join(CARL, "opencode.env"), envFile(p));
     const s = web("opencode");
     assert.equal(s.summary, `on (${p})`);
-    assert.ok(s.lines.includes(`provider: ${p}`), s.lines.join(" | "));
+    assert.ok(s.lines.includes(`On. The search queries go to ${p}, outside this computer.`), s.lines.join(" | "));
   }
   writeFileSync(join(CARL, "opencode.env"), "export OPENCODE_EXPERIMENTAL_LSP_TOOL=1\n");
   assert.equal(web("opencode").summary, "off");
@@ -56,6 +57,110 @@ test("the sections read broken or missing files as not installed", () => {
   writeFileSync(join(HOME, ".config", "opencode", "opencode.json"), "[]");              // not an object
   const all = sections("opencode");
   assert.equal(all[0].id, "sync");
-  assert.equal(all[0].summary, "on the server's computer");
+  assert.equal(all[0].summary, "this computer runs the server");
   assert.equal(all.find((s) => s.id === "cache").summary, "off");
+});
+
+// ------------------------------------------------------------------ the words and the widths (Phase 21)
+
+const OC = join(HOME, ".config", "opencode");
+const BUNDLE = join(HOME, "client");
+const HASH = "c084921eda7e";
+const WAITING = "d1e2f3a4b5c6";
+
+/** Every CARL part on (allOn) or off, and a sync state from another computer with a config that waits. */
+function stage(allOn) {
+  mkdirSync(OC, { recursive: true });
+  mkdirSync(BUNDLE, { recursive: true });
+  for (const d of ["extensions/carl-cache", "extensions/subagent", "agents"]) mkdirSync(join(PI, d), { recursive: true });
+  writeFileSync(join(BUNDLE, "remote.json"), JSON.stringify({ host: "192.168.42.1", port: 8080, cache_api: "http://192.168.42.1:8081" }));
+  writeFileSync(join(CARL, "client-sync.json"), JSON.stringify({
+    bundle: BUNDLE, service: allOn, connected: allOn, alive: Date.now() / 1000 - 30, auto_apply: !allOn,
+    applied: HASH, applied_at: "2026-10-04 10:53:33", pending: allOn ? WAITING : null,
+    error: allOn ? "The dashboard does not answer: Connection refused. Make sure that the dashboard runs on the server." : null,
+  }));
+  writeFileSync(join(OC, "opencode.json"), JSON.stringify(allOn ? {
+    plugin: ["file:/x/carl-cache", ["file:/x/carl-model-check", {}]], agent: { coder: {} }, mcp: { "carl-browser": {} }, lsp: true,
+  } : {}));
+  writeFileSync(join(OC, "tui.json"), JSON.stringify(allOn ? { plugin: ["file:/x/session-switcher", "file:/x/subagents-sidebar"] } : {}));
+  writeFileSync(join(CARL, "opencode.env"), allOn ? envFile("exa") + "export OPENCODE_EXPERIMENTAL_LSP_TOOL=1\n" : "");
+  for (const f of ["extensions/carl-cache/index.ts", "extensions/subagent/index.ts", "agents/coder.md"]) {
+    if (allOn) writeFileSync(join(PI, f), "x");
+    else rmSync(join(PI, f), { force: true });
+  }
+  writeFileSync(join(PI, "mcp.json"), JSON.stringify(allOn ? { mcpServers: { "carl-browser": {}, "carl-web-search": { url: "https://mcp.exa.ai/mcp" } } } : {}));
+  writeFileSync(join(PI, "carl.json"), JSON.stringify({ background_subagents: allOn }));
+}
+
+/** Every text a section shows, with where it is. */
+function texts(s) {
+  return [["title", `${s.title} · ${s.summary}`], ...s.actions.map((a) => ["action", `▸ ${a.label}`]),
+          ...s.lines.map((l) => ["line", l]), ...s.details.map((l) => ["detail", l])];
+}
+
+// docs/phase21/glossary.md: the names that go away (and G16: one path notation)
+const FORBIDDEN = [/prompt cache/i, /auto-apply/i, /\bpush/i, /\bpiece/i, /\bwindow/i, /\bmonitor\b/i, /cache API/,
+                   /dashboard's API/, /→/, /\bctx\b/, /conversation/i, /\bdone\b/];
+
+for (const allOn of [true, false]) {
+  test(`the panel ${allOn ? "with every part on" : "with every part off"}: glossary names, no hash in the main text, short lines`, () => {
+    stage(allOn);
+    for (const client of ["opencode", "pi"]) {
+      for (const s of sections(client)) {
+        for (const [where, t] of texts(s)) {
+          for (const bad of FORBIDDEN) assert.ok(!bad.test(t), `${client} ${s.id} ${where}: ${bad} in "${t}"`);
+          assert.ok(t.length <= 90, `${client} ${s.id} ${where}: ${t.length} characters: "${t}"`);
+          if (where !== "detail") {
+            assert.ok(!t.includes(HASH) && !t.includes(WAITING), `${client} ${s.id} ${where}: a hash in "${t}"`);
+            assert.ok(!/\b[A-Z_]+=/.test(t), `${client} ${s.id} ${where}: an installer variable in "${t}"`);
+            assert.ok(!t.includes("192.168.42.1"), `${client} ${s.id} ${where}: an address in "${t}"`);
+          }
+        }
+      }
+    }
+  });
+}
+
+test("the sync section: plain sentences, the version and the addresses in the details", () => {
+  stage(true);
+  const s = sections("opencode")[0];
+  assert.ok(s.lines.some((l) => l.startsWith("Last config from the dashboard: ")), s.lines.join(" | "));
+  assert.ok(s.details.includes("Dashboard API: http://192.168.42.1:8081"), s.details.join(" | "));
+  assert.ok(s.details.some((l) => l.includes(HASH)), s.details.join(" | "));
+  assert.deepEqual(s.actions.map((a) => a.id), ["auto-on", "apply", "check"]);
+  assert.equal(s.summary, "new config: restart OpenCode to use it");
+  stage(false);
+  assert.equal(sections("pi")[0].summary, "new config: restart Pi to use it");
+  writeFileSync(join(CARL, "client-sync.json"), JSON.stringify({ bundle: BUNDLE, service: false }));
+  assert.equal(sections("pi")[0].summary, "checks at start · applies new configs at once");
+});
+
+test("the coder's section says what ✓ and ✗ mean in the sidebar", () => {
+  stage(true);
+  const sidebar = sections("opencode").find((s) => s.id === "sidebar");
+  assert.ok(sidebar.lines.some((l) => l.includes("✓") && l.includes("✗")), sidebar.lines.join(" | "));
+});
+
+test("outcome: what a toast says after an action", () => {
+  stage(false);
+  writeFileSync(join(CARL, "client-sync.json"), JSON.stringify({ bundle: BUNDLE, applied: HASH }));
+  const check = { id: "check", label: "Check for a new config now", args: ["once"] };
+  assert.deepEqual(outcome(check, 0, "opencode"), { ok: true, message: "CARL updated the model list. Restart OpenCode to use it." });
+  assert.equal(outcome({ id: "auto-off", label: "", args: [] }, 0, "pi").message, "CARL: new configs from the dashboard now wait for you.");
+  assert.equal(outcome(check, 1, "pi").ok, false);
+  assert.match(outcome(check, -1, "pi").message, /Run the installer again/);
+  writeFileSync(join(CARL, "client-sync.json"), JSON.stringify({ bundle: BUNDLE, error: "x" }));
+  assert.equal(outcome(check, 0, "pi").ok, false);
+  assert.equal(restartNotice("pi"), "CARL updated the model list. Restart Pi to use it.");
+});
+
+test("when, duration, wrap: one time format, short lines", () => {
+  const now = new Date(2026, 9, 4, 15, 0);
+  assert.equal(when("2026-10-04 10:53:33", now), "today 10:53");
+  assert.equal(when("2026-10-03 23:01:00", now), "yesterday 23:01");
+  assert.equal(when("2026-09-28 08:00:00", now), "2026-09-28 08:00");
+  assert.equal(when(undefined, now), "at an unknown time");
+  assert.deepEqual([42, 61, 3 * 60, 72 * 60, 3 * 3600, 49 * 3600].map(duration), ["42 s", "1 min", "3 min", "1 h 12 min", "3 h", "2 days"]);
+  assert.deepEqual(wrap("aaa bbb ccc", 7), ["aaa bbb", "ccc"]);
+  assert.deepEqual(wrap("", 7), []);
 });

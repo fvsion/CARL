@@ -164,9 +164,9 @@ def mtp_fallback(m: ModelInfo, spec: str, source: MtpSource) -> Tuple[str, Optio
     if source != "none" or "draft-mtp" not in spec.split(","):
         return spec, None
     name = m.get("name", "")
-    why = (f"its MTP drafter is not downloaded (./carl.sh download {name} gets it)" if m.get("draft")
+    why = (f"its MTP drafter is not downloaded (./carl.sh download {name} downloads it)" if m.get("draft")
            else "its file has no MTP head")
-    return spec_without_mtp(spec), f"{name}: speculation {spec} needs MTP, but {why}: this start uses n-gram."
+    return spec_without_mtp(spec), f"{name}: the speculation is n-gram only, because {why}."
 
 
 def find_model(models: List[ModelInfo], name: str, as_path: str) -> Optional[ModelInfo]:
@@ -223,8 +223,8 @@ def tune_advice(m: ModelInfo, vals: Settings, src: Dict[str, SettingSource]) -> 
     if src.get("ctx") in ("auto-tune", "config") or not isinstance(ctx, int) or ctx >= CTX_FLOOR:
         return None
     name = m.get("name", "")
-    return (f"{name} starts with a {ctx // 1024}K window (sized for smaller Macs). "
-            f"Run ./carl.sh tune {name} (or the Settings tab's Auto-tune panel) to size it for this Mac.")
+    return (f"{name} starts with a context of {ctx // 1024}K tokens (the catalogue sized it for smaller Macs). "
+            f"To find the context for this Mac, run ./carl.sh tune {name} (or use Settings > Auto-tune).")
 
 
 def ctx_zones(m: ModelInfo) -> Tuple[int, int, int]:
@@ -251,7 +251,7 @@ def select_named(models: List[ModelInfo], name: str, as_path: str) -> ModelInfo:
     """The model a start names: it must exist and be downloaded."""
     m = find_model(models, name, as_path)
     if not m:
-        raise ConfigError(f"unknown model '{name}' (see: ./carl.sh models)")
+        raise ConfigError(f"unknown model '{name}'. ./carl.sh models lists the models.")
     if m.get("status") != "downloaded":
-        raise ConfigError(f"{m.get('name')} is not downloaded (run: ./carl.sh download {m.get('name')})")
+        raise ConfigError(f"{m.get('name')} is not downloaded. To download it: ./carl.sh download {m.get('name')}")
     return m

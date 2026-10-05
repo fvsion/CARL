@@ -21,7 +21,7 @@ class CardCli(unittest.TestCase):
         with open(os.path.join(self.models, "Mine-Q4.gguf"), "wb") as f:
             f.write(b"GGUF")
         self.env = {**{k: v for k, v in os.environ.items() if k != "API_KEY_FILE"}, "HOME": d,
-                    "CARL_CONF_DIR": self.conf, "MODELS_DIR": self.models, "CARL_CMD": "./carl.sh"}
+                    "CARL_CONF_DIR": self.conf, "MODELS_DIR": self.models, "CARL_CMD": "./carl.sh", "COLUMNS": "80"}
 
     def tearDown(self) -> None:
         self._tmp.cleanup()
@@ -37,7 +37,7 @@ class CardCli(unittest.TestCase):
     def test_set_show_unset(self) -> None:
         p = self.carl("card", "mine-q4")
         self.assertEqual(p.returncode, 0, p.stderr)
-        self.assertIn("mine-q4: custom model, no card yet", p.stdout)
+        self.assertIn("mine-q4 is a custom model. It has no card yet.", p.stdout)
         for args in (("role", "Fast", "local", "coder"), ("good_for", "agent coding,hard code"), ("rank", "4"),
                      ("arch", "MoE"), ("pick_instead", "qwen3.8-27b=harder code", "qwen3.6-35b-a3b=chat"),
                      ("auto_fit", "yes")):
@@ -47,17 +47,17 @@ class CardCli(unittest.TestCase):
             "role": "Fast local coder", "good_for": ["agent coding", "hard code"], "rank": 4, "arch": "moe",
             "pick_instead": [{"model": "qwen3.8-27b", "when": "harder code"},
                              {"model": "qwen3.6-35b-a3b", "when": "chat"}], "auto_fit": True})
-        self.assertIn("  good_for      agent coding, hard code", p.stdout)
+        self.assertRegex(p.stdout, r"\n  good for \(good_for\) +agent coding, hard code\n")
         listing = self.carl("models").stdout
-        self.assertRegex(listing, r"mine-q4 .* Fast local coder \(your card\)")
+        self.assertRegex(listing, r"mine-q4 .*\n +Fast local coder \(your card\)")
         p = self.carl("card", "mine-q4", "unset", "auto_fit")
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertNotIn("auto_fit", self.stored() or {})
 
     def test_errors_exit_1(self) -> None:
-        for args, msg in ((("qwen3.8-27b", "set", "role", "x"), "qwen3.8-27b is a catalogue model: its card is read-only"),
-                          (("mine-q4", "set", "good_for", "uncensored"), "only abliterated models may be tagged uncensored"),
-                          (("mine-q4", "set", "rank", "0"), "rank must be a whole number >= 1"),
+        for args, msg in ((("qwen3.8-27b", "set", "role", "x"), "qwen3.8-27b is a catalogue model, so you cannot change its card"),
+                          (("mine-q4", "set", "good_for", "uncensored"), "only an abliterated model can have the tag uncensored"),
+                          (("mine-q4", "set", "rank", "0"), "rank must be a whole number, 1 or more"),
                           (("mine-q4", "set", "colour", "red"), "unknown card field 'colour'"),
                           (("mine-q4", "set", "role"), "usage: carl.py card NAME"),
                           (("nope",), "unknown model 'nope'")):
@@ -70,11 +70,11 @@ class CardCli(unittest.TestCase):
     def test_catalogue_card_and_help(self) -> None:
         p = self.carl("card", "qwen3.8-27b")
         self.assertEqual(p.returncode, 0, p.stderr)
-        self.assertIn("qwen3.8-27b: catalogue model, read-only card (host/catalog.json)", p.stdout)
-        self.assertIn("  rank          1", p.stdout)
+        self.assertIn("qwen3.8-27b is a catalogue model. You cannot change its card", p.stdout)
+        self.assertRegex(p.stdout, r"\n  quality rank +1\n")
         self.assertIn("card NAME", self.carl("-h").stdout)
-        self.assertIn("MODEL CARDS", self.carl("help", "card").stdout)
-        self.assertIn("card NAME set FIELD VALUE", self.carl("help", "models").stdout)
+        self.assertIn("FIELDS", self.carl("help", "card").stdout)
+        self.assertIn("card NAME set FIELD VALUE", self.carl("card", "--help").stdout)
 
 
 if __name__ == "__main__":

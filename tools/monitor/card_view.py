@@ -8,14 +8,16 @@ from carl_core.domain.cards import CHOICE_TEXT
 from carl_core.domain.records import GOOD_FOR, ROLE_MAX
 
 from .card_form import CardForm, Item
-from .fmt import B, CYN, DIM, GRN, R, RED, YEL, CardLine, Ln, Row, button_rows, cwrap, draw_card, indent, vlen
+from .fmt import B, CYN, DIM, GRN, R, RED, YEL, CardLine, Key, Ln, Row, button_rows, cwrap, draw_card, indent, vlen
+from .words import plural
 
 LABEL_W = 15                                           # the label column
 REV = "\x1b[7m"                                        # reverse video: the selected row's label
 TAG_COLOUR = {"agent coding": GRN, "hard code": CYN, "chat & writing": B, "uncensored": RED}
-KEYS_HELP = ("Press ↑ ↓ to select a field. Press Enter to edit it. Type the text, then press Enter to keep it or "
-             "Esc to discard it. Press ← → or space to change a choice or to tick a tag. Press x to clear the field. "
-             "Press s to save the card. Press Esc to cancel without a save.")
+LABELS = {"uncensored": "what uncensored means"}         # the form's label where the field's own is too short
+FORM_KEYS: List[Key] = [("↑↓", "field"), ("Enter", "edit"), ("← → space", "change a choice"), ("x", "clear"), ("s", "save"),
+             ("Esc", "cancel")]
+TYPING_KEYS: List[Key] = [("Enter", "keep the text"), ("Esc", "drop it"), ("Backspace", "delete")]
 
 
 def value_text(form: CardForm, it: Item, sel: bool) -> str:
@@ -52,7 +54,7 @@ def row_lines(form: CardForm, it: Item, i: int, first: bool, w: int) -> List[Car
     """One form row (wrapped under the value column); first: the first row of its field (the
     label is shown once for the tags and the pick-instead entries)."""
     sel = i == form.row
-    label = it.field.label if first else ""
+    label = LABELS.get(it.field.key, it.field.label) if first else ""
     pre = f"{CYN}{B}›{R} " if sel else "  "
     lab = f"{label:<{LABEL_W - 2}}"
     head = pre + (f"{REV}{lab}{R}" if sel else lab) + "  "
@@ -85,17 +87,16 @@ def draw_form(form: CardForm, cols: int, height: int) -> List[Row]:
     tw = w - 4
     it = form.item()
     intro = cwrap(f"{DIM}Describe {form.model}. CARL cannot find the purpose of a model from its file. The MODEL card, "
-                  f"the model lists (role, tags), sort by quality and the filters read this card. Auto fit reads it "
-                  f"only if you set auto fit to yes. Good-for tags: {', '.join(GOOD_FOR)}.{R}", tw)
+                  f"the model lists (role, tags), the quality sort and the filters read this card. Auto fit uses the "
+                  f"model only if you set Auto fit to yes. Good-for tags: {', '.join(GOOD_FOR)}.{R}", tw)
     foot: List[CardLine] = [""]
     foot += cwrap(f"{B}{it.field.label}{R}  {DIM}{it.field.help}{R}", tw)
     if form.typing is not None:
-        foot += cwrap(f"{YEL}typing: Enter keeps the text, Esc discards it. You can paste. Backspace deletes.{R}", tw)
+        foot += cwrap(f"{YEL}You type now. Enter keeps the text, Esc drops it. You can paste.{R}", tw)
     if form.error:
         foot += cwrap(f"{RED}{form.error}{R}", tw)
     foot += ["", *button_rows("", [("Save (s)", "cardsave"), ("Cancel (Esc)", "cardcancel"),
-                                    ("Edit field (Enter)", "cardenter"), ("Clear field (x)", "cardclear")], tw)]
-    foot += cwrap(f"{DIM}{KEYS_HELP}{R}", tw)
+                                    ("Edit the field (Enter)", "cardenter"), ("Clear the field (x)", "cardclear")], tw)]
     rows, start, end = form_lines(form, tw)
     room = max(height - 2 - len(intro) - 1 - len(foot) - 2, 4)    # 2: the card's borders; 2: the "more" lines
     top = 0
@@ -103,8 +104,8 @@ def draw_form(form: CardForm, cols: int, height: int) -> List[Row]:
         top = min(max(end - room + 1, 0), start)
         top = max(0, min(top, len(rows) - room))
     shown = rows[top:top + room]
-    above = [f"{DIM}  ↑ {top} more line(s) above{R}"] if top else []
-    below = [f"{DIM}  ↓ {len(rows) - top - room} more line(s) below{R}"] if top + room < len(rows) else []
+    above = [f"{DIM}  ↑ {plural(top, 'more line')} above{R}"] if top else []
+    below = [f"{DIM}  ↓ {plural(len(rows) - top - room, 'more line')} below{R}"] if top + room < len(rows) else []
     L: List[CardLine] = [*intro, "", *above, *shown, *below, *foot]
     title = f"{B}{form.model}{R}  {DIM}custom model · your card (models.json){' · changed' if form.changed else ''}{R}"
-    return indent(draw_card("cardedit", "EDIT CARD", title, L, w, 2))
+    return indent(draw_card("cardedit", "EDIT THE CARD", title, L, w, 1))

@@ -39,7 +39,7 @@ class ConfigureTests(unittest.TestCase):
             json.dump(self.models, f)
         return subprocess.run([sys.executable, SCRIPT, "--bundle", CLIENT, "--home", self.home, "--host", host,
                                "--llama-port", "8080", "--ctx", ctx, "--models", lst, *extra],
-                              capture_output=True, text=True)
+                              capture_output=True, text=True, env={**os.environ, "COLUMNS": "1000"})   # one line each
 
     def path(self, rel: str) -> str:
         return os.path.join(self.home, rel)
@@ -719,6 +719,16 @@ class MergeRuleTests(unittest.TestCase):
         self.assertEqual(conf["plugin"], ["mine.js"])
         self.assertFalse(cfg.merge_plugin_entry(conf, "file:/p/x", None, False, "x", rep))  # nothing left to do
 
+    def test_report_lines_wrap_to_the_width(self) -> None:
+        rep = cfg.Report()
+        rep.add("kept", "no ~/.zshrc or ~/.bashrc. For the tool switches of OpenCode, add this line to your shell "
+                        "profile:\n[ -f x ] && . x")
+        lines = rep.lines(60)
+        self.assertTrue(lines[0].startswith("  kept      no ~/.zshrc"), lines)
+        self.assertTrue(all(len(x) <= 60 for x in lines[:-1]), lines)
+        self.assertTrue(all(x.startswith(" " * 12) for x in lines[1:]), lines)
+        self.assertEqual(lines[-1], " " * 12 + "[ -f x ] && . x")                  # a command stays whole
+
     def test_append_system_keeps_the_users_text(self) -> None:
         old = "<!-- llm-deploy:delegation begin -->\nold\n<!-- llm-deploy:delegation end -->\n\nMine.\n"
         new = cfg.append_system_text(old, "rule")
@@ -926,7 +936,12 @@ class InstallScriptTests(unittest.TestCase):
         p = self.install()
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertIn("no installed-models.json here", p.stdout)
-        self.assertIn("models for the clients: none yet", p.stdout)
+        self.assertIn("Models for the clients: none yet.", p.stdout)
+        self.assertIn("No server answers, so this is", p.stdout)                # C16: plain sentences
+        self.assertIn("Note: no server runs at http://127.0.0.1:", p.stdout)
+        self.assertIn("96K tokens per slot", p.stdout)                           # I3: K = 1024, not 98304
+        self.assertNotIn("98304", p.stdout)
+        self.assertNotIn("((", p.stdout.replace("\n", " "))
         self.assertNotIn("Traceback", p.stderr)                  # the server is away: a note, no stack trace
         with open(os.path.join(self.home, ".config/opencode/opencode.json"), encoding="utf-8") as f:
             self.assertEqual(json.load(f)["provider"]["llamacpp"]["models"], {})
@@ -937,7 +952,7 @@ class InstallScriptTests(unittest.TestCase):
             json.dump(MODELS, f)
         p = self.install()
         self.assertEqual(p.returncode, 0, p.stderr)
-        self.assertIn("models for the clients: qwen3.6-35b-a3b, qwen3.8-27b", p.stdout)
+        self.assertIn("Models for the clients: qwen3.6-35b-a3b, qwen3.8-27b.", p.stdout)
         with open(os.path.join(self.home, ".pi/agent/models.json"), encoding="utf-8") as f:
             self.assertEqual([m["id"] for m in json.load(f)["providers"]["llamacpp"]["models"]],
                              ["qwen3.6-35b-a3b", "qwen3.8-27b"])
@@ -947,10 +962,43 @@ class InstallScriptTests(unittest.TestCase):
         os.makedirs(os.path.join(self.home, ".config/carl"))
         p = self.install()
         self.assertEqual(p.returncode, 0, p.stderr)
-        self.assertIn("Reusing the API key from ~/.config/llm-deploy/api-key", p.stdout)
+        self.assertIn("Using the API key from ~/.config/llm-deploy/api-key", p.stdout)
         self.assertFalse(os.path.islink(os.path.join(self.home, ".config/llm-deploy")))
         with open(os.path.join(self.home, ".config/carl/api-key"), encoding="utf-8") as f:
             self.assertEqual(f.read(), "vmsecret")
+
+
+class HelpPageTests(unittest.TestCase):
+    """I1, I2: install.sh and install-clients.sh print a help page (exit 0) that fits the width."""
+
+    def help(self, script: str, cols: str = "80") -> subprocess.CompletedProcess[str]:
+        env = {**os.environ, "COLUMNS": cols}
+        return subprocess.run(["bash", os.path.join(CLIENT, script), "--help"], capture_output=True, text=True,
+                              stdin=subprocess.DEVNULL, env=env, timeout=30)
+
+    def test_help_pages_exit_0_and_fit_80_columns(self) -> None:
+        for script in ("install.sh", "install-clients.sh"):
+            for flag_cols in ("80", "60", "132"):
+                p = self.help(script, flag_cols)
+                self.assertEqual(p.returncode, 0, p.stderr)
+                self.assertIn("Usage: ./" + script, p.stdout)
+                long = [x for x in p.stdout.splitlines() if len(x) > int(flag_cols)]
+                self.assertEqual(long, [], f"{script} at {flag_cols} columns")
+            self.assertNotIn("MTPLX", p.stdout)                     # no history for users
+
+    def test_install_help_keeps_every_switch(self) -> None:
+        text = self.help("install.sh").stdout
+        for name in ("--local", "--vm", "--host", "--port", "--key-file", "--key", "NO_CACHE=1", "NO_MODEL_CHECK=1",
+                     "NO_SWITCHER=1", "NO_SIDEBAR=1", "NO_CODER=1", "CODER=1", "NO_BACKGROUND_SUBAGENTS=1",
+                     "NO_BROWSER=1", "BROWSER_HEADED=1", "WEB_SEARCH=", "NO_LSP=1", "LLAMA_CTX=", "NO_PROFILE=1",
+                     "NO_SYNC_SERVICE=1", "CARL_API_KEY"):
+            self.assertIn(name, text)
+
+    def test_install_clients_refuses_an_unknown_argument(self) -> None:
+        p = subprocess.run(["bash", os.path.join(CLIENT, "install-clients.sh"), "nope"], capture_output=True,
+                           text=True, stdin=subprocess.DEVNULL, timeout=30)
+        self.assertEqual(p.returncode, 2)
+        self.assertIn("--help", p.stderr)
 
 
 if __name__ == "__main__":

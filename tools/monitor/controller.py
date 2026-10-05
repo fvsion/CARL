@@ -1,25 +1,25 @@
-"""Turns keys and clicks into actions on the UI state: tabs, card levels, scrolling, the quit and
-turn dialogs, and the typed values of the Server panel. The Settings panels' actions are in
-settings_actions.py (the card edit form: card_actions.py), the Connect tab's in connect_actions.py."""
+"""Turns keys and clicks into actions on the UI state: tabs, the detail level (D), card levels,
+scrolling, the quit and "an agent is working" dialogs. Input is handled key by key (keys typed
+fast arrive in one read). The Settings tab's keys and actions are in settings_actions.py (the card
+edit form: card_actions.py), the Connect tab's actions in connect_actions.py."""
 from __future__ import annotations
 
 import signal
 import time
 from typing import Callable, Dict, List, NamedTuple
 
-from . import system
+from . import system, uiprefs
 from .api import Endpoint
 from .clients import LABELS
 from .connect_actions import ConnectActions
 from .jobs import ServerJobs
-from .keys import (BACKSPACE, END, END_ALT, ENTER, ESC, LEFT, LEFTKEY, RIGHT, SCROLL_KEYS, WHEEL_DOWN, WHEEL_UP, Click,
-                   split_mouse, strip_escapes)
+from .keys import END, END_ALT, ENTER, ESC, LEFT, SCROLL_KEYS, WHEEL_DOWN, WHEEL_UP, Click, split_keys, split_mouse
 from .logtail import LogTail
 from .model import ServerData
-from .settings import NUMERIC, Pending, SettingsService
+from .settings import Pending, SettingsService
 from .settings_actions import SETTINGS_ACTIONS, SettingsActions
 from .settings_view import SettingsView
-from .state import CONNECT_SUBPANELS, SP_FIT, SP_SERVER, TABS, UIState
+from .state import CONNECT_SUBPANELS, DETAILS, SP_CACHE, SP_FIT, SP_MODELS, SP_SERVER, TABS, UIState
 
 
 class Region(NamedTuple):
@@ -35,8 +35,9 @@ class Controller:
     last frame; the app keeps both current."""
 
     def __init__(self, ui: UIState, svc: SettingsService, jobs: ServerJobs, view: SettingsView, endpoint: Endpoint,
-                 tail: LogTail, repo: str, home: str) -> None:
+                 tail: LogTail, repo: str, home: str, prefs: str = "") -> None:
         self.ui = ui
+        self.prefs = prefs              # the dashboard's own saved state (uiprefs.py): the detail level
         self.svc = svc
         self.jobs = jobs
         self.endpoint = endpoint
@@ -65,7 +66,11 @@ class Controller:
         elif action.startswith("level:"):
             nm = action[6:]
             if nm in ui.levels:
-                ui.levels[nm] = (ui.levels[nm] + 1) % 3
+                ui.levels[nm] = 0 if ui.levels[nm] else 1
+        elif action == "detail":
+            self.toggle_detail()
+        elif action == "livestart":
+            self.start_from_live()
         elif action.startswith("tab:"):
             ui.tab = int(action[4:])
         elif action == "quit":
@@ -92,8 +97,9 @@ class Controller:
         elif action == "detach":
             pid = d.target_pid
             if pid and not d.exited:
-                ui.exit_msg = (f"Monitor closed. The server still runs (pid {pid}) at {self.endpoint.base}.\n"
-                               f"  re-attach: ./carl.sh monitor --port {self.endpoint.port}\n  stop:      kill {pid}")
+                ui.exit_msg = (f"The dashboard closed. The server runs on at {self.endpoint.base}.\n"
+                               f"  To open the dashboard again: ./carl.sh\n"
+                               f"  To stop the server: ./carl.sh, then q, then s.")
             raise SystemExit
         elif action == "stop":
             pid = d.target_pid
@@ -112,19 +118,35 @@ class Controller:
         elif action == "drain:cancel":
             ui.drain = None
 
+    # ------------------------------------------------------------ the detail level, a start from Live
+    def toggle_detail(self) -> None:
+        """D: simple <-> full, everywhere; saved for the next start of the dashboard."""
+        ui = self.ui
+        ui.detail = DETAILS[(DETAILS.index(ui.detail) + 1) % len(DETAILS)] if ui.detail in DETAILS else DETAILS[0]
+        if self.prefs:
+            uiprefs.save_detail(self.prefs, ui.detail)
+
+    def start_from_live(self) -> None:
+        """a on the Live tab with no server: Settings > Server, and its question "start the server?"."""
+        ui = self.ui
+        ui.tab, ui.sp = 4, SP_SERVER
+        if ui.pending is None:
+            ui.pending, ui.set_run = self.settings.pending_init(self.data), self.svc.running(self.data)
+        self.settings.action("setapply")
+
     # ------------------------------------------------------------ input
     def scroll(self, step: int) -> None:
-        """Up / down (step > 0 = up): moves the Settings row by one, else scrolls the tab's list."""
+        """The mouse wheel and the scroll keys (step > 0 = up): the list or panel of the screen shown."""
         ui = self.ui
-        if ui.tab == 4 and ui.sp == SP_FIT:
-            ui.fit_scroll = max(0, ui.fit_scroll - step)
-        elif ui.tab == 4:
-            if abs(step) != 1:                      # wheel / PgUp PgDn: scroll the Server panel (cards below the rows)
+        if ui.tab == 4:
+            if ui.sp == SP_FIT:
+                ui.fit_scroll = max(0, ui.fit_scroll - step)
+            elif ui.sp == SP_MODELS:
+                ui.mrow = max(ui.mrow - step, 0)
+            elif ui.sp == SP_CACHE:
+                ui.cache_row = max(ui.cache_row - step, 0)
+            else:
                 ui.set_scroll = max(0, ui.set_scroll - step)
-                return
-            n = len(self.svc.rows(ui.pending)) if ui.pending else 1 + len(self.svc.schema.llama)
-            ui.set_row = (ui.set_row - step) % n
-            ui.set_scroll = 0                       # the rows are at the top: keep the selected one in view
         elif ui.tab == 3:
             ui.log_scroll = max(0, min(ui.log_scroll + step, max(len(self.tail.book.lines) - 5, 0)))
         elif ui.tab == 2:
@@ -153,109 +175,91 @@ class Controller:
                 self.do(r.action)
                 return
 
-    def handle_input(self, data: str) -> bool:
-        """Act on keys and clicks. True = refresh the data now (space)."""
+    def typing(self) -> bool:
+        """A text is being typed in the Settings tab (a Hugging Face repo, a card field)."""
         ui = self.ui
+        return ui.tab == 4 and not (ui.quit or ui.drain or ui.confirm) and bool(
+            ui.text or (ui.card is not None and ui.card.typing is not None))
+
+    def handle_input(self, data: str) -> bool:
+        """Act on clicks, then on each key in order. True = read the server again now (space). A text
+        being typed takes the whole input (a paste stays one text)."""
         clicks, rest = split_mouse(data)
         for c in clicks:
             self.handle_click(c)
-        if ui.drain:                              # a reply runs: y now, w wait, n / Esc cancel
-            for ch in rest:
-                if ch in "yYsS":
-                    self.do("drain:now")
-                    break
-                if ch in "wW" and not ui.drain.waiting:
-                    self.do("drain:wait")
-                    break
-                if ch in "nN" + ESC:
-                    self.do("drain:cancel")
-                    break
+        if not rest:
             return False
-        if ui.confirm and not ui.quit:
-            if rest == ESC:
-                self.do("setno")
-            for ch in rest:
-                if ch in "yY":
-                    self.do("setyes")
-                elif ch in "nN":
-                    self.do("setno")
+        if self.typing():
+            self.settings.keys(rest)
             return False
-        if ui.tab == 4 and not ui.quit and rest and ui.edit is None and self.settings.keys(rest):
-            return False
-        if ui.tab == 4 and ui.pending is not None and not ui.quit and ui.sp == SP_SERVER:
-            key = self.settings.selected_key()
-            if ui.edit is not None:               # typing a value: digits . k, Backspace, Enter, Esc
-                for ch in rest:
-                    if ch in "0123456789.kK":
-                        ui.edit += ch.lower()
-                    elif ch in BACKSPACE:
-                        ui.edit = ui.edit[:-1]
-                    elif ch in ENTER:
-                        self.settings.commit_edit(key)
-                        break
-                    elif ch == ESC:
-                        ui.edit = None
-                        break
-                return False
-            if rest in ENTER and key in NUMERIC:
-                ui.edit = ""
-                return False
-        if ui.quit:
-            if rest == ESC:
-                self.do("cancel")
-            for ch in rest:
-                if ch in "sS":
-                    self.do("stop")
-                elif ch in "dDqQ":
-                    self.do("detach")
-                elif ch in "nNcC":
-                    self.do("cancel")
-            return False
-        for seq, step in SCROLL_KEYS.items():
-            if seq in rest:
-                self.scroll(step)
-        if ui.tab == 4 and ui.pending is not None and ui.sp == SP_SERVER:
-            if RIGHT in rest:
-                self.do(f"setinc:{ui.set_row}")
-            if LEFTKEY in rest:
-                self.do(f"setdec:{ui.set_row}")
-        if END in rest or END_ALT in rest:
-            ui.log_scroll = 0
-        if ui.tab == 1 and ui.install_ask and rest == ESC:
-            self.do("insno")
-            return False
-        return self.keys(strip_escapes(rest))
+        refresh = False
+        for k in split_keys(rest):
+            refresh = self.key(k) or refresh
+        return refresh
 
-    def keys(self, rest: str) -> bool:
-        """Plain key presses. True = refresh now."""
+    def key(self, k: str) -> bool:
+        """One key: a dialog's first, then the Settings tab's, then the keys of every screen and of the
+        tab shown. True = read the server again now."""
         ui = self.ui
-        simple: Dict[str, Callable[[], None]] = {
-            "k": lambda: self.do("key"), "o": lambda: self.do("opencode"), "p": lambda: self.do("pi"),
-            "t": lambda: self.do("curl"), "w": lambda: self.do("wrap"), "f": lambda: self.do("errors"),
-            "e": lambda: ui.levels.update({x: 2 for x in ui.levels}), "c": lambda: ui.levels.update({x: 0 for x in ui.levels})}
-        for ch in rest:
-            if ch in "qQ\x03":
-                self.do("quit")
-            elif ch in "12345":
-                ui.tab = int(ch) - 1
-            elif ui.tab == 1 and ui.install_ask and ch in "yYnN":
-                self.do("insyes" if ch in "yY" else "insno")
-            elif ui.tab == 1 and ch in "iuxP":
-                self.do({"i": "insall", "u": "insconfig", "x": "insclose", "P": "inspush"}[ch])
-            elif ui.tab == 1 and ch in "[]":
-                ui.connect_sp = (ui.connect_sp + 1) % len(CONNECT_SUBPANELS)
-            elif ui.tab == 4 and ui.sp == SP_SERVER and ch in "arxA":
-                self.do({"a": "setapply", "r": "setrevert", "x": "setdefaults", "A": "setautofit"}[ch])
-            elif ch == "\t":
-                ui.tab = (ui.tab + 1) % len(TABS)
-            elif ch in simple:
-                simple[ch]()
-            elif ch in "+=":
-                ui.lines = min(ui.lines + 2, 60)
-            elif ch in "-_":
-                ui.lines = max(ui.lines - 2, 2)
-            elif ch == "?":
-                ui.help = not ui.help
-            elif ch == " ":
-                return True
+        if ui.drain:                              # an agent is working: s / y stop now, w wait, n / Esc cancel
+            if k in ("s", "S", "y", "Y"):
+                self.do("drain:now")
+            elif k in ("w", "W") and not ui.drain.waiting:
+                self.do("drain:wait")
+            elif k in ("n", "N", ESC):
+                self.do("drain:cancel")
+            return False
+        if ui.quit:                               # s stop, l / q / d leave it running, n / c / Esc cancel
+            if k in ("s", "S"):
+                self.do("stop")
+            elif k in ("l", "L", "d", "q", "Q"):
+                self.do("detach")
+            elif k in ("n", "N", "c", "C", ESC):
+                self.do("cancel")
+            return False
+        if ui.confirm:                            # Apply's question: y / Enter yes, n / Esc no
+            if k in ("y", "Y") or k in ENTER:
+                self.do("setyes")
+            elif k in ("n", "N", ESC):
+                self.do("setno")
+            return False
+        if ui.tab == 4 and self.settings.key(k):
+            return False
+        if ui.tab == 1 and ui.install_ask:        # the installer's question
+            if k in ("y", "Y") or k in ENTER:
+                self.do("insyes")
+                return False
+            if k in ("n", "N", ESC):
+                self.do("insno")
+                return False
+        if k in ("q", "Q", "\x03"):
+            self.do("quit")
+        elif k in ("1", "2", "3", "4", "5"):
+            ui.tab = int(k) - 1
+        elif k == "\t":
+            ui.tab = (ui.tab + 1) % len(TABS)
+        elif k == "?":
+            ui.help = not ui.help
+        elif k == "D":
+            self.toggle_detail()
+        elif k == " ":
+            return True
+        elif k in SCROLL_KEYS:
+            self.scroll(SCROLL_KEYS[k])
+        elif k in (END, END_ALT):
+            ui.log_scroll = 0
+        elif ui.tab in (0, 1) and k in ("k", "o", "p", "c", "t"):
+            self.do({"k": "key", "o": "opencode", "p": "pi", "c": "curl", "t": "curl"}[k])
+        elif ui.tab == 0 and k == "a" and (self.data.exited or not (self.data.up or self.data.pid)):
+            self.do("livestart")
+        elif ui.tab == 0 and k in ("+", "="):
+            ui.lines = min(ui.lines + 2, 60)
+        elif ui.tab == 0 and k in ("-", "_"):
+            ui.lines = max(ui.lines - 2, 2)
+        elif ui.tab == 1 and k in ("i", "u", "x", "P"):
+            self.do({"i": "insall", "u": "insconfig", "x": "insclose", "P": "inspush"}[k])
+        elif ui.tab == 1 and k in ("[", "]"):
+            ui.connect_sp = (ui.connect_sp + 1) % len(CONNECT_SUBPANELS)
+        elif ui.tab == 3 and k in ("w", "f"):
+            self.do("wrap" if k == "w" else "errors")
         return False

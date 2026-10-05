@@ -140,7 +140,7 @@ class SelectionTest(unittest.TestCase):
         self.assertEqual(dm.select_named(self.ms, "small", "small")["name"], "small")
         with self.assertRaisesRegex(ConfigError, "unknown model 'x'"):
             dm.select_named(self.ms, "x", "x")
-        with self.assertRaisesRegex(ConfigError, r"big is not downloaded \(run: ./carl.sh download big\)"):
+        with self.assertRaisesRegex(ConfigError, r"big is not downloaded. To download it: ./carl.sh download big"):
             dm.select_named(self.ms, "big", "big")
 
     def test_configured_model(self) -> None:

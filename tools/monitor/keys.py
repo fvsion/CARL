@@ -15,7 +15,7 @@ ENTER = ("\r", "\n")
 ESC = "\x1b"
 BACKSPACE = "\x7f\x08"
 SCROLL_KEYS = {UP: 1, DOWN: -1, PGUP: 10, PGDN: -10}       # scroll steps (> 0: up)
-PANEL_PASSTHROUGH = ("q", "Q", "\x03", "\t", "?")  # keys a Settings panel leaves to the app: quit, Ctrl-C, Tab, the ? card
+_KEY = re.compile(r"\x1b\[[0-9;?]*[A-Za-z~]|\x1bO[A-Za-z]|\x1b|.", re.S)   # one key: a CSI / SS3 sequence, Esc, a character
 
 
 class Click(NamedTuple):
@@ -29,6 +29,13 @@ def split_mouse(data: str) -> Tuple[List[Click], str]:
     """The button presses in data (releases are dropped), and data without any mouse report."""
     clicks = [Click(int(m.group(1)), int(m.group(2)), int(m.group(3))) for m in MOUSE.finditer(data) if m.group(4) == "M"]
     return clicks, MOUSE.sub("", data)
+
+
+def split_keys(data: str) -> List[str]:
+    """data (mouse reports removed) as single keys, in order: an escape sequence (an arrow, PgUp, ...)
+    is one key, a lone Esc is one key, every other character is one key. Keys typed fast arrive in
+    one read ("?3"): each one is handled on its own."""
+    return [m.group() for m in _KEY.finditer(data)]
 
 
 def strip_escapes(data: str) -> str:

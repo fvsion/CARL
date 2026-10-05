@@ -1,40 +1,42 @@
 """The Settings tab's actions and keys: the drop-downs and questions, and each panel's (Server,
-Models, Auto fit, Auto-tune, Router, Caching). The card edit form: card_actions.py."""
+Models, Auto fit, Auto-tune, Router, Caching). Keys come one at a time (controller.Controller.key);
+a text being typed takes a whole read (keys()). The card edit form: card_actions.py."""
 from __future__ import annotations
 
-from typing import Callable, List
+from typing import Callable, Dict, List
 
 from carl_core.domain.tuning import DEPTHS, as_depth
+from carl_core.domain.units import file_size, memory
 
 from . import diskcache, fsio
 from .api import Endpoint
 from .arrange import FILTERS, SORTS
 from .card_actions import CardActions
-from .fmt import R, RED, home_short, size
+from .fmt import R, RED, home_short
 from .jobs import ServerJobs
-from .keys import BACKSPACE, DOWN, ENTER, ESC, LEFTKEY, PANEL_PASSTHROUGH, PGDN, PGUP, RIGHT, SCROLL_KEYS, UP
+from .keys import BACKSPACE, DOWN, ENTER, ESC, LEFTKEY, PGDN, PGUP, RIGHT, UP
 from .model import ModelInfo, ServerData, draft_bytes
-from .settings import Pending, SettingsService, parse_typed, step_choice
-from .settings_panels.caching import AUTO_CHOICES, DISK_CHOICES
+from .settings import NUMERIC, Pending, SettingsService, parse_typed, plan_words, spec_value, step_choice
+from .settings_panels.caching import AUTO_CHOICES, CACHE_ROWS, DISK_CHOICES
 from .settings_view import SettingsView
 from .state import (SP_CACHE, SP_FIT, SP_MODELS, SP_ROUTER, SP_SERVER, SP_TUNE, SUBPANELS, TUNE_ALL, Confirm, PickItem,
                     Picker, TextPrompt, UIState)
+from .words import plural, status_name
 
 MODEL_KEYS = {"\r": "museit", "\n": "museit", "d": "mdl", "v": "mverify", "x": "mdelete", "h": "mhf", "c": "mcancel",
-              "u": "mtune", "e": "medit", "s": "msort", "f": "mfilter",
-              "S": "msort-", "F": "mfilter-"}
+              "u": "mtune", "e": "medit", "s": "msort", "f": "mfilter", "S": "msort-", "F": "mfilter-"}
 ARRANGE_KEYS = {"s": "msort", "S": "msort-", "f": "mfilter", "F": "mfilter-"}   # every model list
 FIT_KEYS = {"\r": "fuse", "\n": "fuse", "d": "fdl", "g": "fgoal", "f": "fscope"}
+TUNE_KEYS = {"\r": "trun", "\n": "trun", RIGHT: "tnext", LEFTKEY: "tprev", "c": "tcancel", " ": "tquick", "x": "tclear"}
+SERVER_KEYS = {"a": "setapply", "r": "setrevert", "x": "setdefaults", "A": "setautofit"}
 TUNE_ALL_LABEL = "all downloaded models, one after the other"
 # Actions without a prefix the controller routes here by itself (controller.Controller.do).
 SETTINGS_ACTIONS = ("msort", "mfilter", "msort-", "mfilter-", "msortpick", "mfilterpick",
                     "museit", "mdl", "mverify", "mdelete", "mdelyes", "mhf", "mcancel", "mtune", "mautodl", "medit",
                     "tprev", "tnext", "tpick", "tquick", "trun", "tyes", "tcancel", "tclear", "fuse", "fdl", "fgoal",
                     "fscope")
-CACHE_KEYS = {"d": "cache:disk", "p": "cache:prefix", "s": "cache:sessions", "o": "cache:save", "t": "cache:auto",
-              "w": "cache:swa", "h": "cache:share",
-              "c": "cache:clear"}
-TUNE_KEYS = {"\r": "trun", "\n": "trun", RIGHT: "tnext", LEFTKEY: "tprev", "c": "tcancel", " ": "tquick"}
+CACHE_NAMES = {"disk": "disk limit", "prefix": "saved prompts", "sessions": "saved sessions", "save": "when CARL saves",
+               "auto": "save after", "share": "shared storage", "swa": "Gemma models (sliding window)"}
 
 
 class SettingsActions:
@@ -62,7 +64,7 @@ class SettingsActions:
         try:
             cfg = self.store.load_config()
         except Exception as e:      # carl.ConfigError or a broken file: say so, start from the defaults
-            self.ui.toast(f"{RED}config.json: {e}{R}", 15)
+            self.ui.toast(f"{RED}CARL cannot read config.json: {e}{R}", 15)
             cfg = self.store.empty_config()
         return self.svc.pending_init(d, cfg)
 
@@ -123,7 +125,7 @@ class SettingsActions:
                 cur = ui.msort if kind == "sort" else ui.mfilter
                 self.set_arrangement(kind, cur + (-1 if act.endswith("-") else 1))
             return
-        if act == "mautodl":                            # Auto fit's pick: download it, show it in the Models panel
+        if act == "mautodl":                            # Auto fit's choice: download it, show it in the Models panel
             c, ui.confirm2 = ui.confirm2, None
             if c and c.model:
                 self.jobs.start_download(c.model)
@@ -136,13 +138,13 @@ class SettingsActions:
             if mm:
                 try:
                     self.store.delete(mm)
-                    ui.toast(f"deleted {mm['name']} · update the OpenCode / Pi lists: Connect tab, u", 8)
+                    ui.toast(f"Deleted {mm['name']}. OpenCode and Pi still list it: press u in the Connect tab.", 8)
                 except Exception as e:  # a file in use, permissions, ...: say so, keep running
-                    ui.toast(f"{RED}delete failed: {e}{R}", 10)
+                    ui.toast(f"{RED}CARL cannot delete it: {e}{R}", 10)
                 self.models.get(refresh=True)
             return
         if act == "mhf":
-            ui.text = TextPrompt("Hugging Face repo (OWNER/REPO, or a URL to a .gguf):", "hf")
+            ui.text = TextPrompt("Hugging Face repo (OWNER/REPO, or the address of a .gguf file):", "hf")
             return
         if act == "mcancel":
             if ui.dl:
@@ -158,26 +160,31 @@ class SettingsActions:
             chosen["model"] = m["name"]
             self.svc.load_profile(chosen, m["name"])
             ui.sp, ui.set_row = SP_SERVER, 0            # the model row
-            ui.toast(f"{m['name']} selected: press a to start it" + ("" if m["status"] == "downloaded" else " after the download"), 6)
+            ui.toast(f"{m['name']} is your choice in the Server panel. "
+                     + ("Press a to start it." if m["status"] == "downloaded" else
+                        "Download it first: the Models panel, d."), 6)
         elif act == "mdl":
             self.jobs.start_download(m["name"])
         elif act == "mverify":
             self.jobs.verify(m["name"])
         elif act == "mdelete":
             if d.cmd and m["path"] in d.cmd:
-                ui.toast("that model is loaded: stop the server first", 6)
+                ui.toast(f"{m['name']} runs now. To delete it, stop the server first (q, then s).", 6)
                 return
-            lines = [f"Delete {m['name']} ({size(m['bytes'])})?", home_short(m["path"], self.home)]
+            lines = [f"Delete {m['name']} ({file_size(m['bytes'])})? This cannot be undone.",
+                     home_short(m["path"], self.home)]
             if m.get("draft"):
-                lines.append(f"and its MTP drafter ({size(draft_bytes(m))}): {home_short(str(m.get('draft_path', '')), self.home)}")
-            ui.confirm2 = Confirm("DELETE?", lines, "mdelyes", m["name"])
+                lines += [f"Its MTP drafter goes too ({file_size(draft_bytes(m))}):",
+                          home_short(str(m.get('draft_path', '')), self.home)]
+            lines.append("Then update OpenCode and Pi: press u in the Connect tab.")
+            ui.confirm2 = Confirm("DELETE THE MODEL?", lines, "mdelyes", m["name"], yes_label="Delete")
         elif act == "mtune":
             ui.tune_model, ui.sp = m["name"], SP_TUNE
         elif act == "medit":
             self.card.open(m)
 
     def fit_action(self, act: str) -> None:
-        """The Auto fit panel: the goal and the model set (fgoal / fscope), Use this, Download it."""
+        """The Auto fit panel: the goal and the candidates (fgoal / fscope), Use this, Download it."""
         ui = self.ui
         if act.startswith(("fgoal", "fscope")):
             self.auto_choice(act)
@@ -192,13 +199,16 @@ class SettingsActions:
             if fit and fit.pick and not fit.pick.downloaded:
                 self.jobs.start_download(fit.pick.name)
             else:
-                ui.toast("auto fit's pick is already downloaded", 5)
+                ui.toast("Auto fit's choice is downloaded already.", 5)
 
     def tune_action(self, act: str) -> None:
-        """The Auto-tune panel: the model (tprev / tnext / tpick), the mode (tquick, tdepth:MODE), a run
-        (trun, tyes after the question, tcancel) and tclear (the tuned values apply again)."""
+        """The Auto-tune panel: the model (tprev / tnext / tpick), the length (tquick, tdepth:DEPTH), a run
+        (trun, tyes after the question, tcancel) and tclear (the recommended settings apply again)."""
         ui = self.ui
         if act in ("tprev", "tnext"):
+            if ui.tune and not ui.tune.done:
+                ui.toast(f"Auto-tune runs for {ui.tune.model}. To change the model, cancel the run first (c).", 6)
+                return
             names = [x["name"] for x in self.models.downloaded()] + [TUNE_ALL]
             if len(names) > 1:
                 i = names.index(ui.tune_model) if ui.tune_model in names else 0
@@ -206,7 +216,7 @@ class SettingsActions:
         elif act == "tpick":
             items: List[PickItem] = [(x["name"], x) for x in self.models.downloaded()]
             ui.picker = Picker("AUTO-TUNE WHICH MODEL?", items + [(TUNE_ALL_LABEL, TUNE_ALL_LABEL)], "picktune")
-        elif act == "tquick":                           # quick -> default -> long -> quick
+        elif act == "tquick":                           # quick -> normal -> long -> quick
             ui.tune_depth = DEPTHS[(DEPTHS.index(as_depth(ui.tune_depth)) + 1) % len(DEPTHS)]
         elif act.startswith("tdepth:"):
             ui.tune_depth = as_depth(act[7:])
@@ -223,21 +233,35 @@ class SettingsActions:
                 (cfg.get("models") or {}).pop(ui.tune_model, None)
                 self.store.save_config(cfg)
             except Exception as e:      # config.json unreadable or not writable: say so
-                ui.toast(f"{RED}config.json: {e}{R}", 10)
+                ui.toast(f"{RED}CARL cannot save config.json: {e}{R}", 10)
                 return
             ui.pending = None
-            ui.toast(f"{ui.tune_model}: the tuned values apply (the config.json overrides are cleared)", 8)
+            ui.toast(f"{ui.tune_model}: CARL uses the recommended settings again. Your changes for this model in "
+                     f"config.json are removed.", 8)
+
+    def not_ready(self, p: Pending) -> str:
+        """Why Apply cannot start this setup ('' when it can)."""
+        f = self.svc.fit_cached(p)
+        if not f.known:
+            return f"{f.name} is not a known model. Choose another model."
+        if not f.downloaded:
+            return f"{f.name} is not downloaded. To download it: the Models panel (]), then d."
+        if f.error:
+            return f"CARL cannot check the memory: {f.error}"
+        if not f.fits:
+            return "This setup does not fit this Mac (see Memory). Use a smaller context or fewer slots."
+        return ""
 
     def server_action(self, act: str) -> None:
         """The Server panel: a row (setrow:N), a value (setinc:N / setdec:N), the model drop-down
-        (setpick), Revert, Tuned values, Auto fit, Apply and its question."""
+        (setpick), Undo, the recommended settings, Auto fit, Apply and its question."""
         ui, d, svc = self.ui, self.snapshot(), self.svc
         p = ui.pending
         if p is None:
             return
         rws = svc.rows(p)
         if act == "setpick":
-            ui.set_row = 1
+            ui.set_row = 0
             self.open_model_picker()
         elif act.startswith("setrow:"):
             ui.set_row = min(int(act[7:]), len(rws) - 1)
@@ -245,8 +269,11 @@ class SettingsActions:
             i = min(int(act[7:]), len(rws) - 1)
             ui.set_row = i
             row = rws[i]
-            if row.choices:
-                p[row.key] = step_choice(row.choices, p[row.key], 1 if act.startswith("setinc") else -1)
+            step = 1 if act.startswith("setinc") else -1
+            if row.key == "spec" and row.choices:
+                p["spec"], p["specn"] = str(step_choice(row.choices, spec_value(p), step)).split("|")
+            elif row.choices:
+                p[row.key] = step_choice(row.choices, p[row.key], step)
             if row.key == "model":
                 svc.load_profile(p, str(p["model"]))
         elif act == "setrevert":
@@ -256,13 +283,14 @@ class SettingsActions:
         elif act == "setautofit":
             ui.sp = SP_FIT
         elif act == "setnofit":
-            ui.toast("this setup does not fit or is not downloaded: see Status (fit)", 6)
+            ui.toast(self.not_ready(p) or "This setup cannot start.", 8)
         elif act == "setapply" and not ui.restart:
-            if not svc.fit_cached(p)[0]:
-                ui.toast("this setup does not fit or is not downloaded: see Status (fit)", 6)
+            why = self.not_ready(p)
+            if why:
+                ui.toast(why, 8)
                 return
             if d.cmd and "llama-server" not in d.cmd:
-                ui.toast("another server (not llama.cpp) uses this port: stop it first", 8)
+                ui.toast("Another server (not llama.cpp) uses this port. Stop it first.", 8)
                 return
             ui.confirm = True
         elif act == "setno":
@@ -272,8 +300,8 @@ class SettingsActions:
             self.jobs.restart(p, d)
 
     def router_action(self, act: str) -> None:
-        """The Router panel: rmode:MODE asks to switch the model switching mode, rmodeyes saves it
-        (llama.mode) and restarts a running server in it; rload:ID / runload:ID load or unload a
+        """The Router panel: rmode:MODE asks to switch between single model and router mode, rmodeyes
+        saves it (llama.mode) and restarts a running server in it; rload:ID / runload:ID load or unload a
         router's model (in the background: a load takes 30 s to 2 min)."""
         ui, d = self.ui, self.snapshot()
         if act.startswith("rmode:"):
@@ -281,21 +309,21 @@ class SettingsActions:
             if mode not in ("single", "router"):
                 return
             running = "router" if d.router is not None else "single" if d.up else None
-            what = ("OpenCode / Pi switch models (router mode)" if mode == "router" else
-                    "the dashboard picks the model (single model)")
-            ui.confirm2 = Confirm("MODEL SWITCHING?", [
-                f"Switch to: {what}. CARL saves llama.mode = {mode} in config.json.",
-                "CARL also updates the OpenCode / Pi configs on this Mac (if CARL set them up here).",
-                ("The server restarts in this mode now. Requests in progress stop, and the model loads again."
-                 if running and running != mode else "The next server start uses it."),
-                *(["Router mode: the router offers all downloaded models that fit. The client configs must list them "
-                   "all (update them in the Connect tab).",
-                   "WARNING: Each switch empties the prompt cache. The model that loads starts cold. OpenCode and Pi "
-                   "restore a session from the disk cache about one second after the load (Settings > Caching). Other "
-                   "clients read the full conversation again. For a long conversation, this takes minutes. Switch with "
-                   "this in consideration."]
-                  if mode == "router" else [])],
-                "rmodeyes", mode)
+            now = ("The server restarts in this mode now. Requests in progress stop, and the model loads again."
+                   if running and running != mode else "The next server start uses it.")
+            if mode == "router":
+                lines = ["OpenCode and Pi can then switch the model. Each switch loads the model again (30 s to 2 min).",
+                         "CARL saves this in config.json and updates the OpenCode and Pi configs on this Mac.", now,
+                         "⚠ After a switch, the model reads each session again. OpenCode and Pi restore it from the "
+                         "disk cache in about 1 s. Other clients can wait some minutes for a long session."]
+                title = "SWITCH TO ROUTER MODE?"
+            else:
+                lines = ["One model runs. You change it in the dashboard (Settings > Server).",
+                         "CARL saves this in config.json and updates the OpenCode and Pi configs on this Mac.", now]
+                title = "SWITCH TO A SINGLE MODEL?"
+            if ui.full:
+                lines.append(f"config.json: llama.mode = {mode}")
+            ui.confirm2 = Confirm(title, lines, "rmodeyes", mode, yes_label="Switch")
             return
         if act == "rmodeyes":
             c, ui.confirm2 = ui.confirm2, None
@@ -312,7 +340,7 @@ class SettingsActions:
                     llama["mode"] = mode
                 self.store.save_config(cfg)
             except Exception as e:      # config.json unreadable or not writable: say so
-                ui.toast(f"{RED}config.json: {e}{R}", 10)
+                ui.toast(f"{RED}CARL cannot save config.json: {e}{R}", 10)
                 return
             running = "router" if d.router is not None else "single" if d.up else None
             # the clients on this Mac follow: their configs are updated (after the restart: the
@@ -324,7 +352,8 @@ class SettingsActions:
                 ui.install_after_restart = update
                 self.jobs.restart(ui.pending, d)
             else:
-                ui.toast(f"saved: llama.mode = {mode}" + ("" if running == mode else " (the next start uses it)"), 8)
+                name = "router mode" if mode == "router" else "a single model"
+                ui.toast(f"Saved: {name}." + ("" if running == mode else " The next start uses it."), 8)
                 if update:
                     self.jobs.start_install(config_only=True)
             return
@@ -332,48 +361,50 @@ class SettingsActions:
             self.jobs.router_load(act.split(":", 1)[1], d, unload=act.startswith("runload:"))
 
     def cache_action(self, act: str) -> None:
-        """The Caching panel: disk[:GB] (the next limit, or that one), prefix / sessions / share
-        [:on|off], save[:MODE], auto[:S] and swa[:MODE] (the next one, or that one), saved to
-        config.json "cache" at once; clear asks, clearyes removes every saved state (diskcache.py)."""
+        """The Caching panel: KEY (the next choice), KEY:VALUE (that one) or KEY:prev (the one before) for
+        disk, prefix, sessions, share, save, auto and swa; saved to config.json "cache" at once. clear asks,
+        clearyes removes every saved file (diskcache.py)."""
         ui, jobs = self.ui, self.jobs
         folder = jobs.paths.slots
         if act == "clear":
             files = diskcache.listing(folder)
             if not files:
-                ui.toast("the disk cache is empty", 5)
+                ui.toast("The disk cache is empty.", 5)
                 return
+            n = sum(1 for f in files if f.kind == diskcache.PROMPT)
             ui.confirm2 = Confirm("CLEAR THE DISK CACHE?", [
-                f"This removes {len(files)} saved prompt states ({diskcache.gb(diskcache.used(files))}) from "
-                f"{home_short(folder, self.home)}: the pre-read prompts of OpenCode and the saved conversations.",
-                "The server keeps the states that it holds now. After the next start, the server reads each prompt "
-                "again when a client uses it first."],
-                "cache:clearyes")
+                f"This removes {plural(len(files), 'file')} ({diskcache.gb(diskcache.used(files))}): "
+                f"{plural(n, 'saved prompt')} and {plural(len(files) - n, 'saved session')} of OpenCode and Pi.",
+                f"Folder: {home_short(folder, self.home)}",
+                "The server keeps what it holds now. After the next start, the server reads each prompt again when a "
+                "client uses it first."], "cache:clearyes", yes_label="Clear")
             return
         if act == "clearyes":
             ui.confirm2 = None
             diskcache.remove(folder, [f.name for f in diskcache.listing(folder)])
-            ui.toast("disk cache cleared", 6)
+            ui.toast("The disk cache is empty now.", 6)
             return
         conf = jobs.cache_conf(fresh=True)
         key, _, value = act.partition(":")
+        step = -1 if value == "prev" else 1
         new: object
         if key == "disk":
             gbs = sorted({*DISK_CHOICES, conf.disk_gb})
-            new = int(value) if value.isdigit() else gbs[(gbs.index(conf.disk_gb) + 1) % len(gbs)]
-            text = f"disk limit: {new} GB"
+            new = int(value) if value.isdigit() else gbs[(gbs.index(conf.disk_gb) + step) % len(gbs)]
+            text = f"{new} GB"
         elif key in ("prefix", "sessions", "share"):
             cur = {"prefix": conf.prefix, "sessions": conf.sessions, "share": conf.share}[key]
-            new = value == "on" if value else not cur
-            text = f"{dict(prefix='prompts', sessions='saved conversations', share='shared pieces')[key]}: {'on' if new else 'off'}"
+            new = value == "on" if value in ("on", "off") else not cur
+            text = "on" if new else "off"
         elif key == "auto":
             autos = sorted({*AUTO_CHOICES, conf.auto_s})
-            new = int(value) if value.isdigit() else autos[(autos.index(conf.auto_s) + 1) % len(autos)]
-            text = f"auto: CARL saves after {new} s of unsaved read time"
+            new = int(value) if value.isdigit() else autos[(autos.index(conf.auto_s) + step) % len(autos)]
+            text = f"after {new} s of reading"
         elif key in ("save", "swa"):
             opts = diskcache.SAVES if key == "save" else diskcache.SWAS
             mode = conf.save if key == "save" else conf.swa
-            new = value if value in opts else opts[(opts.index(mode) + 1) % len(opts)]
-            text = (f"save: {new}" if key == "save" else f"SWA models: {new} (applies at the next start)")
+            new = value if value in opts else opts[(opts.index(mode) + step) % len(opts)]
+            text = str(new) + (". It applies at the next start" if key == "swa" else "")
         else:
             return
         try:
@@ -382,18 +413,18 @@ class SettingsActions:
             sec[{"disk": "disk_gb", "auto": "auto_s"}.get(key, key)] = new
             self.store.save_config(cfg)
         except Exception as e:      # config.json unreadable or not writable: say so
-            ui.toast(f"{RED}config.json: {e}{R}", 10)
+            ui.toast(f"{RED}CARL cannot save config.json: {e}{R}", 10)
             return
         jobs.cache_conf(fresh=True)
         if key == "disk":
             before = len(diskcache.listing(folder))
             jobs.trim_cache()
             gone = before - len(diskcache.listing(folder))
-            text += f" ({gone} oldest saved states removed to fit)" if gone else ""
-        ui.toast(f"{text} (saved)", 8)
+            text += f". CARL removed the {plural(gone, 'oldest file')} to stay below it" if gone else ""
+        ui.toast(f"Saved. {CACHE_NAMES[key].capitalize()}: {text}.", 8)
 
     def auto_choice(self, act: str) -> None:
-        """The Auto fit panel's goal / scope: fgoal / fscope switch to the other one, fgoal:X /
+        """The Auto fit panel's goal / candidates: fgoal / fscope switch to the other one, fgoal:X /
         fscope:X choose X. Saved to config.json at once."""
         ui = self.ui
         if ui.pending is None:
@@ -405,38 +436,41 @@ class SettingsActions:
         try:
             self.svc.save_auto_choice(p, key, value)
         except Exception as e:      # config.json unreadable or not writable, a bad value: say so
-            ui.toast(f"{RED}auto fit: {e}{R}", 10)
+            ui.toast(f"{RED}Auto fit: {e}{R}", 10)
             return
         fit = self.svc.auto_fit(p)
-        ui.toast(f"auto fit {'goal' if key == 'goal' else 'from'}: {value} (saved) → "
-                 + (fit.summary() if fit else "unavailable"), 8)
+        now = (f"Auto fit now suggests {fit.pick.name} with {plan_words(fit.plan.slots, fit.plan.ctx)}."
+               if fit and fit.pick and fit.plan else "No model fits with this choice.")
+        ui.toast(f"Saved. {now}", 8)
 
     def auto_fit(self, p: Pending) -> None:
-        """Auto fit (A): the pick for this Mac with the goal and scope rows, its context, slots and
-        KV, in one step; a pick that isn't downloaded is offered for download."""
+        """Auto fit (Enter in its panel): its choice for this Mac with its context, slots and context
+        memory, in one step; a choice that isn't downloaded is offered for download."""
         ui = self.ui
         fit = self.svc.apply_auto_fit(p)
         if fit is None:
-            ui.toast(f"{RED}auto fit unavailable: {self.models.fit_error or 'no model list'}{R}", 10)
+            ui.toast(f"{RED}Auto fit cannot work now: {self.models.fit_error or 'no model list'}{R}", 10)
         elif fit.pick is None or fit.plan is None:
-            ui.toast(f"{RED}auto fit: {fit.because()}{R}", 12)
+            ui.toast(f"{RED}Auto fit: no model fits this Mac.{R}", 12)
         elif not fit.pick.downloaded:
             m = self.models.by_name(fit.pick.name)
-            ui.confirm2 = Confirm("DOWNLOAD?", [
-                f"Auto fit picked {fit.pick.name} ({size(m['bytes']) if m else '?'}) for this Mac: {fit.plan.label()}.",
-                f"Why: {fit.because()}.", "",
-                "Download it now? The Models panel shows the progress. After the download, press a to start it.",
-                "No: the settings stay as they are. A start is possible only after the download."], "mautodl",
-                fit.pick.name)
+            ui.confirm2 = Confirm("DOWNLOAD AUTO FIT'S CHOICE?", [
+                f"Auto fit chose {fit.pick.name} for this Mac: {plan_words(fit.plan.slots, fit.plan.ctx)}. It needs "
+                f"{memory(fit.plan.need)} of {memory(fit.budget.allowed)}.",
+                f"The download is {file_size(m['bytes']) if m else 'of unknown size'}. The Models panel shows the "
+                f"progress. After the download, press a in the Server panel to start it.",
+                "If you cancel, the Server panel keeps this choice. It can start only after the download."], "mautodl",
+                fit.pick.name, yes_label="Download")
         else:
-            ui.toast(f"auto fit: {fit.pick.name}, {fit.plan.label()} chosen: press a to start it", 8)
+            ui.toast(f"Auto fit's choice is set: {fit.pick.name} with {plan_words(fit.plan.slots, fit.plan.ctx)}. "
+                     f"Press a to start it.", 8)
 
     # ------------------------------------------------------------ the model lists
     def set_arrangement(self, kind: str, index: int) -> None:
         """Set the model lists' sort or filter (index wraps), keeping the selected model when it is
         still listed; an open model drop-down is rebuilt in the new order."""
         ui = self.ui
-        name = self.visible()[ui.mrow]["name"] if self.visible() else None
+        name = self.visible()[ui.mrow]["name"] if self.visible() and ui.mrow < len(self.visible()) else None
         if kind == "sort":
             ui.msort = index % len(SORTS)
         else:
@@ -462,7 +496,7 @@ class SettingsActions:
         self.svc.load_profile(ui.pending, name)
         m = self.models.by_name(self.svc.resolved_model(ui.pending))
         if m and m["status"] != "downloaded":
-            ui.toast(f"{m['name']} is not downloaded. To download it, press ] for the Models panel, then d.", 8)
+            ui.toast(f"{m['name']} is {status_name(m['status'])}. To download it: the Models panel (]), then d.", 8)
 
     def picker_choose(self) -> None:
         """Use the picker's selection: a model for the Server panel, a file to download, a model to tune."""
@@ -500,27 +534,10 @@ class SettingsActions:
         elif ui.pending is not None:
             ui.pending[key] = value
 
-    def server_list_keys(self, rest: str) -> bool:
-        """Keys for the Server panel's model list: m focuses it (↑↓ Enter, m / Esc leave); s / f sort
-        and filter it (and every model list)."""
-        ui = self.ui
-        items = ["auto"] + [m["name"] for m in self.visible()]
-        if rest == "m" or (ui.slist and rest == ESC):
-            ui.slist = not ui.slist
-        elif rest in ARRANGE_KEYS:
-            self.action(ARRANGE_KEYS[rest])
-        elif ui.slist and UP in rest:
-            ui.srow = max(ui.srow - 1, 0)
-        elif ui.slist and DOWN in rest:
-            ui.srow = min(ui.srow + 1, len(items) - 1)
-        elif ui.slist and rest in ENTER and items:
-            self.choose_model(items[min(ui.srow, len(items) - 1)])
-            ui.slist = False
-        return True
-
     # ------------------------------------------------------------ keys
     def keys(self, rest: str) -> bool:
-        """Keys in the Settings tab. Returns True when the input was used here."""
+        """A whole read while a text is typed (a Hugging Face repo, a card field): a paste stays one
+        text. True when the input was used here."""
         ui = self.ui
         if ui.text:
             tx = ui.text
@@ -539,74 +556,179 @@ class SettingsActions:
                 elif ch.isprintable():
                     tx.value += ch
             return True
-        if ui.picker:
-            pk = ui.picker
-            if UP in rest:
-                pk.sel = max(pk.sel - 1, 0)
-            elif DOWN in rest:
-                pk.sel = min(pk.sel + 1, len(pk.items) - 1)
-            elif PGUP in rest:
-                pk.sel = max(pk.sel - 10, 0)
-            elif PGDN in rest:
-                pk.sel = min(pk.sel + 10, len(pk.items) - 1)
-            elif rest in ARRANGE_KEYS and pk.on_pick == "pickmodel":
-                cur = str(pk.items[pk.sel][0])
-                self.action(ARRANGE_KEYS[rest])
-                ui.picker = self.view.model_picker(cur, ui.msort, ui.mfilter, ui.pending)
-            elif rest in ENTER:
-                self.picker_choose()
-            elif rest == ESC:
-                ui.picker = None
-            return True
-        if ui.confirm2:
-            for ch in rest:
-                if ch in "yY":
-                    self.run(ui.confirm2.yes)
-                    break
-                if ch in "nN" + ESC:
-                    ui.confirm2 = None
-                    break
-            return True
         if ui.card and ui.sp == SP_MODELS:
             return self.card.keys(rest)
-        if rest in ("[", "]"):
-            ui.sp = (ui.sp + (1 if rest == "]" else -1)) % len(SUBPANELS)
+        return False
+
+    def key(self, k: str) -> bool:
+        """One key in the Settings tab. True when it was used here (else the keys of every screen get it)."""
+        ui = self.ui
+        if ui.text or (ui.card is not None and ui.card.typing is not None and ui.sp == SP_MODELS):
+            return self.keys(k)
+        if ui.picker:
+            return self.picker_key(k)
+        if ui.confirm2:
+            if k in ("y", "Y") or k in ENTER:
+                self.run(ui.confirm2.yes)
+            elif k in ("n", "N", ESC):
+                ui.confirm2 = None
             return True
-        if ui.sp == SP_MODELS:
-            if UP in rest:
-                ui.mrow = max(ui.mrow - 1, 0)
-                return True
-            if DOWN in rest:
-                ui.mrow = max(min(ui.mrow + 1, len(self.visible()) - 1), 0)
-                return True
-            if rest in MODEL_KEYS:
-                self.action(MODEL_KEYS[rest])
-                return True
-            return rest not in PANEL_PASSTHROUGH and not rest.isdigit()
-        if ui.sp == SP_FIT:
-            for seq, step in SCROLL_KEYS.items():
-                if seq in rest:
-                    self.scroll(step * (1 if abs(step) > 1 else 3))
-                    return True
-            if rest in FIT_KEYS:
-                self.action(FIT_KEYS[rest])
-                return True
-            return rest not in PANEL_PASSTHROUGH and not rest.isdigit() and rest != "A"
-        if ui.sp == SP_ROUTER:
-            return rest not in PANEL_PASSTHROUGH and not rest.isdigit()
-        if ui.sp == SP_CACHE:
-            if rest in CACHE_KEYS:
-                self.action(CACHE_KEYS[rest])
-                return True
-            return rest not in PANEL_PASSTHROUGH and not rest.isdigit()
-        if ui.sp == SP_TUNE:
-            if rest in TUNE_KEYS:
-                self.action(TUNE_KEYS[rest])
-                return True
-            return rest not in PANEL_PASSTHROUGH and not rest.isdigit()
-        if ui.sp == SP_SERVER and ui.pending is not None and (ui.slist or rest == "m" or rest in ARRANGE_KEYS):
-            return self.server_list_keys(rest)
-        if ui.sp == SP_SERVER and ui.pending is not None and rest in ENTER and self.selected_key() == "model":
-            self.open_model_picker()
+        if ui.card and ui.sp == SP_MODELS:
+            return self.card.keys(k)
+        if ui.edit is not None and ui.sp == SP_SERVER:
+            return self.edit_key(k)
+        if k in ("[", "]"):
+            ui.sp = (ui.sp + (1 if k == "]" else -1)) % len(SUBPANELS)
+            return True
+        handlers: Dict[int, Callable[[str], bool]] = {
+            SP_SERVER: self.server_key, SP_MODELS: self.models_key, SP_FIT: self.fit_key, SP_TUNE: self.tune_key,
+            SP_ROUTER: self.router_key, SP_CACHE: self.cache_key}
+        return handlers[ui.sp](k)
+
+    def picker_key(self, k: str) -> bool:
+        ui = self.ui
+        pk = ui.picker
+        if pk is None:
+            return False
+        if k == UP:
+            pk.sel = max(pk.sel - 1, 0)
+        elif k == DOWN:
+            pk.sel = min(pk.sel + 1, len(pk.items) - 1)
+        elif k == PGUP:
+            pk.sel = max(pk.sel - 10, 0)
+        elif k == PGDN:
+            pk.sel = min(pk.sel + 10, len(pk.items) - 1)
+        elif k in ARRANGE_KEYS and pk.on_pick == "pickmodel":
+            cur = str(pk.items[pk.sel][0])
+            self.action(ARRANGE_KEYS[k])
+            ui.picker = self.view.model_picker(cur, ui.msort, ui.mfilter, ui.pending)
+        elif k in ENTER:
+            self.picker_choose()
+        elif k == ESC:
+            ui.picker = None
+        return True
+
+    def edit_key(self, k: str) -> bool:
+        """A number being typed into the selected Server row: digits . k, Backspace, Enter keeps it, Esc
+        drops it."""
+        ui = self.ui
+        if ui.edit is None:
+            return False
+        if k in "0123456789.kK" and len(k) == 1:
+            ui.edit += k.lower()
+        elif k in BACKSPACE and len(k) == 1:
+            ui.edit = ui.edit[:-1]
+        elif k in ENTER:
+            self.commit_edit(self.selected_key())
+        elif k == ESC:
+            ui.edit = None
+        return True
+
+    def server_key(self, k: str) -> bool:
+        """The Server panel: ↑↓ a row, ← → its value, Enter (the model list, or type a number), a apply,
+        r undo, x the recommended settings, A Auto fit, m the model list beside it, s f its sort and filter,
+        PgUp PgDn scroll."""
+        ui = self.ui
+        p = ui.pending
+        if p is None:
+            return False
+        items = ["auto"] + [m["name"] for m in self.visible()]
+        if ui.slist:                                # the model list beside the settings has the keys
+            if k == UP:
+                ui.srow = max(ui.srow - 1, 0)
+            elif k == DOWN:
+                ui.srow = min(ui.srow + 1, len(items) - 1)
+            elif k in ENTER and items:
+                self.choose_model(items[min(ui.srow, len(items) - 1)])
+                ui.slist = False
+            elif k in ("m", ESC):
+                ui.slist = False
+            elif k in ARRANGE_KEYS:
+                self.action(ARRANGE_KEYS[k])
+            else:
+                return False
+            return True
+        n = len(self.svc.rows(p))
+        if k in (UP, DOWN):
+            ui.set_row = (ui.set_row + (1 if k == DOWN else -1)) % n
+            ui.set_scroll = 0                       # the rows are at the top: keep the selected one in view
+        elif k in (RIGHT, LEFTKEY):
+            self.action(f"{'setinc' if k == RIGHT else 'setdec'}:{ui.set_row}")
+        elif k in (PGUP, PGDN):
+            ui.set_scroll = max(0, ui.set_scroll + (-10 if k == PGUP else 10))
+        elif k in ENTER:
+            key = self.selected_key()
+            if key == "model":
+                self.open_model_picker()
+            elif key in NUMERIC:
+                ui.edit = ""
+        elif k in SERVER_KEYS:
+            self.action(SERVER_KEYS[k])
+        elif k == "m":
+            ui.slist = True
+        elif k in ARRANGE_KEYS:
+            self.action(ARRANGE_KEYS[k])
+        else:
+            return False
+        return True
+
+    def models_key(self, k: str) -> bool:
+        """The Models panel: ↑↓ PgUp PgDn a model, Enter use it, d v x h c u e, s f (S F back)."""
+        ui = self.ui
+        if k in (UP, DOWN, PGUP, PGDN):
+            step = {UP: -1, DOWN: 1, PGUP: -10, PGDN: 10}[k]
+            ui.mrow = max(min(ui.mrow + step, len(self.visible()) - 1), 0)
+        elif k in MODEL_KEYS:
+            self.action(MODEL_KEYS[k])
+        else:
+            return False
+        return True
+
+    def fit_key(self, k: str) -> bool:
+        """The Auto fit panel: ↑↓ PgUp PgDn scroll, Enter use, d download, g goal, f candidates."""
+        if k in (UP, DOWN, PGUP, PGDN):
+            self.scroll({UP: 3, DOWN: -3, PGUP: 10, PGDN: -10}[k])
+        elif k in FIT_KEYS:
+            self.action(FIT_KEYS[k])
+        else:
+            return False
+        return True
+
+    def tune_key(self, k: str) -> bool:
+        """The Auto-tune panel: ← → the model, space the length, Enter run, c cancel, x recommended."""
+        if k in TUNE_KEYS:
+            self.action(TUNE_KEYS[k])
             return True
         return False
+
+    def router_key(self, k: str) -> bool:
+        """The Router panel: s single model, r router mode (both ask first), ↑↓ a router model, Enter loads
+        or unloads it, u updates the OpenCode and Pi configs."""
+        ui, d = self.ui, self.snapshot()
+        models = d.router.models if d.router is not None else []
+        if k in ("s", "r"):
+            self.action("rmode:single" if k == "s" else "rmode:router")
+        elif k in (UP, DOWN) and models:
+            ui.router_row = max(min(ui.router_row + (1 if k == DOWN else -1), len(models) - 1), 0)
+        elif k in ENTER and models:
+            m = models[min(ui.router_row, len(models) - 1)]
+            self.action(f"{'runload' if m.active else 'rload'}:{m.id}")
+        elif k == "u":
+            self.run("insconfig")
+        else:
+            return False
+        return True
+
+    def cache_key(self, k: str) -> bool:
+        """The Caching panel: ↑↓ a row, ← → its value (saved at once), c clear (asks first)."""
+        ui = self.ui
+        if k in (UP, DOWN):
+            ui.cache_row = (ui.cache_row + (1 if k == DOWN else -1)) % len(CACHE_ROWS)
+        elif k in (RIGHT, LEFTKEY):
+            key = CACHE_ROWS[min(ui.cache_row, len(CACHE_ROWS) - 1)]
+            self.action(f"cache:{key}" + ("" if k == RIGHT else ":prev"))
+        elif k == "c":
+            self.action("cache:clear")
+        else:
+            return False
+        return True

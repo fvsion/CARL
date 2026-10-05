@@ -9,7 +9,7 @@ sys.dont_write_bytecode = True                                  # keep tools/ fr
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "tools"))
 
 from monitor.fmt import (ANSI, B, DIM, GRN, R, RED, YEL, Ln, bar, button_rows, buttons, ctx_label, cwrap, draw_card,
-                         dur, fit, heading, indent, knum, lv, side_by_side, size, vlen, wrap, wwrap)
+                         fit, footer_keys, heading, indent, lv, side_by_side, vlen, wrap, wwrap)
 
 
 class FitTest(unittest.TestCase):
@@ -41,6 +41,12 @@ class FitTest(unittest.TestCase):
 class WrapTest(unittest.TestCase):
     def test_wrap_cuts_plain_text_every_w_characters(self) -> None:
         self.assertEqual(wrap(f"{RED}abcdefg{R}", 3), ["abc", "def", "g"])
+
+    def test_wrap_breaks_at_spaces_and_after_slashes(self) -> None:
+        self.assertEqual(wrap("E failed: Gemma4Assistant requires ctx_other", 30),
+                         ["E failed: Gemma4Assistant", "requires ctx_other"])
+        self.assertEqual(wrap("/Users/x/models/gguf/gemma-4-E4B-it-Q4_0.gguf", 24),
+                         ["/Users/x/models/gguf/", "gemma-4-E4B-it-Q4_0.gguf"])
 
     def test_wrap_of_empty_text_is_one_empty_line(self) -> None:
         self.assertEqual(wrap("", 5), [""])
@@ -87,28 +93,20 @@ class ColourWrapTest(unittest.TestCase):
 
 
 class NumbersTest(unittest.TestCase):
-    def test_size(self) -> None:
-        self.assertEqual(size(None), "?")
-        self.assertEqual(size(512), "512B")
-        self.assertEqual(size(3 * 1024), "3K")
-        self.assertEqual(size(1.5 * 2**20), "1.5M")
-        self.assertEqual(size(13.1 * 2**30), "13.1G")
-
-    def test_knum(self) -> None:
-        self.assertEqual(knum(None), "0")
-        self.assertEqual(knum(999), "999")
-        self.assertEqual(knum(20000), "20.0K")
-
-    def test_dur(self) -> None:
-        self.assertEqual(dur(None), "–")
-        self.assertEqual(dur(42.9), "42s")
-        self.assertEqual(dur(185), "3m05s")
-        self.assertEqual(dur(3720), "1h02m")
+    def test_footer_keeps_its_tail(self) -> None:
+        keys = [("↑↓", "setting"), ("← →", "change"), ("Enter", "choose a model"), ("a", "apply")]
+        tail = [("D", "detail"), ("?", "all keys"), ("q", "quit")]
+        for w in (30, 60, 200):
+            line = ANSI.sub("", footer_keys(keys, tail, w))
+            self.assertTrue(line.endswith("D detail · ? all keys · q quit"), line)
+            self.assertTrue(len(line) <= w or line == "D detail · ? all keys · q quit")
+        self.assertIn("a apply", ANSI.sub("", footer_keys(keys, tail, 200)))
 
     def test_ctx_label(self) -> None:
         self.assertEqual(ctx_label(98304), "96K")
         self.assertEqual(ctx_label("65536"), "64K")
-        self.assertEqual(ctx_label("N/A"), "N/A")
+        self.assertEqual(ctx_label(52722), "51.5K")                  # K = 1024 (glossary): never 52.7K
+        self.assertEqual(ctx_label("auto"), "auto")
 
     def test_bar_colour_by_fill(self) -> None:
         self.assertTrue(bar(0.5, 10).startswith(GRN + "█" * 5))
@@ -127,8 +125,11 @@ class CardTest(unittest.TestCase):
         self.assertEqual(rows[0][1], [(0, 30, "level:x")])
         self.assertEqual(rows[2][1], [(2, 28, "go")])
 
-    def test_collapsed_card_hides_its_lines(self) -> None:
-        self.assertEqual(len(draw_card("x", "T", "", ["a", "b"], 30, 0)), 2)
+    def test_collapsed_card_is_one_line(self) -> None:
+        rows = draw_card("x", "T", "summary", ["a", "b"], 30, 0)
+        self.assertEqual(len(rows), 1)
+        self.assertIn("▸ T", ANSI.sub("", rows[0][0]))
+        self.assertNotIn("●", ANSI.sub("", draw_card("x", "T", "", ["a"], 30, 1)[0][0]))     # no detail dots
 
     def test_buttons_spans_follow_the_prefix(self) -> None:
         ln = buttons("ab", [("Yes", "y"), ("No", "n")])

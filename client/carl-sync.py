@@ -1,25 +1,33 @@
 #!/usr/bin/env python3
-"""CARL client config sync: applies the client config the server's dashboard publishes (its Connect
-tab's Push, or ./carl.sh push on the server) to OpenCode and Pi on this computer, with the same
-installer (install.sh next to this file) and its backups.
+"""CARL client config sync. The dashboard on the server sends the client config
+(its Connect tab, or ./carl.sh push on the server). This tool applies it to
+OpenCode and Pi on this computer: it runs the installer (install.sh next to this
+file) again, with its backups.
 
-  carl-sync.py watch        the sync service: one outgoing connection to the dashboard's API
-                            (server-sent events; no port opens here), a new config applied when
-                            it is pushed; reconnects when the dashboard is away (launchd / systemd
-                            --user keep it running: install.sh sets that up)
-  carl-sync.py once         check once and apply a new config (OpenCode's plugin and Pi's extension
-                            run this when they start, when the service isn't installed)
-  carl-sync.py apply        apply a config that waits (auto-apply off)
-  carl-sync.py auto on|off  apply new configs automatically (on, the default) or keep them waiting
-  carl-sync.py status       the state, as JSON (the /carl panel in OpenCode and Pi reads it)
-  carl-sync.py register on|off   install.sh: the service is (not) installed (the plugins check
-                            when they start only without it)
+Usage: carl-sync.py COMMAND
 
-The server's address comes from remote.json next to this file (the server writes it at every start),
-the key from api-key next to it (or ~/.config/carl/api-key). The switches of the last install
-(web search, LSP, browser, ...: ~/.config/carl/client-install.env) are applied again, so a sync
-changes only what the server decides: the installed models. State: ~/.config/carl/client-sync.json;
-what the installer printed: ~/.config/carl/client-sync.log.
+  watch           The sync service. It keeps one connection to the dashboard API
+                  and applies each new config. No port opens on this computer.
+                  launchd or systemd --user keeps it running (install.sh sets
+                  that up).
+  once            Check one time and apply a new config. Without the service,
+                  OpenCode and Pi run this when they start.
+  apply           Apply the config that waits.
+  auto on|off     on (the default): apply new configs at once. off: new configs
+                  wait until you apply them.
+  status          Show the state as JSON. The /carl panel in OpenCode and Pi
+                  reads it.
+  register on|off For install.sh: the sync service is installed (on) or not
+                  (off). Without the service, OpenCode and Pi check for a new
+                  config when they start.
+
+The server's address comes from remote.json next to this file. The server writes
+it at every start. The API key comes from api-key next to this file, or from
+~/.config/carl/api-key. A sync applies again the switches of the last install
+(web search, LSP, browser and the others, in ~/.config/carl/client-install.env).
+So a sync changes only what the server decides: the installed models.
+State: ~/.config/carl/client-sync.json. The installer's output:
+~/.config/carl/client-sync.log.
 """
 from __future__ import annotations
 
@@ -97,8 +105,8 @@ def server() -> Tuple[str, str]:
     api = r.get("cache_api")
     if not isinstance(api, str) or (url := urllib.parse.urlsplit(api)).scheme not in ("http", "https") \
             or not url.netloc:
-        raise ValueError(f"no remote.json with the server's address next to {sys.argv[0]} (copy the client folder "
-                         f"again from the server: the server writes it at every start)")
+        raise ValueError(f"There is no remote.json with the server's address next to {sys.argv[0]}. Copy the "
+                         f"client folder again from the server. The server writes remote.json at every start.")
     for f in (os.path.join(HERE, "api-key"), os.path.join(CONF, "api-key")):
         try:
             with open(f, encoding="utf-8") as fh:
@@ -107,16 +115,16 @@ def server() -> Tuple[str, str]:
                 return api.rstrip("/"), key
         except OSError:
             continue
-    raise ValueError("no API key (api-key next to this file, or ~/.config/carl/api-key): copy the client folder "
-                     "again from the server")
+    raise ValueError("There is no API key next to carl-sync.py or in ~/.config/carl/api-key. Copy the client "
+                     "folder again from the server.")
 
 
 def describe(e: BaseException) -> str:
     """An error for the state file (the /carl panel shows it): what went wrong and what to do."""
     if isinstance(e, urllib.error.HTTPError) and e.code in (401, 403):
-        return "the server refused the API key: copy the client folder again from the server (it has the key)"
+        return "The server refused the API key. Copy the client folder again from the server. It has the key."
     if isinstance(e, urllib.error.URLError) and not isinstance(e, urllib.error.HTTPError):
-        return f"the server's dashboard does not answer ({e.reason}): is the CARL server running?"[:200]
+        return f"The dashboard does not answer: {e.reason}. Make sure that the dashboard runs on the server."[:200]
     return str(e)[:200] or type(e).__name__
 
 
@@ -151,11 +159,11 @@ def fetch_config(api: str, key: str, etag: str) -> Optional[Json]:
             return None
         raise
     if len(body) > MAX_CONFIG:
-        raise ValueError("the server's client config is too large")
+        raise ValueError("The client config from the server is too large.")
     doc = json.loads(body)
     if not (isinstance(doc, dict) and isinstance(doc.get("models"), dict)
             and isinstance(doc.get("version"), str) and VERSION_RE.fullmatch(doc["version"])):
-        raise ValueError("the server sent something that is not a client config")
+        raise ValueError("The server sent data that is not a client config.")
     return doc
 
 
@@ -187,7 +195,7 @@ def apply(doc: Json) -> None:
         rc = subprocess.run(["bash", os.path.join(HERE, "install.sh")], env=env, stdin=subprocess.DEVNULL,
                             stdout=log, stderr=subprocess.STDOUT, timeout=600).returncode
     if rc != 0:
-        raise RuntimeError(f"the installer failed (exit {rc}): see {LOG}")
+        raise RuntimeError(f"The installer stopped with an error (exit code {rc}). Its output is in {LOG}.")
 
 
 def once(apply_waiting: bool = False) -> Json:
@@ -256,7 +264,9 @@ def watch() -> None:
 
 def main(argv: List[str]) -> int:
     cmd = argv[0] if argv else "status"
-    if cmd == "watch":
+    if cmd in ("-h", "--help", "help"):
+        print(__doc__)
+    elif cmd == "watch":
         watch()
     elif cmd == "once":
         print(json.dumps(once(), indent=1))

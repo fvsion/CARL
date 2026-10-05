@@ -1,18 +1,22 @@
 """The Models panel: every model (the catalogue, the models folder, Hugging Face downloads) in the
-chosen sort and filter, the selected one's details, a download in progress and the actions."""
+chosen sort and filter as a table (download size, status, fits this Mac, speed, what it is for), a
+legend, the actions, a download in progress and the selected model's section."""
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import List, Tuple
+from typing import List
 
-from ..arrange import FILTERS, SORTS, label as arrange_label
-from ..fmt import (B, CYN, DIM, GRN, R, YEL, CardLine, Ln, Row, Section, button_rows, ctx_label, cwrap, draw_card,
-                   home_short, indent, lv, side_lines, size, with_side)
+from carl_core.domain.units import file_size, memory
+
+from ..arrange import label as arrange_label
+from ..fmt import B, CYN, DIM, GRN, R, YEL, CardLine, Ln, Row, button_rows, cwrap, draw_card, heading, home_short, indent
 from ..model import ModelInfo, draft_bytes, drafter_missing, jdict
-from ..settings import SettingsService
+from ..settings import SettingsService, gib_pair, plan_words
 from ..state import UIState
+from ..words import spec_name, status_name
 from .common import download_status, selectable
-from .model_lines import MODEL_HEADER, ModelLines
+from .model_card import short_date, speed_line
+from .model_lines import ModelLines, model_header
 
 
 @dataclass
@@ -22,47 +26,27 @@ class ModelsDir:
     free: int
 
 
-def arrange_chips(sort: int, filt: int, w: int) -> List[CardLine]:
-    """Every sort and filter option as a clickable chip, the current one highlighted (a wide list)."""
-    out: List[CardLine] = []
-    for kind, opts, cur, act in (("Sort", SORTS, sort % len(SORTS), "msortset"), ("Show", FILTERS, filt % len(FILTERS), "mfilterset")):
-        text, col = f"{B}{kind:<5}{R}", 5
-        spans: List[Tuple[int, int, str]] = []
-        for i, o in enumerate(opts):
-            chip = f" {o} "
-            if col + len(chip) + 1 > w:                     # wrap onto another line
-                out.append(Ln(text, spans=spans))
-                text, spans, col = " " * 5, [], 5
-            text += (f"\x1b[7m{chip}{R}" if i == cur else f"{DIM}{chip}{R}") + " "
-            spans.append((col, col + len(chip), f"{act}:{i}"))
-            col += len(chip) + 1
-        out.append(Ln(text, spans=spans))
-    return out
-
-
 def best_tune(t: object) -> str:
-    """Auto-tune's best result in one line: the speculation it picked with its speeds, the KV cache, the
-    window and the slots, when and where it was measured."""
+    """Auto-tune's result in one line: the speculation, the context memory, the context and the slots,
+    when and where it was measured."""
     tune = jdict(t)
     st = jdict(tune.get("settings"))
     if not st:
-        return f"{DIM}not on this Mac yet (the Auto-tune panel measures it){R}"
-    mode = f"{st.get('spec')}:{st.get('spec_n')}"
-    r = jdict(jdict(jdict(tune.get("results")).get("speculation")).get(mode))
-    speeds = (f" · {r.get('prose')} prose · {r.get('code')} code · {r.get('edit')} re-emit tok/s"
-              if r.get("prose") is not None else "")
-    ctx = ctx_label(st["ctx"]) if isinstance(st.get("ctx"), int) else "?"
-    return (f"{GRN}{st.get('spec')} n={st.get('spec_n')}{speeds}{R} · kv {st.get('kv')} · {ctx} × {st.get('slots')} "
-            f"slots {DIM}({tune.get('date', '?')}, {tune.get('machine', '?')}){R}")
+        return ""
+    ctx = st.get("ctx")
+    plan = f"{int(ctx) // 1024}K × {st.get('slots')}" if isinstance(ctx, int) else f"? × {st.get('slots')}"
+    return (f"{spec_name(st.get('spec'), st.get('spec_n'))} · {str(st.get('kv', '')).split('_')[0]} · {plan} "
+            f"(Auto-tune, {short_date(tune.get('date'))}, {tune.get('machine', '?')})")
 
 
-def drafter_line(m: ModelInfo, home: str) -> str:
-    """A model's separate MTP drafter (Gemma 4): its file and whether it is downloaded."""
+def drafter_line(m: ModelInfo, home: str, full: bool) -> str:
+    """A model's separate MTP drafter (Gemma 4): downloaded or not, and what that means."""
     st = str(m.get("draft_status", "missing"))
-    state = (f"{GRN}downloaded{R}" if st == "downloaded" else
-             f"{YEL}{'partial' if st == 'partial' else 'not downloaded'}{R} ({size(draft_bytes(m))}; "
-             f"without it, a start uses n-gram)")
-    return f"{home_short(str(m.get('draft_path', '')), home)} · {state}"
+    where = f" {DIM}{home_short(str(m.get('draft_path', '')), home)}{R}" if full else ""
+    if st == "downloaded":
+        return f"MTP drafter ({file_size(draft_bytes(m))}): {GRN}downloaded{R}.{where}"
+    return (f"MTP drafter ({file_size(draft_bytes(m))}): {YEL}{status_name(st)}{R}. Until it is downloaded, speculation "
+            f"uses n-gram only (slower on new text). Press d.{where}")
 
 
 class ModelsPanel:
@@ -73,84 +57,128 @@ class ModelsPanel:
         self.lines = lines
         self.home = home
 
-    def draw(self, ui: UIState, cols: int, height: int, mdir: ModelsDir) -> List[Row]:
-        """Every model, the selected one's details, the download in progress and the actions."""
+    def draw(self, ui: UIState, cols: int, height: int, mdir: ModelsDir, running: str = "") -> List[Row]:
+        """The table, the legend, the actions, a download, the selected model."""
+        svc = self.svc
         ms = self.lines.visible(ui.msort, ui.mfilter)
         ui.mrow = max(0, min(ui.mrow, len(ms) - 1))
         w = cols - 2
-        _, fi = arrange_label(ui.msort, ui.mfilter)
-        af = self.svc.auto_fit(ui.pending or {})
+        tw = w - 4
+        so, fi = arrange_label(ui.msort, ui.mfilter)
+        af = svc.auto_fit(ui.pending or {})
         pick = af.name if af else None
         m = ms[ui.mrow] if ms else None
+        all_ms = svc.models.get()
+        here = sum(1 for x in all_ms if x["status"] == "downloaded")
 
-        def main(mw: int) -> List[CardLine]:
-            L: List[CardLine] = [*arrange_chips(ui.msort, ui.mfilter, mw), f"{DIM}{len(ms)} of {len(self.svc.models.get())} models{R}",
-                                 MODEL_HEADER]
-            if not ms:
-                L.append(f"{DIM}  no model matches \"{fi}\": select a different filter above{R}")
-            vis = max(height - 11 - below, 4)                # the sections under the list stay on the screen
-            top = min(max(ui.mrow - vis // 2, 0), max(len(ms) - vis, 0))
-            for i in range(top, min(top + vis, len(ms))):
-                L.append(selectable(self.lines.model_line(ms[i], pick), i == ui.mrow, mw, f"mrow:{i}"))
-            if len(ms) > vis:
-                L.append(f"{DIM}  {top + 1}-{min(top + vis, len(ms))} of {len(ms)} (↑↓){R}")
-            L.append("")
-            if ui.dl:
-                L += download_status(ui.dl)
-            L += button_rows("", acts, mw)
-            if ui.text:
-                L += ["", *cwrap(f"{B}{ui.text.prompt}{R} {CYN}{ui.text.value}▏{R}  "
-                                 f"{DIM}(Enter: find it · Esc: cancel){R}", mw)]
-            if ui.hf and ui.hf.status:
-                L += ["", *cwrap(f"{YEL}{ui.hf.status}{R}", mw)]
-            return L
-
-        acts = [("Use it (Enter)", "museit")]
-        if m and (m["status"] != "downloaded" or drafter_missing(m)) and jdict(m.get("hf")).get("repo"):
+        acts = [("Use it (Enter)" if m and m["status"] == "downloaded" else "Choose it (Enter)", "museit")]
+        if m and (m["status"] != "downloaded" or drafter_missing(m)) and (jdict(m.get("hf")).get("repo") or m.get("draft")):
             acts.append(("Download (d)", "mdl"))
         if m and m["status"] == "downloaded":
-            acts += [("Verify (v)", "mverify"), ("Auto-tune (u)", "mtune"), ("Delete (x)", "mdelete")]
+            acts += [("Check the file (v)", "mverify"), ("Auto-tune (u)", "mtune"), ("Delete (x)", "mdelete")]
         elif m and m["status"] == "partial":
             acts.append(("Delete (x)", "mdelete"))
         if m and m.get("custom"):
-            acts.append(("Edit card (e)", "medit"))
+            acts.append(("Edit its card (e)", "medit"))
         acts.append(("Add from Hugging Face (h)", "mhf"))
-        about: List[CardLine] = []
-        tip = "Press h to add any GGUF from Hugging Face."
+
+        below: List[CardLine] = ["", *button_rows("", acts, tw)]
+        if ui.dl:
+            below += download_status(ui.dl)
+        if ui.text:
+            below += ["", *cwrap(f"{B}{ui.text.prompt}{R} {CYN}{ui.text.value}▏{R}  {DIM}(Enter: find it · Esc: "
+                                 f"cancel){R}", tw)]
+        if ui.hf and ui.hf.status:
+            below += ["", *cwrap(f"{YEL}{ui.hf.status}{R}", tw)]
         if m:
+            below += ["", heading(m["name"], tw), *self.selected(m, running, mdir, tw, ui.full)]
+        below += ["", *cwrap(f"{CYN}Quick tip:{R} {self.tip(m)}", tw)]
+
+        sort_len, show_len = len(f"Sort: {so} (s)"), len(f"Show: {fi} (f)")
+        top: List[CardLine] = [
+            Ln(f"Sort: {CYN}{so}{R} (s)    Show: {CYN}{fi}{R} (f)    {len(ms)} of {len(all_ms)} models: "
+               f"{here} downloaded", spans=[(0, sort_len, "msortpick"),
+                                            (sort_len + 4, sort_len + 4 + show_len, "mfilterpick")]),
+            "", model_header(ui.full)]
+        legend: List[CardLine] = [
+            "", *cwrap(f"{GRN}●{R} speed measured on this Mac (Auto-tune)  {DIM}○{R} measured on another Mac (the "
+                       f"catalogue)  not measured: never measured", tw),
+            *cwrap(f"Speed = the mean of the prose, code and edit speeds (tok/s). {CYN}★{R} = Auto fit's choice for this "
+                   f"Mac." + (" Max context = the largest context per slot that fits this Mac (1 slot, q4)."
+                              if ui.full else ""), tw)]
+        vis = max(height - 2 - len(top) - len(legend) - len(below) - 1, 4)
+        rows: List[CardLine] = []
+        if not ms:
+            rows.append(f"{DIM}  No model matches \"{fi}\". Choose another filter (f).{R}")
+        top_i = min(max(ui.mrow - vis // 2, 0), max(len(ms) - vis, 0))
+        for i in range(top_i, min(top_i + vis, len(ms))):
+            rows.append(selectable(self.lines.model_line(ms[i], pick, ui.full), i == ui.mrow, tw, f"mrow:{i}"))
+        if len(ms) > vis:
+            rows.append(f"{DIM}  {top_i + 1}-{min(top_i + vis, len(ms))} of {len(ms)} (↑↓ to scroll){R}")
+        L = top + rows + legend + below
+        ui.keys = [("↑↓", "model"), ("Enter", "use it"), ("d", "download"), ("v", "check"), ("u", "Auto-tune"),
+                   ("x", "delete"), ("e", "card"), ("h", "add"), ("s", "sort"), ("f", "show"), ("c", "cancel download"),
+                   ("[ ]", "panels")]
+        ui.keys_more = ["S and F go back to the sort and the filter before. You can also click Sort or Show.",
+                        "e edits the card of a custom model (a model that you added): its role, its tags, its rank "
+                        "and its thinking."]
+        return indent(draw_card("models", "MODELS", f"{DIM}the catalogue, the models folder and your downloads{R}",
+                                L, w, 1))
+
+    def tip(self, m: object) -> str:
+        if not isinstance(m, dict):
+            return "Press h to add any GGUF file from Hugging Face."
+        if m.get("custom") and not jdict(jdict(m.get("local")).get("card")):
+            return "Press e to write the card of this model: its role, its tags and its rank."
+        if m["status"] == "downloaded" and m.get("draft") and m.get("draft_status") != "downloaded":
+            return "Press d to download its MTP drafter: speculation is then faster on new text."
+        if m["status"] == "downloaded":
+            return "Press Enter to use it in the Server panel."
+        if jdict(m.get("hf")).get("repo"):
+            return "Press d to download it. You can stop and continue the download. CARL checks the file."
+        return "Press Enter to choose it in the Server panel."
+
+    def selected(self, m: ModelInfo, running: str, mdir: ModelsDir, tw: int, full: bool) -> List[CardLine]:
+        """The selected model in sentences: what it is for, its status and size, how it runs on this Mac,
+        its drafter; full: the recommended settings, its source and file, its description."""
+        svc = self.svc
+        L: List[CardLine] = []
+        role = str(m.get("role") or m.get("summary") or "")
+        state = f"{status_name(m['status']).capitalize()}, {file_size(int(m.get('bytes', 0)) + draft_bytes(m))}."  # with its drafter, as the list
+        if running and running == m["name"]:
+            state += " It runs now."
+        L += cwrap(f"{role}{'.' if role and not role.endswith('.') else ''} {state}".strip(), tw)
+        plan = svc.plan_of(m)
+        tune = jdict(jdict(m.get("local")).get("tune"))
+        speed = speed_line(m, tune)
+        if plan is not None and not plan.error:
+            need, limit = gib_pair(plan.need, plan.limit)
+            fits = (f"On this Mac: {plan_words(plan.slots, plan.ctx)} fit ({need.replace(' GiB', '')} of {limit})."
+                    if plan.fits else f"On this Mac: it does not fit. It needs {need} with "
+                                      f"{plan_words(plan.slots, plan.ctx)}; this Mac gives the GPU {limit}.")
+            L += cwrap(f"{fits} {speed}", tw)
+        else:
+            L += cwrap(speed, tw)
+        if m.get("draft"):
+            L += cwrap(drafter_line(m, self.home, full), tw)
+        if m.get("custom"):
+            has = bool(jdict(jdict(m.get("local")).get("card")))
+            L += cwrap(f"Card: {GRN}your card{R}." if has else f"Card: {YEL}none yet{R}. Press e to write one.", tw)
+        if full:
+            rec = best_tune(tune)
+            if rec:
+                L += cwrap(f"Recommended: {rec}.", tw)
             hf = jdict(m.get("hf"))
-            about += [f"{B}{m.get('label', m['name'])}{R}  {DIM}{m['source']}{R}",
-                      f"{DIM}{m.get('description') or m.get('summary', '')}{R}"]
             if hf.get("repo"):
-                about.append(lv("source", f"huggingface.co/{hf['repo']} · {hf.get('file')}"
-                                + (f" @ {hf['revision'][:8]}" if hf.get("revision") else ""), 8))
-            about.append(lv("file", home_short(m["path"], self.home), 8))
-            if m.get("draft"):
-                about.append(lv("drafter", drafter_line(m, self.home), 8))
-            if m.get("custom"):
-                has = bool(jdict(jdict(m.get("local")).get("card")))
-                about.append(lv("card", f"{GRN}your card{R}" if has else f"{YEL}none yet{R}", 8))
-            about.append(lv("tuned", best_tune(jdict(m.get("local")).get("tune")), 8))
-            tip = ("Press Enter to use it in the Server panel." if m["status"] == "downloaded"
-                   else "Press d to download it. You can resume the download, and CARL checks its SHA-256."
-                   if hf.get("repo")
-                   else "Press Enter to use it in the Server panel.")
-            if m["status"] == "downloaded" and drafter_missing(m):
-                tip = ("Press d to download its MTP drafter: until then, a start uses n-gram speculation, which is "
-                       "slower on new text.")
-            if m.get("custom") and not jdict(jdict(m.get("local")).get("card")):
-                tip = "Press e to write the card of this model: its role, tags and rank."
-        secs: List[Section] = [
-            ("Selected model", about),
-            ("The list", [f"speed: {GRN}measured on this Mac{R} (Auto-tune) or on a different Mac (the catalogue) · "
-                          f"? = not measured · fits: the largest window per slot on this Mac"]),
-            ("Models folder", [f"The list shows all .gguf files in {home_short(mdir.path, self.home)} · free disk "
-                               f"{size(mdir.free)}"])]
-        below = len(side_lines(tip, secs, w - 4)) + 1
-        L = with_side(main, tip, secs, w - 4, beside=False)
-        ui.keys = [("↑↓", "select"), ("Enter", "use"), ("d", "download"), ("v", "verify"), ("u", "auto-tune"),
-                   ("x", "delete"), ("e", "edit card"), ("h", "add from HF"), ("s f", "sort / filter"), ("[ ]", "panels")]
-        ui.keys_more = ["S / F: the previous sort / filter. You can also click an option.", "c cancels a download.",
-                        "e edits the card of a custom model (a model that you added): what it is good for, its rank and "
-                        "its thinking."]
-        return indent(draw_card("models", "MODELS", f"{DIM}catalogue + models folder + Hugging Face downloads{R}", L, w, 2))
+                L += cwrap(f"Source: huggingface.co/{hf['repo']} · {hf.get('file')}"
+                           + (f" @ {str(hf['revision'])[:8]}" if hf.get("revision") else ""), tw, "  ")
+            where = "File" if m["status"] != "missing" else "It will be saved as"
+            L += cwrap(f"{where}: {home_short(m['path'], self.home)} · free disk {file_size(mdir.free)}", tw, "  ")
+            L += cwrap(f"{DIM}The list shows the catalogue and every .gguf file in "
+                       f"{home_short(mdir.path, self.home)}.{R}", tw)
+            desc = str(m.get("description") or "")
+            if desc:
+                L += cwrap(f"{DIM}{desc}{R}", tw)
+            if plan is not None and plan.fits:
+                L.append(f"{DIM}Memory with this plan: {memory(plan.need)}.{R}")
+        return L

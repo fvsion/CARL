@@ -111,9 +111,9 @@ class JobsTest(unittest.TestCase):
         finally:
             del os.environ["CTX"]
         msg = self.ui.toast_msg[0]
-        self.assertIn("new settings failed", msg)
-        self.assertIn("no server runs now", msg)
-        self.assertIn("error: the model did not load", msg)
+        self.assertIn("The new settings failed", msg)
+        self.assertIn("No server runs now", msg)
+        self.assertIn("error: the model did not load", " ".join(self.ui.start_error))   # the launcher's error line
         with open(self.paths.console(self.port)) as f:
             self.assertIn("CTX=unset", f.read())
         with open(self.store.config_file) as f:
@@ -126,7 +126,7 @@ class JobsTest(unittest.TestCase):
         self.launcher(HEALTH_SERVER)
         self.ui.pending = dict(self.pending)
         self.jobs._restart(self.pending, ServerData())
-        self.assertTrue(self.ui.toast_msg[0].startswith("the server restarted with the new settings"))
+        self.assertTrue(self.ui.toast_msg[0].startswith("The server restarted with the new settings"))
         self.assertIsNone(self.ui.pending)
         self.assertIsNotNone(self.collector.server_pid)
         self.assertNotIn("backend", self.store.saved[-1])
@@ -159,8 +159,8 @@ class JobsTest(unittest.TestCase):
         self.jobs.poll()
         self.assertTrue(dl.done)
         self.assertEqual(dl.tail, ["verified"])
-        self.assertTrue(self.ui.toast_msg[0].startswith("a: downloaded and verified"))
-        self.assertIn("Connect tab, u", self.ui.toast_msg[0])                 # the client lists need updating
+        self.assertTrue(self.ui.toast_msg[0].startswith("a is downloaded and checked"))
+        self.assertIn("u in the Connect tab", self.ui.toast_msg[0])                 # the client lists need updating
 
     def test_tune_end_is_announced(self) -> None:
         log = os.path.join(self.tmp.name, "tune.out")
@@ -169,7 +169,7 @@ class JobsTest(unittest.TestCase):
         self.ui.tune = TuneRun(model="big", proc=FakeProc([0]), log=log, restart=False)
         self.jobs.poll()
         self.assertTrue(self.ui.tune.done)
-        self.assertEqual(self.ui.toast_msg[0], "auto-tune finished: kv q4_0, ngram n=2")
+        self.assertEqual(self.ui.toast_msg[0], "Auto-tune is done. kv q4_0, ngram n=2")
 
     def test_tune_that_stopped_the_server_starts_it_again(self) -> None:
         self.launcher(FAILS)
@@ -182,7 +182,7 @@ class JobsTest(unittest.TestCase):
         deadline = time.time() + 10
         while "did not start again" not in self.ui.toast_msg[0] and time.time() < deadline:
             time.sleep(0.1)
-        self.assertIn("the server did not start again", self.ui.toast_msg[0])
+        self.assertIn("The server did not start again", self.ui.toast_msg[0])
 
     def test_hugging_face_lookup(self) -> None:
         self.jobs._hf_lookup("Qwen/Qwen3-0.6B-GGUF")

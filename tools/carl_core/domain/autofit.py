@@ -34,11 +34,15 @@ Goal = Literal["everyday", "hard-code"]
 Scope = Literal["catalogue", "downloaded"]
 GOALS: Tuple[Goal, ...] = ("everyday", "hard-code")
 SCOPES: Tuple[Scope, ...] = ("catalogue", "downloaded")
-GOAL_TEXT: Dict[Goal, str] = {"everyday": "everyday (fast first: MoE, small dense)",
-                               "hard-code": "hard code (dense first: better, slower)"}
+# The words every screen uses (docs/phase21/glossary.md): the goal "hard code" (config: hard-code),
+# the candidates, memory in GiB, the context in K = 1024 tokens.
+GOAL_TEXT: Dict[Goal, str] = {"everyday": "everyday (fast models first)",
+                               "hard-code": "hard code (dense models first: better code, slower)"}
+GOAL_NAME: Dict[Goal, str] = {"everyday": "everyday", "hard-code": "hard code"}
 SCOPE_TEXT: Dict[Scope, str] = {"catalogue": "all catalogue models", "downloaded": "downloaded models only"}
 ARCH_TEXT: Dict[str, str] = {"moe": "MoE", "dense": "dense"}
 FAMILY_TEXT: Dict[Goal, str] = {"everyday": "fast (MoE or small dense)", "hard-code": "dense"}
+KV_TEXT: Dict[str, str] = {"q4_0": "q4", "q8_0": "q8"}
 MIN_WINDOW = 32768                  # below this a window is not worth starting
 
 
@@ -53,7 +57,14 @@ def as_scope(v: object) -> Scope:
 
 
 def gib(n: float) -> str:
+    """Memory in GiB, one decimal (glossary: GiB for memory)."""
     return f"{n / GIB:.1f} GiB"
+
+
+def setup_text(slots: int, ctx: Optional[int], kv: Optional[str] = None) -> str:
+    """Slots and context in words: 2 slots × 96K tokens (q4)."""
+    head = f"{slots} slot{'s' if slots != 1 else ''} × {window_label(ctx or 0)} tokens"
+    return f"{head} ({KV_TEXT.get(kv, kv)})" if kv else head
 
 
 @dataclass(frozen=True)
@@ -116,10 +127,22 @@ class Budget:
         return max(0.0, min(self.gpu_limit, self.ram - self.reserve))
 
     def describe(self) -> str:
+        """What a model may use, and the reason, as a short phrase: 25.0 GiB (the GPU memory limit)."""
         if self.ram > 0 and self.ram - self.reserve < self.gpu_limit:
-            return (f"{gib(self.allowed)} ({gib(self.ram)} RAM minus {gib(self.reserve)} for macOS and apps; "
-                    f"GPU limit {gib(self.gpu_limit)})")
-        return f"{gib(self.allowed)} (the GPU limit)"
+            return f"{gib(self.allowed)} (the RAM, {gib(self.ram)}, minus {gib(self.reserve)} kept free for macOS and apps)"
+        return f"{gib(self.allowed)} (the GPU memory limit)"
+
+    def explain(self) -> str:
+        """What a model may use on this Mac, in full sentences (the CLI's ./carl.sh fit)."""
+        if self.ram <= 0:
+            return f"A model can use {gib(self.allowed)}: the GPU memory limit."
+        free = self.ram - self.reserve
+        kept = f"the RAM ({gib(self.ram)}) minus the memory kept free for macOS and apps ({gib(self.reserve)})"
+        if free < self.gpu_limit:
+            return (f"A model can use {gib(self.allowed)}: {kept}. "
+                    f"This is less than the GPU memory limit ({gib(self.gpu_limit)}).")
+        return (f"A model can use {gib(self.allowed)}: the GPU memory limit. "
+                f"This is less than {kept}, which is {gib(free)}.")
 
 
 @dataclass(frozen=True)
@@ -131,7 +154,12 @@ class Plan:
     need: float
 
     def label(self) -> str:
-        return f"{self.slots} × {window_label(self.ctx)} {self.kv}"
+        """The plan in short: 2 × 96K tokens, q4."""
+        return f"{self.slots} × {window_label(self.ctx)} tokens, {KV_TEXT.get(self.kv, self.kv)}"
+
+    def describe(self) -> str:
+        """The plan in words: 2 slots × 96K tokens (q4)."""
+        return setup_text(self.slots, self.ctx, self.kv)
 
 
 @dataclass(frozen=True)
@@ -141,7 +169,7 @@ class Tier:
     ctx: Optional[int]
 
     def label(self) -> str:
-        return f"{self.slots} × {window_label(self.ctx)}" if self.ctx else f"1 × {window_label(MIN_WINDOW)}"
+        return setup_text(self.slots, self.ctx) if self.ctx else setup_text(1, MIN_WINDOW)
 
 
 TIERS: Tuple[Tier, ...] = (Tier(2, CTX_FLOOR), Tier(1, CTX_FLOOR), Tier(1, None))
@@ -166,15 +194,16 @@ def plan_for(c: Candidate, tier: Tier, allowed: float, swa_full: bool = True) ->
 def why_not(c: Candidate, tier: Tier, allowed: float, swa_full: bool = True) -> str:
     """Why a candidate fails a pass, with the numbers."""
     if c.shape is None:
-        return "size unknown: CARL cannot read its GGUF header (no network?)"
+        return "has an unknown size: CARL cannot read its GGUF header (possibly no network)"
     alone = c.weights + c.shape["rs_bytes"] + OVERHEAD
     if alone > allowed:
-        return f"the weights and buffers alone use {gib(alone)} (the limit on this Mac is {gib(allowed)})"
+        return f"does not fit: the weights and buffers alone need {gib(alone)}, and a model can use {gib(allowed)}"
     if tier.ctx is None:
         mx = max_ctx(c.shape, c.weights, allowed, 1, c.kv, swa_full)
-        return f"the largest window that fits is {window_label(mx)} (less than {window_label(MIN_WINDOW)})"
+        return (f"does not fit: the largest context that fits is {window_label(mx)} tokens, "
+                f"less than {window_label(MIN_WINDOW)}")
     need = need_bytes(c.shape, c.weights, tier.ctx, tier.slots, c.kv, swa_full)
-    return f"{tier.label()} uses {gib(need)} (the limit on this Mac is {gib(allowed)})"
+    return f"does not fit: {tier.label()} need {gib(need)}, and a model can use {gib(allowed)}"
 
 
 @dataclass(frozen=True)
@@ -185,7 +214,8 @@ class Rejection:
     reason: str
 
     def line(self) -> str:
-        return f"{self.name} (rank {self.rank}): {self.reason}"
+        """One sentence without the last full stop: qwen3.8-27b (quality rank 1) is dense: ..."""
+        return f"{self.name} (quality rank {self.rank}) {self.reason}"
 
 
 @dataclass(frozen=True)
@@ -209,21 +239,23 @@ class AutoFit:
     def because(self) -> str:
         """Why the pick (or that nothing fits), in short sentences without the last full stop."""
         if not self.pick or not self.plan:
-            return (f"no ranked stock model fits this Mac ({SCOPE_TEXT[self.scope]}). "
-                    f"The limit is {self.budget.describe()}")
+            return (f"No stock model with a quality rank fits this Mac ({SCOPE_TEXT[self.scope]}). "
+                    f"A model can use {self.budget.describe()}")
         arch = self.pick.kind()
-        holds = ("two 96K windows (main session + a subagent)" if self.tier == 0 else
-                 "one 96K window (two do not fit)" if self.tier == 1 else
-                 f"a {window_label(self.plan.ctx)} window, the largest that fits (no build holds 96K)")
+        holds = (f"two slots of {window_label(CTX_FLOOR)} tokens (the main session and a subagent)" if self.tier == 0
+                 else f"one slot of {window_label(CTX_FLOOR)} tokens (two slots do not fit)" if self.tier == 1 else
+                 f"one slot of {window_label(self.plan.ctx)} tokens, the largest context that fits "
+                 f"(no model fits {window_label(CTX_FLOOR)})")
         here = "downloaded " if self.scope == "downloaded" else ""
-        lead = (f"no {here}{FAMILY_TEXT[self.goal]} build fits, so this is the best {arch} build that fits. "
-                f"It holds " if self.fallback else f"the best-ranked stock {arch} build that holds ")
-        return f"{lead}{holds}. It uses {gib(self.plan.need)} of {self.budget.describe()}"
+        lead = (f"No {here}{FAMILY_TEXT[self.goal]} model fits, so this is the best {arch} model that fits. It holds "
+                if self.fallback else
+                f"Of the stock {arch} models that hold ")
+        tail = "" if self.fallback else ", this model has the best quality rank"
+        return f"{lead}{holds}{tail}. It needs {gib(self.plan.need)}, and a model can use {self.budget.describe()}"
 
     def summary(self) -> str:
-        """The pick in one line: name, plan, goal and scope."""
-        head = f"{self.pick.name}, {self.plan.label()}" if self.pick and self.plan else "nothing fits"
-        return f"{head}  [{GOAL_TEXT[self.goal]} · {SCOPE_TEXT[self.scope]}]"
+        """The pick in one line: its name and plan (the goal and the candidates are shown elsewhere)."""
+        return f"{self.pick.name}, {self.plan.label()}" if self.pick and self.plan else "nothing fits"
 
 
 def in_family(c: Candidate, goal: Goal) -> bool:
@@ -269,15 +301,22 @@ def _rejections(eligible: Sequence[Candidate], pick: Optional[Candidate], tier: 
         if (pick is not None and c.name == pick.name) or not better(c):
             continue
         if scope == "downloaded" and not c.downloaded:
-            reason = "not downloaded"
+            reason = "is not downloaded"
+        elif pick is not None and not fallback and not in_family(c, goal) and _fits_somehow(c, allowed, swa_full):
+            other: Goal = "everyday" if goal == "hard-code" else "hard-code"
+            reason = f"is {c.kind()}: Auto fit keeps it for the {GOAL_NAME[other]} goal"
         elif pick is not None and not fallback and not in_family(c, goal):
-            reason = (f"{c.kind()}: for the "
-                      f"{'everyday goal (faster)' if goal == 'hard-code' else 'hard-code goal (slower)'}")
+            reason = why_not(c, TIERS[-1], allowed, swa_full)       # it fits no pass: say that, not the family
         else:
             failed = tier if pick is not None and not (fallback and in_family(c, goal)) else len(TIERS) - 1
             reason = why_not(c, TIERS[failed], allowed, swa_full)
         out.append(Rejection(c.name, c.rank or 0, reason))
     return out
+
+
+def _fits_somehow(c: Candidate, allowed: float, swa_full: bool) -> bool:
+    """Does the candidate fit any pass (its family aside)?"""
+    return any(plan_for(c, t, allowed, swa_full) for t in TIERS)
 
 
 def best_downloaded(fit: AutoFit, candidates: Sequence[Candidate]) -> AutoFit:

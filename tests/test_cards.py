@@ -118,13 +118,13 @@ class StoreAndMergeTest(unittest.TestCase):
 
     def test_set_field_checks_the_whole_card(self) -> None:
         w = world()
-        with self.assertRaisesRegex(ConfigError, "mine-q4: card: only abliterated models may be tagged uncensored"):
+        with self.assertRaisesRegex(ConfigError, "mine-q4: card: only an abliterated model can have the tag uncensored"):
             w.carl.set_card_field("mine-q4", "good_for", ["uncensored"])
         w.carl.set_card_field("mine-q4", "abliterated", ["yes"])
         w.carl.set_card_field("mine-q4", "good_for", ["uncensored"])
         with self.assertRaisesRegex(ConfigError, "unknown model 'nope'"):
             w.carl.set_card_field("nope", "role", ["x"])
-        with self.assertRaisesRegex(ConfigError, "pick_instead entries need a model CARL knows"):
+        with self.assertRaisesRegex(ConfigError, "each pick_instead entry needs a model that CARL knows"):
             w.carl.set_card_field("mine-q4", "pick_instead", ["nope=x"])
 
     def test_catalogue_models_are_read_only(self) -> None:
@@ -133,7 +133,7 @@ class StoreAndMergeTest(unittest.TestCase):
                                                     lambda: w.carl.set_card_field("big", "role", ["x"]),
                                                     lambda: w.carl.unset_card_field("big", "role"))
         for call in calls:
-            with self.assertRaisesRegex(ConfigError, "big is a catalogue model: its card is read-only"):
+            with self.assertRaisesRegex(ConfigError, "big is a catalogue model, so you cannot change its card"):
                 call()
         self.assertEqual(w.local.saved, [])
 
@@ -153,13 +153,14 @@ class StoreAndMergeTest(unittest.TestCase):
     def test_describe(self) -> None:
         w = world()
         ms = by_name(w)
-        self.assertEqual(cards.describe(ms["mine-q4"])[0], "mine-q4: custom model, no card yet")
+        self.assertEqual(cards.describe(ms["mine-q4"])[0], "mine-q4 is a custom model. It has no card yet.")
         w.carl.set_card_field("mine-q4", "good_for", ["agent coding,hard code"])
         lines = cards.describe(by_name(w)["mine-q4"])
-        self.assertEqual(lines[0], "mine-q4: custom model, your card (models.json)")
-        self.assertIn("  good_for      agent coding, hard code", lines)
-        self.assertIn("  rank          -", lines)
-        self.assertEqual(cards.describe(ms["big"])[0], "big: catalogue model, read-only card (host/catalog.json)")
+        self.assertEqual(lines[0], "mine-q4 is a custom model. This is your card (models.json).")
+        self.assertRegex("\n".join(lines), r"\n  good for \(good_for\) +agent coding, hard code\n")
+        self.assertRegex("\n".join(lines), r"\n  quality rank \(rank\) +-\n")
+        self.assertEqual(cards.describe(ms["big"])[0],
+                         "big is a catalogue model. You cannot change its card (host/catalog.json).")
 
 
 class AutoFitOptInTest(unittest.TestCase):

@@ -14,13 +14,13 @@ class Options:
     """The command line and environment, read once at start."""
     host: Optional[str]         # --host: the server address (default: wherever it listens)
     port: int
-    lines: int                  # log lines on the Overview tab
+    lines: int                  # log lines on the Live tab (full detail)
     interval: float             # seconds between refreshes
     log: Optional[str]
     server_pid: Optional[int]   # the launcher's server
     console: Optional[str]      # its console output file
     once: bool
-    tab: int                    # --once: which tab (1-5; 0 = Overview)
+    tab: int                    # --once: which tab (1-5; 0 = Live)
     expand: bool
     # from the environment
     home: str = ""
@@ -40,7 +40,7 @@ def parse(argv: Optional[Sequence[str]], description: str, env: Mapping[str, str
     ap = argparse.ArgumentParser(description=description, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--host", default=None, help="server address (default: wherever the server on --port listens)")
     ap.add_argument("--port", type=int, default=_env_int(env, "PORT", 8080), help="server port (default 8080)")
-    ap.add_argument("--lines", type=int, default=6, help="log lines on the Overview tab (default 6)")
+    ap.add_argument("--lines", type=int, default=6, help="log lines on the Live tab, full detail (default 6)")
     ap.add_argument("--interval", type=float, default=2.0, help="seconds between refreshes (default 2)")
     ap.add_argument("--log", default=None, help="log file (default: the running server's --log-file)")
     ap.add_argument("--server-pid", type=int, default=None, help="PID of the server to watch (set by the launcher)")

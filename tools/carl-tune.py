@@ -34,7 +34,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import argparse  # noqa: E402
 import json  # noqa: E402
-from typing import List  # noqa: E402
+from typing import List, Optional  # noqa: E402
 
 import carl  # noqa: E402
 from carl_core.adapters import llama_server  # noqa: E402
@@ -47,13 +47,26 @@ from carl_core.domain.models import mtp_source  # noqa: E402
 from carl_core.domain.settings import Config  # noqa: E402
 from carl_core.domain.tuning import AutoTuner, TunePlan, blocking_processes  # noqa: E402
 from carl_core.domain.types import ModelInfo, TuneRecord  # noqa: E402
+from carl_help import render  # noqa: E402
 
 GUARDED_PORTS = (8080,)                        # the llama.cpp server CARL starts
 DEFAULT_BIG_GB = 8
 
 
+class HelpAction(argparse.Action):
+    """-h / --help: the same help as ./carl.sh help tune (tools/carl_help.py)."""
+    def __init__(self, option_strings: List[str], dest: str = argparse.SUPPRESS, **kw: object) -> None:
+        super().__init__(option_strings, dest, nargs=0, default=argparse.SUPPRESS, help="show this help")
+
+    def __call__(self, parser: argparse.ArgumentParser, ns: argparse.Namespace, values: object,
+                 option_string: Optional[str] = None) -> None:
+        print(render("tune"))
+        parser.exit()
+
+
 def parse_args(argv: List[str]) -> argparse.Namespace:
-    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = argparse.ArgumentParser(prog="./carl.sh tune", add_help=False)
+    ap.add_argument("-h", "--help", action=HelpAction)
     ap.add_argument("model", help="a downloaded model, or all (every downloaded model in turn)")
     ap.add_argument("--port", type=int, default=8093)
     depth = ap.add_mutually_exclusive_group()
@@ -68,9 +81,9 @@ def parse_args(argv: List[str]) -> argparse.Namespace:
 def downloaded_model(name: str) -> ModelInfo:
     m = carl.find(name)
     if not m:
-        raise ConfigError(f"unknown model '{name}' (./carl.sh models)")
+        raise ConfigError(f"unknown model '{name}'. ./carl.sh models lists the models.")
     if m.get("status") != "downloaded":
-        raise ConfigError(f"{m.get('name')} is not downloaded (./carl.sh download {m.get('name')})")
+        raise ConfigError(f"{m.get('name')} is not downloaded. To download it: ./carl.sh download {m.get('name')}")
     return m
 
 
@@ -79,17 +92,17 @@ def guard_gpu(port: int) -> None:
     busy = listening_ports()
     for p in GUARDED_PORTS + (port,):
         if p in busy:
-            raise ConfigError(f"a server is running on port {p}: stop it first (two models don't fit in memory)")
+            raise ConfigError(f"a server runs on port {p}. Stop it first: two models do not fit in the memory.")
     if os.environ.get("ALLOW_SECOND_MODEL") == "1":
         return
     try:
         big_gb = int(os.environ.get("BIG_GB", DEFAULT_BIG_GB))
     except ValueError:
-        raise ConfigError("BIG_GB must be a whole number of GB") from None
+        raise ConfigError("BIG_GB must be a whole number of GB.") from None
     big = blocking_processes(processes(), big_gb * 2 ** 20, os.getpid())
     if big:
-        raise ConfigError("another large process (probably a model) is in memory: " + "; ".join(big)
-                          + ". Stop it first, or set ALLOW_SECOND_MODEL=1 if it is not a model.")
+        raise ConfigError("another large process (possibly a model) is in memory: " + "; ".join(big)
+                          + ". Stop it first. If it is not a model, set ALLOW_SECOND_MODEL=1.")
 
 
 def save(m: ModelInfo, record: TuneRecord) -> None:
@@ -110,17 +123,17 @@ def run(args: argparse.Namespace, server: llama_server.LlamaServerControl, m: Mo
     machine = sysctl_text("machdep.cpu.brand_string")
     ram_gb = sysctl_int("hw.memsize") // 2 ** 30
     source = mtp_source(m, shape)
-    mtp = {"head": "head in the file", "drafter": f"drafter {os.path.basename(m.get('draft_path', ''))}",
-           "none": "drafter not downloaded" if m.get("draft") else "none"}[source]
-    print(f"Auto-tune {m.get('name')} on {machine} {ram_gb} GB ({os.path.basename(path)}, {shape['ftype']}, "
-          f"{'MoE' if shape['experts'] else 'dense'}, MTP: {mtp})", flush=True)
+    mtp = {"head": "an MTP head in the file", "drafter": f"the MTP drafter {os.path.basename(m.get('draft_path', ''))}",
+           "none": "no MTP (the MTP drafter is not downloaded)" if m.get("draft") else "no MTP"}[source]
+    print(f"Auto-tune measures {m.get('name')} on this Mac ({machine}, {ram_gb} GiB of RAM). The model: "
+          f"{os.path.basename(path)}, {shape['ftype']}, {'MoE' if shape['experts'] else 'dense'}, {mtp}.", flush=True)
     guard_gpu(args.port)
     # the re-emit workload copies this code back (it has a `call` method the prompt renames)
     with open(llama_server.__file__, encoding="utf-8") as f:
         edit_source = f.read()
     base_ctx = app.effective_tune(m, Config())[0]["ctx"]       # catalogue / header window, no config.json
     if not isinstance(base_ctx, int):
-        raise ConfigError(f"{m.get('name')}: the tuned ctx is not a token count")
+        raise ConfigError(f"{m.get('name')}: the context of the model is not a number of tokens")
     drafter = source == "drafter"           # the launcher passes it with -md for the MTP modes
     weights = os.path.getsize(path) + (os.path.getsize(m.get("draft_path", "")) if drafter else 0)
     plan = TunePlan(shape=shape, weights=weights, limit=app.gpu.limit()[0], base_ctx=base_ctx,
@@ -131,8 +144,8 @@ def run(args: argparse.Namespace, server: llama_server.LlamaServerControl, m: Mo
     record = AutoTuner(server, progress).run(plan)
     if not args.dry_run:
         save(m, record)
-        progress.note(f"saved to {carl.LOCAL_FILE.replace(os.path.expanduser('~'), '~')} "
-                      f"(used by the next start of {m.get('name')})")
+        progress.note(f"Saved in {carl.LOCAL_FILE.replace(os.path.expanduser('~'), '~')}. The next start of "
+                      f"{m.get('name')} uses it.")
     print("DONE " + json.dumps(record.get("settings", {})), flush=True)
 
 
@@ -153,7 +166,7 @@ def tune_all(args: argparse.Namespace) -> int:
     and the rest still run. 0 when every one was tuned."""
     models = [m for m in carl.all_models() if m.get("status") == "downloaded"]
     if not models:
-        raise ConfigError("no model is downloaded (./carl.sh download NAME)")
+        raise ConfigError("no model is downloaded. To download one: ./carl.sh download NAME")
     failed = []
     for k, m in enumerate(models, 1):
         print(f"MODEL {k}/{len(models)} {m.get('name')}", flush=True)

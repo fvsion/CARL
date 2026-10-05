@@ -43,6 +43,19 @@ test("carl-model-check: the warning for each situation", () => {
   assert.equal(parseModels({ nope: 1 }), undefined);
 });
 
+test("carl-model-check: short sentences, one path notation (Settings > Router), no arrow", () => {
+  const single = parseModels({ data: [{ id: "a" }] });
+  const router = parseModels({ data: [{ id: "a", status: { value: "loaded" } }, { id: "b", status: { value: "unloaded" } }] });
+  const said = [verdict("b", single).message, verdict("b", router).message, verdict("c", router).message];
+  assert.match(said[0], /^The server runs a, not b\. .*Settings > Router/);
+  assert.match(said[2], /^The server does not have c\. It has a, b\./);
+  for (const m of said) {
+    assert.ok(!m.includes("→"), m);
+    for (const sentence of m.split(/(?<=\.) /)) assert.ok(sentence.split(" ").length <= 20, sentence);
+  }
+  assert.match(verdict("c", { router: true, models: [] }).message, /It has no models\./);
+});
+
 // ------------------------------------------------------------------ carl-cache (OpenCode)
 
 /** A fake llama-server: one idle slot; a chat reply that ends the turn. */

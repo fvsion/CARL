@@ -35,13 +35,6 @@ Mode = Tuple[str, int]                     # (speculation, draft n)
 Read = Tuple[int, float]                   # (prompt tokens, cold read tok/s)
 Depth = Literal["quick", "default", "long"]
 DEPTHS: Tuple[Depth, ...] = ("quick", "default", "long")
-DEPTH_TEXT: Dict[Depth, str] = {
-    "quick": "quick: measures the MTP modes with 1 draft token (1 and 2 with an MTP drafter) and reads at 8K and 32K "
-             "(about 4 min).",
-    "default": "default: measures all speculation modes and reads at 8K, 32K and 64K (about 5-10 min).",
-    "long": "long: does the default steps, then reads at 128K and 192K and measures the decode speed at each "
-            "depth (10-40 min more)."}
-
 TUNE_KV = "q4_0"
 MIN_WINDOW = 16384                         # below this the model is not usable here
 TEST_CTX, TEST_CTX_QUICK = 69632, 36864    # the window benchmarks run with (64K / 32K + room)
@@ -257,6 +250,16 @@ class TunePlan:
         return 1 + len(self.modes()) + 2 + (0 if self.quick else 1)    # memory, modes, reading, [parallel], result
 
 
+KV_WORDS = {"q4_0": "q4", "q8_0": "q8"}
+_SPEC_WORDS = {"none": "none", "ngram-mod": "n-gram", "draft-mtp": "MTP", "draft-mtp,ngram-mod": "MTP + n-gram"}
+
+
+def spec_words(spec: str, n: int) -> str:
+    """A speculation mode in the glossary's words: MTP + n-gram, 2 guesses."""
+    name = _SPEC_WORDS.get(spec, spec)
+    return name if spec == "none" else f"{name}, {n} guess{'' if n == 1 else 'es'}"
+
+
 class AutoTuner:
     """Runs a tune through a TuneServer and reports progress; returns the record to save."""
 
@@ -276,25 +279,26 @@ class AutoTuner:
 
         self._next("memory")
         m1, m2 = max_ctx(shape, weights, limit, 1, TUNE_KV), max_ctx(shape, weights, limit, 2, TUNE_KV)
-        self.progress.note(f"GPU limit {limit / 2 ** 30:.1f} GiB; largest window per slot: "
-                           f"1 slot {m1 // 1024}K, 2 slots {m2 // 1024}K")
+        self.progress.note(f"The GPU memory limit is {limit / 2 ** 30:.1f} GiB. The largest context per slot: "
+                           f"{m1 // 1024}K tokens with 1 slot, {m2 // 1024}K tokens with 2 slots.")
         if m1 < MIN_WINDOW:
-            raise ConfigError("the model doesn't fit this Mac's GPU memory with a 16K window")
+            raise ConfigError("the model does not fit the GPU memory of this Mac with a context of 16K tokens")
 
         test_ctx = min(TEST_CTX_QUICK if plan.quick else TEST_CTX, m1)
         prompts = workloads(plan.edit_source)
         results: Dict[str, ModeResult] = {}
         for mode in plan.modes():
-            self._next(f"speculation {mode[0]} n={mode[1]}")
+            self._next(f"speculation {spec_words(mode[0], mode[1])}")
             load = self.server.start(mode[0], mode[1], test_ctx)
             r = results[mode_key(mode)] = bench_mode(self.server, prompts)
-            self.progress.note(f"loaded in {load:.0f}s · prose {r['prose']} · code {r['code']} · "
-                               f"re-emit {r['edit']} tok/s · score {r['score']}")
+            self.progress.note(f"Loaded in {load:.0f} s. Write speed: prose {r['prose']}, code {r['code']}, "
+                               f"edit {r['edit']} tok/s. Weighted speed: {r['score']} tok/s.")
         spec, n = best = best_mode(results)
         first = next(iter(results.values()))
-        self.progress.note(f"best: {spec} n={n} (score {results[mode_key(best)]['score']} vs none {first['score']})")
+        self.progress.note(f"The best speculation is {spec_words(spec, n)}: {results[mode_key(best)]['score']} tok/s "
+                           f"(none: {first['score']} tok/s).")
 
-        self._next("prompt reading")
+        self._next("read speed")
         rctx = read_ctx(plan.depth, m1)
         self.server.start(spec, n, rctx)
         reads: List[Read] = []
@@ -303,23 +307,24 @@ class AutoTuner:
         depths = read_depths(plan.depth)
         for i, depth in enumerate(depths):
             if depth + READ_ROOM > rctx:
-                self.progress.note(f"{depth // 1024}K and deeper: skipped (the largest window that fits this Mac "
-                                   f"is {m1 // 1024}K)")
+                self.progress.note(f"{depth // 1024}K tokens and more: not measured. The largest context that fits "
+                                   f"this Mac is {m1 // 1024}K tokens.")
                 break
             if long and depth > 65536 and depth == depths[3] and len(reads) >= 2:
                 left = sum(read_seconds(reads, d) for d in depths[i:] if d + READ_ROOM <= rctx)
-                self.progress.note(f"the deep reads ({', '.join(f'{d // 1024}K' for d in depths[i:] if d + READ_ROOM <= rctx)}) "
-                                   f"take about {left / 60:.0f} min (estimated from the reads so far)")
+                self.progress.note(f"The long reads ({', '.join(f'{d // 1024}K' for d in depths[i:] if d + READ_ROOM <= rctx)}) "
+                                   f"take about {left / 60:.0f} min (an estimate from the reads so far).")
             (got, tps), tg = cold_read(self.server, depth, LONG_DECODE_TOKENS if long else 0)
             reads.append((got, tps))
             if tg is not None:
                 decodes.append((got, tg))
-            self.progress.note(f"{got} tokens read cold at {tps:.0f} tok/s ({got / tps:.0f} s)"
-                               + (f" · then decodes at {tg} tok/s" if tg is not None else ""))
+            self.progress.note(f"Read {got} new tokens at {tps:.0f} tok/s ({got / tps:.0f} s)."
+                               + (f" Then wrote at {tg} tok/s." if tg is not None else ""))
         self.server.stop()
         zones = zones_from_reads(reads)
-        self.progress.note(f"context zones (cold read of a full window): fast to {zones['good'] // 1024}K (3 min), "
-                           f"slow to {zones['slow'] // 1024}K (10 min), very slow to {zones['very_slow'] // 1024}K (20 min)")
+        self.progress.note(f"Context zones (the time to read a full context again): fast to {zones['good'] // 1024}K "
+                           f"(3 min), slow to {zones['slow'] // 1024}K (10 min), very slow to "
+                           f"{zones['very_slow'] // 1024}K (20 min).")
 
         parallel: List[List[float]] = []
         if not plan.quick:
@@ -328,16 +333,17 @@ class AutoTuner:
             parallel = [[n, round(tg, 1), round(pp, 1)] for n, (tg, pp) in sorted(got_par.items())]
             if parallel:
                 one = parallel[0][1] or 1.0
-                self.progress.note("decoding in total: " + " · ".join(
-                    f"{int(n)} at once {tg:.0f} tok/s ({tg / n:.1f} each)" for n, tg, _ in parallel)
-                    + f" · {parallel[-1][1] / one:.1f}x with {int(parallel[-1][0])}")
+                self.progress.note("Write speed in total: " + ", ".join(
+                    f"{int(n)} at the same time {tg:.0f} tok/s ({tg / n:.1f} each)" for n, tg, _ in parallel)
+                    + f". That is {parallel[-1][1] / one:.1f} times the speed of one, with {int(parallel[-1][0])}.")
             else:
-                self.progress.note("parallel requests: not measured (llama-batched-bench didn't run)")
+                self.progress.note("Parallel requests: not measured (llama-batched-bench did not run).")
 
         ctx = choose_ctx(plan.base_ctx, zones, m1)
         slots = "2" if need_bytes(shape, weights, ctx, 2, TUNE_KV) <= limit else "1"
         self._next("result")
-        self.progress.note(f"kv {TUNE_KV} · speculation {spec} n={n} · context {ctx // 1024}K per slot · {slots} slot(s)")
+        self.progress.note(f"Context memory type {KV_WORDS.get(TUNE_KV, TUNE_KV)}. Speculation {spec_words(spec, n)}. "
+                           f"Context {ctx // 1024}K tokens per slot. Slots: {slots}.")
         results_out: TuneResults = {"speculation": results, "prompt_read": [[g, t] for g, t in reads]}
         if decodes:
             results_out["decode_at_depth"] = [[g, t] for g, t in decodes]
@@ -366,5 +372,5 @@ class ProcessInfo:
 def blocking_processes(procs: Sequence[ProcessInfo], big_kib: int, own_pid: int) -> List[str]:
     """Processes that probably hold a model (over big_kib resident, or a known model
     server): a second model can crash the Mac. Like host/common.sh guard_other_models."""
-    return [f"pid {p.pid} ({os.path.basename(p.command)}, {p.rss_kib / 2 ** 20:.1f} GB)"
+    return [f"pid {p.pid} ({os.path.basename(p.command)}, {p.rss_kib / 2 ** 20:.1f} GiB)"
             for p in procs if p.pid != own_pid and (p.rss_kib > big_kib or _MODEL_SERVER.search(p.command))]

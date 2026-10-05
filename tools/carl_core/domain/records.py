@@ -78,15 +78,15 @@ def _card(entry: Dict[str, JsonValue], names: Optional[AbstractSet[str]], at: st
             raise ConfigError(f"{at}: {k} must be text")
     role = entry.get("role")
     if isinstance(role, str) and len(role) > ROLE_MAX:
-        raise ConfigError(f"{at}: role must be at most {ROLE_MAX} characters (it is a headline)")
+        raise ConfigError(f"{at}: role must be {ROLE_MAX} characters or less (it is a headline)")
     tags = entry.get("good_for", [])
     if not isinstance(tags, list) or not all(isinstance(t, str) and t in GOOD_FOR for t in tags):
         raise ConfigError(f"{at}: good_for must list tags from: {', '.join(GOOD_FOR)}")
     if "uncensored" in tags and not entry.get("abliterated"):
-        raise ConfigError(f"{at}: only abliterated models may be tagged uncensored")
+        raise ConfigError(f"{at}: only an abliterated model can have the tag uncensored")
     rank = entry.get("rank")
     if rank is not None and (not isinstance(rank, int) or isinstance(rank, bool) or rank < 1):
-        raise ConfigError(f"{at}: rank must be a whole number >= 1 (1 = best quality)")
+        raise ConfigError(f"{at}: rank must be a whole number, 1 or more (1 is the best quality)")
     if "fast" in entry and not (entry["fast"] is True and entry.get("arch") == "dense"):
         raise ConfigError(f"{at}: fast is true or absent, and only on a dense model (auto fit's everyday goal "
                           "takes it with the MoE builds)")
@@ -98,7 +98,7 @@ def _card(entry: Dict[str, JsonValue], names: Optional[AbstractSet[str]], at: st
     for alt in alts:
         if not (isinstance(alt, dict) and isinstance(alt.get("when"), str) and isinstance(alt.get("model"), str)
                 and (names is None or alt.get("model") in names)):
-            raise ConfigError(f"{at}: pick_instead entries need a model CARL knows (./carl.sh models) and a when text")
+            raise ConfigError(f"{at}: each pick_instead entry needs a model that CARL knows (./carl.sh models) and a when text")
 
 
 def _text(card: Dict[str, JsonValue], key: str, limit: int, at: str) -> None:
@@ -107,11 +107,11 @@ def _text(card: Dict[str, JsonValue], key: str, limit: int, at: str) -> None:
     if v is None:
         return
     if not isinstance(v, str) or not v.strip():
-        raise ConfigError(f"{at}: {key} must be text (unset it instead of leaving it empty)")
+        raise ConfigError(f"{at}: {key} must be text (to remove it, use unset)")
     if _CONTROL.search(v):
         raise ConfigError(f"{at}: {key} must not contain control characters (newlines, escapes)")
     if len(v) > limit:
-        raise ConfigError(f"{at}: {key} must be at most {limit} characters")
+        raise ConfigError(f"{at}: {key} must be {limit} characters or less")
 
 
 def parse_custom_card(raw: object, names: Optional[AbstractSet[str]], at: str,
@@ -133,17 +133,17 @@ def parse_custom_card(raw: object, names: Optional[AbstractSet[str]], at: str,
     for alt in cast("list[Dict[str, JsonValue]]", card.get("pick_instead", [])):
         _text(alt, "when", TEXT_MAX, f"{at}: pick_instead")
         if model is not None and alt.get("model") == model:
-            raise ConfigError(f"{at}: pick_instead can't name the model itself")
+            raise ConfigError(f"{at}: pick_instead cannot name the model itself")
     for key in ("abliterated", "auto_fit"):
         if key in card and not isinstance(card[key], bool):
             raise ConfigError(f"{at}: {key} must be true or false")
     if "arch" in card and card["arch"] not in ARCHS:
         raise ConfigError(f"{at}: arch must be one of: {', '.join(ARCHS)}")
     if "uncensored" in card and not card.get("abliterated"):
-        raise ConfigError(f"{at}: the uncensored text is for abliterated models only (set abliterated first)")
+        raise ConfigError(f"{at}: the uncensored text is for an abliterated model only (set abliterated first)")
     if card.get("auto_fit") and ("rank" not in card or "arch" not in card or card.get("abliterated")):
-        raise ConfigError(f"{at}: auto fit only picks a ranked stock model: set rank and arch, "
-                          f"and abliterated must be off")
+        raise ConfigError(f"{at}: Auto fit chooses only a stock model with a quality rank. Set rank and arch, "
+                          f"and set abliterated to no")
     return cast(CustomCard, card)
 
 

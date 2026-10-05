@@ -1,7 +1,7 @@
 {
   "name": "carl-cache",
   "version": "1.0.0",
-  "description": "CARL's prompt cache for OpenCode: each session's conversation and each agent's prompt saved on the CARL server's disk and restored before the next request, so restarts, model switches and reopened sessions don't re-read everything.",
+  "description": "CARL's disk cache for OpenCode. CARL saves each session and each agent's prompt on the server's disk and restores them before the next request. After a restart, a model switch or a reopened session, the server does not read everything again.",
   "type": "module",
   "license": "MIT",
   "exports": {

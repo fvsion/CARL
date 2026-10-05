@@ -88,7 +88,8 @@ class RealCatalogueTest(unittest.TestCase):
         self.assertEqual(auto_fit(cands, here, "hard-code").name, "qwen3.8-27b")
         vm = auto_fit(cands, Budget(THIS_MAC_LIMIT, 32 * GIB, RESERVE_VM), "everyday")
         self.assertEqual(vm.name, "qwen3.6-35b-a3b-iq3")
-        self.assertIn("qwen3.6-35b-a3b (rank 3): the weights and buffers alone use 22.2 GiB (the limit on this Mac is 22.0 GiB)",
+        self.assertIn("qwen3.6-35b-a3b (quality rank 3) does not fit: the weights and buffers alone need 22.2 GiB, and a "
+                      "model can use 22.0 GiB",
                       [r.line() for r in vm.rejected])
 
     def test_a_fast_small_dense_model_joins_the_everyday_family(self) -> None:
@@ -99,8 +100,10 @@ class RealCatalogueTest(unittest.TestCase):
         self.assertEqual(auto_fit(slow, mac(16), "everyday").name, "gemma-4-12b")
         fit = auto_fit(cands, mac(16), "everyday")
         self.assertFalse(fit.fallback)
-        self.assertIn("best-ranked stock small dense build", fit.because())
-        self.assertIn("gemma-4-12b (rank 8): dense: for the hard-code goal (slower)", [r.line() for r in fit.rejected])
+        self.assertIn("Of the stock small dense models that hold two slots", fit.because())
+        self.assertIn("this model has the best quality rank", fit.because())
+        self.assertIn("gemma-4-12b (quality rank 8) is dense: Auto fit keeps it for the hard code goal",
+                      [r.line() for r in fit.rejected])
 
     def test_never_an_abliterated_model(self) -> None:
         cands = real_catalogue(downloaded=("orcarouter-27b-iq3", "heretic-35b-a3b-iq3"))
@@ -115,10 +118,14 @@ class RealCatalogueTest(unittest.TestCase):
     def test_reasons_name_the_numbers(self) -> None:
         fit = auto_fit(real_catalogue(), mac(24), "hard-code")
         self.assertEqual([r.line() for r in fit.rejected], [
-            "qwen3.8-27b (rank 1): the weights and buffers alone use 16.5 GiB (the limit on this Mac is 16.0 GiB)",
-            "qwen3.8-27b-q3 (rank 2): 2 × 96K uses 16.9 GiB (the limit on this Mac is 16.0 GiB)",
-            "qwen3.6-35b-a3b (rank 3): MoE: for the everyday goal (faster)"])
-        self.assertIn("two 96K windows", fit.because())
+            "qwen3.8-27b (quality rank 1) does not fit: the weights and buffers alone need 16.5 GiB, and a model can "
+            "use 16.0 GiB",
+            "qwen3.8-27b-q3 (quality rank 2) does not fit: 2 slots × 96K tokens need 16.9 GiB, and a model can use "
+            "16.0 GiB",
+            # X11 (Phase 21 audit): a model that fits no pass says so, not "kept for the other goal"
+            "qwen3.6-35b-a3b (quality rank 3) does not fit: the weights and buffers alone need 22.2 GiB, and a model "
+            "can use 16.0 GiB"])
+        self.assertIn("two slots of 96K tokens", fit.because())
 
     def test_downloaded_scope(self) -> None:
         cands = real_catalogue(downloaded=("qwen3.6-35b-a3b-iq3", "orcarouter-27b-iq3", "heretic-35b-a3b-iq3"))
@@ -127,7 +134,7 @@ class RealCatalogueTest(unittest.TestCase):
         start = best_downloaded(best, cands)
         self.assertEqual((best.name, start.name), ("qwen3.6-35b-a3b", "qwen3.6-35b-a3b-iq3"))
         self.assertEqual(start.scope, "downloaded")
-        self.assertIn("qwen3.6-35b-a3b (rank 3): not downloaded", [r.line() for r in start.rejected])
+        self.assertIn("qwen3.6-35b-a3b (quality rank 3) is not downloaded", [r.line() for r in start.rejected])
         self.assertIs(best_downloaded(start, cands), start)            # downloaded already: itself
 
     def test_16gb_the_9b_only_when_it_is_the_one_downloaded(self) -> None:
@@ -137,7 +144,7 @@ class RealCatalogueTest(unittest.TestCase):
         only_9b = [replace(c, downloaded=c.name == "qwen3.8-9b") for c in real_catalogue()]
         start = auto_fit(only_9b, mac(16), "everyday", "downloaded")
         self.assertEqual((start.name, start.fallback), ("qwen3.8-9b", True))    # no fast build downloaded
-        self.assertIn("gemma-4-e4b (rank 9): not downloaded", [r.line() for r in start.rejected])
+        self.assertIn("gemma-4-e4b (quality rank 9) is not downloaded", [r.line() for r in start.rejected])
 
     def test_nothing_fits_lists_every_candidate(self) -> None:
         fit = auto_fit(real_catalogue(), mac(8), "everyday")
@@ -145,7 +152,7 @@ class RealCatalogueTest(unittest.TestCase):
         self.assertEqual([r.name for r in fit.rejected],
                          ["qwen3.8-27b", "qwen3.8-27b-q3", "qwen3.6-35b-a3b", "qwen3.8-27b-iq3", "qwen3.6-35b-a3b-iq3",
                           "gemma-4-31b", "gemma-4-26b-a4b", "gemma-4-12b", "gemma-4-e4b", "qwen3.8-9b"])
-        self.assertIn("no ranked stock model fits", fit.because())
+        self.assertIn("No stock model with a quality rank fits", fit.because())
         self.assertIn("nothing fits", fit.summary())
 
 
@@ -164,7 +171,7 @@ class PassesTest(unittest.TestCase):
         small = cand("small", "moe", 2, 8.0, kv_elems=65536)
         fit = auto_fit([big, small], Budget(18 * GIB, 0, 0), "everyday")
         self.assertEqual((fit.name, fit.plan.slots if fit.plan else 0, fit.tier), ("small", 2, 0))
-        self.assertEqual(fit.rejected[0].reason, "2 × 96K uses 20.8 GiB (the limit on this Mac is 18.0 GiB)")
+        self.assertEqual(fit.rejected[0].reason, "does not fit: 2 slots × 96K tokens need 20.8 GiB, and a model can use 18.0 GiB")
 
     def test_sliding_window_models_plan_as_cache_swa_says(self) -> None:
         """A sliding-window model: planned with the window cache (auto, window), with every layer at full
@@ -180,27 +187,28 @@ class PassesTest(unittest.TestCase):
         m = cand("m", "moe", 1, 13.0, kv_elems=65536)
         one = auto_fit([m], Budget(17.5 * GIB, 0, 0), "everyday")
         self.assertEqual((one.plan.slots, one.plan.ctx, one.tier) if one.plan else None, (1, 98304, 1))
-        self.assertIn("one 96K window", one.because())
+        self.assertIn("one slot of 96K tokens", one.because())
         small = auto_fit([m], Budget(16 * GIB, 0, 0), "everyday")
         self.assertEqual((small.plan.slots, small.tier) if small.plan else None, (1, 2))
         self.assertTrue(32768 <= (small.plan.ctx if small.plan else 0) < 98304)
-        self.assertIn("the largest that fits", small.because())
+        self.assertIn("the largest context that fits", small.because())
         none = auto_fit([m], Budget(14.5 * GIB, 0, 0), "everyday")
         self.assertIsNone(none.pick)
-        self.assertIn("the largest window that fits is", none.rejected[0].reason)
+        self.assertIn("the largest context that fits is", none.rejected[0].reason)
 
     def test_goal_family_first_then_fallback(self) -> None:
         dense = cand("dense", "dense", 1, 10.0)
         moe = cand("moe", "moe", 2, 30.0)
         fit = auto_fit([dense, moe], Budget(20 * GIB, 0, 0), "everyday")
         self.assertEqual((fit.name, fit.fallback), ("dense", True))
-        self.assertIn("no fast (MoE or small dense) build fits", fit.because())
+        self.assertIn("No fast (MoE or small dense) model fits", fit.because())
         self.assertEqual([r.name for r in fit.rejected], ["moe"])
         hard = auto_fit([dense, moe], Budget(40 * GIB, 0, 0), "hard-code")
         self.assertEqual((hard.name, hard.fallback), ("dense", False))
         everyday = auto_fit([dense, moe], Budget(40 * GIB, 0, 0), "everyday")
         self.assertEqual(everyday.name, "moe")
-        self.assertEqual(everyday.rejected[0].line(), "dense (rank 1): dense: for the hard-code goal (slower)")
+        self.assertEqual(everyday.rejected[0].line(), "dense (quality rank 1) is dense: Auto fit keeps it for the hard "
+                                                      "code goal")
 
     def test_only_ranked_stock_models(self) -> None:
         ablit = cand("ablit", "moe", 1, 5.0, abliterated=True)
@@ -217,7 +225,7 @@ class PassesTest(unittest.TestCase):
         b, c = cand("b", "moe", 2, 5.0), cand("c", "moe", 2, 5.0)
         fit = auto_fit([c, unknown, b], Budget(20 * GIB, 0, 0))
         self.assertEqual(fit.name, "b")                              # same rank: by name
-        self.assertEqual(fit.rejected[0].reason, "size unknown: CARL cannot read its GGUF header (no network?)")
+        self.assertEqual(fit.rejected[0].reason, "has an unknown size: CARL cannot read its GGUF header (possibly no network)")
         self.assertIsNone(plan_for(unknown, TIERS[0], 20 * GIB))
 
     def test_window_beyond_the_trained_length(self) -> None:
@@ -230,8 +238,11 @@ class PassesTest(unittest.TestCase):
         self.assertEqual(Budget(25 * GIB, 32 * GIB, 6 * GIB).allowed, 25 * GIB)
         self.assertEqual(Budget(25 * GIB, 32 * GIB, 10 * GIB).allowed, 22 * GIB)
         self.assertEqual(Budget(25 * GIB, 0, 10 * GIB).allowed, 25 * GIB)      # RAM unknown: the GPU limit
-        self.assertIn("minus 10.0 GiB for macOS and apps", Budget(25 * GIB, 32 * GIB, 10 * GIB).describe())
-        self.assertEqual(Budget(25 * GIB, 32 * GIB, 6 * GIB).describe(), "25.0 GiB (the GPU limit)")
+        self.assertIn("minus 10.0 GiB kept free for macOS and apps", Budget(25 * GIB, 32 * GIB, 10 * GIB).describe())
+        self.assertEqual(Budget(25 * GIB, 32 * GIB, 6 * GIB).describe(), "25.0 GiB (the GPU memory limit)")
+        self.assertEqual(Budget(25 * GIB, 32 * GIB, 6 * GIB).explain(),
+                         "A model can use 25.0 GiB: the GPU memory limit. This is less than the RAM (32.0 GiB) minus "
+                         "the memory kept free for macOS and apps (6.0 GiB), which is 26.0 GiB.")
 
     def test_candidate_from_a_record(self) -> None:
         m = cast(ModelInfo, {"name": "x", "arch": "MoE", "rank": 2, "abliterated": False, "status": "downloaded",

@@ -53,7 +53,7 @@ while [[ $# -gt 0 ]]; do
     --host|--host=*)
       v="${1#--host}"; v="${v#=}"
       if [[ -z "$v" ]]; then shift; v="${1:-}"; fi
-      [[ -n "$v" ]] || { echo "error: --host needs an address" >&2; exit 2; }
+      [[ -n "$v" ]] || { echo "error: --host needs an address." >&2; exit 2; }
       HOST="$v"; HOST_FLAG=1 ;;
     --q4) KV_FLAG=q4_0 ;;
     --q8) KV_FLAG=q8_0 ;;
@@ -64,17 +64,17 @@ while [[ $# -gt 0 ]]; do
         q4|q4_0) KV_FLAG=q4_0 ;;
         q8|q8_0) KV_FLAG=q8_0 ;;
         f16|bf16) KV_FLAG="$v" ;;
-        *) echo "error: --kv takes q4 or q8 (or f16), got '$v'" >&2; exit 2 ;;
+        *) echo "error: --kv takes q4 or q8 (or f16), not '$v'." >&2; exit 2 ;;
       esac ;;
     --model|--model=*)
       v="${1#--model}"; v="${v#=}"
       if [[ -z "$v" ]]; then shift; v="${1:-}"; fi
-      [[ -n "$v" ]] || { echo "error: --model needs a model name or a .gguf path" >&2; exit 2; }
+      [[ -n "$v" ]] || { echo "error: --model needs a model name or the path of a .gguf file." >&2; exit 2; }
       MODEL_FLAG="$v" ;;
     --slots|--slots=*)
       v="${1#--slots}"; v="${v#=}"
       if [[ -z "$v" ]]; then shift; v="${1:-}"; fi
-      [[ "$v" =~ ^([1-4]|auto)$ ]] || { echo "error: --slots takes 1-4 or auto, got '$v'" >&2; exit 2; }
+      [[ "$v" =~ ^([1-4]|auto)$ ]] || { echo "error: --slots takes 1 to 4 or auto, not '$v'." >&2; exit 2; }
       SLOTS_FLAG="$v" ;;
     --ctx|--ctx=*)
       v="${1#--ctx}"; v="${v#=}"
@@ -82,9 +82,9 @@ while [[ $# -gt 0 ]]; do
       v="$(printf '%s' "$v" | tr '[:upper:]' '[:lower:]')"
       if [[ "$v" =~ ^([0-9]{1,6})k$ ]]; then CTX_FLAG=$(( 10#${BASH_REMATCH[1]} * 1024 ))
       elif [[ "$v" =~ ^[0-9]{1,9}$ ]]; then CTX_FLAG=$(( 10#$v ))
-      else echo "error: --ctx takes tokens (e.g. 131072) or Nk (e.g. 128k), got '$v'" >&2; exit 2; fi
+      else echo "error: --ctx takes a number of tokens (for example 131072) or Nk (for example 128k), not '$v'." >&2; exit 2; fi
       if (( CTX_FLAG < 4096 || CTX_FLAG > 262144 )); then
-        echo "error: --ctx must be between 4k and 256k (model max 262144), got $CTX_FLAG" >&2; exit 2
+        echo "error: --ctx must be from 4k to 256k tokens, not $CTX_FLAG." >&2; exit 2
       fi ;;
     *) pass+=("$1") ;;
   esac
@@ -104,7 +104,14 @@ ensure_deps                      # llama-server, aria2, ansifilter (asks to brew
 # this Mac (llama.auto_goal / llama.auto_fit; the best downloaded stock model that fits
 # when the pick isn't downloaded).
 # SETTINGS_FILE=none ignores config.json (catalogue and Auto-tune only).
+# The checks below read GGUF headers (and, for a model that is not downloaded, Hugging Face):
+# say so in a terminal, so a slow first start shows progress (Phase 21 audit Z4).
+[[ -t 1 ]] && echo "CARL reads the model and checks the memory..."
 model_arg="${MODEL_FLAG:-${MODEL:-}}"
+# Where each reported setting comes from (the start lines): a flag, the environment, else what
+# carl.py says (CARL_SOURCES: config, Auto-tune, catalogue, the model file, Auto fit, default).
+ENV_SET=" "
+for v in CTX KV SPEC SLOTS; do [[ -n "${!v:-}" ]] && ENV_SET+="$v "; done
 carl_args=(launch-env); [[ -n "$model_arg" ]] && carl_args+=(--model "$model_arg")
 [[ "${SETTINGS_FILE:-}" == none ]] && carl_args+=(--no-config)
 CARL_ENV="$(python3 "$HERE/../tools/carl.py" "${carl_args[@]}")" || exit 1
@@ -114,8 +121,8 @@ CARL_SOURCES=""; DRAFT=""; MTP_SOURCE=""
 apply_settings "MODEL|MODEL_NAME|CARL_SOURCES|DRAFT|MTP_SOURCE|ALIAS|KV|CTX|SLOTS|SPEC|SPEC_N|TEMP|TOP_P|TOP_K|MIN_P|PRESENCE|REPEAT|NET|HOST|CACHE_RAM|UB|BATCH|CKPT|CKPT_STEP|THINK_TOGGLE|EXTRA_ARGS|LLAMA_MODE|SWA_MODE" \
   "MODEL|MODEL_NAME|CARL_SOURCES|DRAFT|MTP_SOURCE" <<< "$CARL_ENV"
 LLAMA_MODE="${MODE_FLAG:-${LLAMA_MODE:-single}}"
-case "$LLAMA_MODE" in single|router) ;; *) echo "error: LLAMA_MODE takes single or router, got '$LLAMA_MODE'" >&2; exit 2 ;; esac
-[[ -f "$MODEL" ]] || { echo "error: model file not found: $MODEL (./carl.sh models lists the models; ./carl.sh download NAME gets one)" >&2; exit 1; }
+case "$LLAMA_MODE" in single|router) ;; *) echo "error: LLAMA_MODE takes single or router, not '$LLAMA_MODE'." >&2; exit 2 ;; esac
+[[ -f "$MODEL" ]] || { echo "error: the model file $MODEL does not exist. ./carl.sh models lists the models; ./carl.sh download NAME downloads one." >&2; exit 1; }
 ALIAS="${ALIAS:-$(basename "$MODEL" .gguf)}"
 # config.json llama.extra_args: more llama-server flags (command-line extras still
 # come last). One string of space-separated words (carl.py allows no quotes or
@@ -128,7 +135,7 @@ set -- ${extra_args[@]+"${extra_args[@]}"} "$@"
 [[ -n "$NET_FLAG" && -z "$HOST_FLAG" ]] && HOST=""
 resolve_host "$NET_FLAG"
 PORT="${PORT:-8080}"
-is_port "$PORT" || { echo "error: PORT must be a TCP port (1-65535), got '$PORT'" >&2; exit 2; }
+is_port "$PORT" || { echo "error: PORT must be a TCP port from 1 to 65535, not '$PORT'." >&2; exit 2; }
 API_KEY_FILE="${API_KEY_FILE:-$CARL_KEY_FILE}"
 CTX="${CTX_FLAG:-${CTX:-98304}}"   # per slot: --ctx flag > CTX env > 96K. Measured on the 35B (q4_0 KV, 2026-10-01):
                                    # 64K reads a cold prompt at 229 tok/s, decodes 20 tok/s; 128K: 117 / 13.9.
@@ -167,10 +174,10 @@ SPEC_N="${SPEC_N:-1}"           # --spec-draft-n-max; 27B dense: MTP n>1 loses o
 draft_args=()
 if [[ ",$SPEC," == *,draft-mtp,* ]]; then
   if [[ "${MTP_SOURCE:-}" == none ]]; then
-    echo "note: ${MODEL_NAME:-$MODEL} has no MTP head and no downloaded MTP drafter: speculation n-gram instead of $SPEC" >&2
+    echo "note: ${MODEL_NAME:-$MODEL} has no MTP head and no downloaded MTP drafter, so the speculation is n-gram only." >&2
     SPEC=ngram-mod
   elif [[ -n "$DRAFT" ]]; then
-    [[ -f "$DRAFT" ]] || { echo "error: MTP drafter not found: $DRAFT (./carl.sh download ${MODEL_NAME:-NAME})" >&2; exit 1; }
+    [[ -f "$DRAFT" ]] || { echo "error: the MTP drafter $DRAFT does not exist. ./carl.sh download ${MODEL_NAME:-NAME} downloads it." >&2; exit 1; }
     draft_args=(-md "$DRAFT")
   fi
 fi
@@ -196,8 +203,8 @@ for v in UB BATCH CKPT CKPT_STEP SPEC_N; do require_int "$v" "${!v}"; done
 # One server per port, and in practice one model at a time (two don't fit in
 # 36 GB). Fail before touching the log symlink or loading anything.
 if pid=$(port_pid "$PORT") && [[ -n "$pid" ]]; then
-  echo "error: port $PORT is already in use by: $(ps -o command= -p "${pid%%$'\n'*}" | cut -c1-100)" >&2
-  echo "       Stop it first (Ctrl-C in its terminal, or kill $pid). Watch it: ./carl.sh monitor" >&2
+  echo "error: port $PORT is in use by process $pid ($(ps -o command= -p "${pid%%$'\n'*}" | cut -c1-60)). Stop it first: press Ctrl-C in its terminal, or run kill $pid." >&2
+  echo "       If it is a CARL server, ./carl.sh monitor opens its dashboard." >&2
   exit 1
 fi
 guard_other_models               # a second model can crash the Mac (host/common.sh)
@@ -241,17 +248,18 @@ if [[ "$LLAMA_MODE" == router ]]; then
   fi
   PRESET="$CARL_CONF/router-presets.ini"
   presets="$(python3 "$HERE/../tools/carl.py" router-preset --out "$PRESET" --templates "$TMPL_DIR")" || exit 1
-  grep -q '^model ' <<< "$presets" || { echo "error: router mode: no downloaded model fits this Mac (./carl.sh fit)" >&2; exit 1; }
-  echo "network: $NET_NOTE"
-  echo "router mode: OpenCode / Pi switch models (one loaded at a time; a switch takes 30 s - 2 min). Presets: $PRESET"
-  echo "  WARNING: every switch empties the prompt cache: the model that loads starts cold. OpenCode and Pi"
-  echo "  put a session back from the disk cache (about a second after the load); other clients re-read the"
-  echo "  whole conversation. Switch with this in consideration."
+  grep -q '^model ' <<< "$presets" || { echo "error: router mode cannot start: no downloaded model fits this Mac. ./carl.sh fit shows what fits." >&2; exit 1; }
+  first="$(sed -n 's/^start //p' <<< "$presets")"
+  echo "CARL starts the server in router mode at http://$HOST:$PORT. $NET_NOTE"
+  echo "OpenCode and Pi can switch the model. The server loads one model at a time. A switch takes 30 s to 2 min."
+  echo "Each switch empties the RAM cache. OpenCode and Pi restore their sessions from the disk cache."
+  echo "Other clients read the whole session again."
+  echo "The models (their settings: $(tilde "$PRESET")):"
   while IFS= read -r line; do
     case "$line" in
-      "model "*) echo "  offers  ${line#model }" ;;
-      "skip "*) echo "  left out ${line#skip }" ;;
-      "start "*) echo "  loads   ${line#start } first" ;;
+      "model "*) n="${line#model }"; n="${n%% *}"
+                 echo "  $n: ${line#model "$n" }$([[ "$n" == "$first" ]] && echo " (loads first)")" ;;
+      "skip "*) echo "  ${line#skip } This model is left out." ;;
     esac
   done <<< "$presets"
   run_server "$PORT" "$LOG_FILE" llama-server \
@@ -278,11 +286,13 @@ SWA=-
 if plan=$(python3 "$HERE/../tools/llama-fit.py" --plan "$MODEL" --ctx "$CTX" --kv "$KV_K" \
             --want-slots "$SLOTS" --swa "${SWA_MODE:-auto}" ${fit_args[@]+"${fit_args[@]}"} 2>/dev/null) \
    && [[ "$plan" =~ ^([1-9])\ ([0-9]+)\ (full|window|-)$ ]]; then
-  if [[ "$SLOTS" == auto ]]; then SLOTS_NOTE="auto"; else SLOTS_NOTE="set"; fi
+  if [[ "$SLOTS" == auto ]]; then
+    SLOTS_NOTE="auto: $([[ "${BASH_REMATCH[1]}" == 1 ]] && echo "two slots do not fit" || echo "two slots fit")"
+  fi
   SLOTS="${BASH_REMATCH[1]}"; CACHE_RAM="${CACHE_RAM:-${BASH_REMATCH[2]}}"; SWA="${BASH_REMATCH[3]}"
 else
-  [[ "$SLOTS" == auto ]] && SLOTS=1
-  SLOTS_NOTE="fallback"; CACHE_RAM="${CACHE_RAM:-4096}"
+  [[ "$SLOTS" == auto ]] && { SLOTS=1; SLOTS_NOTE="auto: CARL could not calculate the memory"; }
+  CACHE_RAM="${CACHE_RAM:-4096}"
 fi
 
 # Memory check (tools/llama-fit.py --check): a start whose weights + KV + buffers
@@ -297,7 +307,7 @@ if [[ "${FIT_CHECK:-1}" != 0 ]]; then
   if (( fit_rc == 3 )); then
     exit 1
   elif (( fit_rc != 0 )); then
-    echo "warning: the memory check could not run (exit $fit_rc); starting anyway" >&2
+    echo "warning: CARL could not check the memory (exit $fit_rc). The server starts anyway." >&2
   fi
 fi
 
@@ -314,25 +324,65 @@ fi
 # The sliding-window layers at full length (SWA=full, above): without it llama.cpp re-reads a
 # restored prompt state on such a model.
 swa_args=()
-if [[ "$SWA" == full ]]; then
-  swa_args=(--swa-full); echo "sliding-window cache: full (saved prompt states can be restored; cache.swa = ${SWA_MODE:-auto})"
-elif [[ "$SWA" == window ]]; then
-  echo "sliding-window cache: window only (less memory; saved prompt states can't be restored; cache.swa = ${SWA_MODE:-auto})"
-fi
+[[ "$SWA" == full ]] && swa_args=(--swa-full)
 
 spec_args=()
 if [[ "$SPEC" != "none" ]]; then
   spec_args=(--spec-type "$SPEC" --spec-draft-n-max "$SPEC_N")
 fi
 
-echo "network: $NET_NOTE"
 slot_args=()
 (( SLOTS > 1 )) && slot_args=(--kv-unified --kv-unified-per-slot "$CTX" --no-cache-idle-slots -sps 0.5)
-echo "slots: $SLOTS ($SLOTS_NOTE) x ${CTX} tokens, KV $KV_K/$KV_V, RAM prompt cache ${CACHE_RAM} MiB"
-echo "settings from: $CARL_SOURCES (./carl.sh config show)"
-draft_note=""
-[[ ${#draft_args[@]} -gt 0 ]] && draft_note=" drafter=$(basename "$DRAFT")"
-echo "model=$(basename "$MODEL") alias=$ALIAS ctx=$CTX slots=$SLOTS kv=$KV_K/$KV_V ub=$UB spec=$SPEC n=$SPEC_N$draft_note log=$LOG_FILE"
+# The start lines: one plain sentence per setting, with its unit and where it comes from.
+src_word() {
+  case "$1" in
+    flag) echo "from your option" ;; env) echo "from the environment" ;; config) echo "from your settings" ;;
+    auto-tune) echo "from Auto-tune" ;; catalogue) echo "from the catalogue" ;; header) echo "from the model file" ;;
+    auto-fit) echo "from Auto fit: the largest context that fits" ;; *) echo "CARL's default" ;;
+  esac
+}
+# source KEY FLAG_VALUE ENV_NAME: where one setting comes from, in words
+source_of() {
+  local s=" $CARL_SOURCES "
+  if [[ -n "$2" ]]; then src_word flag
+  elif [[ "$ENV_SET" == *" $3 "* ]]; then src_word env
+  elif [[ "$s" == *" $1:"* ]]; then s="${s#* "$1":}"; src_word "${s%% *}"
+  else src_word default; fi
+}
+tokens_k() { awk -v n="$1" 'BEGIN { if (n % 1024 == 0) printf "%dK", n / 1024; else printf "%.1fK", n / 1024 }'; }
+mib_text() { awk -v n="$1" 'BEGIN { if (n >= 1024) printf "%.1f GiB", n / 1024; else printf "%d MiB", n }'; }
+kv_text() { case "$1" in q4_0) echo q4 ;; q8_0) echo q8 ;; *) echo "$1" ;; esac; }
+spec_text() {
+  case "$1" in none) echo "none" ;; ngram-mod) echo "n-gram" ;; draft-mtp) echo "MTP" ;;
+    draft-mtp,ngram-mod) echo "MTP + n-gram" ;; *) echo "$1" ;; esac
+}
+slots_src="$(source_of slots "$SLOTS_FLAG" SLOTS)"
+[[ -n "${SLOTS_NOTE:-}" ]] && slots_src="$SLOTS_NOTE"
+echo "CARL starts the server: ${MODEL_NAME:-$ALIAS} ($(basename "$MODEL"))."
+echo "Address: http://$HOST:$PORT. $NET_NOTE"
+echo "Slots: $SLOTS ($slots_src). Context: $(tokens_k "$CTX") tokens per slot ($(source_of ctx "$CTX_FLAG" CTX))."
+if [[ "$KV_K" == "$KV_V" ]]; then
+  echo "Context memory type: $(kv_text "$KV_K") ($(source_of kv "$KV_FLAG" KV)). RAM cache: $(mib_text "$CACHE_RAM")."
+else
+  echo "Context memory type: K $(kv_text "$KV_K"), V $(kv_text "$KV_V"). Different types read prompts about 5 times more slowly. RAM cache: $(mib_text "$CACHE_RAM")."
+fi
+if [[ "$SPEC" == none ]]; then
+  echo "Speculation: none ($(source_of spec "" SPEC))."
+else
+  guesses="$SPEC_N guess$([[ "$SPEC_N" == 1 ]] || echo es)"
+  drafter=""; [[ ${#draft_args[@]} -gt 0 ]] && drafter=" The MTP drafter is $(basename "$DRAFT")."
+  echo "Speculation: $(spec_text "$SPEC"), $guesses ($(source_of spec "" SPEC)).$drafter"
+fi
+if [[ "$SWA" == full ]]; then
+  echo "Sliding window: full cache. CARL can restore saved sessions and prompts (cache.swa = ${SWA_MODE:-auto})."
+elif [[ "$SWA" == window ]]; then
+  echo "Sliding window: window cache. It uses less memory, but CARL cannot restore saved sessions and prompts (cache.swa = ${SWA_MODE:-auto})."
+fi
+log_text=none; [[ "$LOG_FILE" == none ]] || log_text="$(tilde "$LOG_FILE")"
+echo "Log file: $log_text. Batch: -ub $UB. Your settings: ./carl.sh config show."
+# --fit off: CARL sizes the start itself (llama-fit.py --check above); llama.cpp's own memory
+# fitting only probes here (-ngl and -c are set), and the probe logs a false error for Gemma 4's
+# MTP drafter ("Gemma4Assistant requires ctx_other"), which made a normal start look broken.
 # Starts the server and the live monitor in this terminal (host/common.sh);
 # also keeps the Mac awake while it runs: a sleeping Mac freezes requests
 # mid-prompt (10:13-10:46 on 2026-09-25, sleep = 1 min on battery).
@@ -343,7 +393,7 @@ run_server "$PORT" "$LOG_FILE" llama-server \
   --temp "$TEMP" --top-p "$TOP_P" --top-k "$TOP_K" --min-p "$MIN_P" \
   --presence-penalty "$PRESENCE" --repeat-penalty "$REPEAT" \
   --chat-template-kwargs '{"preserve_thinking":true}' \
-  -ngl 999 -fa on -ctk "$KV_K" -ctv "$KV_V" -c "$(( SLOTS * CTX ))" \
+  -ngl 999 -fa on --fit off -ctk "$KV_K" -ctv "$KV_V" -c "$(( SLOTS * CTX ))" \
   -b "$BATCH" -ub "$UB" --parallel "$SLOTS" ${slot_args[@]+"${slot_args[@]}"} --no-mmproj \
   --ctx-checkpoints "$CKPT" --checkpoint-min-step "$CKPT_STEP" --cache-ram "$CACHE_RAM" \
   --metrics --slot-save-path "$SLOT_DIR" \

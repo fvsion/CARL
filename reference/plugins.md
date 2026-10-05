@@ -10,7 +10,7 @@ Type `/carl` in OpenCode or Pi to see each piece and its state on this computer.
 
 | Piece | Client | Kind | What you get | Switch |
 |---|---|---|---|---|
-| `carl-cache` | OpenCode, Pi | server plugin / extension | The prompt cache: fast starts, sessions back after a restart | `NO_CACHE=1` |
+| `carl-cache` | OpenCode, Pi | server plugin / extension | The disk cache: fast starts, sessions back after a restart | `NO_CACHE=1` |
 | `carl-model-check` | OpenCode | server plugin | A warning when the model you pick is not the model the server runs | `NO_MODEL_CHECK=1` |
 | `carl-background` | OpenCode | server plugin | The coder runs in the background | `NO_BACKGROUND_SUBAGENTS=1` |
 | `subagent` | Pi | extension | The `subagent` tool: the coder and other agents, also in the background | comes with the coder (`NO_CODER=1`) |
@@ -28,12 +28,12 @@ Put a switch in front of the installer, for example `NO_SIDEBAR=1 ./carl.sh inst
 | Pi | `~/.pi/agent/extensions/NAME/` | Pi loads every folder in `extensions/`. |
 
 - The source is in `client/opencode/plugins/` and `client/pi/extensions/`.
-- The code that more than one piece uses is in `client/shared/`: `carl-cache.js` (the prompt cache), `carl-panel.js` (the /carl panel) and `carl-tui.js` (the TUI helpers of the session switcher and the subagents panel). The installer copies each file into each piece that uses it.
+- The code that more than one piece uses is in `client/shared/`: `carl-cache.js` (the disk cache), `carl-panel.js` (the /carl panel) and `carl-tui.js` (the TUI helpers of the session switcher and the subagents panel). The installer copies each file into each piece that uses it.
 - OpenCode and Pi load the pieces when they start. After an install, restart OpenCode or Pi.
 
-## carl-cache: the prompt cache
+## carl-cache: the disk cache
 
-The prompt cache saves prompt states on the server's disk, through the server. Then a new session, a restart or a router switch does not mean reading everything again. The pages [Caching](caching.md) and [Caching](caching.md#how-a-saved-state-is-built) give the details.
+The disk cache saves prompts and sessions on the server's disk, through the server. Then a new session, a restart or a router switch does not mean reading everything again. The pages [Caching](caching.md) and [Caching](caching.md#how-a-saved-state-is-built) give the details.
 
 | | OpenCode | Pi |
 |---|---|---|
@@ -97,6 +97,7 @@ Pi has no subagents of its own. CARL installs the `subagent` extension (from Pi'
   - `/subagents` lists the agents that run in the background, and stops one.
   - The footer shows how many run.
   - When Pi closes, the running agents stop.
+  - **The result on the screen:** a background result comes back as a message. The model reads it as it is (`<subagent id="…" agent="coder" state="done" took="42 s">…</subagent>`). The screen shows `✓ Coder finished (42 s)` (`✗ Coder failed (…)`, `■ Coder was stopped (…)`) and the first 3 lines of the result. Ctrl+O shows all of it. Before, the screen showed the `<subagent …>` text. The formatting is in `client/pi/extensions/subagent/result.js` (tested in `tests/js/pi-subagent.test.mjs`).
   - `NO_BACKGROUND_SUBAGENTS=1` turns the background off (`"background_subagents": false` in `~/.pi/agent/carl.json`).
 
 ## subagents-sidebar: the Subagents panel (OpenCode)
@@ -124,15 +125,19 @@ The list has the top-level sessions of this project that changed in the last 72 
 
 ## carl-panel: the /carl panel (OpenCode and Pi)
 
-Type `/carl`. The panel shows one section for each CARL piece on this computer, with its state. A section opens a dialog with its lines and its actions.
+Type `/carl`. The panel shows one section for each CARL piece on this computer, with its state in a few words (for example `checks at start · applies new configs at once`). A section opens a dialog:
+- First, its state and what the piece does, in plain sentences (at most 88 characters on a line), and its actions.
+- A **Details** part: the addresses, the config version, and the installer's switches (for example "To turn it off, run the installer again with NO_CACHE=1.").
+- **‹ back** goes back to the list. (OpenCode shows **‹ back** before the details, Pi after them.)
 
 | Section | It shows |
 |---|---|
-| Config sync | The server, the service, the config that is applied, a config that waits, auto-apply. Actions: auto-apply on or off, Apply now, Check the server now. |
-| Prompt cache, Model check, Session switcher, Subagents sidebar | On or off, and the switch |
+| Config sync | If new configs are applied at once, the sync service, the last config from the dashboard ("Last config from the dashboard: today 10:53."), a config that waits. Actions: **Do not apply new configs at once** (or **Apply new configs at once**), **Apply the new config now** (only when a config waits), **Check for a new config now**. Details: the server, the dashboard API, the config version. |
+| Disk cache, Model check, Session switcher, Subagents sidebar | On or off, and what it does. Details: the switch. The Subagents sidebar section also explains ✓ and ✗. |
 | Coder subagent | On or off, its tools, background on or off |
 | Browser, Web search, LSP | On or off; web search shows its provider (Exa or Parallel) and says that its queries leave this computer |
 
 - The panel reads the files that the installer wrote. It changes nothing, except through `client/carl-sync.py` (the actions).
 - Without the sync service, the panel checks the server for a pushed config one time when OpenCode or Pi starts.
-- When a pushed config is applied while OpenCode or Pi runs, OpenCode shows a message and Pi shows a notice: restart it to use the new config.
+- When a config from the dashboard is applied while OpenCode or Pi runs, OpenCode shows a message and Pi shows a notice: restart it to use the new config.
+- After an action, a short message says what happened, for example "CARL: new configs from the dashboard now wait for you.".

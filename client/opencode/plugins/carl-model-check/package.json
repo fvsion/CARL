@@ -1,7 +1,7 @@
 {
   "name": "carl-model-check",
   "version": "1.0.0",
-  "description": "Warns in OpenCode when the model picked is not the one the CARL server runs (single-model mode), is not installed on it, or is being loaded (router mode).",
+  "description": "Tells you in OpenCode when the CARL server runs a different model than the one you select, does not have it, or loads it first (router mode).",
   "type": "module",
   "license": "MIT",
   "exports": {

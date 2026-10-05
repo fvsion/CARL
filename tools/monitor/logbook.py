@@ -29,14 +29,16 @@ _SPAWN = re.compile(r"spawning server instance with name=\S+ on port (\d+)")
 # A router logs every request it forwards, the dashboard's own polls included (one line per
 # /slots, /metrics, /props every refresh): left out of the lines shown.
 _PROXIED = "proxy_reques: proxying request to model"
-# Warning lines llama.cpp writes in normal work: counted as notices, so the HEALTH card's
-# warning count means something (found in every log, 2026-10-03).
+# Warning (and a few error) lines llama.cpp writes in normal work: counted as notices, so the HEALTH
+# card's counts mean something (found in every log, 2026-10-03; the Gemma 4 lines 2026-10-04).
 ROUTINE = ("stop: cancel task",                          # a client stopped a request
            "erasing old context checkpoint",              # checkpoints rotate as a session grows
            "making room for prompt cache entry",          # the RAM prompt cache drops its oldest entry
            "server default port will be changed",         # an upstream notice (CARL sets --port)
            "chat template supports preserving reasoning", # CARL sends preserve_thinking itself
-           "model has unused tensor")                     # tensors the loader skips (e.g. the MTP head's)
+           "model has unused tensor",                     # tensors the loader skips (e.g. the MTP head's)
+           "requires ctx_other to be set",                # Gemma 4: an error line while llama.cpp fits the memory
+           "control-looking token")                       # Gemma 4: token-type notes when the model loads
 _SWITCH = re.compile(r"(?:ensure_model: waiting until model name=|load_startup: \(startup\) loading model )(\S+)")
 
 
@@ -127,7 +129,7 @@ class LogBook:
 
     def parse(self, line: str) -> None:
         lvl = level_of(line)
-        if lvl == "W" and any(r in line for r in ROUTINE):
+        if lvl in ("W", "E") and any(r in line for r in ROUTINE):
             self.counts["notice"] += 1
         elif lvl in ("E", "W"):
             self.counts[lvl] += 1

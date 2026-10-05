@@ -33,7 +33,7 @@ class PlanTest(unittest.TestCase):
         p, why = plan_model("m", "/m.gguf", {**VALS, "slots": "1"}, shape(), 30 * GIB, 24 * GIB, 32 * GIB, 6 * GIB,
                             COMMON, None)
         self.assertIsNone(p)
-        self.assertIn("the weights alone don't fit", why)
+        self.assertIn("The weights alone do not fit.", why)
 
     def test_a_sliding_window_model_gets_swa_full_when_it_fits(self) -> None:
         swa = with_window(shape(), 512, 32768)                                    # 18 KiB per token at full length

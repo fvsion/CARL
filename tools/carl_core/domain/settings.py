@@ -15,10 +15,10 @@ from .types import JsonObject, JsonValue, SettingValue, Settings
 
 SCHEMA = 1
 DEFAULT_MODELS_DIR = "~/models/gguf"
-CONFIG_COMMENT = ("CARL settings. Edit here or in the monitor's Settings tab. "
-                  "Sections: llama, models.<name> (per-model profile), paths, cache (the disk cache). "
-                  "Precedence: flags > environment > this file > Auto-tune > catalogue. "
-                  "./carl.sh config show lists every key.")
+CONFIG_COMMENT = ("CARL settings. Change them here or in the Settings tab of the dashboard. "
+                  "Sections: llama, models.<name> (the settings of one model), paths, cache (the disk cache). "
+                  "Order: flags > environment > this file > Auto-tune > catalogue. "
+                  "./carl.sh config show lists every setting.")
 # Top-level keys of removed features: ignored on load (None = silently, else this warning)
 # and dropped on the next save. "backend" chose llama.cpp or MTPLX before 1.2.0.
 REMOVED: Dict[str, Optional[str]] = {

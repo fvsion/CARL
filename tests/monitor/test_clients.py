@@ -49,13 +49,13 @@ class DriftTest(unittest.TestCase):
     def test_out_of_date_lists(self) -> None:
         out = drift({"OpenCode": {"a": 98304, "gone": 98304}, "Pi": {"a": 98304, "b": 0}, "broken": None}, ["a", "b"])
         self.assertEqual([(d.client, d.added, d.removed) for d in out], [("OpenCode", ["b"], ["gone"])])
-        self.assertEqual(out[0].line(2), "OpenCode lists 2 models; installed now: 2 — added b; removed gone")
+        self.assertEqual(out[0].line(2), "OpenCode lists 2 models, 2 are installed. An update adds b and removes gone. Press u.")
 
     def test_the_running_window_changed(self) -> None:
         listed = {"OpenCode": {"a": 98304}, "Pi": {"a": 131072}}
         out = drift(listed, ["a"], running=("a", 131072))                  # the server now runs 128K per slot
         self.assertEqual([d.client for d in out], ["OpenCode"])
-        self.assertEqual(out[0].line(1), "OpenCode window of a: 96K in the config, 128K on the server")
+        self.assertEqual(out[0].line(1), "OpenCode: the context of a is 96K in the config, 128K on the server. Press u.")
         self.assertEqual(drift(listed, ["a"], running=("other", 4096)), [])
 
     def test_listed_models_reads_our_provider(self) -> None:

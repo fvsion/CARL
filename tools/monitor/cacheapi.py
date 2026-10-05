@@ -482,7 +482,7 @@ class CacheApi:
         try:
             self.server = QuietServer((self.host, self.port), Handler)
         except OSError as e:
-            return f"cache API: port {self.port} on {self.host}: {e.strerror or e}"
+            return f"dashboard API: port {self.port} on {self.host}: {e.strerror or e}"
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
         return None
 

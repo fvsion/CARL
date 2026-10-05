@@ -199,7 +199,7 @@ class CommonTests(unittest.TestCase):
     def test_resolve_host_default_is_local(self) -> None:
         p = bash('unset HOST NET; resolve_host; echo "$HOST|$NET_NOTE"')
         self.assertEqual(p.returncode, 0, p.stderr)
-        self.assertTrue(p.stdout.startswith("127.0.0.1|local (127.0.0.1): this Mac only"), p.stdout)
+        self.assertTrue(p.stdout.startswith("127.0.0.1|Only this Mac can use the server."), p.stdout)
 
     def test_resolve_host_net_auto_is_local_with_a_note(self) -> None:
         p = bash('unset HOST; NET=auto; resolve_host; echo "$HOST|$NET_NOTE"')
@@ -210,7 +210,7 @@ class CommonTests(unittest.TestCase):
     def test_resolve_host_unknown_mode(self) -> None:
         p = bash('unset HOST; resolve_host moon')
         self.assertEqual(p.returncode, 2)
-        self.assertIn("(vm | local)", p.stderr)
+        self.assertIn("Use vm or local.", p.stderr)
 
 
 class ServeDispatch(unittest.TestCase):
@@ -324,6 +324,16 @@ class ServeLlamaArgs(ServeLlama):
         p, argv, _ = self.run_serve("--host", "127.0.0.1", env={"HOST": "10.9.8.7"})
         self.assertEqual(argv[argv.index("--host") + 1], "127.0.0.1")
 
+    def test_a_test_settings_folder_keeps_the_real_one_untouched(self) -> None:
+        """CARL_CONF_DIR (as carl.py reads it) also moves the launcher's slots folder and router presets:
+        a run with a test folder writes nothing in $HOME/.config/carl (Phase 21 audit: it overwrote the
+        user's router-presets.ini)."""
+        with tempfile.TemporaryDirectory() as home:
+            p, argv, _ = self.run_serve(env={"HOME": home})
+            self.assertEqual(p.returncode, 0, p.stderr)
+            self.assertFalse(argv[argv.index("--slot-save-path") + 1].startswith(home))
+            self.assertFalse(os.path.exists(os.path.join(home, ".config", "carl")))
+
     def test_a_start_over_the_gpu_limit_is_refused(self) -> None:
         """Weights bigger than any Mac's GPU limit: refused before llama-server runs, with the
         reasons; FIT_CHECK=0 (the expert override) starts it anyway."""
@@ -331,7 +341,8 @@ class ServeLlamaArgs(ServeLlama):
         p, argv, _ = self.run_serve(env={"FIT_CHECK": "1"}, model_bytes=huge)
         self.assertEqual(p.returncode, 1, p.stderr)
         self.assertEqual(argv, [])                               # llama-server never ran
-        self.assertIn("so it is refused", p.stderr)
+        self.assertIn("CARL refuses the start", p.stderr)
+        self.assertIn("\nerror: fake.gguf does not fit this Mac", p.stderr)   # one whole error line first (the dashboard shows it)
         self.assertIn("FIT_CHECK=0", p.stderr)
         p, argv, _ = self.run_serve(env={"FIT_CHECK": "0"}, model_bytes=huge)
         self.assertEqual(p.returncode, 0, p.stderr)
@@ -443,7 +454,7 @@ class ServeLlamaDrafter(ServeLlama):
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertEqual(argv[argv.index("--spec-type") + 1], "draft-mtp")
         self.assertEqual(argv[argv.index("-md") + 1], os.path.join(mdir, "mtp-Gem-Q4_0.gguf"))
-        self.assertIn("drafter=mtp-Gem-Q4_0.gguf", p.stdout)
+        self.assertIn("The MTP drafter is mtp-Gem-Q4_0.gguf.", p.stdout)
 
     def test_ngram_from_the_environment_leaves_the_drafter_out(self) -> None:
         p, argv, _ = self.run_gem(env={"SPEC": "ngram-mod"})

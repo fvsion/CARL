@@ -34,13 +34,14 @@ class SettingsView:
         self._autofit = AutoFitPanel(svc)
         self._tune = TunePanel(svc)
 
-    def server(self, ui: UIState, p: Pending, d: ServerData, cols: int, height: int, port: int) -> List[Row]:
+    def server(self, ui: UIState, p: Pending, d: ServerData, cols: int, height: int, port: int,
+               limit_src: str = "") -> List[Row]:
         """Panel 1: the settings beside what runs now, the model list, the MODEL card (settings_panels.server)."""
-        return self._server.draw(ui, p, d, cols, height, port)
+        return self._server.draw(ui, p, d, cols, height, port, limit_src)
 
-    def models(self, ui: UIState, cols: int, height: int, mdir: ModelsDir) -> List[Row]:
+    def models(self, ui: UIState, cols: int, height: int, mdir: ModelsDir, running: str = "") -> List[Row]:
         """Panel 2: every model, the selected one's details, a download, the actions (settings_panels.models)."""
-        return self._models.draw(ui, cols, height, mdir)
+        return self._models.draw(ui, cols, height, mdir, running)
 
     def autofit(self, ui: UIState, p: Pending, cols: int, height: int) -> List[Row]:
         """Panel 3: auto fit's pick for this Mac, its reasons and the ranking (settings_panels.autofit)."""
@@ -52,21 +53,22 @@ class SettingsView:
 
     @staticmethod
     def router(ui: UIState, d: ServerData, saved: str, switches: Sequence[Tuple[str, str]], stale: Sequence[str],
-               cols: int) -> List[Row]:
+               cols: int, here: bool = False) -> List[Row]:
         """Panel 5: who switches the model (settings_panels.router)."""
-        return router_panel(ui, d, saved, switches, stale, cols)
+        return router_panel(ui, d, saved, switches, stale, cols, here)
 
-    def caching(self, ui: UIState, conf: CacheConfig, files: Sequence[CacheFile], folder: str, cols: int) -> List[Row]:
+    def caching(self, ui: UIState, conf: CacheConfig, files: Sequence[CacheFile], folder: str, cols: int,
+                api: str = "") -> List[Row]:
         """Panel 6: the disk cache (settings_panels.caching)."""
-        return caching_panel(ui, conf, files, folder, cols, self.home)
+        return caching_panel(ui, conf, files, folder, cols, self.home, api)
 
-    def picker(self, pk: Picker, cols: int, height: int) -> List[Row]:
-        """An open drop-down."""
-        return self.pickers.picker(pk, cols, height)
+    def picker(self, pk: Picker, cols: int, height: int, ui: Optional[UIState] = None) -> List[Row]:
+        """An open drop-down (it sets the footer's keys in ui)."""
+        return self.pickers.picker(pk, cols, height, ui)
 
-    def confirm(self, c: Confirm, cols: int) -> List[Row]:
-        """A yes / no question."""
-        return self.pickers.confirm(c, cols)
+    def confirm(self, c: Confirm, cols: int, ui: Optional[UIState] = None) -> List[Row]:
+        """A yes / no question (it sets the footer's keys in ui)."""
+        return self.pickers.confirm(c, cols, ui)
 
     def visible(self, sort: int, filt: int) -> List[ModelInfo]:
         """The models in the current sort order, filtered (the Models panel and the drop-down)."""

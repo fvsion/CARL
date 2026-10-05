@@ -1,5 +1,5 @@
 // @ts-check
-// CARL's prompt cache for OpenCode and Pi (client/shared/carl-cache.js: the OpenCode plugin carl-cache and
+// CARL's disk cache for OpenCode and Pi (client/shared/carl-cache.js: the OpenCode plugin carl-cache and
 // the Pi extension carl-cache each carry a copy, installed by client/configure.py).
 //
 // Each request to CARL's llama.cpp server goes through before() and each finished turn through after():
@@ -27,7 +27,7 @@ import { join } from "node:path";
 
 export const MIN_PREFIX_TOKENS = 1024;   // a shorter prompt is quick to read: no file
 export const MIN_SESSION_TOKENS = 4096;  // a shorter conversation is quick to read again
-export const MIN_FREE_BYTES = 10 * 2 ** 30;  // no saves on this Mac below this much free disk
+export const MIN_FREE_BYTES = 10 * 1000 ** 3;  // no saves on this Mac below 10 GB of free disk
 export const DEFAULT_GB = 10;                // the disk limit (a 74K-token session on the 35B is ~1 GB)
 // When a session is saved: auto = when the part not saved yet would take autoS seconds to read again,
 // and before it leaves the server; turn = after every turn; switch = before it leaves the server (its
