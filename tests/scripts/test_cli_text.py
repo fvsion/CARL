@@ -15,8 +15,8 @@ import unittest
 from _paths import REPO
 from test_shell import ServeLlama, gguf_header
 
-COMMANDS = ("llama", "dashboard", "monitor", "install", "models", "fit", "download", "verify", "delete", "card",
-            "tune", "config", "cache", "push")
+COMMANDS = ("llama", "dashboard", "monitor", "install", "package", "models", "fit", "download", "verify", "delete",
+            "card", "tune", "config", "cache", "push")
 TOPICS = COMMANDS + ("env", "tuning")
 # Names the glossary replaced (its "Not this" column) that must not come back in the CLI's text.
 FORBIDDEN = (r"\bprompt cache\b", r"\bKV cache\b", r"\bmax ctx\b", r"\bauto-fit\b", r"\bautofit\b", r"\bt/s\b",

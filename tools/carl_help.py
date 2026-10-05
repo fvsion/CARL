@@ -138,7 +138,8 @@ def topics(cmd: str) -> Dict[str, List[Block]]:
                    ("tune NAME", "Auto-tune: CARL measures the model on this Mac and finds its best settings. "
                                  "It takes 5 to 10 min.")]),
             ("h", "CLIENTS AND SETTINGS"),
-            ("d", [("install", "Install OpenCode and Pi, and connect them to this server."),
+            ("d", [("install", "Install OpenCode and Pi on this Mac, and connect them to this server."),
+                   ("package", "Make the client package: a zip for OpenCode and Pi on another computer."),
                    ("config", "Show or change your settings (config.json)."),
                    ("cache", "Show the disk cache, make it smaller, or clear it."),
                    ("push", "Send the client config to other computers.")]),
@@ -206,25 +207,61 @@ def topics(cmd: str) -> Dict[str, List[Block]]:
                   "asks if the server must stop."),
         ],
         "install": [
-            ("p", "Install OpenCode and Pi for your user, then write their configs for this server. "
-                  "For a VM or another computer, copy the client folder there and run its install.sh."),
+            ("p", "Install OpenCode and Pi on this Mac and connect them to this server. This runs client/setup, the "
+                  "same setup as on another computer. For another computer or a VM, make the client package "
+                  f"({c} package), copy it there, unzip it and run ./setup."),
             ("h", "USAGE"),
             ("c", [f"{c} install [both|opencode|pi] [OPTIONS]"]),
+            ("p", "The setup asks one time which clients and which options you want: the coder subagent, the "
+                  "browser tools, web search (the search queries leave this computer) and LSP. Press Enter to keep "
+                  "the value in brackets. The defaults are the choices of your last setup. Then it installs OpenCode "
+                  "and Pi when they are missing or older (into ~/.local, no sudo). It writes their configs, keeps "
+                  "your settings and makes a backup of each file that it changes."),
             ("h", "OPTIONS"),
-            ("d", [("both, opencode, pi", "The clients to install (default: both)."),
-                   ("--clients-only", "Install the clients. Do not write the configs."),
+            ("d", [("both, opencode, pi", "The clients (default: both, or the choice of your last setup)."),
+                   ("-y, --yes", "Take the defaults. Ask no questions."),
+                   ("--coder auto|on|off", "The coder subagent. auto: on when the server runs 2 or more slots."),
+                   ("--browser on|off", "The browser tools."),
+                   ("--web-search WHICH", "exa, parallel or off."),
+                   ("--lsp on|off", "LSP in OpenCode."),
+                   ("--clients-only", "Install or update the clients. Do not write the configs."),
                    ("--config-only", "Write the configs again. Do this after a change of the model list, the "
                                      "context or the slots."),
                    ("--local", "Connect the clients to the server on this Mac (the default)."),
                    ("--vm [HOST]", "Connect the clients to the server on the VM network (default 192.168.42.1)."),
                    ("--host ADDR", "Connect the clients to the server at this address."),
                    ("--port N", "The port of the server (default 8080)."),
-                   ("--key-file FILE", "Read the API key from FILE."),
-                   ("--key KEY", "The API key. Your shell history keeps it, so use --key-file if you can.")]),
-            ("p", "The installer also reads environment variables, for example NO_CACHE=1 (no disk cache) or "
-                  "CODER=0 (no coder subagent). client/install.sh --help lists them."),
+                   ("--key-file FILE", "Read the API key from FILE.")]),
+            ("p", "The setup also reads environment variables, for example NO_CACHE=1 (no disk cache) or "
+                  "WEB_SEARCH=off. client/setup --help and client/install.sh --help list them."),
             ("h", "EXAMPLES"),
-            ("c", [f"{c} install", f"{c} install pi", f"{c} install --config-only"]),
+            ("c", [f"{c} install", f"{c} install --yes pi", f"{c} install --config-only"]),
+        ],
+        "package": [
+            ("p", "Make the client package: one zip for OpenCode and Pi on another computer (macOS or Linux). It "
+                  "holds the client folder, the address and the API key of the server, the list of installed "
+                  "models and the setup. CARL writes it to dist/carl-client-VERSION-HOST.zip in the CARL folder "
+                  "and shows the path."),
+            ("h", "USAGE"),
+            ("c", [f"{c} package [--anyway] [--out DIR]"]),
+            ("h", "OPTIONS"),
+            ("d", [("--out DIR", "Write the zip to DIR, not to dist/."),
+                   ("--anyway", "Make the package also when the server serves only this Mac."),
+                   ("-h, --help", "Show this help.")]),
+            ("h", "THE KEY"),
+            ("p", "The zip holds the API key of the server, so keep it secret. Its mode is 0600. After you copy it, "
+                  "delete it (rm with the path that CARL shows). On the other computer, delete the zip after you "
+                  "unzip it. The key file in the folder keeps the mode 0600."),
+            ("h", "ON THE OTHER COMPUTER"),
+            ("c", ["unzip carl-client-VERSION-HOST.zip", "cd carl-client && ./setup"]),
+            ("p", "On a Mac, a double click on setup.command does the same. To update, make a new package, unzip it "
+                  "over the old folder (unzip -o) and run ./setup again."),
+            ("h", "WHEN CARL MAKES NO PACKAGE"),
+            ("p", "When the server serves only this Mac (the network local, the address 127.0.0.1), other computers "
+                  "cannot reach it. CARL then tells you how to change the network and changes nothing: in the "
+                  f"dashboard, Settings > Server > Network, or {c} config set llama.net vm. Then start the server "
+                  "again, so that client/remote.json has the new address. CARL also makes no package before the "
+                  "first start of the server: the start writes client/remote.json and client/api-key."),
         ],
         "models": [
             ("p", "List every model that CARL knows: the catalogue (CARL's tested models), the files in the "
@@ -349,8 +386,9 @@ def topics(cmd: str) -> Dict[str, List[Block]]:
                    ("--dry-run", "Measure and show the result, but do not save it.")]),
             ("h", "WHAT AUTO-TUNE DOES"),
             ("p", "1. It calculates the largest context that fits with 1 and 2 slots."),
-            ("p", "2. It measures each speculation mode: none, n-gram, and MTP and MTP + n-gram with 1 to 4 guesses "
-                  "(when the model has an MTP head or an MTP drafter). Each mode writes prose, new code and an edit, "
+            ("p", "2. It measures each speculation mode: none, n-gram, and MTP and MTP + n-gram: with 1 and 2 guesses "
+                  "for a model with an MTP head (quick: 1), with 1 to 4 guesses for a model with an MTP drafter "
+                  "(quick: 1 and 2). Each mode writes prose, new code and an edit, "
                   "two times. A mode with more parts must be 3% faster to win."),
             ("p", "3. It measures the read speed at 8K, 32K and 64K tokens. The time to read a full context again "
                   "gives the context zones of this Mac: fast (3 min or less), slow (10 min or less), very slow."),
@@ -399,8 +437,8 @@ def topics(cmd: str) -> Dict[str, List[Block]]:
                                   "types read prompts about 5 times more slowly."),
                    ("SPEC, SPEC_N", "The speculation mode (none, ngram-mod, draft-mtp, draft-mtp,ngram-mod) and "
                                     "the number of guesses. Default: the settings of the model."),
-                   ("TEMP, TOP_P, TOP_K, MIN_P", "The sampling. Default: 1.0, 0.95, 20, 0 (the values of Qwen for "
-                                                 "thinking). PRESENCE=0 is the presence penalty."),
+                   ("TEMP, TOP_P, TOP_K, MIN_P", "The sampling. Default: the settings of the model (Qwen: 1.0, 0.95, 20, 0 for "
+                                                 "thinking; Gemma 4: 1.0, 0.95, 64, 0). PRESENCE=0 is the presence penalty."),
                    ("CACHE_RAM", "The size of the RAM cache in MiB. Default: the free memory, from 1 GiB to 8 GiB."),
                    ("RESERVE_GB", "The memory (GiB) that CARL keeps free for macOS and apps. Default: 6, or 10 when "
                                   "the VM network is up."),
@@ -421,7 +459,7 @@ def topics(cmd: str) -> Dict[str, List[Block]]:
                                  "no dashboard."),
                    ("KEEP_AWAKE=1", "Keep the Mac awake while the server runs. 0: off."),
                    ("LOG_FILE", "The log file. Default: ~/models/logs/llama-server-DATE.log. none: no log file."),
-                   ("ALLOW_SECOND_MODEL=1", "Start also when a process of more than 8 GB (BIG_GB) is in memory. "
+                   ("ALLOW_SECOND_MODEL=1", "Start also when a process of more than 8 GiB (BIG_GB) is in memory. "
                                             "A second model can stop the Mac."),
                    ("SETTINGS_FILE=none", "Do not use ~/.config/carl/config.json."),
                    ("MODELS_DIR", "The models folder. Default: ~/models/gguf (your setting paths.models_dir)."),

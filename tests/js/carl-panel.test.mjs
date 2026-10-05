@@ -9,7 +9,7 @@ import { test } from "node:test";
 const HOME = mkdtempSync(join(tmpdir(), "carl-panel-"));
 process.env.HOME = HOME;                     // read when the module loads
 delete process.env.PI_CODING_AGENT_DIR;
-const { duration, openCodeSearch, outcome, piSearch, restartNotice, sections, when, wrap } =
+const { duration, openCodeSearch, outcome, packageVersions, piSearch, restartNotice, sections, when, wrap } =
   await import("../../client/shared/carl-panel.js");
 const CARL = join(HOME, ".config", "carl");
 const PI = join(HOME, ".pi", "agent");
@@ -133,6 +133,31 @@ test("the sync section: plain sentences, the version and the addresses in the de
   assert.equal(sections("pi")[0].summary, "new config: restart Pi to use it");
   writeFileSync(join(CARL, "client-sync.json"), JSON.stringify({ bundle: BUNDLE, service: false }));
   assert.equal(sections("pi")[0].summary, "checks at start · applies new configs at once");
+});
+
+test("the sync section: the version of the client package, and a note when the server runs another", () => {
+  stage(true);
+  rmSync(join(BUNDLE, "VERSION"), { force: true });
+  let s = sections("opencode")[0];
+  assert.ok(!s.details.some((l) => l.startsWith("Client package")), s.details.join(" | "));   // no package file
+  writeFileSync(join(BUNDLE, "VERSION"), "1.7.0\n");
+  writeFileSync(join(BUNDLE, "remote.json"), JSON.stringify({ host: "192.168.42.1", port: 8080,
+                                                            cache_api: "http://192.168.42.1:8081", version: "1.7.0" }));
+  s = sections("opencode")[0];
+  assert.ok(s.details.includes("Client package: version 1.7.0"), s.details.join(" | "));
+  assert.ok(s.details.includes("Server: CARL 1.7.0 (from the client package)"), s.details.join(" | "));
+  assert.ok(!s.lines.some((l) => l.includes("version")), s.lines.join(" | "));                // the same: no note
+  writeFileSync(join(BUNDLE, "remote.json"), JSON.stringify({ host: "192.168.42.1", port: 8080,
+                                                            cache_api: "http://192.168.42.1:8081", version: "1.8.0" }));
+  s = sections("pi")[0];
+  assert.ok(s.lines.includes("The client package is version 1.7.0, but the server runs CARL 1.8.0."), s.lines.join(" | "));
+  assert.ok(s.lines.some((l) => l.includes("./setup")), s.lines.join(" | "));
+  for (const t of [...s.lines, ...s.details]) assert.ok(t.length <= 90, t);
+  assert.deepEqual(packageVersions(BUNDLE, { version: "1.8.0\n<script>" }), { client: "1.7.0", server: "" });
+  assert.deepEqual(packageVersions("", {}), { client: "", server: "" });
+  // the version the sync service heard from the dashboard API wins over the packaged remote.json
+  assert.deepEqual(packageVersions(BUNDLE, { version: "1.7.0" }, { server_version: "1.8.0" }), { client: "1.7.0", server: "1.8.0" });
+  rmSync(join(BUNDLE, "VERSION"), { force: true });
 });
 
 test("the coder's section says what ✓ and ✗ mean in the sidebar", () => {

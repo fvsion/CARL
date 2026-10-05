@@ -24,7 +24,8 @@ Usage: carl-sync.py COMMAND
 The server's address comes from remote.json next to this file. The server writes
 it at every start. The API key comes from api-key next to this file, or from
 ~/.config/carl/api-key. A sync applies again the switches of the last install
-(web search, LSP, browser and the others, in ~/.config/carl/client-install.env).
+(the clients, the coder, web search, LSP, browser and the others, in
+~/.config/carl/client-install.env: ./setup writes them).
 So a sync changes only what the server decides: the installed models.
 State: ~/.config/carl/client-sync.json. The installer's output:
 ~/.config/carl/client-sync.log.
@@ -56,13 +57,14 @@ LOCK = os.path.join(CONF, "client-sync.lock")
 STATE_LOCK = os.path.join(CONF, "client-sync.state.lock")
 INSTALL_ENV = os.path.join(CONF, "client-install.env")
 # the install switches a sync applies again (install.sh records them)
-SWITCHES = ("WEB_SEARCH", "NO_LSP", "LSP", "NO_BROWSER", "BROWSER_HEADED", "NO_SIDEBAR", "NO_SWITCHER",
-            "NO_MODEL_CHECK", "NO_BACKGROUND_SUBAGENTS", "NO_CACHE", "LLAMA_CTX")
+SWITCHES = ("CLIENTS", "CODER", "NO_CODER", "WEB_SEARCH", "NO_LSP", "LSP", "NO_BROWSER", "BROWSER_HEADED",
+            "NO_SIDEBAR", "NO_SWITCHER", "NO_MODEL_CHECK", "NO_BACKGROUND_SUBAGENTS", "NO_CACHE", "LLAMA_CTX")
 READ_TIMEOUT = 75            # the dashboard sends a comment every 25 s: silence this long = reconnect
 BACKOFF = (5, 10, 30, 60)
 MAX_CONFIG = 1 << 20         # the published config (the installed models) is a few KB
 MAX_LINE = 1 << 16           # one line of the event stream
 VERSION_RE = re.compile(r"[A-Za-z0-9._-]{1,64}")    # the config's version: written to the state file and the log
+VERSION_TEXT_RE = re.compile(r"[0-9A-Za-z.+-]{1,40}")   # a CARL version (1.7.0), as /carl shows it
 # What can go wrong when the dashboard is away or answers badly (the service then tries again).
 NET_ERRORS = (OSError, ValueError, http.client.HTTPException)
 
@@ -105,8 +107,8 @@ def server() -> Tuple[str, str]:
     api = r.get("cache_api")
     if not isinstance(api, str) or (url := urllib.parse.urlsplit(api)).scheme not in ("http", "https") \
             or not url.netloc:
-        raise ValueError(f"There is no remote.json with the server's address next to {sys.argv[0]}. Copy the "
-                         f"client folder again from the server. The server writes remote.json at every start.")
+        raise ValueError("There is no remote.json (the server's address) in the client folder. Make a new client "
+                         "package on the server Mac (./carl.sh package), unzip it over this folder and run ./setup.")
     for f in (os.path.join(HERE, "api-key"), os.path.join(CONF, "api-key")):
         try:
             with open(f, encoding="utf-8") as fh:
@@ -115,14 +117,15 @@ def server() -> Tuple[str, str]:
                 return api.rstrip("/"), key
         except OSError:
             continue
-    raise ValueError("There is no API key next to carl-sync.py or in ~/.config/carl/api-key. Copy the client "
-                     "folder again from the server.")
+    raise ValueError("There is no API key next to carl-sync.py or in ~/.config/carl/api-key. Make a new client "
+                     "package on the server Mac (./carl.sh package), unzip it over this folder and run ./setup.")
 
 
 def describe(e: BaseException) -> str:
     """An error for the state file (the /carl panel shows it): what went wrong and what to do."""
     if isinstance(e, urllib.error.HTTPError) and e.code in (401, 403):
-        return "The server refused the API key. Copy the client folder again from the server. It has the key."
+        return ("The server refused the API key. Make a new client package on the server Mac (./carl.sh package), "
+                "unzip it over this folder and run ./setup. The package has the key.")
     if isinstance(e, urllib.error.URLError) and not isinstance(e, urllib.error.HTTPError):
         return f"The dashboard does not answer: {e.reason}. Make sure that the dashboard runs on the server."[:200]
     return str(e)[:200] or type(e).__name__
@@ -149,13 +152,24 @@ def request(url: str, key: str, etag: str = "") -> urllib.request.Request:
     return urllib.request.Request(url, headers=headers)
 
 
+SERVER_VERSION: Dict[str, str] = {}        # the server's CARL version from the last reply (X-Carl-Version)
+
+
+def _note_version(headers: Any) -> None:
+    v = (headers.get("X-Carl-Version") or "").strip() if headers is not None else ""
+    if VERSION_TEXT_RE.fullmatch(v):
+        SERVER_VERSION["v"] = v
+
+
 def fetch_config(api: str, key: str, etag: str) -> Optional[Json]:
-    """The published config when it isn't `etag`; None when it is (304)."""
+    """The published config when it isn't `etag`; None when it is (304). Notes the server's CARL version."""
     try:
         with urllib.request.urlopen(request(api + "/carl/client/config", key, etag), timeout=10) as r:
+            _note_version(r.headers)
             body = r.read(MAX_CONFIG + 1)
     except urllib.error.HTTPError as e:
         if e.code == 304:
+            _note_version(e.headers)
             return None
         raise
     if len(body) > MAX_CONFIG:
@@ -209,6 +223,8 @@ def once(apply_waiting: bool = False) -> Json:
             doc = fetch_config(api, key, "" if apply_waiting else str(st.get("applied") or ""))
         except NET_ERRORS as e:
             return update(checked=time.time(), error=describe(e))
+        if SERVER_VERSION.get("v"):                  # /carl compares the client package with it
+            st = update(server_version=SERVER_VERSION["v"])
         if doc is None or doc["version"] == st.get("applied"):
             return update(checked=time.time(), error=None, pending=None)
         if not (st.get("auto_apply", True) or apply_waiting):

@@ -13,18 +13,21 @@ import sys
 import threading
 import time
 import urllib.parse
+import zipfile
 from dataclasses import dataclass
 from typing import Callable, Dict, List, Mapping, Optional
 
 from . import api, clientsync, diskcache, fsio, slotpack, system
 from .cacheapi import CacheState, Registry
 from .collector import Collector
+from carl_core.adapters.client_package import make_package as make_client_package
+from carl_core.domain.package import Outcome
 from carl_core.domain.units import file_size
 
 from .fmt import ANSI, DIM, R, RED
 from .model import ServerData, SlotInfo, clean, draft_bytes, jlist
 from .settings import REINSTALL, Pending, SettingsService, env_from_cmd
-from .state import TUNE_ALL, Confirm, Download, Drain, HFLookup, InstallRun, Picker, TuneRun, UIState
+from .state import TUNE_ALL, Confirm, Download, Drain, HFLookup, InstallRun, PackageRun, Picker, TuneRun, UIState
 from .store import ModelList
 
 # Settings the launchers read from the environment: removed, so config.json (or the
@@ -506,7 +509,44 @@ class ServerJobs:
             proc = subprocess.Popen(argv, env=dict(os.environ, CARL_CMD="./carl.sh"), stdin=subprocess.DEVNULL,
                                     stdout=out, stderr=subprocess.STDOUT, start_new_session=True)
         ui.install = InstallRun("configs" if config_only else "clients and configs", proc, log)
-        ui.install_shown = True
+        ui.install_shown, ui.package_shown = True, False
+
+    # ------------------------------------------------------------ Connect: the client package
+    def make_package(self) -> None:
+        """The client package for another computer (z): the code of ./carl.sh package, in a thread. Its result
+        (the zip, the key warning, or why CARL made none) shows in the Connect tab."""
+        ui = self.ui
+        if ui.package and not ui.package.done:
+            ui.toast("CARL makes the client package already.", 5)
+            return
+        run = PackageRun(time.time())
+        ui.package, ui.package_shown, ui.install_shown = run, True, False
+        repo = self.paths.repo
+        client_dir = os.environ.get("CARL_CLIENT_DIR") or os.path.join(repo, "client")
+
+        def work() -> None:
+            try:
+                out = make_client_package(repo, client_dir, os.path.join(repo, "dist"),
+                                          self.svc.store.client_models(), self.svc.store.load_config())
+            except (OSError, ValueError, zipfile.BadZipFile) as e:
+                out = Outcome("", f"error: CARL cannot make the client package: {e}", ())
+            run.outcome, run.done = out, True
+            ui.toast(f"{RED}CARL made no client package.{R} The Connect tab says why." if out.error else
+                     "CARL made the client package. It holds the API key: keep it secret.", 10)
+        threading.Thread(target=work, daemon=True).start()
+
+    def show_package(self) -> None:
+        """Show the zip in the Finder (open -R)."""
+        run = self.ui.package
+        path = run.outcome.path if run and run.outcome else ""
+        if not path or not os.path.isfile(path):
+            self.ui.toast("There is no client package to show. Press z to make one.", 6)
+            return
+        try:
+            subprocess.Popen(["open", "-R", path], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL, start_new_session=True)
+        except OSError:
+            self.ui.toast(f"CARL cannot open the Finder. The zip is {path}", 10)
 
     def cancel_install(self) -> None:
         """Stop the installer (its backups stay; re-running it is safe)."""

@@ -125,7 +125,7 @@ migrate_conf_dir() {
   echo "moved $(tilde "$OLD_CONF") to $(tilde "$CARL_CONF") (CARL's new name; the old path links to it)" >&2
 }
 
-# The server's Bearer key. Clients copy it: client/install.sh, or the monitor's
+# The server's Bearer key. Clients copy it: client/setup (./carl.sh install, the package), or the dashboard's
 # CONNECT section. Its earlier places, newest first (LEGACY_KEY_FILES): the old
 # settings folder (when both folders exist), and MTPLX's folder (before 1.2.0).
 # The first start copies the newest one here once, so configured clients keep working.
@@ -151,20 +151,32 @@ ensure_api_key() {
   # pipefail off here: head closing the pipe ends tr with SIGPIPE, which would
   # fail the subshell (and, under set -e, silently end the server start).
   ( set +o pipefail; umask 077; LC_ALL=C tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 40 > "$f" )
-  echo "CARL made the API key $(tilde "$f"). The clients need it: client/install.sh copies it, and the dashboard shows it (Connect, then k)." >&2
+  echo "CARL made the API key $(tilde "$f"). The clients need it: ./carl.sh install and the client package (./carl.sh package) copy it, and the dashboard shows it (Connect, then k)." >&2
+}
+
+# carl_version: the CARL version: the newest "## X.Y.Z" heading of CHANGELOG.md, else
+# git describe --tags, else "unknown" (tools/carl_core/domain/package.py reads it the same way).
+carl_version() {
+  local root v
+  root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+  v="$(sed -nE 's/^##[[:space:]]+v?([0-9]+[.][0-9]+[.][0-9]+)([^0-9].*)?$/\1/p' "$root/CHANGELOG.md" 2>/dev/null | head -n1)"
+  [[ -n "$v" ]] || v="$(git -C "$root" describe --tags 2>/dev/null | sed -E 's/^v//')" || v=""
+  [[ "$v" =~ ^[0-9A-Za-z.+-]+$ ]] || v=unknown
+  printf '%s' "$v"
 }
 
 # write_client_package HOST PORT KEY_FILE: the client folder's connection file, so a copy of
-# client/ (to a VM or another computer) needs nothing else: client/remote.json (the server's
-# address and port, the dashboard's cache API at port + 1) and client/api-key (the key), both
-# readable by the owner only and git-ignored. Written at every server start (the address can
-# change between --local and --vm). client/install.sh uses them when it is given no address.
+# client/ (./carl.sh package zips it for another computer) needs nothing else: client/remote.json
+# (the server's address and port, the dashboard API at port + 1, the CARL version) and
+# client/api-key (the key), both readable by the owner only and git-ignored. Written at every
+# server start (the address can change between --local and --vm). client/setup and
+# client/install.sh use them when they are given no address.
 write_client_package() {
   local host="$1" port="$2" key="$3" dir="$CARL_CLIENT_DIR"
   [[ -d "$dir" && -s "$key" ]] || return 0
   ( umask 077
-    printf '{\n  "host": "%s",\n  "port": %s,\n  "cache_api": "http://%s:%s",\n  "written": "%s"\n}\n' \
-      "$host" "$port" "$host" "$(( port + 1 ))" "$(date +%Y-%m-%dT%H:%M:%S)" > "$dir/remote.json.tmp" \
+    printf '{\n  "host": "%s",\n  "port": %s,\n  "cache_api": "http://%s:%s",\n  "version": "%s",\n  "written": "%s"\n}\n' \
+      "$host" "$port" "$host" "$(( port + 1 ))" "$(carl_version)" "$(date +%Y-%m-%dT%H:%M:%S)" > "$dir/remote.json.tmp" \
       && mv "$dir/remote.json.tmp" "$dir/remote.json"
     cp "$key" "$dir/api-key.tmp" && mv "$dir/api-key.tmp" "$dir/api-key" ) || return 0
   chmod 600 "$dir/remote.json" "$dir/api-key" 2>/dev/null || true

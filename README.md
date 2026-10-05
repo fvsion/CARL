@@ -23,8 +23,18 @@ brew install llama.cpp aria2 ansifilter zstd
 
 - If you skip the `brew install`, `./carl.sh` finds the missing tools and asks to install them.
 - If you skip the download, `./carl.sh` asks to download the best model for this Mac.
-- **Your own OpenCode and Pi settings stay.** The installer adds CARL next to them. It keeps a backup of each file that it changes (`FILE.before-carl`, `FILE.bak.<time>`).
-- **The server serves this Mac only** (127.0.0.1). For a VM or another computer, see [Clients in the VM](USERGUIDE.md#clients-in-the-vm) and [Clients on another computer](USERGUIDE.md#clients-on-another-computer-or-another-vm-app).
+- `./carl.sh install` asks one time which clients (OpenCode, Pi or both) and which options you want (the coder, the browser, web search, LSP). `--yes` takes the defaults.
+- **Your own OpenCode and Pi settings stay.** The setup adds CARL next to them. It keeps a backup of each file that it changes (`FILE.before-carl`, `FILE.bak.<time>`).
+
+**Another computer or a VM** (macOS or Linux): start the server for that network (for example `./carl.sh --vm`), then make the client package and run its setup there:
+
+```bash
+./carl.sh package                     # on the server Mac: dist/carl-client-VERSION-HOST.zip
+unzip carl-client-*.zip && cd carl-client && ./setup      # on the other computer
+```
+
+- The zip holds the server's API key: keep it secret, and delete it after the copy.
+- **The server serves this Mac only** (127.0.0.1) by default. Then `package` makes no zip and tells you how to change the network. More: [Clients in the VM](USERGUIDE.md#clients-in-the-vm), [Clients on another computer](USERGUIDE.md#clients-on-another-computer-or-another-vm-app), [The client package](USERGUIDE.md#the-client-package).
 
 ## Use
 
@@ -67,7 +77,7 @@ The live state of the server: what it does now, the slots, the speed, the memory
 
 ![The CARL dashboard](assets/dashboard.gif)
 
-- **Tabs:** Live, Connect (install the clients, send their config), Requests, Log, Settings.
+- **Tabs:** Live, Connect (install the clients, make the client package, send their config), Requests, Log, Settings.
 - **Settings (tab 5):** six panels: Server, Models, Auto fit, Auto-tune, Router, Caching. Push `[` or `]` to change the panel.
 - **Detail:** push `D` to change between simple and full detail. The dashboard keeps your choice.
 - The footer shows the keys of the screen that you see. `?` shows all keys of that screen.
@@ -80,18 +90,18 @@ The live state of the server: what it does now, the slots, the speed, the memory
 - **Model:** `/models` in OpenCode, `/model` in Pi.
 - **Thinking:** `/variants` (or ctrl+t) in OpenCode, the thinking level in Pi ([Thinking](USERGUIDE.md#4-thinking-on-off-and-effort)).
 - **The coder:** large tasks go to a coder subagent in the background. Type `@coder TASK` in OpenCode to ask for it.
-- **Tools:** web search, LSP, a browser subagent, background subagents ([Tools](USERGUIDE.md#tools-in-opencode-and-pi)). Web search sends the queries to Exa: `WEB_SEARCH=off ./carl.sh install` turns it off.
+- **Tools:** web search, LSP, a browser subagent, background subagents ([Tools](USERGUIDE.md#tools-in-opencode-and-pi)). Web search sends the queries to Exa: answer `off` in the setup (or `./carl.sh install --web-search off`) to turn it off.
 
 ## Plugins
 
 ![OpenCode with the CARL plugins](assets/opencode-plugins.png)
 
-`./carl.sh install` adds CARL's plugins to OpenCode and Pi:
+The setup (`./carl.sh install`, or `./setup` on another computer) adds CARL's plugins to OpenCode and Pi:
 
 - **Disk cache:** fast starts; sessions come back after a restart (OpenCode, Pi).
 - **Coder subagent, in the background:** large tasks go to a specialist coder while the main session stays free (OpenCode, Pi).
 - **Subagents panel** and **session switcher** in OpenCode's sidebar and prompt box.
-- **Model check:** a warning when the model you pick is not the one the server runs (OpenCode).
+- **Model check:** a warning when the model that you select is not the one that the server runs (OpenCode).
 - **`/carl`:** every CARL piece and its state, and the config sync (OpenCode, Pi).
 
 What each one does and how to turn it off: [USERGUIDE.md, "CARL's plugins and extensions"](USERGUIDE.md#carls-plugins-and-extensions). How they work: [reference/plugins.md](reference/plugins.md).

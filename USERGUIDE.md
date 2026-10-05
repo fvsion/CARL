@@ -16,7 +16,7 @@ Commands with the label **Mac** run in the CARL folder on the Mac. Commands with
 2. [Daily use](#2-daily-use)
 3. [Choosing a model](#3-choosing-a-model)
 4. [Thinking on, off and effort](#4-thinking-on-off-and-effort)
-5. [Context window](#5-context-window)
+5. [Context: how much a slot holds](#5-context-how-much-a-slot-holds)
 6. [Working in OpenCode and Pi](#6-working-in-opencode-and-pi)
 7. [Fast starts: the disk cache](#7-fast-starts-the-disk-cache)
 8. [Context memory: q4 or q8](#8-context-memory-q4-or-q8)
@@ -36,10 +36,10 @@ Commands with the label **Mac** run in the CARL folder on the Mac. Commands with
 
 | Item | Requirement |
 |---|---|
-| Mac | An **Apple Silicon** Mac. A 36 GB Mac runs all Qwen models of the catalogue. A 24 GB Mac runs the IQ3 and Q3 builds ([Sharing with a friend](#sharing-with-a-friend)). A 16 GB Mac runs `gemma-4-e4b`, `gemma-4-12b` and `qwen3.8-9b`. |
+| Mac | An **Apple Silicon** Mac. A 36 GB Mac runs all models of the catalogue. A 24 GB Mac runs the IQ3 and Q3 builds and the smaller Gemma 4 models ([Sharing with a friend](#sharing-with-a-friend)). A 16 GB Mac runs `gemma-4-e4b`, `gemma-4-12b` and `qwen3.8-9b`. |
 | Homebrew tools | [Homebrew](https://brew.sh), for `llama.cpp` (tested with 0.4.1 and 0.5.0), `aria2`, `ansifilter` and `zstd` |
 | Python | `python3`. The first time that you use it, macOS offers to install it with the command-line developer tools. |
-| Swift | The `fit` command uses `swift` to read the exact GPU limit. It comes with the command-line developer tools (`xcode-select --install`). |
+| Swift | The `fit` command uses `swift` to read the exact GPU memory limit. It comes with the command-line developer tools (`xcode-select --install`). |
 | Disk space | 4.6–23 GB for each model, and up to 10 GB for the disk cache |
 | VM (optional) | VMware Fusion with NAT (vmnet8), for VM clients |
 
@@ -54,7 +54,7 @@ Commands with the label **Mac** run in the CARL folder on the Mac. Commands with
    | `llama.cpp` | Gives `llama-server`. CARL cannot run without it. |
    | `aria2` | Makes downloads faster |
    | `ansifilter` | Makes the logs easy to read |
-   | `zstd` | Stores the conversations of the disk cache as patches ([the disk cache](#7-fast-starts-the-disk-cache)) |
+   | `zstd` | Stores a saved session as the changes to its saved prompt, so that it uses less disk space ([the disk cache](#7-fast-starts-the-disk-cache)) |
 
    - If you forget this step, `./carl.sh` finds the missing tools. It asks to install them with Homebrew.
    - `SKIP_DEPS=1` skips this check.
@@ -100,27 +100,30 @@ Commands with the label **Mac** run in the CARL folder on the Mac. Commands with
 | Item | Value |
 |---|---|
 | Key file | `~/.config/carl/api-key`, mode 600, in a folder with mode 700 (the same folder as `config.json`) |
-| Configs from `install.sh` | They refer to the key file. They do not contain the key. |
+| Configs from the setup | They refer to the key file. They do not contain the key. |
 | Key from before 1.2.0 | The first start copies your old key (`~/.mtplx/api-key`) to the new path. It is the same key, so your clients continue to work. |
 
 **The network.** The server serves this Mac only (127.0.0.1) by default.
 
 - For clients in a VMware Fusion VM, start Fusion first. Then start the server with `--vm`. The server then listens on the Fusion NAT address `192.168.42.1`. This address exists only while the Fusion network is up.
-- To make the VM the default, set **network** to `vm` in the Settings tab. Or run `./carl.sh config set llama.net vm`.
+- To make the VM the default, set **Network** to **this Mac and the VM** in the Settings tab. Or run `./carl.sh config set llama.net vm`.
 - Before 1.3.0, the default was "auto": the VM address when the Fusion network was up. The server was then open to the VM network without a question, so CARL removed this mode. A saved `llama.net = auto` changes to local one time, with a note at the start. `NET=auto` means local.
 
-**The client folder.** At each server start, the launcher writes two files into the `client/` folder: `remote.json` (the server's address) and `api-key`. Both have mode 0600, and git ignores them. A copy of the folder then has all that the installer needs ([Clients on other computers](reference/client-sync.md)).
+**The client folder.** At each server start, the launcher writes two files into the `client/` folder: `remote.json` (the server's address, its port and the CARL version) and `api-key`. Both have mode 0600, and git ignores them. The client package for other computers takes them from there ([The client package](#the-client-package)).
 
 ### Clients on the same Mac (no VM)
 
 Use this procedure when the server and the clients run on the same Mac, for example the Mac of a friend.
 
 1. Do the steps in [Set up the Mac](#set-up-the-mac).
-2. Run the installer:
+2. Run the setup:
    ```bash
    ./carl.sh install
    ```
-   It installs OpenCode and Pi into `~/.local` (no sudo). Then it connects them to the server on this Mac.
+   - It asks one time which clients (OpenCode, Pi or both) and which options you want: the coder subagent, the browser tools, web search and LSP. Press Enter to keep the value in brackets. The defaults are the choices of your last setup.
+   - NOTE: web search sends the search queries to Exa (or Parallel), outside this computer.
+   - It installs OpenCode and Pi into `~/.local` (no sudo) when they are missing or older. Then it connects them to the server on this Mac.
+   - At the end, it tells you what it did, if the server answers, and the next step.
 3. Open a new terminal, so that `~/.local/bin` is on the `PATH`.
 4. Go to the folder of your project:
    ```bash
@@ -132,70 +135,68 @@ Use this procedure when the server and the clients run on the same Mac, for exam
    ```
    Or run `pi`. The client works on the folder that you start it in.
 
-**Installer options:**
+**Setup options** (`./carl.sh install --help` shows all):
 
 | Command | Does |
 |---|---|
-| `./carl.sh install opencode` (or `pi`) | Installs only one client, then writes the configs |
-| `./carl.sh install --config-only` | Writes only the configs |
-| `./carl.sh install --clients-only` | Installs only the clients |
+| `./carl.sh install --yes` | Takes the defaults. Asks no questions |
+| `./carl.sh install opencode` (or `pi`) | Sets up only one client |
+| `./carl.sh install --coder off --web-search off` | Gives an answer without the question (also `--browser on\|off`, `--lsp on\|off`, `--coder auto\|on\|off`, `--web-search exa\|parallel\|off`) |
+| `./carl.sh install --config-only` | Writes only the configs (the same choices) |
+| `./carl.sh install --clients-only` | Installs or updates only the clients |
 | `./carl.sh install --vm` or `--host ADDR` | Connects the clients to a different address |
 | `./carl.sh install --port N` | Connects the clients to a different llama.cpp port |
 
-**From the dashboard.** The Connect tab (tab 2) does the same:
+- The setup needs `python3`. If macOS asks you to install the command-line developer tools, accept. Or run `xcode-select --install`.
+- On the server Mac, the setup uses the server's own key file (`~/.config/carl/api-key`).
+
+**From the dashboard.** The Connect tab (tab 2) does the same, with the choices of your last setup:
 1. Push `2` for the Connect tab.
 2. Push `i` (**[ Install on this Mac (i) ]**). Or push `u` (**[ Update the model lists (u) ]**) to write only the configs.
 3. Push `y` (**[ Run it (y) ]**) to confirm.
 
-The installer's output shows in the tab.
+The output of the setup shows in the tab.
 
-**The two steps by hand.** `./carl.sh install` runs these two commands from the CARL folder:
-```bash
-./client/install-clients.sh       # OpenCode + Pi into ~/.local (gets Node 22 for macOS if necessary)
-./client/install.sh --local       # configs for the server on this Mac, with its own key file
-```
-- On a Mac, `install.sh` uses `--local` by default. It sets the clients to the address on which the server listens now: 127.0.0.1, or 192.168.42.1 for a VM server. It reads the key from `~/.config/carl/api-key`.
-- `install.sh` needs `python3`. If macOS asks you to install the command-line developer tools, accept. Or run `xcode-select --install`.
-
-**Without the installer.** In the dashboard, push `o` (**[ OpenCode config (o) ]**) or `p` (**[ Pi config (p) ]**). The dashboard copies a config for the server to the clipboard, with the URL and the key. Merge it into `~/.config/opencode/opencode.json` or `~/.pi/agent/models.json`.
+**Without the setup.** In the dashboard, push `o` (**[ OpenCode config (o) ]**) or `p` (**[ Pi config (p) ]**). The dashboard copies a config for the server to the clipboard, with the URL and the key. Merge it into `~/.config/opencode/opencode.json` or `~/.pi/agent/models.json`.
 
 CAUTION: A config that the dashboard copies contains the API key itself, so that you can paste it on a different computer. Protect this config as you protect the key.
 
 ### Clients in the VM
 
-The VM needs Python 3 and curl. On the Mac, the staging folder for the client bundle is `~/Documents/carl-vm-client`. Before 1.2.0, its name was `mtplx-vm-client`: rename it, or use the old one. The VM sees this folder through the Fusion shared folder `/mnt/data/Documents/carl-vm-client`.
+The VM needs Python 3, curl and unzip.
 
 1. **Mac:** start the server for the VM:
    ```bash
    ./carl.sh --vm
    ```
-2. **Mac:** copy the client folder to the staging folder:
+   To make the VM network the default, set **Network** to **this Mac and the VM** in Settings > Server, or run `./carl.sh config set llama.net vm`.
+2. **Mac:** make the client package:
    ```bash
-   rsync -a --delete client/ ~/Documents/carl-vm-client/
+   ./carl.sh package
    ```
-3. **VM:** copy the bundle in:
+   CARL writes `dist/carl-client-VERSION-HOST.zip` and shows its path. Or push `z` in the dashboard's Connect tab ([The client package](#the-client-package)).
+3. **Mac:** put the zip where the VM can read it, for example the Fusion shared folder:
    ```bash
-   cp -r /mnt/data/Documents/carl-vm-client/. ~/carl-vm-client/ && cd ~/carl-vm-client
+   cp dist/carl-client-*.zip ~/Documents/
    ```
-4. **VM:** install OpenCode and Pi (first time only):
+   In this example, the VM sees the Mac's `~/Documents` folder as `/mnt/data/Documents`. Use the path of your own shared folder.
+4. **VM:** unzip it and run the setup:
    ```bash
-   ./install-clients.sh          # or: ./install-clients.sh opencode | pi
+   cd ~ && unzip /mnt/data/Documents/carl-client-*.zip && cd carl-client && ./setup
    ```
-   - The installer gets both clients from npm (`opencode-ai`, `@earendil-works/pi-coding-agent`), without sudo, into `~/.local`.
-   - It needs Node 22.19 or newer. If Node is missing or older, it downloads Node 22 LTS (Linux or macOS build) from nodejs.org, checks its SHA-256, and puts it in `~/.local/lib/nodejs`.
-   - It adds a `PATH` line (marked `# carl-vm-client`) to your `~/.zshrc` or `~/.bashrc`, if the file exists. Make sure that `~/.local/bin` is on your `PATH`.
-5. **VM:** install the configs:
-   ```bash
-   ./install.sh
-   ```
+5. Delete the zip on the Mac and in the shared folder: it holds the key. The `carl-client` folder in the VM keeps the key in `api-key` (mode 0600).
 6. **VM:** go to the folder of your project, and start `opencode` or `pi` there.
 
-What `install.sh` does in the VM:
-- It reads the server's address and key from `remote.json` and `api-key` in the bundle. With both files, it asks nothing.
-- Without these files, it asks for the API key. Paste the contents of `~/.config/carl/api-key` from the Mac. Or put the key in a file `api-key` next to `install.sh`, or set `CARL_API_KEY`.
-- It keeps the key at `~/.config/carl/api-key`, and uses it again on later runs.
-- It adds the client sync service. The service applies the config that you send from the dashboard ([Clients on other computers](reference/client-sync.md)). `NO_SYNC_SERVICE=1` leaves it out.
-- On Linux, the service runs only while you are logged in. To keep it running (a VM that you reach by SSH), run `loginctl enable-linger $USER` one time. The installer tells you when this is necessary.
+What `./setup` does on the other computer:
+- It reads the server's address and key from `remote.json` and `api-key` in the package. It asks no address.
+- It asks one time which clients and options you want, as on the server Mac. `./setup --yes` takes the defaults. `./setup --help` shows all options.
+- It installs OpenCode and Pi from npm (`opencode-ai`, `@earendil-works/pi-coding-agent`) into `~/.local`, without sudo, when they are missing or older.
+  - They need Node 22.19 or newer. If Node is missing or older, the setup downloads Node 22 LTS (Linux or macOS build) from nodejs.org, checks its SHA-256, and puts it in `~/.local/lib/nodejs`.
+  - It adds a `PATH` line (marked `# carl-vm-client`) to your `~/.zshrc` or `~/.bashrc`, if the file exists.
+- It writes the configs. It keeps your own settings and makes backups ([What the setup changes](#what-the-setup-changes)).
+- It keeps the key at `~/.config/carl/api-key`.
+- It adds the client sync service. The service applies the config that you send from the dashboard ([Clients on other computers](reference/client-sync.md)). `NO_SYNC_SERVICE=1 ./setup` leaves it out. Keep the `carl-client` folder: the service runs from it.
+- On Linux, the service runs only while you are logged in. To keep it running (a VM that you reach by SSH), run `loginctl enable-linger $USER` one time. The setup tells you when this is necessary.
 - At the end, it does a smoke test. The line `OK: the server answers at http://192.168.42.1:8080/v1. It has qwen3.6-35b-a3b.` tells you that the connection works. The name is the loaded model.
 
 The client configs are in these files:
@@ -207,7 +208,7 @@ The client configs are in these files:
 
 ### Clients on another computer or another VM app
 
-Use this procedure for clients that are not on the server Mac and not in the VMware Fusion VM. Examples: a Parallels VM, or a laptop on your network.
+Use this procedure for clients that are not on the server Mac and not in the VMware Fusion VM. Examples: a Parallels VM, or a laptop on your network. The other computer can be a Mac or a Linux computer.
 
 1. Find an address of the Mac that the client can reach:
    - The LAN address: run `ipconfig getifaddr en0`.
@@ -216,12 +217,15 @@ Use this procedure for clients that are not on the server Mac and not in the VMw
    ```bash
    ./carl.sh llama --host ADDR
    ```
-   Or, in the dashboard, open the Settings tab (tab 5) and select the address in the **network** row. The row shows each address of this Mac.
-3. Copy the `client/` folder to the client computer. The folder holds the address and the key (`remote.json`, `api-key`).
-4. On the client computer, run the installers in that folder:
+   Or, in the dashboard, open the Settings tab (tab 5) and select the address in the **Network** row. The row shows each address of this Mac.
+3. Make the client package: `./carl.sh package` (or `z` in the Connect tab).
+4. Copy the zip to the other computer (for example with `scp`, AirDrop or a USB disk). Then delete it on the Mac.
+5. On the other computer, unzip it and run the setup:
    ```bash
-   ./install-clients.sh && ./install.sh
+   unzip carl-client-VERSION-HOST.zip && cd carl-client && ./setup
    ```
+   On a Mac, you can also double-click `setup.command` in the folder. If macOS does not open it (a file from another computer), right-click it and select **Open**, or run `./setup` in Terminal.
+6. Delete the zip on the other computer.
 
 - The address must exist on this Mac. The launcher always refuses `0.0.0.0`.
 - To use a Parallels address for `--vm`, set `VM_HOST=10.211.55.2`.
@@ -230,14 +234,40 @@ Use this procedure for clients that are not on the server Mac and not in the VMw
 **To give the address and the key by hand** (a client folder without `remote.json`):
 1. Get the key. In the dashboard, open the Connect tab and push `k` to show the key. Or run `cat ~/.config/carl/api-key` on the Mac.
 2. Put the key in a file, for example `key.txt`.
-3. Run the installer:
+3. Run the setup:
    ```bash
-   ./install.sh --host ADDR --key-file key.txt
+   ./setup --host ADDR --key-file key.txt
    ```
-4. Delete `key.txt`. The installer keeps its own copy (`~/.config/carl/api-key`, mode 600).
+4. Delete `key.txt`. The setup keeps its own copy (`~/.config/carl/api-key`, mode 600).
 
-- If you give no key, the installer asks for it. The key does not show when you type it.
-- `--key KEY` also works, but the key then stays in your shell history. Use the file or the prompt.
+- If you give no key and the folder has none, the setup asks for it. The key does not show when you type it.
+
+### The client package
+
+`./carl.sh package` (or **[ Make the client package (z) ]** in the dashboard's Connect tab) writes one zip for another computer: `dist/carl-client-VERSION-HOST.zip` in the CARL folder. VERSION is the CARL version; HOST is the name of this Mac. Git ignores `dist/`.
+
+| In the zip (folder `carl-client/`) | From |
+|---|---|
+| The client files | The files of `client/` that git tracks. Never a cache, a backup or a file that git does not track |
+| `setup`, `setup.command` | The setup, and its double-click form for macOS |
+| `remote.json`, `api-key` | The server's address and key, from its last start (mode 0600) |
+| `installed-models.json` | The installed models, for the model lists of OpenCode and Pi |
+| `VERSION` | The CARL version. `/carl` shows it in the **Details** part of **Config sync** |
+
+- CAUTION: **The zip holds the API key of the server.** Its mode is 0600. Keep it secret. After the copy, delete it on both computers (`rm` with the path that CARL shows). `unzip` keeps the mode 0600 of the key file, and the setup sets it again.
+- **When the server serves only this Mac** (network local, 127.0.0.1), other computers cannot reach it. CARL then makes no package, changes nothing, and tells you how to change the network: Settings > Server > Network, or `./carl.sh config set llama.net vm`. Then start the server again, so that `remote.json` has the new address. `--anyway` makes the package also in this case (for example for a test).
+- **Before the first server start,** `client/` has no `remote.json` and `api-key`. CARL tells you to start the server one time.
+- In the dashboard, **[ Show it in the Finder (f) ]** shows the zip in the Finder.
+
+### Updating a client computer
+
+- **The model lists:** send the config from the dashboard (`P` in the Connect tab). The sync service applies it ([11. Updating the client configs](#11-updating-the-client-configs)).
+- **A new CARL version** (new plugins, a new setup): make a new package, copy it, and unzip it over the old folder. Then run the setup again:
+  ```bash
+  unzip -o carl-client-VERSION-HOST.zip && cd carl-client && ./setup
+  ```
+  The setup keeps your settings and your choices, and makes backups. `/carl` shows the version of the client package (**Config sync**, **Details**). It also tells you when the server Mac runs a newer CARL version than the package: the sync service learns the server's version at each contact.
+- NOTE: the client folder does not learn about a later CARL update on the server Mac. After you update CARL there, make a new package for each client computer.
 
 ### Sharing with a friend
 
@@ -246,9 +276,9 @@ Use this procedure for clients that are not on the server Mac and not in the VMw
    tools/make-share-zip.sh [--with-docs] [OUT]
    ```
    The command writes `../CARL-YYYYMMDD.zip`, or the file `OUT`. The zip holds one folder, `CARL/`.
-   - The zip does not include caches, `.DS_Store` files, `api-key` files, `*.bak.*` files or the development notes (`docs/`). `--with-docs` (the first argument) keeps the notes.
+   - The zip holds only the files that git tracks. It does not include files that git does not track (test folders, notes), caches, `.DS_Store` files or `*.bak.*` files. It never includes `api-key`, `remote.json` or `installed-models.json`.
+   - The development notes (`docs/`) are not in git. `--with-docs` (the first argument) adds them from the disk.
    - The models, the logs and the API key are outside the folder (`~/models`, `~/.config/carl`).
-   - NOTE: The zip includes `client/remote.json` if it exists. This file holds the address of your server, not the key. The first server start on the other Mac writes a new one.
 2. On the Mac of your friend, unzip the file.
 3. Do the steps in [Set up the Mac](#set-up-the-mac) and [Clients on the same Mac](#clients-on-the-same-mac-no-vm). In short:
    ```bash
@@ -270,7 +300,8 @@ Use this procedure for clients that are not on the server Mac and not in the VMw
 | `heretic-35b-a3b-iq3` (abliterated fast MoE, 13.6 GB) | 2 × 96K slots fit, so subagents work. It has no MTP head: n-gram speculation. |
 | `orcarouter-27b-iq3` (abliterated, the smallest abliterated 27B, 12.6 GB) | 2 × 96K slots fit, so subagents work. |
 | `orcarouter-27b-q3` (abliterated, 14.6 GB) | ~68K with 1 slot. Its default context is 64K. |
-| `qwen3.8-9b` (5.8 GB) and `gemma-4-e4b` (4.6 GB) | 2 × 96K slots fit |
+| `qwen3.8-9b` (5.8 GB), `gemma-4-e4b` (4.6 GB) and `gemma-4-12b` (7.2 GB) | 2 × 96K slots fit (the Gemma models with the window cache) |
+| `gemma-4-26b-a4b` (14.6 GB) | 1 slot, up to ~192K with the window cache. 2 × 96K slots need 16.1 GiB: just over the limit. |
 | `qwen3.8-27b`, `orcarouter-27b` (Q4) | They do not fit under the default limit. |
 | `qwen3.6-35b-a3b`, `heretic-35b-a3b` (Q4), `gemma-4-31b` | They do not fit. |
 
@@ -278,7 +309,7 @@ Use this procedure for clients that are not on the server Mac and not in the VMw
 - **Experts only: a larger GPU memory limit.** CAUTION: keep at least 6 GiB for macOS, or the Mac can stop. `sudo sysctl iogpu.wired_limit_mb=18432` gives the GPU more memory until the next restart. Then the stock Q4 `qwen3.8-27b` can run with ~84K. The abliterated Q4 gets only ~16K: use its Q3.
 - **Watch the memory on the Live tab of the dashboard.** Its first line ends with `Memory is normal.` If it says `Memory is low (macOS warns).` or `Memory is very low: …`, use a smaller `--ctx`.
 - **The launcher refuses a model and a context that do not fit.** It shows what they need and the GPU memory limit. It also shows the largest context that fits, and Auto fit's choice. `FIT_CHECK=0` is the expert override.
-- With 1 slot, `install.sh` does not install the coder subagent ([The coder subagent](#the-coder-subagent-opencode-and-pi)).
+- With 1 slot, the setup does not install the coder subagent ([The coder subagent](#the-coder-subagent-opencode-and-pi)).
 - NOTE: These estimates did not get a test on a 24 GB Mac.
 
 ---
@@ -299,7 +330,7 @@ Use this procedure for clients that are not on the server Mac and not in the VMw
 4. In the client, select the model that the server runs: `/models` in OpenCode, `/model` in Pi.
    - The lists show the models that are installed on the server, under their own names.
    - This step is necessary only if the server's model is not the clients' default.
-   - If you pick a different model, OpenCode shows a CARL warning. In [router mode](#router-mode-switch-models-from-opencode-or-pi), the pick loads that model.
+   - If you select a different model, OpenCode shows a CARL warning. In [router mode](#router-mode-switch-models-from-opencode-or-pi), your selection loads that model.
 
 **Other ways to start:**
 
@@ -309,7 +340,7 @@ Use this procedure for clients that are not on the server Mac and not in the VMw
 | `./carl.sh llama --model qwen3.8-27b` | Starts a specific model ([Choosing a model](#3-choosing-a-model)) |
 | `./carl.sh monitor` | Attaches the dashboard to a server that runs |
 
-CAUTION: **The server does not start if another model is in memory.** Two models do not fit. The launcher looks for each process larger than 8 GB, and shows it.
+CAUTION: **The server does not start if another model is in memory.** Two models do not fit. The launcher looks for each process larger than 8 GiB, and shows it.
 
 ### Stop the server, or keep it running
 
@@ -333,11 +364,13 @@ CAUTION: **The server does not start if another model is in memory.** Two models
 
 | Situation | What occurs |
 |---|---|
-| The first message of the first session | The server reads the system prompt and the tools of OpenCode, about 9K tokens: about 13–20 s on the 35B, about 2 min on the 27B. The [disk cache](#7-fast-starts-the-disk-cache) then saves this prompt. |
+| The first message of the first session | The server reads the system prompt and the tools of OpenCode, about 9K tokens. This takes about 13–20 s on the 35B and about 2 min on the 27B. The [disk cache](#7-fast-starts-the-disk-cache) then saves this prompt. |
 | A new session later | The disk cache puts the saved prompt back. The first answer starts in under a second, not after 13–20 s (35B) or about 2 min (27B). |
-| A long session after a server restart | The disk cache puts the session back. The next answer starts in about a second. Without the cache, the server reads the whole session again: a 74K-token session takes about 4 min on the 35B and about 13 min on the 27B. |
-| Follow-up turns | They are fast. The server uses its cache again, and reads only the new tokens. |
+| A long session after a server restart | The disk cache puts the session back. The next answer starts in about a second. Without the cache, the server reads the whole session again. A 64K-token session then takes about 5 min on the 35B. A 56K-token session takes about 16 min on the 27B. |
+| Follow-up turns | They are fast. The server uses its RAM cache and its slots again, and reads only the new tokens. |
 | The Mac on battery power with the lid closed | The Mac sleeps, and all requests in progress pause. The Mac stays awake while the server runs (`caffeinate`), but not with the lid closed on battery. Connect the power supply for long work. |
+
+The times in this table come from these measurements: the 35B IQ3 on an M2 Max 32 GB (llama.cpp 0.5.0, 2026-10-03 and 2026-10-04), and the 35B Q4 and the 27B on an M3 Pro 36 GB (llama.cpp 0.4.1, 2026-09-24 to 2026-10-01). A different Mac gives different times. [Caching](reference/caching.md#measurements) and [Context length](reference/memory.md#context-length-what-a-larger-context-costs) give the details.
 
 ---
 
@@ -347,7 +380,7 @@ Each model has its own name on the server, and the clients list it under the sam
 
 | You want | Run on the Mac | Select in the client |
 |---|---|---|
-| **The default:** Qwen3.6-35B-A3B (MoE, ~4× faster decode and ~6× faster prompt read than the 27B) | `./carl.sh llama` | `qwen3.6-35b-a3b` |
+| **The default:** Qwen3.6-35B-A3B (MoE: about 4× the write speed and 6× the read speed of the 27B) | `./carl.sh llama` | `qwen3.6-35b-a3b` |
 | The dense 27B (stock), for hard code | `./carl.sh llama --model qwen3.8-27b` | `qwen3.8-27b` |
 | The uncensored (abliterated) 27B, with the best measured quality in long sessions | `./carl.sh llama --model orcarouter-27b` | `orcarouter-27b` |
 | Uncensored and fast: the abliterated A3B (Heretic, Q4 with the MTP head; 32 GB+) | `./carl.sh llama --model heretic-35b-a3b` | `heretic-35b-a3b` |
@@ -371,12 +404,12 @@ Each model has its own name on the server, and the clients list it under the sam
 - **IQ3:** the IQ3 builds are smaller again, and their quality is lower again. The IQ formats unpack more slowly on Metal. MTP helps them less, and 2 guesses make them slower. Thus, their recommended speculation is MTP + n-gram with 1 guess ([IQ3 speculation](reference/models.md#iq3-speculation-measured-2026-10-03)). Use IQ3 only if nothing larger fits.
 - **The 9B** (`qwen3.8-9b`, 5.8 GB) is empero-ai's community distillation of Qwen3.8 into a 9B. It is not an official Qwen release: Qwen publishes no 9B in the 3.8 line.
   - It is the one Qwen model that fits a 16 GB Mac with 2 × 96K.
-  - It decodes at ~25 tok/s on an M2 Max. The Qwen3.6/3.8 hybrid layers are slow on Metal (llama-bench without CARL's flags agrees).
+  - It writes at ~25 tok/s on an M2 Max 32 GB (llama.cpp 0.5.0, 2026-10-03). The Qwen3.6/3.8 hybrid layers are slow on Metal (llama-bench without CARL's flags agrees).
   - Where the 35B-A3B IQ3 fits, the IQ3 is faster and better, also for several subagents at the same time.
   - Thinking is on or off only.
 - **More slots (3–4)** run more subagents at the same time.
   - The Server panel offers 3 and 4 only when they fit this Mac with the selected model, context and context memory type.
-  - CARL stops at 4, because each request becomes slower as more requests run at the same time. The 9B: 25 tok/s alone, 41 tok/s in total with 4 (~10 each). 8 would fit, but at ~6 tok/s each.
+  - CARL stops at 4, because each request becomes slower as more requests run at the same time. The 9B (M2 Max, 2026-10-03): 25 tok/s alone, 41 tok/s in total with 4 (~10 each). 8 would fit, but at ~6 tok/s each.
   - The parallel step of Auto-tune measures this for each model.
 - **Other models:** each `.gguf` in `~/models/gguf` is a model too ([Downloading and adding models](#9-downloading-and-adding-models)).
 
@@ -397,7 +430,7 @@ The catalogue has four Gemma 4 models from Google. Each one is Google's QAT buil
   - With the **window cache**, they keep only the last window. It uses less memory, but CARL cannot restore saved sessions and prompts.
   - The setting `cache.swa` (Settings > Caching, **Gemma models**) decides this ([Models with sliding-window layers](#models-with-sliding-window-layers)).
 - **Speculation: MTP with a drafter.** Gemma 4 has no MTP head in the model file. Google gives a separate drafter file for each model (`mtp-gemma-4-*.gguf`, 60–280 MB). `./carl.sh download NAME` gets the model and its drafter. A start gives the drafter to llama.cpp (`-md`).
-  - The catalogue uses MTP + n-gram with 2 guesses. MTP makes new text faster, and n-gram makes edits faster. Measured on the E4B, the 12B and the 26B-A4B: 55% to 83% faster than no speculation ([the numbers](reference/models.md#gemma-4)).
+  - The catalogue uses MTP + n-gram with 2 guesses. MTP makes new text faster, and n-gram makes edits faster. Measured on all four models (2026-10-04): 55% to 85% faster than no speculation ([the numbers](reference/models.md#gemma-4)).
   - If the drafter is not downloaded, the start uses n-gram speculation and tells you. Run `./carl.sh download NAME` again to get the drafter.
   - A Gemma 4 model from another Hugging Face repository (for example a fine-tune) also gets a drafter: the drafter of the catalogue model with the same size. `./carl.sh download hf:…` gets it with the model. For a custom Gemma 4 model that you have already, run `./carl.sh download NAME`, or press d on it in Settings > Models.
 - **Sampling:** Google's values: temperature 1.0, top_p 0.95, top_k 64.
@@ -413,7 +446,7 @@ Router mode is for users who prefer to change models during the work. llama.cpp'
 - A switch takes 30 s to 2 min.
 - The default is **single model**: one model runs. Auto fit or you choose it in the Settings tab.
 
-WARNING: Every switch empties the RAM cache. The model that loads starts cold. OpenCode and Pi put a session back from the [disk cache](#7-fast-starts-the-disk-cache) about a second after the load. Any other client reads the whole conversation again (minutes for a long session). Keep this in mind before you switch.
+WARNING: Every switch empties the RAM cache. The model that loads starts cold. OpenCode and Pi put a session back from the [disk cache](#7-fast-starts-the-disk-cache) about a second after the load. Any other client reads the whole session again (minutes for a long session). Keep this in mind before you switch.
 
 **To turn router mode on:**
 1. In the dashboard, push `5` for the Settings tab.
@@ -421,7 +454,7 @@ WARNING: Every switch empties the RAM cache. The model that loads starts cold. O
 3. Push `r`, or click **Router mode: OpenCode and Pi switch (r)**.
 4. Push `y` (**[ Switch (y) ]**) to confirm (**SWITCH TO ROUTER MODE?**).
 
-The dashboard saves `llama.mode = router` in `config.json`, and restarts a server that runs. Then it updates the OpenCode and Pi configs on this Mac (when CARL set them up here). In a VM, run `./install.sh` again there.
+The dashboard saves `llama.mode = router` in `config.json`, and restarts a server that runs. Then it updates the OpenCode and Pi configs on this Mac (when CARL set them up here). On other computers, send the config (`P` in the Connect tab), or run `./setup` again there.
 
 Other ways:
 
@@ -433,12 +466,12 @@ Other ways:
 
 **How the router works:**
 - **Each model gets the settings that a single start of it uses:** your `config.json` profile, else its Auto-tune result, else the catalogue. This includes the context, the slots, the context memory type, the speculation, the sampling and the RAM cache.
-- A model whose setup does not fit the GPU limit is left out. The start tells you why.
+- A model whose setup does not fit the GPU memory limit is left out. The start tells you why.
 - `--model`, `--ctx`, `--kv` and `--slots` do not apply to a router start.
 - The launcher writes the presets to `~/.config/carl/router-presets.ini` at each start. Do not edit this file.
 - **The model that loads first** is the model that a single start loads (`llama.model`, or Auto fit's choice).
 - **The Router panel** (router mode only) lists the models that the router offers, with their state, their slots and context (`2 × 96K`), and **[ Load ]** or **[ Unload ]**. Push ↑ ↓ to select a model, and Enter to load or unload it. The panel also shows the recent switches.
-- The panel also tells you if the OpenCode and Pi configs on this Mac list the installed models. **[ Update the OpenCode and Pi configs (u) ]** runs the installer for this Mac. The Connect tab shows its output.
+- The panel also tells you if the OpenCode and Pi configs on this Mac list the installed models. **[ Update the OpenCode and Pi configs (u) ]** runs the setup for this Mac. The Connect tab shows its output.
 - **A model that is not installed** gets an error (HTTP 400 "not found"), and nothing loads. OpenCode shows a CARL warning.
 - **Custom models:** set the *thinking* field of the card (Models panel, `e`), so that OpenCode offers the correct levels.
 - The dashboard follows the loaded model (memory, context, requests). The header shows `router mode (N models)` after the model name.
@@ -466,11 +499,11 @@ In OpenCode 1.18, the thinking levels are model **variants**. Type `/variants` a
 | The 27B builds | off, low, medium, xhigh |
 | The 35B-A3B builds, the 9B, Gemma 4 | off, high |
 
-`install.sh` sets the Pi defaults: provider `llamacpp`, the model that a server start loads, and thinking `low`. It sets them only if they are unset, or if they still have the values that it set before.
+The setup sets the Pi defaults: provider `llamacpp`, the default model ([What the setup changes](#what-the-setup-changes)), and thinking `low`. It sets them only if they are unset, or if they still have the values that it set before.
 
 **Notes:**
 - **A change applies from the next message.** A reply in progress keeps its mode.
-- **After `install.sh` runs again, fully restart OpenCode.** An open OpenCode keeps its old options. If OpenCode does not know an option, it uses the default without a warning.
+- **After the setup runs again, fully restart OpenCode.** An open OpenCode keeps its old options. If OpenCode does not know an option, it uses the default without a warning.
 - **Use `xhigh` only when necessary.** With `xhigh`, Qwen3.8 thinks too much on simple tasks. `low` is the correct default for agent work on the 27B.
 - **The 35B has no effort levels,** only on and off. Its template ignores low, medium and xhigh. Thus, only `none` and `high` are available.
 - **The sampling settings follow the mode:**
@@ -486,24 +519,24 @@ In OpenCode 1.18, the thinking levels are model **variants**. Type `/variants` a
 
 ---
 
-## 5. Context window
+## 5. Context: how much a slot holds
 
-The context window is the quantity of conversation that the model can hold.
+The context is the number of tokens that one slot can hold: the session, its tool results and its answers.
 
 - The default is 96K tokens for each slot.
 - 96K is a floor: CARL does not select less if 96K fits. Agent work needs that much context.
 - The one exception is `orcarouter-27b-q3`, a build for 24 GB Macs. It starts at 64K and suggests a tune.
-- The Settings tab warns only about larger windows.
+- The Settings tab warns only about a larger context (in the very slow zone).
 
-Longer windows work (recall stayed 8/8 up to ~150K), but they need more time. On the 35B, a cold prompt reads in these times:
+A larger context works (the recall test stayed 8/8 up to ~150K), but it needs more time. When the server must read a full context again (a cold read), the 35B needs these times (M3 Pro 36 GB, llama.cpp 0.4.1, 2026-10-01):
 
-| Window | Cold read | Decode speed |
+| Context | Cold read | Write speed |
 |---|---|---|
 | 64K | ~5 min | 20 tok/s |
 | 128K | ~19 min | 14 tok/s |
 | 150K | ~27 min | 12 tok/s |
 
-Use `--ctx 128k` or `--ctx 160k` when you need it. More: [Context length](reference/memory.md#context-length-what-longer-windows-cost).
+Use `--ctx 128k` or `--ctx 160k` when you need it. More: [Context length](reference/memory.md#context-length-what-a-larger-context-costs).
 
 ```bash
 ./carl.sh --ctx 192k      # larger: N or Nk, from 4k to 256k
@@ -511,22 +544,22 @@ Use `--ctx 128k` or `--ctx 160k` when you need it. More: [Context length](refere
 ```
 
 **After you change `--ctx`, update the clients:**
-1. **VM:** run the installer again. It reads the window of the server that runs:
+1. **Mac:** run `./carl.sh install --config-only`.
+2. **Other computers:** send the config (`P` in the Connect tab). Or run the setup again in the client folder. It reads the context of the server that runs:
    ```bash
-   cd ~/carl-vm-client && ./install.sh
+   cd ~/carl-client && ./setup --yes --no-install
    ```
-   On the Mac, run `./carl.sh install --config-only`.
-2. Restart OpenCode or Pi.
+3. Restart OpenCode or Pi.
 
 **Why this is important:**
-- **The client limit decides only when the client compacts** (summarises) the conversation. The client does not send this limit to the server.
+- **The client limit decides only when the client compacts** (summarises) the session. The client does not send this limit to the server.
 - **If the client has 128K but the server has 96K,** all requests fail when the session is larger than 96K. The error is `HTTP 400 ... exceeds the available context size`. The client never compacts, because it did not get to its own limit.
-- **A server window that is larger than the client limit causes no problem.** It only uses memory that the client does not use.
-- **`install.sh` sets the client limit** from the server that runs, or from `LLAMA_CTX=128k ./install.sh`. If the server is down, it uses 96K.
+- **A server context that is larger than the client limit causes no problem.** It only uses memory that the client does not use.
+- **The setup sets the client limit** from the server that runs, or from `LLAMA_CTX=128k ./carl.sh install` (`LLAMA_CTX=128k ./setup` on other computers). If the server is down, it uses 96K.
 
 **Memory:**
-- The server allocates all of the KV cache at the start. The 27B at 128K: about 2.25 GiB with q4_0, 4.25 GiB with q8_0. The 35B: 720 MiB and 1.33 GiB.
-- 192K with q4 fits on a 36 GB Mac. If you use a larger window, keep the memory of the VM small.
+- The server allocates all of the context memory at the start. The 27B at 128K: about 2.25 GiB with q4, 4.25 GiB with q8. The 35B: 720 MiB and 1.33 GiB.
+- 192K with q4 fits on a 36 GB Mac. If you use a larger context, keep the memory of the VM small.
 
 ---
 
@@ -534,18 +567,18 @@ Use `--ctx 128k` or `--ctx 160k` when you need it. More: [Context length](refere
 
 ### Subagents
 
-OpenCode and Pi run a subagent as a separate conversation (a child session).
+OpenCode and Pi run a subagent as a separate session (a child session).
 
 - **By default, the server keeps two slots** (if they fit). The main session and a subagent each keep their own cache.
   - When the subagent is complete, the main session continues in about a second. It does not read its full context again. With one slot, the main session read everything again: this took minutes on the 27B at 60K tokens.
   - The start lines show `Slots: 2 (auto: two slots fit). Context: 96K tokens per slot (…).`
   - `--slots 1` sets one slot (less memory). `./carl.sh fit --slots 2` shows what fits.
-- **Two at the same time:** a subagent can run while the main session keeps its place. OpenCode can also run two subagents in parallel.
-  - On the 35B, two requests at the same time give ~39% more total throughput.
+- **Two at the same time:** a subagent can run while the main session keeps its place. OpenCode can also run two subagents at the same time.
+  - On the 35B, two requests at the same time write ~39% more tokens in total (M3 Pro, 2026-10-01).
   - On the 27B, the two requests share the GPU. Each one runs at about half speed.
 - **The title agent of OpenCode stays on.** With 2 slots, it runs at the same time as the main session. It does not wait behind the main session.
 - **The dashboard:** the SLOTS card of the Live tab shows one bar for each slot. When both slots work, the header shows **BUSY ×2**.
-- **More than two conversations at the same time** (for example, two subagents and the main session): the server puts the extra conversation in the RAM cache. The size of that cache comes from the free memory, so the conversation possibly does not fit. Then the server reads it again.
+- **More than two sessions at the same time** (for example, two subagents and the main session): the server puts the extra session in the RAM cache. The size of that cache comes from the free memory, so the session possibly does not fit. Then the server reads it again.
 
 ### The coder in the background
 
@@ -563,7 +596,7 @@ Local models often ignore an instruction to use the background. Thus, CARL start
 - OpenCode: the `carl-background` plugin.
 - Pi: the `subagent` tool. In Pi, `/subagents` lists the subagents that run and stops one. The footer shows how many run.
 
-`NO_BACKGROUND_SUBAGENTS=1 ./install.sh` turns the background off.
+`NO_BACKGROUND_SUBAGENTS=1 ./carl.sh install --config-only` (`./setup` on other computers) turns the background off. `NO_BACKGROUND_SUBAGENTS=0` turns it on again.
 
 ### The Subagents panel (OpenCode)
 
@@ -576,14 +609,14 @@ In OpenCode, the sidebar shows a Subagents panel.
 | `+N more` | The other finished subagents. Click it to see all of them. |
 
 - When you go to a different parent session, the panel shows the subagents of that session.
-- Click a subagent to see its model and its context size. Click it again to open its conversation.
+- Click a subagent to see its model and its context size. Click it again to open its session.
 - Click the panel header to collapse the panel.
-- To get a new version of the panel, run `install.sh` again. Then restart OpenCode.
-- The plugin is `client/opencode/plugins/subagents-sidebar/`. `install.sh` registers it in `~/.config/opencode/tui.json`. `NO_SIDEBAR=1 ./install.sh` installs without it.
+- To get a new version of the panel, run the setup again. Then restart OpenCode.
+- The plugin is `client/opencode/plugins/subagents-sidebar/`. The setup registers it in `~/.config/opencode/tui.json`. `NO_SIDEBAR=1 ./carl.sh install --config-only` installs without it.
 
 ### Switching sessions (OpenCode)
 
-OpenCode 1.18.34 does not show the open sessions as tabs. Thus, `install.sh` adds a session switcher to the right side of the prompt box:
+OpenCode 1.18.34 does not show the open sessions as tabs. Thus, the setup adds a session switcher to the right side of the prompt box:
 
 ```
 ‹ 2/3 ● fix the log parser ›
@@ -599,7 +632,7 @@ OpenCode 1.18.34 does not show the open sessions as tabs. Thus, `install.sh` add
 
 - The list contains the top-level sessions of this project that changed in the last 72 hours (at most 9). It does not contain subagent sessions. For older sessions, use `/sessions`.
 - The switcher does not show when there is only one session.
-- The plugin is `client/opencode/plugins/session-switcher/`. `install.sh` registers it in `~/.config/opencode/tui.json`. `NO_SWITCHER=1 ./install.sh` installs without it.
+- The plugin is `client/opencode/plugins/session-switcher/`. The setup registers it in `~/.config/opencode/tui.json`. `NO_SWITCHER=1 ./carl.sh install --config-only` installs without it.
 
 ### Tools in OpenCode and Pi
 
@@ -614,7 +647,7 @@ OpenCode 1.18.34 does not show the open sessions as tabs. Thus, `install.sh` add
 | **Background subagents** | The task tool can run a subagent in the background. CARL's coder always does (`carl-background`). | The `background` option of the `subagent` tool. CARL's coder always uses it. `/subagents` lists and stops them. | `NO_BACKGROUND_SUBAGENTS=1` |
 | **Parallel tool calls** | Several tool calls in one turn. llama.cpp needs the request to ask for them: CARL's OpenCode model entries do. | | |
 
-Put a switch in front of the installer, for example `WEB_SEARCH=off ./carl.sh install --config-only`.
+Answer the questions of the setup, or put a switch in front of it, for example `WEB_SEARCH=off ./carl.sh install --config-only` (`WEB_SEARCH=off ./setup` on other computers). The setup keeps your choices for the next time.
 
 - CAUTION: **Web search sends data out of this computer.** The search queries go to Exa (`mcp.exa.ai`, no account necessary) or to Parallel (`search.parallel.ai`). Everything else stays local. `WEB_SEARCH=off` turns web search off.
 - **The browser runs in a temporary profile** (`--isolated`). It is not logged in to a site, and nothing stays after it closes.
@@ -628,21 +661,21 @@ Put a switch in front of the installer, for example `WEB_SEARCH=off ./carl.sh in
   - You can also write `@browser ...`.
   - In Pi, `tool_search` loads the browser tools when necessary.
 - **How OpenCode gets the switches:** OpenCode reads them only from environment variables. Its config file has no keys for them.
-  - The installer writes them to `~/.config/carl/opencode.env`.
+  - The setup writes them to `~/.config/carl/opencode.env`.
   - It adds a marked 3-line pointer to your `~/.zshrc` or `~/.bashrc` that loads this file. It makes a backup first, and changes nothing else in the file.
   - It never makes a new profile file. Without one, it shows the line to add.
   - Before it writes, it tells you which file it changes. For a symlinked profile, it changes the target of the link.
   - `NO_PROFILE=1` keeps your profile as it is, and shows the line to add.
-  - Open a new terminal after the installer. An OpenCode that you start in a different way (not from a shell) does not see the switches.
-- **Background subagents** and **LSP** are experimental features of OpenCode (`OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=1`, `OPENCODE_EXPERIMENTAL_LSP_TOOL=1`). Web search uses `OPENCODE_ENABLE_EXA` (or `OPENCODE_ENABLE_PARALLEL`) and `OPENCODE_WEBSEARCH_PROVIDER`. The installer removes the pointer when all these switches are off.
+  - Open a new terminal after the setup. An OpenCode that you start in a different way (not from a shell) does not see the switches.
+- **Background subagents** and **LSP** are experimental features of OpenCode (`OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=1`, `OPENCODE_EXPERIMENTAL_LSP_TOOL=1`). Web search uses `OPENCODE_ENABLE_EXA` (or `OPENCODE_ENABLE_PARALLEL`) and `OPENCODE_WEBSEARCH_PROVIDER`. The setup removes the pointer when all these switches are off.
 
 ### The coder subagent (OpenCode and Pi)
 
-`install.sh` adds a specialist **coder** subagent, and a rule that tells the main agent when to use it.
+The setup adds a specialist **coder** subagent, and a rule that tells the main agent when to use it.
 
-- It does this **only when the server has 2 or more slots.** With one slot (for example a 24 GB Mac with a 27B), each delegation removes the main session from its slot. The server then reads it all again. Thus, `install.sh` does not install the coder, or removes it.
-- `install.sh` checks the server that runs. Run `install.sh` again after you change the model or the slots.
-- `CODER=1` installs the coder in all conditions.
+- With the answer `auto` (the default), it does this **only when the server has 2 or more slots.** With one slot (for example a 24 GB Mac with a 27B), each delegation removes the main session from its slot. The server then reads it all again. Thus, the setup does not install the coder, or removes it.
+- The setup checks the server that runs. Run it again after you change the model or the slots.
+- The answer `on` (`--coder on`, or `CODER=1`) installs the coder in all conditions. `off` (`--coder off`, or `NO_CODER=1`) never installs it.
 
 **When the main agent uses the coder.** The main agent delegates **on its own**, and only in these conditions:
 1. **It is stuck:** a fix for the same code failed two times. These are its own attempts, or attempts that you tell it failed.
@@ -700,39 +733,39 @@ Delegation depends on the judgment of the model. Thus, it occurs "usually", not 
 - **OpenCode:** type `@coder` and your task in the prompt, for example `@coder add tests for parse_config`. The subagents are in the `@` list, and Tab completes the name. The task goes directly to the coder: the main agent does not decide. If you already have an agent of your own with the name `coder`, CARL's coder is `@carl-coder`. "Use the coder agent to …" also works.
 - **Pi:** there is no command. The coder is the `subagent` tool. Ask for it in the message: "use the coder subagent to …".
 
-**To turn it off,** run `NO_CODER=1 ./install.sh`.
+**To turn it off,** run the setup again with `--coder off` (`./carl.sh install --config-only --coder off`).
 
 **Where it is:**
 
 | Item | Place |
 |---|---|
-| Source | `client/agents/coder.md` (the frontmatter description tells when to use it; the body holds its instructions) and `client/agents/delegation.md` (the rule for the main agent). To change the coder, edit these files and run `install.sh` again. |
+| Source | `client/agents/coder.md` (the frontmatter description tells when to use it; the body holds its instructions) and `client/agents/delegation.md` (the rule for the main agent). To change the coder, edit these files and run the setup again. |
 | OpenCode | `agent.coder` in `opencode.json` (mode subagent, reasoning medium, temperature 0.6, no nested subagents, at most 80 steps), and `instructions`. Its prompt is in `~/.config/opencode/carl/coder.md`. |
 | Pi | `~/.pi/agent/agents/coder.md`, the `subagent` extension, and a marked block in `~/.pi/agent/APPEND_SYSTEM.md` |
 
-`install.sh` never replaces your own `coder` agent, Pi `agents/coder.md` or `extensions/subagent`. CARL's agent then gets the name `carl-coder`. If you also have your own `carl-coder`, the installer skips it and shows a note.
+The setup never replaces your own `coder` agent, Pi `agents/coder.md` or `extensions/subagent`. CARL's agent then gets the name `carl-coder`. If you also have your own `carl-coder`, the setup skips it and shows a note.
 
 ### CARL's plugins and extensions
 
-`./carl.sh install` adds these to OpenCode and Pi. Each one has a switch for the installer. Type `/carl` in OpenCode or Pi to see which are on. [The plugins and extensions](reference/plugins.md) tells how each one works.
+The setup (`./carl.sh install`, `./setup`) adds these to OpenCode and Pi. Each one has a switch for the setup. Type `/carl` in OpenCode or Pi to see which are on. [The plugins and extensions](reference/plugins.md) tells how each one works.
 
 | Plugin | In | What you get | Off |
 |---|---|---|---|
 | **Disk cache** (`carl-cache`) | OpenCode, Pi | Fast starts: each agent's prompt and each session saved on the server's disk ([Fast starts](#7-fast-starts-the-disk-cache)) | `NO_CACHE=1` |
-| **Model check** (`carl-model-check`) | OpenCode | A warning when the model you pick is not the model that the server runs, is not installed, or loads now | `NO_MODEL_CHECK=1` |
+| **Model check** (`carl-model-check`) | OpenCode | A warning when the model that you select is not the model that the server runs, is not installed, or loads now | `NO_MODEL_CHECK=1` |
 | **Coder in the background** (`carl-background`) | OpenCode | The coder subagent runs in the background, so the main session stays free | `NO_BACKGROUND_SUBAGENTS=1` |
 | **Subagent tool** (`subagent`) | Pi | The `subagent` tool: the coder and other agents, one, several at the same time, a chain, or in the background; `/subagents` | `NO_CODER=1` |
 | **Subagents panel** (`subagents-sidebar`) | OpenCode | The running and finished subagents in the sidebar ([The Subagents panel](#the-subagents-panel-opencode)) | `NO_SIDEBAR=1` |
 | **Session switcher** (`session-switcher`) | OpenCode | `‹ 2/3 ● title ›` in the prompt box, `/switch` ([Switching sessions](#switching-sessions-opencode)) | `NO_SWITCHER=1` |
 | **The /carl panel** (`carl-panel`) | OpenCode, Pi | Every CARL piece on this computer with its state, and the config sync (apply new configs at once or not, apply a new config now, check for a new config) | (always on) |
 
-- Put a switch in front of the installer, for example `NO_SIDEBAR=1 ./carl.sh install --config-only`. The installer then removes the plugin.
+- Put a switch in front of the setup, for example `NO_SIDEBAR=1 ./carl.sh install --config-only`. The setup then removes the plugin, and keeps it off the next time. `NO_SIDEBAR=0` puts it back.
 - Restart OpenCode or Pi after an install. They load their plugins when they start.
 - Your own plugins and extensions stay. If one of yours has the same name, CARL does not install its own.
 
 **The /carl panel.** Type `/carl` in OpenCode or Pi. The panel shows one section for each CARL piece, with its state. Select a section to open it:
 - The section tells its state and what the piece does, in plain sentences. Then come its actions.
-- Its **Details** part holds the addresses, the config version and the installer's switches.
+- Its **Details** part holds the addresses, the config version, the version of the client package, the CARL version of the server when CARL made the package, and the switches of the setup. When these two versions are different, **Config sync** says so.
 - **‹ back** goes back to the list of sections.
 
 | Section | In | It shows |
@@ -753,21 +786,21 @@ Delegation depends on the judgment of the model. Thus, it occurs "usually", not 
 
 ## 7. Fast starts: the disk cache
 
-The server keeps the conversations that it read in memory: in its slots, and in its RAM cache. That memory is lost in these conditions:
+The server keeps the sessions that it read in memory: in its slots, and in its RAM cache. That memory is lost in these conditions:
 - The server restarts.
 - Router mode changes the model.
-- Many other sessions push a conversation out.
+- Many other sessions push a session out.
 
 ![The Caching panel](assets/caching.png)
 
-The next request then reads the whole prompt again. This is OpenCode's system prompt and tools (~8–10K tokens: ~13–17 s on the 35B, ~2 min on the 27B). In a session that continues, it is also the whole conversation (minutes for a long one).
+The next request then reads the whole prompt again. This is OpenCode's system prompt and tools: ~8–10K tokens, ~13–17 s on the 35B IQ3 (M2 Max), ~2 min on the 27B (M3 Pro). In a session that continues, it is also the whole session (minutes for a long one).
 
-OpenCode and Pi prevent this with CARL's **disk cache**: the OpenCode plugin and the Pi extension `carl-cache`, which `install.sh` adds. They save prompts and sessions on the server's disk, through the server.
+OpenCode and Pi prevent this with CARL's **disk cache**: the OpenCode plugin and the Pi extension `carl-cache`, which the setup adds. They save prompts and sessions on the server's disk, through the server.
 
 | What is saved | Effect |
 |---|---|
-| **Each agent's prompt:** the system prompt and the tools of each agent (OpenCode's build, plan and coder; Pi, and each Pi subagent) | The server reads the prompt one time and saves it. A new session then starts at once: **the first answer starts in under a second instead of after about 13 s** (35B IQ3; about 2 min on the 27B). |
-| **Each session** (only main sessions of 4,096 tokens or more) | When the session continues and the server no longer holds it, its file goes back in first: **the next answer starts in about a second instead of after the whole conversation is read again** (a 10K-token session: about 20 s on the 35B; a 74K-token one: about 4 min). This works after a restart, after a router switch, and after many other sessions. It works for each session, so a session that you open again after several others also comes back. |
+| **Each agent's prompt:** the system prompt and the tools of each agent (OpenCode's build, plan and coder; Pi, and each Pi subagent) | The server reads the prompt one time and saves it. A new session then starts at once: **the first answer starts in under a second instead of after about 13 s** (35B IQ3 on an M2 Max; about 2 min on the 27B on an M3 Pro). |
+| **Each session** (only main sessions of 4,096 tokens or more) | When the session continues and the server no longer holds it, its file goes back in first: **the next answer starts in about a second instead of after the whole session is read again** (a 10K-token session: about 20 s on the 35B IQ3, M2 Max; a 64K-token session: about 5 min on the 35B, M3 Pro). This works after a restart, after a router switch, and after many other sessions. It works for each session, so a session that you open again after several others also comes back. |
 
 ### When a session is saved
 
@@ -815,26 +848,26 @@ Gemma 4 models have sliding-window layers. llama.cpp can put their saved states 
 ### The files and the disk limit
 
 - The files are in `~/.config/carl/slots` (the server's folder).
-- They stay inside a disk limit: **10 GB** by default. The oldest conversations go first, then the oldest prompts.
+- They stay inside a disk limit: **10 GB** by default. The oldest saved sessions go first, then the oldest saved prompts.
 - The clients on the server's Mac apply the limit after each save. The dashboard applies it each minute, and the launcher at each start (for files that clients on other computers wrote).
-- An agent's prompt is ~25–120 MB. On the 35B, a conversation is ~59 MB plus ~5.8 KB for each token (a 74K-token session: ~0.5 GB).
+- A saved prompt is ~25–120 MB. On the 35B, a saved session is ~59 MB plus ~5.8 KB for each token (a 74K-token session: ~0.5 GB).
 - When the disk has less than 10 GB free, the clients on the server's Mac save nothing.
-- **Conversations stored as patches:** a conversation is stored as a patch against the agent's prompt file that it starts with. The prompt part is then on the disk only one time ([Caching](reference/caching.md#how-a-saved-state-is-built)).
-  - On the 35B, an 8.6K-token session goes from 115 MB to 64 MB. A long session is ~10% smaller.
+- **Shared storage:** a saved session is stored as the changes to the saved prompt that it starts with. The prompt part is then on the disk only one time ([Caching](reference/caching.md#how-a-saved-state-is-built)).
+  - On the 35B IQ3 (2026-10-04), an 8.6K-token session goes from 115 MB to 64 MB. A long session is ~10% smaller.
   - Caching panel: **Shared storage** (`cache.share`).
   - It needs zstd on the server's Mac (`brew install zstd`). Without zstd, the files stay whole. Clients on other computers get a whole file through the dashboard's API.
 
 ### Settings and switches
 
-- **Settings tab → Caching panel** (experimental): the disk limit, saved prompts on or off, saved sessions on or off, when to save, save after, shared storage (conversations stored as patches), Gemma models, what is on the disk, and **[ Clear the disk cache (c) ]** ([Caching panel](#caching-panel)).
-- `./carl.sh cache show` lists the saved prompts and the saved sessions, with their sizes (GB, MB). A `*` marks a saved session that is stored as the changes to its saved prompt. `./carl.sh cache trim` applies the limit (and stores new conversations as patches). `./carl.sh cache clear` removes all files.
+- **Settings tab → Caching panel** (experimental): the disk limit, saved prompts on or off, saved sessions on or off, when to save, save after, shared storage, Gemma models, what is on the disk, and **[ Clear the disk cache (c) ]** ([Caching panel](#caching-panel)).
+- `./carl.sh cache show` lists the saved prompts and the saved sessions, with their sizes (GB, MB). A `*` marks a saved session that is stored as the changes to its saved prompt. `./carl.sh cache trim` applies the limit (and stores new saved sessions as changes). `./carl.sh cache clear` removes all files.
 
 | Switch | Effect |
 |---|---|
 | `CARL_CACHE_SAVE=turn\|auto\|switch\|stop` | Sets the save rule for one client |
 | `CARL_CACHE=0` | Turns the cache off for one run |
 | `CARL_CACHE_LOG=FILE` | Writes what the cache does to a file |
-| `NO_CACHE=1 ./install.sh` | Installs without the disk cache |
+| `NO_CACHE=1 ./carl.sh install --config-only` | Installs without the disk cache (`NO_CACHE=1 ./setup` on other computers) |
 
 **Clients on another computer** (a VM) use the dashboard API for the Caching settings, the slot claims and the records. This works while the dashboard runs ([Clients on other computers](reference/client-sync.md)).
 
@@ -847,15 +880,17 @@ More: [Caching](reference/caching.md).
 The context memory holds the context of all slots (llama.cpp: the KV cache). Its type is q4 (smaller, the default) or q8 (larger). The Server panel shows it in the **Context memory** row: `q4 (small)` or `q8 (large)`.
 
 ```bash
-./carl.sh llama        # q4_0 (default)
-./carl.sh --kv q8      # q8_0
+./carl.sh llama        # q4 (q4_0, the default)
+./carl.sh --kv q8      # q8 (q8_0)
 ```
 
-| | q4_0 (default) | q8_0 |
+The 27B, measured on an M3 Pro 36 GB (llama.cpp 0.4.1, 2026-09-24):
+
+| | q4 (default) | q8 |
 |---|---|---|
-| Decode at 66K | 7.3 tok/s | 7.5 tok/s |
-| Cold prompt read at 66K | 64.8 tok/s | 55.7 tok/s |
-| Memory (27B, 128K) | ~20 GB | ~22 GB |
+| Write speed at 66K | 7.3 tok/s | 7.5 tok/s |
+| Read speed, cold, at 66K | 64.8 tok/s | 55.7 tok/s |
+| Memory of the server (RSS, 128K) | ~19.8 GiB | ~21.7 GiB |
 | Needle recall at 66K | 8/8 | 8/8 |
 
 Use q8 when subtle long-range detail is the most important.
@@ -914,9 +949,9 @@ The catalogue is [host/catalog.json](host/catalog.json). It holds the built-in m
 - **`./carl.sh download hf:OWNER/REPO/FILE.gguf` downloads any GGUF from Hugging Face.** It gets the revision, the size and the SHA-256 from the Hugging Face API. Then it downloads the file and verifies it. A `huggingface.co` URL to the file also works. `hf:OWNER/REPO` (no file) lists the GGUF files of the repo.
 - CARL records these models in `~/.config/carl/models.json`. This file also holds the Auto-tune results for each model on this Mac.
 - **A custom model gets its first settings from its GGUF header:**
-  - q4_0 KV.
+  - q4 context memory.
   - 96K for each slot (less only if the model was trained for less).
-  - MTP + n-gram (1 guess) if the file has an MTP head. Without an MTP head: n-gram only (2 guesses).
+  - MTP + n-gram (1 guess) if the file has an MTP head. A Gemma 4 model with an MTP drafter: MTP + n-gram (2 guesses). Else: n-gram only (2 guesses).
 
   These settings are a guess. Run [Auto-tune](#auto-tune) to measure better values.
 - To start it, run `./carl.sh llama --model NAME`. A path to a `.gguf` also works.
@@ -930,12 +965,12 @@ The catalogue is [host/catalog.json](host/catalog.json). It holds the built-in m
 4. Fill in `hf`: `repo`, `revision` (the commit SHA), `file`, `sha256` and `bytes`. The easy way: run `./carl.sh download hf:OWNER/REPO/FILE.gguf` first. Then copy the `hf` block that it writes to `~/.config/carl/models.json`.
 5. Set `tune` and `why`:
    - For `spec`, use `draft-mtp,ngram-mod` if the GGUF has an MTP head. For a file without an MTP head, use `ngram-mod`.
-   - Use `spec_n` 1. For a MoE K-quant, 2 can be better (the Q4 35B). Do not use 2 on an IQ quant.
+   - Use `spec_n` 1. For a MoE K-quant, 2 can be better (the Q4 35B). Do not use 2 on an IQ quant. A model with an MTP drafter (Gemma 4) uses 2.
    - Run `./carl.sh tune NAME` to measure.
 6. Set `arch`, `mtp`, `min_ram_gb` and `ctx_zones`.
 7. Examine the chat template of the model before you add it to the clients. The thinking options are different between model families.
 8. Run `./carl.sh install --config-only`. The clients then list the model when it is downloaded.
-9. In a VM, copy the bundle to the shared folder, and run `install.sh` again there.
+9. On other computers, send the config (`P` in the Connect tab). The sync service applies it.
 
 ### Cards for custom models
 
@@ -1010,7 +1045,7 @@ Auto-tune measures the best settings for one model on this Mac. It takes about 5
 
 ```bash
 ./carl.sh tune qwen3.8-27b-iq3            # all modes
-./carl.sh tune qwen3.8-27b-iq3 --quick    # no MTP modes with 2 guesses, no 64K read, no parallel step (about 4 min)
+./carl.sh tune qwen3.8-27b-iq3 --quick    # fewer guesses, no 64K read, no parallel step (about 4 min)
 ./carl.sh tune qwen3.8-27b-iq3 --long     # also reads 128K and 192K, and the write speed at each depth (+10-40 min)
 ./carl.sh tune all                        # every downloaded model, one after the other
 ```
@@ -1044,7 +1079,7 @@ It does these steps. The model loads one time for each speculation mode.
 
 - CARL saves the result in `~/.config/carl/models.json`. Each later start of the model uses it. A value that you set in the settings file has priority ([The settings file](#the-settings-file)).
 - `./carl.sh tune all` tunes each downloaded model, one after the other. A model that fails does not stop the others.
-- CAUTION: **Auto-tune needs the GPU for itself.** It does not start in these conditions: a server runs on port 8080, another large process (more than 8 GB, `BIG_GB`) is in memory, or a known model server runs. `ALLOW_SECOND_MODEL=1` skips the check for a large process. Stop the server first. The **Auto-tune** panel of the dashboard stops the server for you, and starts it again after the tune.
+- CAUTION: **Auto-tune needs the GPU for itself.** It does not start in these conditions: a server runs on port 8080, another large process (more than 8 GiB, `BIG_GB`) is in memory, or a known model server runs. `ALLOW_SECOND_MODEL=1` skips the check for a large process. Stop the server first. The **Auto-tune** panel of the dashboard stops the server for you, and starts it again after the tune.
 - Auto-tune uses its own server on port 8093 (`--port` changes it). `--dry-run` measures, but does not save.
 - NOTE: The edit workload copies `tools/carl_core/adapters/llama_server.py`. Thus, the edit speeds are not directly comparable with older Auto-tune results.
 
@@ -1136,7 +1171,7 @@ Push `D` (or click `detail: simple (D)` at the right of the tab line) to change 
 
 | Panel | Sections of the side column |
 |---|---|
-| Connect, Setup | On this Mac, In a VM, Other computers, By hand |
+| Connect, Setup | On this Mac, A VM or another computer, Other computers, By hand |
 | Connect, Clients | Quick tip, Who is in the list, Add a computer |
 | Server | Quick tip, About: (the selected setting), Choose a model |
 | Models | (no side column; below the list: the selected model, Quick tip) |
@@ -1177,14 +1212,16 @@ If a value is not available, the card shows a dash or a sentence (for example "n
 
 ### Connect tab
 
-**Setup sub-tab** (the card **SET UP OPENCODE AND PI**):
+**Setup sub-tab** (the card **SET UP OPENCODE AND PI**, in three parts: **This Mac**, **A VM or another computer**, **By hand**):
 
 | Button | Key | Does |
 |---|---|---|
-| **[ Install on this Mac (i) ]** (**[ Install again (i) ]** when OpenCode and Pi are set up) | `i`, then `y` | Runs `./carl.sh install` and shows its output. `n` or Esc: no. `x` closes the output. |
+| **[ Install on this Mac (i) ]** (**[ Install again (i) ]** when OpenCode and Pi are set up) | `i`, then `y` (**[ Run it (y) ]**) | Runs `./carl.sh install` (the setup, with the choices of your last setup, without questions) and shows its output in the card **INSTALLER**. `n` or Esc: no. `x` closes the output. |
 | **[ Update the model lists (u) ]** | `u`, then `y` | Runs `./carl.sh install --config-only` |
-| **[ OpenCode config (o) ]**, **[ Pi config (p) ]**, **[ curl test (c) ]** | `o`, `p`, `c` | Copies the config to the clipboard and shows it below. `t` also copies the curl test. |
+| **[ Make the client package (z) ]** | `z` | Runs the code of `./carl.sh package`. The card **CLIENT PACKAGE** shows the path of the zip, the key warning and the next steps. Or it tells you why CARL made no package (for example: the server serves only this Mac). **[ Make it again (z) ]**. `x` closes the card. |
+| **[ Show it in the Finder (f) ]** | `f` | Shows the zip in the Finder. The button shows after `z`. |
 | **[ Send the config (P) ]** | `P` | Sends the client config to the computers that sync |
+| **[ OpenCode config (o) ]**, **[ Pi config (p) ]**, **[ curl test (c) ]** | `o`, `p`, `c` | Copies the config to the clipboard and shows it below. `t` also copies the curl test. |
 
 - The screen masks the key. Push `k` to show or hide it. The copy has the real key.
 - CAUTION: Protect a copied config as you protect the key.
@@ -1272,7 +1309,7 @@ For a model with sliding-window layers (Gemma), the Memory section tells you whi
 - **The dashboard saves the settings in `~/.config/carl/config.json`** ([The settings file](#the-settings-file)). `./carl.sh llama` uses this file the next time. Flags and environment variables have priority over the file.
   - Server-wide values go to the `llama` section. The dashboard writes only the values that are different from the defaults.
   - Model values (context memory type, context, slots, speculation, sampling) go to the profile of the model (`models.<name>`). The dashboard writes only the values that are different from the recommended values of that model.
-- **After a change of the model, the context or the slots,** run `install.sh` again on each client. The clients then get the new context limit, and the coder subagent is added or removed.
+- **After a change of the model, the context or the slots,** run the setup again on each client (`./carl.sh install --config-only` on this Mac, `./setup` on other computers). The clients then get the new context limit, and the coder subagent is added or removed.
 - **If the catalogue or `models.json` cannot be loaded** (for example after a bad edit), the Settings tab shows a **SETTINGS UNAVAILABLE** card with the error. The other tabs continue to work.
 
 **More settings (full detail):**
@@ -1389,7 +1426,8 @@ The footer shows the keys of the screen that you see. `?` shows all of them: the
 | `o` / `p` / `c` | Live and Connect: copy the OpenCode config / the Pi config / the curl test (`t` also copies the curl test) |
 | `a` | Live: start a stopped server |
 | `+` / `-` | Live, full detail: more / fewer lines in the LOG card (2 at a time, 2 to 60) |
-| `i` / `u`, then `y` | Connect tab: install OpenCode and Pi and their configs / update the model lists only (`n` or Esc: no). `x` closes the installer's output. |
+| `i` / `u`, then `y` | Connect tab: install OpenCode and Pi and their configs / update the model lists only (`n` or Esc: no). `x` closes the output of the setup. |
+| `z` / `f` | Connect tab: make the client package for another computer / show it in the Finder |
 | `[` / `]` | Connect tab: the Setup and Clients sub-tabs. Settings tab: the previous / next panel. |
 | `P` | Connect tab: send the client config to the computers that sync |
 | `w` / `f`, End | Log tab: wrap the lines / only errors; back to the end |
@@ -1499,16 +1537,16 @@ ls ~/models/logs/                         # one log per server start; llama-serv
 | Log line | Meaning |
 |---|---|
 | `prompt processing, n_tokens = 8192, progress = 0.11, ... / 94.45 tokens per second` | The progress of the prompt read, about every 2K tokens |
-| `prompt eval time = ... tokens per second` | The prompt read is complete. |
-| `eval time = ... tokens per second` | The generation speed |
-| `draft acceptance = 0.875` | How frequently the speculation guessed correctly |
+| `prompt eval time = ... tokens per second` | The prompt read is complete: the read speed. |
+| `eval time = ... tokens per second` | The write speed |
+| `draft acceptance = 0.875` | The part of the guesses that were correct (here 87.5%) |
 | `n_tokens = 8961, truncated = 0` | The request is complete, and its size |
 
 **Quick server checks (Mac):**
 ```bash
 K=$(cat ~/.config/carl/api-key)
 curl -s -H "Authorization: Bearer $K" http://127.0.0.1:8080/v1/models          # which model is loaded
-curl -s -H "Authorization: Bearer $K" http://127.0.0.1:8080/props | python3 -c 'import json,sys; print(json.load(sys.stdin)["default_generation_settings"]["n_ctx"])'   # context window
+curl -s -H "Authorization: Bearer $K" http://127.0.0.1:8080/props | python3 -c 'import json,sys; print(json.load(sys.stdin)["default_generation_settings"]["n_ctx"])'   # the context of a slot
 PID=$(netstat -anv -p tcp | awk '$6=="LISTEN" && $4 ~ /[.]8080$/ {n=split($(NF-8),a,":"); print a[n]; exit}')   # the server process
 ps -o rss=,command= -p $PID                                                        # memory + exact flags
 ```
@@ -1521,57 +1559,55 @@ NOTE: CARL does not use `lsof`. On a Mac with a stale network share (for example
 
 ## 11. Updating the client configs
 
-Run the installer again in these conditions:
+Run the setup again in these conditions:
 - You downloaded or deleted a model. The lists show only the installed models. The dashboard's Connect tab warns when they are out of date: the tab shows ⚠, and `u` there updates the configs of this Mac.
-- The bundle in `client/` changed (new options).
+- CARL changed (a new version with new plugins or options).
 - You restarted the server with a different `--ctx`, model or number of slots.
 
 **On the server Mac,** run `./carl.sh install --config-only` from the CARL folder, or push `u` in the dashboard's Connect tab.
 
 **On other computers,** send the config from the dashboard: push `P` in the Connect tab (**[ Send the config (P) ]**), or run `./carl.sh push`. The sync service on each computer applies it ([Clients on other computers](reference/client-sync.md)).
 
-**For a VM without the sync service:**
-1. **Mac:** run `./carl.sh install --config-only`. It writes the list of installed models to `client/installed-models.json`. The copy of the client folder carries the list into the VM.
-2. **Mac:** if `client/` changed, copy the bundle to the shared folder:
-   ```bash
-   rsync -a --delete client/ ~/Documents/carl-vm-client/
-   ```
-3. **VM:** copy the bundle in, and run the installer:
-   ```bash
-   cp -r /mnt/data/Documents/carl-vm-client/. ~/carl-vm-client/ && cd ~/carl-vm-client && ./install.sh
-   ```
+**For a new CARL version, or a computer without the sync service:** make a new client package, unzip it over the old folder, and run the setup there ([Updating a client computer](#updating-a-client-computer)):
+```bash
+unzip -o carl-client-VERSION-HOST.zip && cd carl-client && ./setup
+```
 
-Without `installed-models.json` (a bundle from before 1.3.0), `install.sh` lists only what the server reports. In the dashboard's mode, this is the model that runs.
+Without `installed-models.json` (a client folder from before 1.3.0), the setup lists only what the server reports. With a single model, this is the model that runs.
 
 Then **fully restart OpenCode or Pi.**
 
-### What `install.sh` does
+### What the setup changes
 
 **Backups.** Before it changes a config file that exists, it makes backups:
 
 | Backup | Contents |
 |---|---|
-| `FILE.before-carl` | Your original file, from before CARL changed it the first time. The installer never overwrites this copy. |
+| `FILE.before-carl` | Your original file, from before CARL changed it the first time. The setup never overwrites this copy. |
 | `FILE.bak.<timestamp>` | The version from before each later change |
 
-- The summary shows the backups as `backed up`. If nothing changes, the installer writes nothing and makes no backup.
+- The summary shows the backups as `backed up`. If nothing changes, the setup writes nothing and makes no backup.
 - To go back to your own config, copy `FILE.before-carl` back to `FILE`. For example: `cp ~/.config/opencode/opencode.json.before-carl ~/.config/opencode/opencode.json`.
+
+**Your choices.** The setup keeps the clients and the options that you chose, and the switches that you gave (`NO_CACHE=1` and the others), in `~/.config/carl/client-install.env`. The next setup uses them as the defaults. A config that the dashboard sends is applied with the same choices, and without changes to your shell profile. With `--coder auto`, a sync decides the coder from the number of slots again.
 
 **The API key.** It stores the key at `~/.config/carl/api-key` (mode 600). The configs refer to this key file. They do not contain the key.
 - It takes the key from the first of these sources:
-  1. `--key KEY` or `--key-file FILE`
+  1. `--key-file FILE`
   2. `$CARL_API_KEY`
-  3. A file `api-key` next to `install.sh`
+  3. The file `api-key` in the client folder (the client package has it)
   4. `~/.config/carl/api-key` (the server's key on the Mac, or the key from an earlier run)
   5. `~/.config/llm-deploy/api-key`
   6. With `--local`: `~/.mtplx/api-key`
   7. `~/.config/mtplx/api-key`
   8. A prompt (the key does not show when you type it)
-- Before 1.2.0, the client copy was `~/.config/mtplx/api-key`. If the installer finds no other key, it uses that one. It changes old configs to the new path. It does not delete the old file, because a provider of your own can use it. Delete it yourself when nothing uses it.
+- Before 1.2.0, the client copy was `~/.config/mtplx/api-key`. If the setup finds no other key, it uses that one. It changes old configs to the new path. It does not delete the old file, because a provider of your own can use it. Delete it yourself when nothing uses it.
 
 **The models.** It writes one entry for each installed model, under the model's own name.
-- Each entry gets its family's thinking options (custom models: the *thinking* field of their card) and its context window. The model that runs gets the server's window. The others get their settings.
-- The default model (`model` / `small_model`, Pi's `defaultModel`) becomes the model that a server start loads, if the default is still CARL's.
+- Each entry gets its family's thinking options (custom models: the *thinking* field of their card) and its context. The model that runs gets the context of the server. The others get the context of their own settings.
+- **The default model** (`model` / `small_model`, Pi's `defaultModel`) is the model that the server runs now, when the server runs a single model that is in the installed list. Else, it is the model that a server start loads (`llama.model`, or Auto fit's choice). In router mode, it is the model that a start loads.
+  - Reason: the dashboard saves the model that it applies (`llama.model`), so a restart runs it again. Only `./carl.sh --model NAME` is not saved: the next start without `--model` runs the saved model again.
+  - The setup changes the default only if it is unset, or if it still has the value that the setup set before. Your own default model stays.
 - It replaces the `llamacpp` provider as a complete block. Thus, removed models do not stay in the config. (A deep merge never deletes keys, so old variants stayed in the configs.) It keeps your other providers and settings.
 - It sets the llama.cpp context limit from the server.
 
@@ -1579,10 +1615,7 @@ Then **fully restart OpenCode or Pi.**
 - It replaces the plugin `carl-prefix-cache` of earlier versions with `carl-cache`.
 - It removes the client parts of the server support that 1.2.0 removed (a provider, an OpenCode plugin and a Pi extension; CHANGELOG.md), if an earlier CARL installed them. It removes only CARL's own items, with the usual backups.
 
-**The sync service.** On a computer whose server is elsewhere (with `remote.json`), it adds the client sync service. `NO_SYNC_SERVICE=1` leaves it out.
-- It records the switches of this install in `~/.config/carl/client-install.env`. A config that the dashboard sends is then applied with the same switches, and without changes to your shell profile.
-- `NO_CODER`, `CODER` and `NO_SYNC_SERVICE` are not recorded. Thus, a sync decides the coder from the number of slots again.
-- The service writes its log to `~/.config/carl/client-sync.log` and `client-sync.err`.
+**The sync service.** On a computer whose server is elsewhere (with `remote.json`), it adds the client sync service. `NO_SYNC_SERVICE=1` leaves it out. The service writes its log to `~/.config/carl/client-sync.log` and `client-sync.err`.
 
 **The smoke test.** At the end, it checks the connection to the server: `OK: the server answers at http://HOST:PORT/v1. It has MODEL.`
 
@@ -1591,30 +1624,26 @@ Then **fully restart OpenCode or Pi.**
 | Item | Rule |
 |---|---|
 | Records | It records CARL's items in `carl.json` next to each config (`~/.config/opencode/`, `~/.pi/agent/`). It finds older installs by CARL's provider names and the key path. |
-| Providers | If you already have your own provider with the id `llamacpp`, it stays. The installer then adds CARL's provider next to it as `carl`. |
+| Clients | It writes the configs of the clients that you chose. The files of the other client stay as they are. |
+| Providers | If you already have your own provider with the id `llamacpp`, it stays. The setup then adds CARL's provider next to it as `carl`. |
 | Default model | It sets the OpenCode `model` / `small_model` and the Pi defaults only if they are unset, or if they still have the value that it set before. If your default model is your own, it stays, and `small_model` follows it. |
-| Agents, prompts, extensions | It never replaces your own `coder` agent, Pi `agents/coder.md` or `extensions/subagent`. CARL's coder becomes `carl-coder`, or the installer skips it and shows a note. |
+| Agents, prompts, extensions | It never replaces your own `coder` agent, Pi `agents/coder.md` or `extensions/subagent`. CARL's coder becomes `carl-coder`, or the setup skips it and shows a note. |
 | Lists (`plugin`, `instructions`) | It adds CARL's items to the end of the list, or removes them. It keeps your items. |
 | Report | At the end, it shows a summary: added / updated / kept / removed. |
 | A second run | With the same input, it changes nothing. |
 
 **Formerly LLM-Deploy.** Before 1.2.0, CARL's files had the name `llm-deploy`: the folder `~/.config/llm-deploy`, the records `llm-deploy.json`, the prompt folder `~/.config/opencode/llm-deploy/`, the provider `llm-deploy` and the coder `llm-deploy-coder`.
-- The first `./carl.sh` command (or this installer) moves the folder to `~/.config/carl`. It leaves a link with the old name, so the old configs continue to work.
-- The installer then changes CARL's own items to the new names (`carl.json`, `~/.config/opencode/carl/`, `carl`, `carl-coder`), with the usual backups.
+- The first `./carl.sh` command (or the setup) moves the folder to `~/.config/carl`. It leaves a link with the old name, so the old configs continue to work.
+- The setup then changes CARL's own items to the new names (`carl.json`, `~/.config/opencode/carl/`, `carl`, `carl-coder`), with the usual backups.
 - Your own items with these names stay.
 
-### The options of the installer
+### Internals: install-clients.sh and install.sh
 
-```bash
-./install.sh                 # auto: the address in remote.json; else --vm on Linux (the VM), --local on macOS
-./install.sh --vm [HOST]     # server at the VM host address (default 192.168.42.1)
-./install.sh --local         # server on this Mac (the address that it listens on, else 127.0.0.1)
-./install.sh --host ADDR     # any address
-./install.sh --port N        # the llama.cpp port (default 8080)
-./install.sh HOST [X] [PORT] # old positional form: X (an old second port) is ignored with a note; PORT = the llama.cpp port
-./install.sh --help          # the help: the options, where the key comes from, the switches
-./install-clients.sh --help  # the help of the client installer
-```
+The setup has two parts in the client folder. You do not need to run them yourself:
+- `install-clients.sh [both|opencode|pi]` installs OpenCode and Pi (and Node 22 when necessary).
+- `install.sh` writes the configs, adds the sync service and does the smoke test. The sync service runs it with your recorded choices. Its options (`--vm`, `--local`, `--host ADDR`, `--port N`, `--key-file FILE`, and the old positional form `HOST [X] [PORT]`) and its switches are in `./install.sh --help`.
+
+Both still work alone, for scripts and for the instructions of earlier versions. Their `--help` pages say to use `./setup`.
 
 ---
 
@@ -1627,32 +1656,32 @@ Then **fully restart OpenCode or Pi.**
 | The header shows **STOPPED** directly after the start, and the Live tab says "The server stopped." | The server did not start (bad flag, file not found, out of memory). | Read the lines of the launcher in the SERVER card ("The last start failed. The launcher said:"). The full output is in `~/models/logs/.console-8080.out`. |
 | You closed the terminal, and you do not know if the server still runs | The server continues to run, because it runs under `nohup`. | To attach again, run `./carl.sh monitor`. Then push `q` → `s` to stop it. |
 | Clients on the Mac cannot connect to 127.0.0.1 | The server started for the VM (192.168.42.1). | Run `./carl.sh install --config-only` again (it uses the address on which the server listens). Or start the server without `--vm`. |
-| The VM cannot reach 192.168.42.1:8080 | Since 1.3.0, the server serves only this Mac unless you ask for more. | Start it with `./carl.sh --vm`, or set **network** to `vm` in Settings (`llama.net = vm`). The Connect tab tells you which one runs. |
+| The VM cannot reach 192.168.42.1:8080 | Since 1.3.0, the server serves only this Mac unless you ask for more. | Start it with `./carl.sh --vm`, or set **Network** to **this Mac and the VM** in Settings (`llama.net = vm`). The Connect tab tells you which one runs. |
 | `error: --vm: no network interface has the address 192.168.42.1. …` | The Fusion network is not up. | Start VMware Fusion, or use `--local`. |
 | The HEALTH card says `✗ The GPU failed (out of memory or a compute error). …` | GPU out-of-memory or compute errors in the log | Restart the server. Make sure that no other large program runs. |
 | `error: port 8080 is in use by process PID (…). Stop it first: …` | A server runs already (one model at a time). | Stop it first: `./carl.sh monitor`, then `q` and `s`. Or use the `kill` command of [Daily use](#stop-the-server-or-keep-it-running). Or only watch it with `./carl.sh monitor`. |
 | `error: another large process (possibly a model) is in memory. …` | A model server runs already: llama.cpp, or a server that started in a different way. Two models do not fit in the GPU memory. | Stop the other server first. The message shows its process ID and its size. If the large process is not a model, start with `ALLOW_SECOND_MODEL=1`. |
 | The prompt progress stops for many minutes, then continues | The Mac went to sleep (lid closed on battery power, or `KEEP_AWAKE=0`). | Connect the power supply and keep the lid open. To check, run `pmset -g log \| grep -E "Sleep\|Wake"`. |
 | All requests fail with `Compute error`, but `/health` says ok | A GPU out-of-memory event. Usually, a second model started at the same time. | Restart the server. CAUTION: Do not run two models at the same time. |
-| `HTTP 400 ... exceeds the available context size` | The session became larger than the server `--ctx`, and the client limit is higher. | Restart the server with a larger `--ctx`, or run `install.sh` again so that the client compacts in time. Compact the session manually now. |
-| Thinking `none` / off still thinks | You did not restart OpenCode after `install.sh`, or the reply started before the change. | Fully restart OpenCode and send a new message. Make sure that the server has `--chat-template-file` (see the `ps` command in [Log files](#log-files)). |
-| `/variants` shows options that must not be there | An old config in the VM | Run the current `install.sh` again (it replaces the providers). Then restart OpenCode. |
+| `HTTP 400 ... exceeds the available context size` | The session became larger than the server `--ctx`, and the client limit is higher. | Restart the server with a larger `--ctx`, or run the setup again so that the client compacts in time. Compact the session manually now. |
+| Thinking `none` / off still thinks | You did not restart OpenCode after the setup, or the reply started before the change. | Fully restart OpenCode and send a new message. Make sure that the server has `--chat-template-file` (see the `ps` command in [Log files](#log-files)). |
+| `/variants` shows options that must not be there | An old config in the VM | Unzip a new client package and run `./setup` again (it replaces the providers). Then restart OpenCode. |
 | The first message takes minutes | A cold prompt: the system prompt and the tools (~9K), or a long session after a restart without the disk cache | This is correct for the first session. The 35B reads prompts ~6× faster. The [disk cache](#7-fast-starts-the-disk-cache) makes later starts fast. |
 | A new session or a session after a restart reads the whole prompt again | The disk cache is off, the prompt changed (a new tool, an update), or a different model file or llama.cpp build | Look at `/carl` and at the Caching panel. After a prompt change, the first new session saves the new prompt. |
-| Slow replies late in a long session | The decode speed decreases as the context becomes larger (27B: ~7 tok/s at 60–80K). | Compact the session or start a new session. Or use the 35B. |
+| Slow replies late in a long session | The write speed decreases as the context becomes larger (27B: ~7 tok/s at 60–80K). | Compact the session or start a new session. Or use the 35B. |
 | The client shows the wrong model name | The client selection does not control the server. | Select the entry that agrees with `./carl.sh --model ...`. OpenCode's model check warns you. |
-| `install.sh` waits at the API key prompt | The installer found no key. | Paste the key, put it in `./api-key`, or set `CARL_API_KEY`. |
+| The setup waits at the API key prompt | The client folder has no key (not a client package). | Paste the key, or make a client package on the server Mac (`./carl.sh package`) and use it. |
 | Smoke test: `Note: no server runs at http://HOST:PORT. …` | The server is not up, or the VM cannot reach the Mac. | Start the server. From the VM, run `curl -s http://192.168.42.1:8080/health`. |
 | The download stops or fails its checksum | A network interruption, or a bad file (`*.bad`) | First, delete the `.bad` file. Then run `download` again (it continues from where it stopped). |
 | The dashboard or `./carl.sh` freezes, and Ctrl-C does not stop it (versions before 1.1.0) | Old versions used `lsof` to find the server. `lsof` checks each mounted volume. On a stale network share (for example a disconnected Time Machine SMB volume), it hangs, and you cannot stop it. | Update CARL: it now uses `netstat`. To release the hang now, eject the stale volume in Finder (or `diskutil unmount force /Volumes/NAME`), then close the terminal. |
 | `CARL needs these programs, and they are not installed: llama.cpp aria2 ansifilter zstd.` | Homebrew tools are missing. | Answer `Y`, and CARL runs `brew install`. Or install them yourself. `SKIP_DEPS=1` skips the check. If Homebrew is missing, install it first (https://brew.sh). |
 | `No model is downloaded. CARL looks for the best model for this Mac. …` | A new installation | Answer `Y` to download Auto fit's choice for this Mac. Or answer `n`: the dashboard opens without a server, and you can download a model in its **Models** panel. |
-| `Auto fit chooses X for this Mac, but it is not downloaded (./carl.sh download X). CARL starts Y, the best downloaded model that fits.` | `llama.model` is `auto`, and Auto fit chooses from the whole catalogue (`llama.auto_fit catalogue`). | This is correct. To use X, run `./carl.sh download X` (or push `A` in the Settings tab). To pick only from downloaded models, run `./carl.sh config set llama.auto_fit downloaded`. To always use Y, run `./carl.sh config set llama.model Y`. |
+| `Auto fit chooses X for this Mac, but it is not downloaded (./carl.sh download X). CARL starts Y, the best downloaded model that fits.` | `llama.model` is `auto`, and Auto fit chooses from the whole catalogue (`llama.auto_fit catalogue`). | This is correct. To use X, run `./carl.sh download X` (or push `A` in the Settings tab). To choose only from downloaded models, run `./carl.sh config set llama.auto_fit downloaded`. To always use Y, run `./carl.sh config set llama.model Y`. |
 | `error: Auto fit: No stock model with a quality rank fits this Mac (downloaded models only). …` | `llama.model` is `auto`, and only abliterated (or no fitting) models are downloaded. Auto fit never chooses an abliterated model. | Download Auto fit's choice (`./carl.sh download default`), or select the model by name: `./carl.sh config set llama.model NAME`. |
 | `error: models.NAME.ctx: ... is out of range` (or a different key) | A bad value in `~/.config/carl/config.json` | Correct the value, or remove it with `./carl.sh config unset KEY`. `./carl.sh config show` lists the valid keys. |
 | `error: a server runs on port 8080. Stop it first: two models do not fit in the memory.` from `./carl.sh tune` | Auto-tune needs the GPU for itself. | Stop the server first, or run Auto-tune from the dashboard (Settings, **Auto-tune** panel): it stops and starts the server for you. |
-| `error: another large process (possibly a model) is in memory: …` from `./carl.sh tune` | A different model server, or another process larger than 8 GB (`BIG_GB`), runs. | Stop it first. If the process is not a model, run with `ALLOW_SECOND_MODEL=1`. |
-| `error: …opencode.json is not plain JSON (comments?)` from `install.sh` | The installer cannot merge a config file with comments (JSONC). | Remove the comments, or move the file. Then run the installer again. It changed nothing. |
+| `error: another large process (possibly a model) is in memory: …` from `./carl.sh tune` | A different model server, or another process larger than 8 GiB (`BIG_GB`), runs. | Stop it first. If the process is not a model, run with `ALLOW_SECOND_MODEL=1`. |
+| `error: …opencode.json is not plain JSON (comments?)` from the setup | The setup cannot merge a config file with comments (JSONC). | Remove the comments, or move the file. Then run the setup again. It changed nothing. |
 | A config that you send does not arrive on a client computer | The sync service is not running, the dashboard is not running, or new configs wait for you (`/carl`: **Do not apply new configs at once**). | Look at the Clients sub-tab of the Connect tab, and at `/carl` on the client. When a new config waits, select **Apply the new config now** in `/carl`. |
 
 **To see exactly what a client sends** (thinking settings, tool counts): see [Verifying behaviour](reference/verifying.md).
@@ -1670,16 +1699,16 @@ The easy way to find the best speculation and context for a model on this Mac is
 MODEL=$(./host/models.sh path qwen3.6-35b-a3b) LOG_FILE=none \
   tools/llama-spec-sweep.sh none:1 draft-mtp:1 ngram-mod:1 draft-mtp,ngram-mod:1 draft-mtp,ngram-mod:2
 
-# KV-type and batch-size A/B (waits for 20 min idle first)
+# Context memory type and batch size A/B (waits for 20 min idle first)
 tools/llama-wait-idle.sh 1200 && tools/llama-ab.sh all
 ```
 
 | Tool | Purpose |
 |---|---|
 | `./carl.sh tune NAME [--quick\|--long]` (`tools/carl-tune.py`) | Auto-tune: memory, speculation modes, prompt reading, parallel requests. It saves the result for this Mac in `~/.config/carl/models.json`. |
-| `tools/llama-spec-sweep.sh CFG...` + `tools/llama-spec-bench.py` | A sweep of the speculative decoding. The sweep restarts the server for each config. The bench measures the prose, code and edit decode speed. NOTE: the edit workload re-emits the source of `llama-spec-bench.py`, which was rewritten in 1.1.0. Thus, new edit numbers are not directly comparable with older measurements. |
-| `tools/llama-ab.sh [kv\|ub\|all]` | An A/B test of the KV type and `-ub`. It uses `tools/llama-kv-longctx.py` and `tools/llama-ab-measure.py`. It restarts the server. |
-| `tools/llama-kv-longctx.py` | A ~64K haystack with 8 needles: cold prefill, decode, append, recall |
+| `tools/llama-spec-sweep.sh CFG...` + `tools/llama-spec-bench.py` | A sweep of the speculation modes. The sweep restarts the server for each config. The bench measures the write speed on prose, code and an edit. NOTE: the edit workload writes the source of `llama-spec-bench.py` again. That file was rewritten in 1.1.0. Thus, new edit numbers are not directly comparable with older measurements. |
+| `tools/llama-ab.sh [kv\|ub\|all]` | An A/B test of the context memory type and `-ub`. It uses `tools/llama-kv-longctx.py` and `tools/llama-ab-measure.py`. It restarts the server. |
+| `tools/llama-kv-longctx.py` | A ~64K haystack with 8 needles: cold read, write speed, append, recall |
 | `tools/llama-wait-idle.sh [SECS] [BASE]` | Waits until the server stays idle for SECS (default 1200) |
 | `tools/llama-sesstest.py` | A multi-turn test of a long session (56K start, ~7K appends). It records the RSS. |
 | `tools/req-capture-proxy.py LISTEN UPSTREAM LOG` | A pass-through with a log: it records what a client sends. It refuses a wildcard listen address (`0.0.0.0`, `::`), and it writes the log with mode 600. `--bodies DIR` saves the full requests. |
@@ -1708,7 +1737,7 @@ CARL_DOCKER_TESTS=1 python3 -m unittest tests/integration/test_sync_docker.py
 - **Run only one model server at a time.**
 - **Keep the Mac connected to power and awake** during long work.
 - **Start OpenCode or Pi in the folder of your project.**
-- **Run `install.sh` again and restart the client** after you change the model, the options, the slots or `--ctx`.
+- **Run the setup again and restart the client** after you change the model, the options, the slots or `--ctx`.
 - **Select the client model that agrees with the server.**
 - **Use thinking `low` as the default** on the 27B. Use `none` for quick, mechanical edits. Use `xhigh` only for difficult problems.
 - **Use the 35B-A3B for speed.** Use the abliterated 27B when you need an uncensored model or the best measured quality.
@@ -1733,7 +1762,8 @@ CARL_DOCKER_TESTS=1 python3 -m unittest tests/integration/test_sync_docker.py
 | `./carl.sh --model NAME\|PATH` | A different model (catalogue, models folder or Hugging Face download) or a `.gguf` path |
 | `./carl.sh --kv q8` / `--q8` / `--q4` | The context memory type |
 | `./carl.sh --ctx 192k` | The context of each slot (4k to 256k) |
-| `./carl.sh install [opencode\|pi] [--config-only\|--clients-only] [--vm\|--host ADDR] [--port N]` | Installs OpenCode and Pi, and connects them to this server |
+| `./carl.sh install [opencode\|pi] [--yes] [--config-only\|--clients-only] [--vm\|--host ADDR] [--port N]` | The setup on this Mac: installs OpenCode and Pi, and connects them to this server |
+| `./carl.sh package [--anyway] [--out DIR]` | Makes the client package for another computer ([The client package](#the-client-package)) |
 | `./carl.sh models` | The catalogue, the models folder and your downloads, with the size (GB), the download status and the source |
 | `./carl.sh fit [--ram GB] [--ctx N] [--slots N] [--goal everyday\|hard-code] [--scope catalogue\|downloaded] [--reserve-gb N]` | Auto fit's choice for each goal and why; which models fit this Mac, and the largest context of each model |
 | `./carl.sh download NAME\|default\|all` | Downloads catalogue models |
@@ -1743,9 +1773,9 @@ CARL_DOCKER_TESTS=1 python3 -m unittest tests/integration/test_sync_docker.py
 | `./carl.sh card NAME [set FIELD VALUE\|unset FIELD]` | A model's card. Custom models: set or remove one field of your card ([Cards for custom models](#cards-for-custom-models)). |
 | `./carl.sh tune NAME\|all [--quick\|--long]` | Auto-tunes a model (or every downloaded model) for this Mac: speculation, context, slots (~5–10 min; quick ~4 min; long +10–40 min, up to 192K; stop the server first) |
 | `./carl.sh config [show\|path\|get KEY\|set KEY VALUE\|unset KEY]` | The settings file `~/.config/carl/config.json`. KEY is like `llama.net` or `models.NAME.ctx`. `show` lists every key with what it does, its values and its default. |
-| `./carl.sh cache [show\|trim\|clear]` | The [disk cache](#7-fast-starts-the-disk-cache) that OpenCode and Pi fill: the saved prompts and saved sessions, trim to the limit (and store new conversations as patches), remove all |
+| `./carl.sh cache [show\|trim\|clear]` | The [disk cache](#7-fast-starts-the-disk-cache) that OpenCode and Pi fill: the saved prompts and saved sessions, trim to the limit (and store new saved sessions as changes), remove all |
 | `./carl.sh push` | Sends the client config (the installed models) to the clients on other computers ([Clients on other computers](reference/client-sync.md)) |
-| `./carl.sh help COMMAND` | The help for one command: llama, dashboard (or monitor), install, models, fit, download, verify, delete, card, tune, config, cache, push. Also the topics env and tuning. `./carl.sh COMMAND --help` and `./carl.sh COMMAND -h` do the same. The help wraps to the width of the terminal. |
+| `./carl.sh help COMMAND` | The help for one command: llama, dashboard (or monitor), install, package, models, fit, download, verify, delete, card, tune, config, cache, push. Also the topics env and tuning. `./carl.sh COMMAND --help` and `./carl.sh COMMAND -h` do the same. The help wraps to the width of the terminal. |
 | `./carl.sh -h` | The help: all commands. An unknown command gives one `error:` line and exits with 2. |
 | `./carl.sh --help-adv` | All `llama-server` flags |
 | `./host/models.sh list\|download\|verify\|delete NAME\|path NAME\|get NAME FIELD\|default\|downloaded` | The models tool (a wrapper around `tools/carl.py`; `./carl.sh models\|download\|verify\|delete` use it): list, download, verify, delete, the local path, one field, the default model for this Mac, the downloaded models |
@@ -1765,12 +1795,12 @@ CARL_DOCKER_TESTS=1 python3 -m unittest tests/integration/test_sync_docker.py
 | `LOG_FILE` | The path of the log file. `none` turns off the log file. |
 | `THINK_TOGGLE=0` | Use the chat template without the thinking rule |
 | `KEEP_AWAKE=0` | Do not keep the Mac awake |
-| `FIT_CHECK=0` | Expert override: start also when the setup needs more than the GPU limit (else the memory check refuses it) |
+| `FIT_CHECK=0` | Expert override: start also when the setup needs more than the GPU memory limit (else the memory check refuses it) |
 | `SLOTS` | Slots (default auto) |
 | `CACHE_RAM` | The RAM cache in MiB (default: sized from the free RAM, 1–8 GiB) |
 | `RESERVE_GB` | The memory kept free for macOS and apps. The server uses it to size the RAM cache, and Auto fit to choose a model (default 6, 10 with the VM network up). |
 | `MONITOR=0` | No dashboard: the server runs in the foreground |
-| `ALLOW_SECOND_MODEL=1` | Start also when a process larger than 8 GB (`BIG_GB`) is in memory. CAUTION: a second model can stop the Mac. |
+| `ALLOW_SECOND_MODEL=1` | Start also when a process larger than 8 GiB (`BIG_GB`) is in memory. CAUTION: a second model can stop the Mac. |
 | `SETTINGS_FILE=none` | Ignore the saved settings in `~/.config/carl/config.json` |
 | `CARL_CONF_DIR` | A different settings folder (default `~/.config/carl`): `config.json`, `models.json`, the disk cache, the router presets. The API key stays in `~/.config/carl`. |
 | `MODELS_DIR` | The models folder (default `~/models/gguf`; also `paths.models_dir` in `config.json`) |
@@ -1778,11 +1808,12 @@ CARL_DOCKER_TESTS=1 python3 -m unittest tests/integration/test_sync_docker.py
 
 The script sends all other arguments after the flags to `llama-server`.
 
-**Installer switches** (put them in front of `./install.sh` or `./carl.sh install`):
+**Setup switches** (put them in front of `./carl.sh install` or `./setup`; the setup keeps them for the next time, and `=0` turns a `NO_…` switch back off):
 
 | Variable | Does |
 |---|---|
-| `NO_CODER=1` / `CODER=1` | Without the coder subagent and its rule / with the coder in all conditions |
+| `CLIENTS=both\|opencode\|pi` | The clients (as `--clients`) |
+| `NO_CODER=1` / `CODER=1` | Without the coder subagent and its rule / with the coder in all conditions (as `--coder off` / `--coder on`) |
 | `NO_BACKGROUND_SUBAGENTS=1` | The coder runs in the foreground |
 | `NO_CACHE=1` (or `NO_PREFIX_CACHE=1`) | Without the disk cache |
 | `NO_MODEL_CHECK=1` | Without the OpenCode model check |
@@ -1794,14 +1825,13 @@ The script sends all other arguments after the flags to `llama-server`.
 | `NO_PROFILE=1` | Do not change `~/.zshrc` or `~/.bashrc`; show the line to add |
 | `NO_SYNC_SERVICE=1` | Without the client sync service |
 | `LLAMA_CTX=96k` | Sets the client context limit (N or Nk) |
-| `CARL_API_KEY` | The API key (in place of a prompt) |
+| `CARL_API_KEY` | The API key (in place of the key file of the package, or a prompt) |
 
 **VM (or another client computer):**
 
 | Command | Does |
 |---|---|
-| `./install-clients.sh [opencode\|pi]` | Installs the clients. `--help` shows its help. |
-| `./install.sh [--vm\|--local\|--host ADDR] [--port N] [--key-file FILE]` | Installs or updates the configs, then does a smoke test (auto: the address in `remote.json`, else VM on Linux, local on macOS). `--help` shows its help. |
+| `./setup [opencode\|pi] [--yes] [--no-install] [--host ADDR] [--key-file FILE]` | In the unzipped client package: installs or updates OpenCode and Pi and their configs, then does a smoke test. `--help` shows its help. On a Mac, `setup.command` (a double click) does the same. |
 | OpenCode `/models` (`/mo`), `/variants` (ctrl+t steps) | Changes the model, the thinking level |
 | OpenCode `/switch`, `@coder TASK` | Changes the session; gives a task to the coder |
 | Pi `/model`, `/subagents` | Changes the model; lists and stops background subagents |

@@ -7,6 +7,7 @@ remote.json and api-key, run install.sh, and the test checks:
   a push (clientsync.publish + the SSE "config" event) is applied within seconds
   the API goes away: the service retries after 5 s, then 10 s, and reconnects when it is back
   NO_SYNC_SERVICE=1 ./install.sh removes the unit; three containers at once all sync
+  the client package (Phase 22): unzip, ./setup --yes, the service syncs (PackageInstallTest)
 
 Opt-in (it builds an image and starts containers): CARL_DOCKER_TESTS=1, with docker running.
   CARL_DOCKER_TESTS=1 python3 -m unittest -v tests/integration/test_sync_docker.py
@@ -111,6 +112,13 @@ class Container:
         self.name, self.bundle = name, bundle
 
     def start(self, stage: str) -> None:
+        self.boot()
+        self.root("mkdir", "-p", os.path.dirname(self.bundle))
+        docker("cp", stage, f"{self.name}:{self.bundle}")
+        self.root("chown", "-R", "carl:carl", self.bundle)
+
+    def boot(self) -> None:
+        """The container with systemd and the user manager of carl running."""
         docker("run", "-d", "--name", self.name, "--hostname", self.name, "--label", LABEL, "--privileged",
                "--cgroupns=private", "--tmpfs", "/run", "--tmpfs", "/run/lock", "--add-host", "carl-api:host-gateway",
                IMAGE)
@@ -118,9 +126,6 @@ class Container:
              in ("running", "degraded"), 60, 0.5)
         wait(f"the user manager in {self.name}", lambda: self.sh("systemctl --user show-environment",
                                                                   check=False).returncode == 0, 30, 0.5)
-        self.root("mkdir", "-p", os.path.dirname(self.bundle))
-        docker("cp", stage, f"{self.name}:{self.bundle}")
-        self.root("chown", "-R", "carl:carl", self.bundle)
 
     def root(self, *cmd: str, check: bool = True) -> subprocess.CompletedProcess:
         return docker("exec", self.name, *cmd, check=check)
@@ -351,6 +356,77 @@ class SyncServiceTest(unittest.TestCase):
         self.timings["push applied on 3 clients"] = time.time() - t0
         wait("the registry to show the version for all", lambda: all((self.client_of(c) or Client("")).applied == v
                                                                        for c in everyone), 10)
+
+
+class PackageInstallTest(unittest.TestCase):
+    """Phase 22: the client package (./carl.sh package) on a new Linux computer: unzip it as the user, run
+    ./setup --yes. OpenCode and Pi are fake programs in ~/.local/bin (no download from npm), so the setup only
+    checks them and writes their configs. Then the sync service runs and applies the config of the dashboard."""
+    api: Optional[CacheApi] = None
+    tmp = ""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        why = docker_ok()
+        if why:
+            raise unittest.SkipTest(why)
+        docker("build", "-q", "-t", IMAGE, HERE, timeout=900)
+        cls.tmp = tempfile.mkdtemp(prefix="carl-pkg-docker-")
+        cls.key = secrets.token_hex(24)
+        cls.bind = SyncServiceTest.api_address()
+        cls.port = free_port()
+        cls.version = clientsync.publish(cls.tmp, models("pkg-a", "pkg-b"))
+        api = CacheApi(cls.bind, cls.port, lambda: cls.key, cls.tmp, CacheConfig, carl_dir=cls.tmp)
+        err = api.start()
+        if err is not None:
+            raise AssertionError(err)
+        cls.api = api
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        if cls.api:
+            cls.api.stop()
+        ids = docker("ps", "-aq", "--filter", f"label={LABEL}", check=False).stdout.split()
+        if ids:
+            docker("rm", "-f", *ids, check=False)
+        if cls.tmp:
+            shutil.rmtree(cls.tmp, ignore_errors=True)
+
+    def test_install_from_the_zip(self) -> None:
+        from carl_core.adapters.client_package import make_package
+        server = os.path.join(self.tmp, "server-client")       # what a server start writes into client/
+        os.makedirs(server)
+        with open(os.path.join(server, "remote.json"), "w", encoding="utf-8") as f:
+            json.dump({"host": "carl-api", "port": free_port(), "cache_api": f"http://carl-api:{self.port}"}, f)
+        with open(os.path.join(server, "api-key"), "w", encoding="utf-8") as f:
+            f.write(self.key)
+        out = make_package(REPO, server, os.path.join(self.tmp, "dist"), models("pkg-a"), {})
+        self.assertEqual(out.error, "", out.notes)
+        c = Container(f"carl-pkg-{os.getpid()}", "/home/carl/carl-client")
+        c.boot()
+        docker("cp", out.path, f"{c.name}:/home/carl/package.zip")
+        c.root("chown", "carl:carl", "/home/carl/package.zip")
+        c.sh("unzip -q package.zip && rm package.zip")
+        self.assertEqual(c.sh("stat -c %a carl-client/api-key").stdout.strip(), "600")
+        self.assertEqual(c.sh("test -x carl-client/setup && echo yes").stdout.strip(), "yes")
+        c.sh("mkdir -p ~/.local/bin && for b in opencode pi; do printf '#!/bin/sh\\necho 1.0.0\\n' > ~/.local/bin/$b; "
+             "chmod +x ~/.local/bin/$b; done")
+        p = c.sh("./setup --yes", check=False, timeout=300, cwd=c.bundle)
+        text = " ".join(p.stdout.split())
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        for part in ("CARL client setup (client package", "OpenCode: version 1.0.0. CARL cannot check for a newer",
+                     "Client sync: a background service (systemd --user carl-sync)", "CARL setup is done.",
+                     "Smoke test: Note: no server runs at http://carl-api:", "run: opencode (or: pi)"):
+            self.assertIn(part, text)
+        self.assertNotIn(self.key, p.stdout + p.stderr)
+        assert self.api
+        wait("the registry to list the container (service, connected)",
+             lambda: any(x.host == c.name and x.connected >= 1 and x.mode == "service" for x in self.api.registry.list()),
+             60)
+        wait("the dashboard's config applied", lambda: json.loads(c.read("/home/carl/.config/carl/client-sync.json")
+                                                                   or "{}").get("applied") == self.version, 60)
+        self.assertIn("pkg-b", c.read("/home/carl/.config/opencode/opencode.json"))
+        self.assertEqual(c.read("/home/carl/.config/carl/api-key"), self.key)
 
 
 if __name__ == "__main__":

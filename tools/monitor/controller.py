@@ -83,6 +83,8 @@ class Controller:
             self.connect.show_config(action)
         elif action.startswith("ins"):
             self.connect.install_action(action)
+        elif action.startswith("pkg"):
+            self.connect.package_action(action)
         elif action.startswith("csp:"):
             ui.connect_sp = int(action[4:])
         elif action == "clforget":
@@ -256,8 +258,9 @@ class Controller:
             ui.lines = min(ui.lines + 2, 60)
         elif ui.tab == 0 and k in ("-", "_"):
             ui.lines = max(ui.lines - 2, 2)
-        elif ui.tab == 1 and k in ("i", "u", "x", "P"):
-            self.do({"i": "insall", "u": "insconfig", "x": "insclose", "P": "inspush"}[k])
+        elif ui.tab == 1 and k in ("i", "u", "x", "P", "z", "f"):
+            self.do({"i": "insall", "u": "insconfig", "x": "insclose", "P": "inspush", "z": "pkgmake",
+                     "f": "pkgshow"}[k])
         elif ui.tab == 1 and k in ("[", "]"):
             ui.connect_sp = (ui.connect_sp + 1) % len(CONNECT_SUBPANELS)
         elif ui.tab == 3 and k in ("w", "f"):

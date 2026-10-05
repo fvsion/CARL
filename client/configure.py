@@ -24,7 +24,8 @@ Rules
   extension mtplx-request-policy.ts are taken out of an earlier install; a
   provider, plugin or extension of the user's own with those names stays.
 - Default model (OpenCode model/small_model, Pi defaultProvider/defaultModel/
-  defaultThinkingLevel): set only when unset or still the value we set before.
+  defaultThinkingLevel): the model the server runs now (else the one a start loads); set only
+  when unset or still the value we set before.
 - Agents, prompts, extensions: never overwrite a user's file or agent with the
   same name. CARL's coder subagent is "coder", or "carl-coder" when the user has
   an agent "coder" of their own (before 1.2.0 that fallback was "llm-deploy-coder":
@@ -51,6 +52,8 @@ Rules
 - OpenCode plugin carl-model-check (opencode.json "plugin", with our provider id as its
   option): warns when the model picked isn't the one the server runs, isn't installed, or
   is being loaded (router mode). NO_MODEL_CHECK=1 leaves it out.
+- Clients (--clients both|opencode|pi, CLIENTS= in install.sh): the configs of the clients chosen; the
+  other client's files are not read or changed.
 - Every changed file is backed up first (<file>.bak.<timestamp>). A config that is not plain
   JSON stops the run before anything is written.
 
@@ -111,6 +114,7 @@ OLD_OC_PLUGIN_SIG = "MTPLXSessionHeaders"
 OLD_PI_EXT = "extensions/mtplx-request-policy.ts"
 OLD_PI_EXT_SIG = "Pi <-> MTPLX request bridge"
 WEB_SEARCH = ("exa", "parallel", "off")
+CLIENTS = ("both", "opencode", "pi")
 SEARCH_MCP = {"exa": "https://mcp.exa.ai/mcp", "parallel": "https://search.parallel.ai/mcp"}
 SEARCH_NAME = "carl-web-search"                         # Pi's MCP server entry
 PI_TOOLS = ["+grep", "+find", "+ls"]                    # Pi's built-in tools that are off by default
@@ -169,6 +173,7 @@ class Options:
     browser_headed: bool = False
     cache: bool = True
     profile: bool = True      # append the pointer to ~/.zshrc / ~/.bashrc (NO_PROFILE=1: print it instead)
+    clients: str = "both"     # both | opencode | pi: the configs to write (the other client's stay as they are)
 
     @property
     def oc_dir(self) -> str:
@@ -236,6 +241,7 @@ def parse_args(argv: list[str]) -> Options:
     ap.add_argument("--browser-headed", type=switch_arg, default=False)
     ap.add_argument("--profile", type=switch_arg, default=True)
     ap.add_argument("--cache", "--prefix-cache", dest="cache", type=switch_arg, default=True)
+    ap.add_argument("--clients", choices=CLIENTS, default="both")
     a = ap.parse_args(argv)
     try:
         models = carl_models.load_list(a.models)
@@ -245,7 +251,7 @@ def parse_args(argv: list[str]) -> Options:
                    running=a.running, coder=a.coder, sidebar=a.sidebar, switcher=a.switcher,
                    model_check=a.model_check, web_search=a.web_search, lsp=a.lsp, background=a.background,
                    browser=a.browser, browser_headed=a.browser_headed, profile=a.profile,
-                   cache=a.cache)
+                   cache=a.cache, clients=a.clients)
 
 
 # ================================================================== merge rules (no I/O)
@@ -345,8 +351,13 @@ def split_agent(text: str) -> tuple[str, str]:
     return body, d.group(1)
 
 
-def default_model(ml: ModelList) -> str | None:
-    """The model to make the clients' default: the one a server start loads, else the first."""
+def default_model(ml: ModelList, running: str | None = None) -> str | None:
+    """The model to make the clients' default: the one the server runs now (single model: install.sh
+    passes no running model in router mode), else the one a server start loads, else the first. The
+    dashboard saves the model it applies, so a restart runs it again; only a one-off ./carl.sh --model
+    differs until the next plain start."""
+    if running and running in ml.ids:
+        return running
     return ml.default or (ml.ids[0] if ml.ids else None)
 
 
@@ -892,10 +903,11 @@ class ConfigFiles:
         try:
             data = json.loads(text)
         except json.JSONDecodeError:
-            raise ConfigError(f"{path} is not plain JSON (comments?). Fix or move it, then re-run; "
-                              "nothing was changed.") from None
+            raise ConfigError(f"{path} is not plain JSON (it can have comments). CARL changed nothing. "
+                              "Correct the file or move it, then run the setup again.") from None
         if not isinstance(data, dict):
-            raise ConfigError(f"{path} is not a JSON object. Fix or move it, then re-run; nothing was changed.")
+            raise ConfigError(f"{path} is not a JSON object. CARL changed nothing. Correct the file or move it, "
+                              "then run the setup again.")
         return data
 
     def save(self, path: str, data: JsonObj, mode: int = 0o600, backup: bool = True) -> None:
@@ -952,9 +964,13 @@ class Installer:
     def check_configs(self) -> None:
         """Load every config this run reads, so one that isn't plain JSON stops it before a write."""
         oc, pi = self.o.oc_dir, self.o.pi_dir
-        for path in (os.path.join(oc, "opencode.json"), self.state_path(oc), os.path.join(oc, "tui.json"),
-                     os.path.join(pi, "models.json"), self.state_path(pi), os.path.join(pi, "settings.json"),
-                     os.path.join(pi, "mcp.json")):
+        paths = []
+        if self.o.clients != "pi":
+            paths += [os.path.join(oc, "opencode.json"), self.state_path(oc), os.path.join(oc, "tui.json")]
+        if self.o.clients != "opencode":
+            paths += [os.path.join(pi, "models.json"), self.state_path(pi), os.path.join(pi, "settings.json"),
+                      os.path.join(pi, "mcp.json")]
+        for path in paths:
             self.cf.load(path)
 
     def save_state(self, folder: str, client: str, st: JsonObj) -> None:
@@ -1015,7 +1031,7 @@ class Installer:
         if new_id != PROVIDER:
             prov["name"] = prov["name"] + f" [{ALT}]"
         renamed = merge_provider(providers, st, prov, new_id, ours_oc, "OpenCode", rep)
-        merge_oc_default_model(cfg, st, default_model(o.models), new_id, legacy, renamed, rep)
+        merge_oc_default_model(cfg, st, default_model(o.models, o.running), new_id, legacy, renamed, rep)
         agent = cfg.setdefault("agent", {})
         undo_title_disable(agent, st, legacy, rep)
 
@@ -1227,7 +1243,7 @@ class Installer:
 
         sp = os.path.join(pi, "settings.json")
         sett = self.cf.load(sp)
-        write = merge_pi_defaults(sett, st, new_id, default_model(o.models), first_install and had_ours_before,
+        write = merge_pi_defaults(sett, st, new_id, default_model(o.models, o.running), first_install and had_ours_before,
                                   renamed, rep)
         if merge_pi_default_tools(sett, st, rep) or write:
             self.cf.save(sp, sett)
@@ -1334,15 +1350,17 @@ def main(argv: list[str]) -> int:
     inst = Installer(opts, time.strftime("%Y%m%d-%H%M%S"), LocalFiles(), chrome)
     try:
         inst.check_configs()
-        oc_ids = inst.opencode()
-        pi_ids = inst.pi()
+        oc_ids = inst.opencode() if opts.clients != "pi" else None
+        pi_ids = inst.pi() if opts.clients != "opencode" else None
     except ConfigError as e:
         print(f"error: {e}", file=sys.stderr)
         return 1
     for line in inst.report.lines():
         print(line)
-    print(f"OpenCode: {inst.short(opts.oc_dir)}/opencode.json, CARL provider {', '.join(oc_ids.values())}")
-    print(f"Pi:       {inst.short(opts.pi_dir)}/models.json, CARL provider {', '.join(pi_ids.values())}")
+    if oc_ids is not None:
+        print(f"OpenCode: {inst.short(opts.oc_dir)}/opencode.json, CARL provider {', '.join(oc_ids.values())}")
+    if pi_ids is not None:
+        print(f"Pi:       {inst.short(opts.pi_dir)}/models.json, CARL provider {', '.join(pi_ids.values())}")
     return 0
 
 

@@ -1,5 +1,6 @@
 """The Connect tab's actions: the client configs (shown and copied to the clipboard), the installer
-for this Mac, the config push for the clients that sync, and forgetting old clients."""
+for this Mac, the client package for other computers, the config push for the clients that sync,
+and forgetting old clients."""
 from __future__ import annotations
 
 import json
@@ -56,7 +57,7 @@ class ConnectActions:
         """Show a config on the Connect tab and copy it to the clipboard."""
         ui, d = self.ui, self.snapshot()
         ui.preview, ui.prev_scroll, ui.tab = kind, 0, 1
-        ui.install_shown = False                # the preview takes the installer's place
+        ui.install_shown = ui.package_shown = False     # the preview takes the place of the installer's output
         if not d.up:
             ui.toast("No server runs: CARL copied nothing.")
             return
@@ -88,11 +89,24 @@ class ConnectActions:
             ui.install_ask = None
         elif act == "insshow":
             ui.install_shown = bool(ui.install)
+            ui.package_shown = ui.package_shown and not ui.install_shown
         elif act == "insclose":
-            ui.install_shown = False
+            ui.install_shown = ui.package_shown = False
         elif act == "inscancel" and running:
             self.jobs.cancel_install()
             ui.toast("You stopped the installer. It is safe to run it again: the backups stay.", 8)
+
+    def package_action(self, act: str) -> None:
+        """The client package: pkgmake makes it (z), pkgshow shows the zip in the Finder (f), pkgclose hides
+        its card."""
+        ui = self.ui
+        ui.tab, ui.connect_sp = 1, 0
+        if act == "pkgmake":
+            self.jobs.make_package()
+        elif act == "pkgshow":
+            self.jobs.show_package()
+        elif act == "pkgclose":
+            ui.package_shown = False
 
     def forget_clients(self) -> None:
         """The Clients panel's Forget: drop the clients not seen for a week."""

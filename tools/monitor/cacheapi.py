@@ -378,9 +378,11 @@ class CacheApi:
     """The HTTP server (a thread); start() returns why it couldn't start, else None."""
 
     def __init__(self, host: str, port: int, key: Callable[[], str], folder: str, conf: Callable[[], CacheConfig],
-                 save_recorded: Callable[[str], int] = lambda model: 0, carl_dir: str = "") -> None:
+                 save_recorded: Callable[[str], int] = lambda model: 0, carl_dir: str = "",
+                 carl_version: str = "") -> None:
         self.host, self.port, self.key, self.conf, self.save_recorded = host, port, key, conf, save_recorded
         self.carl_dir = carl_dir
+        self.carl_version = carl_version         # sent as X-Carl-Version: /carl on a client compares its package
         self.listeners = 0                       # clients holding /carl/client/events
         self._listeners_lock = threading.Lock()
         self.registry = Registry(os.path.join(carl_dir, "clients.json") if carl_dir else os.devnull)
@@ -409,6 +411,8 @@ class CacheApi:
                 version = doc.get("version") if status == 200 else None
                 if isinstance(version, str):
                     self.send_header("ETag", f'"{version}"')
+                if api.carl_version:
+                    self.send_header("X-Carl-Version", api.carl_version)
                 self.end_headers()
                 self.wfile.write(data)
 
@@ -417,6 +421,8 @@ class CacheApi:
                 self.send_response(200)
                 self.send_header("Content-Type", "text/event-stream")
                 self.send_header("Cache-Control", "no-cache")
+                if api.carl_version:
+                    self.send_header("X-Carl-Version", api.carl_version)
                 self.end_headers()
                 api._listening(1)
                 who = parse_client(self.headers.get("X-Carl-Client", ""))

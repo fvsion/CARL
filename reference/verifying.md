@@ -24,7 +24,7 @@ head -2 ~/models/templates/*.thinking-toggle.jinja
 curl -s -H "Authorization: Bearer $K" http://$ADDR:8080/props | python3 -c 'import json,sys; d=json.load(sys.stdin)["default_generation_settings"]; print(d["n_ctx"], {k: d["params"][k] for k in ("temperature","top_k","top_p","min_p")})'
 ```
 
-- In single mode, the server ignores the `"model"` field. In router mode, use the CARL name of a model.
+- With a single model, the server ignores the `"model"` field. In router mode, use the CARL name of a model.
 - In router mode, `/props` needs `?model=NAME`. Without it, it answers `role: router`.
 
 ### Capture what a client sends
@@ -41,5 +41,5 @@ python3 tools/req-capture-proxy.py 127.0.0.1:8080 127.0.0.1:8081 ~/models/logs/r
 - The proxy does not log the message text or the headers (the API key).
 - Each JSON line has `req` (`reasoning_effort`, `chat_template_kwargs` and the other request fields), `n_messages`, `n_tools`, `status`, `reasoning_chars` and `content_chars`.
 - `--bodies DIR` also saves the full body of each chat request (mode 600). `tools/prompt-size.py BODY --per-tool` counts its tokens ([OpenCode config](client-configs.md)).
-- The proxy writes an entry when the response is complete. Thus, a long cold prompt shows nothing until it is complete. The first OpenCode prompt (~9K tokens) takes approximately 2 min on the 27B.
-- If the request has only the base `reasoning_effort`, the client did not apply the variant. Run `client/install.sh` again and fully restart OpenCode. Then capture again.
+- The proxy writes an entry when the response is complete. Thus, a long cold prompt shows nothing until it is complete. The first OpenCode prompt (~9K tokens) takes approximately 2 min on the 27B (M3 Pro 36 GB).
+- If the request has only the base `reasoning_effort`, the client did not apply the variant. Run the setup again and fully restart OpenCode. Then capture again.

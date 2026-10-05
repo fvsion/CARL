@@ -1,6 +1,6 @@
 # CARL Reference: Caching
 
-[Index](README.md) · every cache that CARL uses: llama.cpp's slots and RAM cache, the disk cache of OpenCode and Pi, how a saved state is built, and how conversations share their prompt on the disk.
+[Index](README.md) · every cache that CARL uses: llama.cpp's slots and RAM cache, the disk cache of OpenCode and Pi, how a saved state is built, and how saved sessions share their prompt on the disk.
 
 ## The caches at a glance
 
@@ -8,39 +8,39 @@ A request reads its whole prompt unless a cache already holds the start of it. T
 
 | Cache | Where | What it holds | Lost when | Set by |
 |---|---|---|---|---|
-| A slot | GPU memory | The conversation that the slot runs now (its KV cache and, on Qwen, the recurrent state) | Another conversation takes the slot | `--parallel` (slots), the window per slot |
-| Context checkpoints | GPU memory | Points in a conversation that the server can go back to (Qwen) | The conversation leaves its slot | `--ctx-checkpoints` (8, at least 4K tokens apart) |
-| The RAM cache | RAM | Conversations that left their slot | The server stops, a router switch, or the cache is full | `--cache-ram` (the launcher: 1–8 GiB) |
+| A slot | GPU memory | The session that the slot runs now (its context memory, the KV cache, and on Qwen the recurrent state) | Another session takes the slot | `--parallel` (slots), the context per slot |
+| Context checkpoints | GPU memory | Points in a session that the server can go back to (Qwen) | The session leaves its slot | `--ctx-checkpoints` (8, at least 4K tokens apart) |
+| The RAM cache | RAM | Sessions that left their slot | The server stops, a router switch, or the cache is full | `--cache-ram` (the launcher: 1–8 GiB) |
 | The disk cache | `~/.config/carl/slots` | Each agent's prompt (a saved prompt) and each session (a saved session) of OpenCode and Pi | The disk limit removes the oldest files | The `carl-cache` plugin and extension; Settings > Caching |
 
 ## llama.cpp's own caches
 
-- **Slots:** the server has 2 slots by default (up to 4 where they fit). Each slot keeps one conversation.
-- **RAM cache** (`--cache-ram`): the launcher calculates its size from the free RAM after the model and a reserve. The reserve is 10 GiB with the VM network, else 6 GiB (`RESERVE_GB`). The size is 1–8 GiB, in 256 MiB steps. This cache holds conversations that are not in a slot.
+- **Slots:** the server has 2 slots by default (up to 4 where they fit). Each slot keeps one session.
+- **RAM cache** (`--cache-ram`): the launcher calculates its size from the free RAM after the model and the memory kept free for macOS and apps: 10 GiB with the VM network, else 6 GiB (`RESERVE_GB`). The size is 1–8 GiB, in 256 MiB steps. This cache holds sessions that are not in a slot.
 - On Apple Silicon, the RAM cache uses the same memory as "VRAM". macOS moves this memory to swap on the SSD when the memory pressure is high.
 - **Disk:** llama.cpp has no automatic disk tier. It has only a manual function (`--slot-save-path` and `/slots/{id}?action=save|restore`). CARL's clients use this function ([the disk cache](#the-disk-cache-of-opencode-and-pi-measured-2026-10-03-and-2026-10-04)).
 
 ### The RAM cache and checkpoints (measured 2026-10-02)
 
-- The server has 2 slots by default. When a third conversation starts, it takes the slot of the conversation that was used least recently.
+- The server has 2 slots by default. When a third session starts, it takes the slot of the session that was used least recently.
 - The server keeps the removed prompt in the **RAM cache** (`--cache-ram`).
-- When that conversation continues, the server copies the prompt back from RAM. It does not read the prompt again.
-- **The launcher sets the cache size.** The size is the free memory after the model and a reserve for macOS (10 GiB when the VMware network is up, else 6 GiB). The limits are 1024 MiB and 8192 MiB.
-- **Test:** the 35B, 2 × 96K, M3 Pro. Three conversations of ~20K tokens each, then one follow-up in each conversation. Then a turn with thinking, and the turn after it.
+- When that session continues, the server copies the prompt back from RAM. It does not read the prompt again.
+- **The launcher sets the cache size.** The size is the free memory after the model and the memory kept free for macOS (10 GiB when the VMware network is up, else 6 GiB). The limits are 1024 MiB and 8192 MiB.
+- **Test:** the 35B, 2 × 96K, M3 Pro 36 GB, llama.cpp 0.4.1. Three sessions of ~20K tokens each, then one follow-up in each session. Then a turn with thinking, and the turn after it.
 
-| Configuration | Cold read of each prompt | Follow-up after eviction | Turn after a thinking turn | Swap |
+| Configuration | Cold read of each prompt | Follow-up after eviction: the wait | Turn after a thinking turn | Swap |
 |---|---|---|---|---|
-| Default: cache 2560 MiB, 8 checkpoints at least 4096 tokens apart | 44–47 s (~450 tok/s) | **0.7–1.2 s** (22 tokens read) | 26 tokens read | 0.90 GB |
-| `--cache-ram 0` | the same | **40–45 s** (~19K tokens read again) | 26 tokens read | 0.90 GB |
-| 16 checkpoints at least 1024 tokens apart | the same | 0.7–1.1 s | 26 tokens read | 0.90 GB |
-| `--kv q8` (cache 1792 MiB) | 42–45 s (~470 tok/s) | 0.8–1.2 s | 26 tokens read | 1.26 GB |
+| Default: cache 2560 MiB, 8 checkpoints at least 4096 tokens apart | 44–47 s (~450 tok/s) | **0.7–1.2 s** | only the new text read | 0.90 GiB |
+| `--cache-ram 0` | the same | **40–45 s** (the session read again) | only the new text read | 0.90 GiB |
+| 16 checkpoints at least 1024 tokens apart | the same | 0.7–1.1 s | only the new text read | 0.90 GiB |
+| `--kv q8` (cache 1792 MiB) | 42–45 s (~470 tok/s) | 0.8–1.2 s | only the new text read | 1.26 GiB |
 
 **Results:**
-- **The RAM cache is necessary.** Without it, the server reads a removed conversation again in full: 40–45 s for 20K tokens, and minutes for a long session.
-- **A larger cache gives no gain on the 35B.** 2560 MiB holds approximately 466K tokens of q4_0 KV. This is almost five full 96K windows.
-- **More checkpoints give no gain.** Each turn adds to the end of the conversation. The server keeps earlier reasoning (`preserve_thinking`). Thus, the cached prompt stays the start of the new prompt, and the server reads only the new tokens.
-- **q8_0 fits at 96K on 36 GB.** On the 35B, it reads approximately 4% faster, with the same decode speed and 0.36 GB more swap. q4_0 stays the default, because it uses less memory and has the recall tests.
-- NOTE: **The 27B with `--kv q8` has a small cache.** The automatic size is 1792 MiB. At 34 KiB for each token, this holds only ~54K tokens. Thus, the server reads a removed long 27B conversation again in full. With q4_0, the 27B gets 4864 MiB (~276K tokens), which is sufficient.
+- **The RAM cache is necessary.** Without it, the server reads a removed session again in full: 40–45 s for 20K tokens, and minutes for a long session.
+- **A larger cache gives no gain on the 35B.** 2560 MiB holds approximately 466K tokens of q4 context memory. This is almost five full 96K contexts.
+- **More checkpoints give no gain.** Each turn adds to the end of the session. The server keeps earlier reasoning (`preserve_thinking`). Thus, the cached prompt stays the start of the new prompt, and the server reads only the new tokens.
+- **q8 fits at 96K on 36 GB.** On the 35B, it reads approximately 4% faster, with the same write speed and 0.36 GiB more swap. q4 stays the default, because it uses less memory and has the recall tests.
+- NOTE: **The 27B with `--kv q8` has a small cache.** The automatic size is 1792 MiB. At 34 KiB for each token, this holds only ~54K tokens. Thus, the server reads a removed long 27B session again in full. With q4, the 27B gets 4864 MiB (~276K tokens), which is sufficient.
 - The RAM cache is lost when the server stops or when router mode changes the model. The disk cache of OpenCode and Pi covers these cases ([below](#the-disk-cache-of-opencode-and-pi-measured-2026-10-03-and-2026-10-04)).
 
 ## The disk cache of OpenCode and Pi (measured 2026-10-03 and 2026-10-04)
@@ -73,7 +73,7 @@ The RAM cache is lost when the server stops or when router mode changes the mode
    - The session's file (`carl-session+MODEL+KEY+SESSION.bin`), when the session is new to this process or server. Also when a different session took its slot after its last save.
    - Else, the prompt file of the agent (`carl-prefix+MODEL+AGENT+HASH.bin`).
    - Else, the client reads the agent's prompt one time (`/completion` with exactly its tokens, `n_predict 0`) and saves it. A prompt of less than 1,024 tokens gets no file.
-   - A slot that holds a different conversation first goes to the RAM cache. The client sends a 1-token task: llama.cpp saves the old prompt when a new task arrives.
+   - A slot that holds a different session first goes to the RAM cache. The client sends a 1-token task: llama.cpp saves the old prompt when a new task arrives.
    - The agent's prompt is the common token prefix of the system text and the tools. The client finds it with two different user messages (`/apply-template`, `/tokenize` with `add_special`).
 4. **Router mode:** the client loads a model that is not loaded (`POST /models/load`). It asks again while the router is busy with a different switch. Thus, the state can go in before the request. A title or summary request for a model that is not loaded goes to the loaded model. A switch for it would unload the session's model, and then load it again.
 5. **Title and summary requests** run with thinking off (`reasoning_effort: none`) and are not pinned. With thinking on, an OpenCode title on the 35B held a slot for 35 s, and `opencode run` waited for it.
@@ -113,13 +113,13 @@ A state saved directly after a reply fits when the template renders the reply ag
 |---|---|
 | Qwen 35B and 27B templates, with `preserve_thinking` (CARL sends it) | Yes, with thinking on and off |
 | Qwen 9B | Its template has no `preserve_thinking`, and drops earlier reasoning. `host/gguf-chat-template.py` adds it, as in the newer templates. |
-| Gemma 4 | It drops earlier reasoning. The client checks this one time for each model and thinking mode (with a probe conversation). Where the state does not fit, the client first sets the slot back to the end of the last prompt (`/completion`). Then it saves. |
+| Gemma 4 | It drops earlier reasoning. The client checks this one time for each model and thinking mode (with a probe session). Where the state does not fit, the client first sets the slot back to the end of the last prompt (`/completion`). Then it saves. |
 
 ### Sliding-window models
 
 - Gemma 4 E4B has sliding-window layers (`attention.sliding_window` 512).
-- A restored state was not used: the next request read all 5,100 tokens. With `--swa-full`, it read 100 of 5,100.
-- `--swa-full` keeps each layer at full length. llama.cpp calculated 4,766 MiB without it and 7,099 MiB with it (2 × 96K, q4_0).
+- With the window cache, a restored state was not used: the next request read the whole prompt again (5,100 tokens, ~9 s at ~580 tok/s). With the full cache (`--swa-full`), the answer started in under a second (100 new tokens read).
+- `--swa-full` keeps each layer at full length. llama.cpp calculated 4,766 MiB without it and 7,099 MiB with it (2 × 96K, q4).
 - `cache.swa` (`SWA_MODE` for the launcher) sets the mode:
 
 | `cache.swa` | Effect |
@@ -133,14 +133,14 @@ A state saved directly after a reply fits when the template renders the reply ag
   - `attention.sliding_window_pattern`: 35 of the 42 layers of Gemma 4 E4B
   - `shared_kv_layers`: the last 18 layers use the KV of earlier layers
   - the sliding-window key and value lengths
-- Gemma 4 E4B has 24 layers with their own KV: 4 full-attention layers (8,192 elements for each token) and 20 sliding-window layers (20,480 elements). The sliding-window layers count at full length with `--swa-full`, else as the window + 512 tokens for each slot.
+- Gemma 4 E4B has 24 layers with their own context memory: 4 full-attention layers (8,192 elements for each token) and 20 sliding-window layers (20,480 elements). The sliding-window layers count at full length with `--swa-full`, else as the window + 512 tokens for each slot.
 - Before this change, the estimate counted each layer at full length with the global head size. This gave 86,016 elements for each token, about 3× too much.
 
 ### Measurements
 
-The table gives the wait before the answer starts: with the cache, and without it (the server reads the prompt again). "Without" comes from the measured read speeds on this Mac (35B IQ3 ~505 tokens/s, 9B ~293, Gemma 4 E4B ~580, at 8K), except where the table says "measured". The tokens that the server read are in the last column, for a check against the server's log.
+The table gives the wait before the answer starts: with the cache, and without it (the server reads the prompt again). All rows: an M2 Max 32 GB, llama.cpp 0.5.0 (build 11146), 2026-10-03 and 2026-10-04. "Without" comes from the measured read speeds on this Mac (35B IQ3 ~505 tok/s, 9B ~293, Gemma 4 E4B ~580, at 8K), except where the table says "measured". The last column gives the tokens that the server read, only for a check against the server's log.
 
-| Measured (llama.cpp b11146, q4_0, 2 × 96K) | Wait with the cache | Wait without it | Tokens read (with / without) |
+| Measured (q4, 2 × 96K) | Wait with the cache | Wait without it | Tokens read (with / without) |
 |---|---|---|---|
 | 35B IQ3, OpenCode: a new session (the build prompt read one time: 12.9 s, measured) | under 1 s | ~13 s | 207 / ~8.4K |
 | 35B IQ3, OpenCode: the session after a router switch away and back (after the load) | under 1 s | ~17 s | 23 / ~8.5K |
@@ -156,7 +156,7 @@ The table gives the wait before the answer starts: with the cache, and without i
 ### The disk limit
 
 - `cache.disk_gb` (default 10 GB) is the limit.
-- After each save on this Mac, the client removes the oldest conversations first, then the oldest prompts. The file that it saved last stays, unless it alone is over the limit.
+- After each save on this Mac, the client removes the oldest saved sessions first, then the oldest saved prompts. The file that it saved last stays, unless it alone is over the limit.
 - The older prompt files of the same agent go at once.
 - The dashboard checks the limit each minute. The launcher checks it at each start (for files written from a VM).
 - The client does not save when the disk has less than 10 GB free.
@@ -170,15 +170,15 @@ The `cache` section of `config.json` (the Caching panel of the dashboard: **Disk
 |---|---|---|
 | `disk_gb` | 10 | The disk limit in GB (1–1000) |
 | `prefix` | true | Save and restore the prompt of each agent |
-| `sessions` | true | Save and restore the conversations |
+| `sessions` | true | Save and restore the sessions |
 | `save` | `auto` | When to save: `auto`, `turn`, `switch`, `stop` (see above) |
 | `auto_s` | 120 | `auto`: the seconds of unsaved reading before a save (10–3600) |
-| `share` | true | Store conversations as patches against their prompt file (see below) |
+| `share` | true | Store a saved session as the changes to its saved prompt (see below) |
 | `swa` | `auto` | Sliding-window models (Caching panel: **Gemma models**): `auto`, `full` (the full cache), `window` (the window cache) |
 
 - With `prefix` and `sessions` both false, the cache does nothing.
 - In the environment of OpenCode or Pi, `CARL_CACHE=0` turns the cache off, and `CARL_CACHE_SAVE=MODE` overrides `save`.
-- `NO_CACHE=1 ./install.sh` leaves the OpenCode plugin and the Pi extension out.
+- `NO_CACHE=1 ./carl.sh install --config-only` (`NO_CACHE=1 ./setup` on other computers) leaves the OpenCode plugin and the Pi extension out.
 - `./carl.sh cache show` lists the saved prompts and the saved sessions (sizes in GB and MB; `*` marks a session stored as the changes to its saved prompt). `./carl.sh cache trim` applies the limit. `./carl.sh cache clear` removes each file.
 
 ### When an agent's prompt changes
@@ -188,22 +188,22 @@ The `cache` section of `config.json` (the Caching panel of the dashboard: **Disk
 - The date, the folder and the AGENTS.md of the project do not change it. They move to the first message (step 1 above).
 - After a change, the next new session reads the new prompt one time and saves it as a new file. The hash gives a new name. This read takes the same time as a session without the cache.
 - On this Mac, the client then removes the older prompt files of the same agent and model. The dashboard's limit removes them on the server for clients on other computers.
-- A saved conversation that started with the old prompt cannot continue from its file, because its first tokens are different now. llama.cpp reads the conversation again one time. The tidy step removes its patch, because the base is gone.
+- A saved session that started with the old prompt cannot continue from its file, because its first tokens are different now. llama.cpp reads the session again one time. The tidy step removes its patch, because the base is gone.
 
 ## How a saved state is built
 
 ### One sequence, in order
 
-llama.cpp keeps a conversation as one sequence of tokens. A saved state is that sequence and the model's memory of it. The sequence always has the same order:
+llama.cpp keeps a session as one sequence of tokens. A saved state is that sequence and the model's memory of it. The sequence always has the same order:
 
 | Order | Part | What it holds | Who makes it |
 |---|---|---|---|
 | 1 | The agent's prompt | The system text and the tool definitions | OpenCode or Pi, for each agent |
 | 2 | The first user message | The environment block, the project's instructions, then your first message | OpenCode or Pi; CARL moves the first two parts here |
-| 3 | The conversation | The replies, the tool calls, the tool results, your next messages | The model and the client |
+| 3 | The rest of the session | The replies, the tool calls, the tool results, your next messages | The model and the client |
 
 - The chat template sets the order inside part 1. Qwen puts the tools first and the system text after them. Gemma 4 puts the system text first and the tools after it. Both orders are in part 1.
-- A tool call is text that the model writes. The template writes it again, from the structured call, when the client sends the conversation back.
+- A tool call is text that the model writes. The template writes it again, from the structured call, when the client sends the session back.
 - A tool result is a message from the client.
 
 ### Saved states are prefixes
@@ -223,16 +223,16 @@ Thus, CARL keeps these rules:
 
 ### What a saved state holds
 
-For each token, the state holds the KV cache of the attention layers. A hybrid model (Qwen 3.6 and 3.8) also holds a recurrent state for the whole sequence.
+For each token, the state holds the context memory (the KV cache) of the attention layers. A hybrid model (Qwen 3.6 and 3.8) also holds a recurrent state for the whole sequence.
 
 | Part | Size (35B IQ3, q4_0) | Shared between files |
 |---|---|---|
-| KV cache of the attention layers | ~5.8 KB per token | Yes: the same tokens at the same places give the same bytes |
+| Context memory of the attention layers | ~5.8 KB per token | Yes: the same tokens at the same places give the same bytes |
 | Recurrent state | ~59 MB, for any length | No: it is a summary of the whole sequence |
 
-- A session of 8.6K tokens is 115 MB. About 45 MB of it is the prompt's KV cache. About 59 MB is the recurrent state.
+- A session of 8.6K tokens is 115 MB. About 45 MB of it is the prompt's context memory. About 59 MB is the recurrent state.
 - A session of 74K tokens is about 0.5 GB.
-- A model without recurrent layers (Gemma 4) has only the KV cache. A larger part of its file is shared.
+- A model without recurrent layers (Gemma 4) has only the context memory. A larger part of its file is shared.
 
 ### What a change does
 
@@ -243,9 +243,9 @@ For each token, the state holds the KV cache of the attention layers. A hybrid m
 | An edited or removed earlier message | Part 3 changes at that message. The reuse stops there. |
 | Another model file or llama.cpp build | No saved file matches. The file names carry a hash of both. |
 
-## Conversations stored as patches (dedup)
+## Shared storage: saved sessions stored as changes (zstd patches)
 
-- A conversation is stored as a zstd patch against the prompt file of the agent that it starts with (`tools/monitor/slotpack.py`, `cache.share`, default on). The prompt files stay whole: they are the bases.
+- A saved session is stored as a zstd patch against the saved prompt of the agent that it starts with (`tools/monitor/slotpack.py`, `cache.share`, default on). The Caching panel calls this **Shared storage**. The prompt files stay whole: they are the bases.
 - The dashboard makes the patches in its minute loop. `./carl.sh cache trim` also makes them. A new file waits 30 s. CARL keeps a patch only when it is at most 80% of the file.
 - Before a restore, the file is made whole again. A client on this Mac uses zstd. A client on another computer uses the dashboard's API (`POST /carl/cache/unpack`). The copy gets the time of the patch, so the tidy step removes it after one minute.
 - When the limit removes a prompt file, it also removes the patches that need it.
@@ -255,11 +255,11 @@ For each token, the state holds the KV cache of the attention layers. A hybrid m
 |---|---|
 | A build session, 8.6K tokens, whole | 115.2 MB |
 | The same session as a patch against the build prompt | 64.1 MB (0.3 s to make, 0.1 s to undo, the same bytes) |
-| The 7 conversations on disk, whole / as patches | 1.5 GB / 1.2 GB |
-| A restore from a patch after a server restart: the wait before the answer starts | under 1 s (the patch is undone in 0.1 s; 100 tokens read) |
+| The 7 saved sessions on disk, whole / as patches | 1.5 GB / 1.2 GB |
+| A restore from a patch after a server restart: the wait before the answer starts | under 1 s (the patch is undone in 0.1 s) |
 
 The patches save disk space. They do not decrease the drive writes, because llama.cpp writes the whole file first. A decrease of the writes needs incremental saves (v2 in the plan).
 
-- The prompt's KV cache is then stored one time, in the prompt file.
+- The prompt's context memory is then stored one time, in the prompt file.
 - Each session stores its recurrent state and its own tokens.
 - The saving is about 40% for a short session and about 10% for a long session (35B).

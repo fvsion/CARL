@@ -124,13 +124,14 @@ class RegistryTest(unittest.TestCase):
             s.bind(("127.0.0.1", 0))
             port = s.getsockname()[1]
             s.close()
-            api = CacheApi("127.0.0.1", port, lambda: "k3y", d, lambda: CONF)
+            api = CacheApi("127.0.0.1", port, lambda: "k3y", d, lambda: CONF, carl_version="1.7.0")
             self.assertIsNone(api.start())
             try:
                 who = '{"id": "0123456789ab", "host": "vm", "applied": "v1", "mode": "service"}'
                 req = urllib.request.Request(f"http://127.0.0.1:{port}/carl/client/events",
                                              headers={"Authorization": "Bearer k3y", "X-Carl-Client": who})
                 r = urllib.request.urlopen(req, timeout=5)
+                self.assertEqual(r.headers.get("X-Carl-Version"), "1.7.0")          # /carl on the client reads it
                 time.sleep(0.3)
                 self.assertEqual(api.registry.list()[0].connected, 1)
                 cfg = urllib.request.Request(f"http://127.0.0.1:{port}/carl/client/config",

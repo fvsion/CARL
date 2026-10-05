@@ -203,8 +203,23 @@ export function when(stamp, now = new Date()) {
  * @typedef {{ id: string, title: string, summary: string, lines: string[], details: string[], actions: Action[] }} Section
  */
 
+/**
+ * The version of the client package (VERSION in the client folder, written by ./carl.sh package) and the CARL
+ * version of the server: the one the sync service last heard from the dashboard API (state server_version), else
+ * remote.json "version" (written at each server start; it comes with the package, so it is the same at first);
+ * "" when not known.
+ * @param {string} bundle
+ * @param {JsonObject} remote
+ * @param {JsonObject} [st]
+ * @returns {{ client: string, server: string }}
+ */
+export function packageVersions(bundle, remote, st = {}) {
+  const ok = (/** @type {unknown} */ v) => (typeof v === "string" && /^[0-9A-Za-z.+-]{1,40}$/.test(v.trim()) ? v.trim() : "");
+  return { client: bundle ? ok(text(join(bundle, "VERSION"))) : "", server: ok(st.server_version) || ok(remote.version) };
+}
+
 const APPLY = "Apply the new config now";
-const INSTALLER = "The installer is ./install.sh in the client folder, or ./carl.sh install on the server.";
+const INSTALLER = "The installer is ./setup in the client folder, or ./carl.sh install on the server.";
 
 /** The client config sync (carl-sync.py's state). @param {Client} client @returns {Section} */
 function syncSection(client) {
@@ -234,7 +249,14 @@ function syncSection(client) {
     : "The sync service is not connected. Make sure that the dashboard runs on the server.");
   said.push(st.applied ? `Last config from the dashboard: ${when(st.applied_at)}.` : "No config from the dashboard yet.");
   if (st.error) said.push(`Last error: ${String(st.error)}`);
+  const pkg = packageVersions(bundle, remote, st);
+  if (pkg.client && pkg.server && pkg.client !== pkg.server) {
+    said.push(`The client package is version ${pkg.client}, but the server runs CARL ${pkg.server}.`,
+              "To update: make a new client package on the server, unzip it here and run ./setup.");
+  }
   const details = para([
+    ...(pkg.client ? [`Client package: version ${pkg.client}`] : []),
+    ...(pkg.server ? [`Server: CARL ${pkg.server} (${st.server_version ? "last contact with the dashboard" : "from the client package"})`] : []),
     `Server: ${remote.host}:${remote.port}`,
     `Dashboard API: ${remote.cache_api}`,
     ...(st.applied ? [`Config version ${st.applied}, applied ${st.applied_at ?? "at an unknown time"}`] : []),
@@ -278,7 +300,7 @@ function pieces(client) {
                details: para([...how, INSTALLER]), actions: [] });
   };
   const turnOff = (/** @type {string} */ v) => `To turn it off, run the installer again with ${v}=1.`;
-  const turnOn = (/** @type {string} */ v) => `To turn it on, run the installer again without ${v}=1.`;
+  const turnOn = (/** @type {string} */ v) => `To turn it on, run the installer again with ${v}=0.`;
   const cache = {
     on: ["CARL saves each agent's prompt and each session on the server's disk.",
          "They stay when the server stops, restarts or switches the model.",
@@ -303,7 +325,7 @@ function pieces(client) {
     howOn: ["The installer turns the coder on when the server runs 2 or more slots.",
             "CODER=1 always turns it on. NO_CODER=1 turns it off.",
             bg ? "To turn the background off, run the installer again with NO_BACKGROUND_SUBAGENTS=1."
-               : "To turn the background on, run the installer again without NO_BACKGROUND_SUBAGENTS=1."],
+               : "To turn the background on, run the installer again with NO_BACKGROUND_SUBAGENTS=0."],
     howOff: ["The installer turns the coder on when the server runs 2 or more slots.",
              "CODER=1 always turns it on."],
   });

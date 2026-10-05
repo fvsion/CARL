@@ -77,6 +77,8 @@ usage() {
   wrap_help <<'HELP'
 CARL client installer: connect OpenCode and Pi to the CARL server.
 
+Run ./setup instead. It asks for your choices, installs OpenCode and Pi, and runs this script. This script is an internal part of the setup. The sync service runs it too.
+
 Usage: ./install.sh [OPTION...]
 
 Where the server is:
@@ -94,6 +96,7 @@ The API key:
   The script looks for the key in this order: --key or --key-file, CARL_API_KEY, the file api-key next to this script, ~/.config/carl/api-key, a key from an earlier install. Then it asks you. It keeps the key in ~/.config/carl/api-key, with mode 0600.
 
 Switches (environment variables, for example NO_CACHE=1 ./install.sh):
+  CLIENTS=WHICH	The configs to write: both (the default), opencode or pi.
   NO_CACHE=1\tDo not install the disk cache.
   NO_MODEL_CHECK=1\tDo not install the model check of OpenCode.
   NO_SWITCHER=1\tDo not install the session switcher of OpenCode.
@@ -327,13 +330,15 @@ json.dump({"schema": 1, "default": ml.default, "models": [m.__dict__ for m in ml
        > "$models_arg" 2>/dev/null; then
     echo '{"schema": 1, "default": null, "models": []}' > "$models_arg"
   fi
-  say "Note: there is no installed-models.json here, so the model list comes from the server (/v1/models). For every installed model, run ./carl.sh install on the server Mac. Then copy the client folder again."
+  say "Note: there is no installed-models.json here, so the model list comes from the server (/v1/models). For every installed model, make a new client package on the server Mac (./carl.sh package), unzip it over this folder and run ./setup."
 fi
 say "Models for the clients: $(python3 -c 'import json,sys; print(", ".join(m["id"] for m in json.load(open(sys.argv[1]))["models"]) or "none yet")' "$models_arg")."
 
 # --- Tools: web search on by default (WEB_SEARCH=exa|parallel|off) -------------------
 web_search="${WEB_SEARCH:-exa}"
 case "$web_search" in exa|parallel|off) ;; *) echo "error: WEB_SEARCH takes exa, parallel or off, got '$web_search'" >&2; exit 2 ;; esac
+clients="${CLIENTS:-both}"
+case "$clients" in both|opencode|pi) ;; *) echo "error: CLIENTS takes both, opencode or pi, got '$clients'" >&2; exit 2 ;; esac
 if [[ "$web_search" != off ]]; then
   say "Web search: on ($web_search). OpenCode and Pi send the search queries to $web_search, outside this computer. Everything else stays on this computer. To turn it off, use WEB_SEARCH=off."
 fi
@@ -370,7 +375,7 @@ fi
 # your own named "llamacpp" stays, and ours is added as "carl"; your
 # default model, agents and extensions are kept. Our MTPLX pieces from before
 # 1.2.0 are removed, and the pieces named llm-deploy get CARL's names. Backups: *.bak.<time>.
-python3 "$HERE/configure.py" --bundle "$HERE" --home "$HOME" --host "$HOST" \
+python3 "$HERE/configure.py" --bundle "$HERE" --home "$HOME" --host "$HOST" --clients "$clients" \
   --llama-port "$LLAMA_PORT" --ctx "$ctx" --models "$models_arg" ${running:+--running "$running"} --coder "$CODER" --sidebar "$([[ "${NO_SIDEBAR:-0}" == 1 ]] && echo 0 || echo 1)" \
   --switcher "$([[ "${NO_SWITCHER:-0}" == 1 ]] && echo 0 || echo 1)" \
   --model-check "$([[ "${NO_MODEL_CHECK:-0}" == 1 ]] && echo 0 || echo 1)" \
@@ -436,8 +441,8 @@ UNIT
 }
 if [[ "${CARL_SYNC:-0}" != 1 ]]; then
   ( umask 077; mkdir -p "$HOME/.config/carl"
-    for k in WEB_SEARCH NO_LSP LSP NO_BROWSER BROWSER_HEADED NO_SIDEBAR NO_SWITCHER NO_MODEL_CHECK \
-             NO_BACKGROUND_SUBAGENTS NO_CACHE LLAMA_CTX; do
+    for k in CLIENTS CODER NO_CODER WEB_SEARCH NO_LSP LSP NO_BROWSER BROWSER_HEADED NO_SIDEBAR NO_SWITCHER \
+             NO_MODEL_CHECK NO_BACKGROUND_SUBAGENTS NO_CACHE LLAMA_CTX; do
       [[ -n "${!k:-}" ]] && printf '%s=%s\n' "$k" "${!k}"
     done > "$HOME/.config/carl/client-install.env" ) || true
   if [[ "$MODE" == local || ! -s "$HERE/remote.json" || "${NO_SYNC_SERVICE:-0}" == 1 ]]; then
@@ -461,7 +466,7 @@ fi
 # --- Smoke test ----------------------------------------------------------------
 echo
 if out=$(api_get "http://$HOST:$LLAMA_PORT/v1/models" 2>/dev/null); then
-  first_id="$(echo "$out" | grep -o '"id":"[^"]*"' | head -1 | sed -e 's/^"id":"//' -e 's/"$//')"
+  first_id="$(printf '%s' "$out" | python3 -c 'import json,sys; print(json.load(sys.stdin)["data"][0]["id"])' 2>/dev/null || true)"
   say "OK: the server answers at http://$HOST:$LLAMA_PORT/v1${first_id:+. It has $first_id}."
 else
   say "Note: no server runs at http://$HOST:$LLAMA_PORT. Start it on the server Mac with ./carl.sh."

@@ -13,21 +13,23 @@ The installer writes these settings into `~/.config/opencode/opencode.json` (tem
 | Provider id | `llamacpp`, or `carl` when you have your own provider `llamacpp` |
 | Provider package | `@ai-sdk/openai-compatible`, base URL `http://HOST:PORT/v1`, the key from `~/.config/carl/api-key` |
 | Models | One entry for each installed model, under its CARL name (`client/carl_models.py`) |
-| Context (`limit.context`) | The running model: the server window. The other models: the window of their own settings. |
-| Output (`limit.output`) | Half the window, at most 32,000 |
+| Context (`limit.context`) | The running model: the context of the server. The other models: the context of their own settings. |
+| Output (`limit.output`) | Half the context, at most 32,000 |
 | Model options | `reasoningEffort` (the default variant) and `parallel_tool_calls: true` |
-| `model`, `small_model` | The model that a server start loads. The installer sets them only when they are not set, or still have CARL's earlier value. |
+| `model`, `small_model` | The model that the server runs now, when it runs a single model that is in the installed list. Else (and in router mode), the model that a server start loads (`llama.model`, or Auto fit's choice). `default_model()` in `client/configure.py`. The installer sets them only when they are not set, or still have CARL's earlier value. |
 
 | Thinking type | Variants (`/variants`) | Default |
 |---|---|---|
-| `on-off` (Qwen3.6 35B-A3B, Heretic, 9B) | `none` (off), `high` (on) | `high` |
+| `on-off` (Qwen3.6 35B-A3B, Heretic, 9B, Gemma 4) | `none` (off), `high` (on) | `high` |
 | `effort` (Qwen3.8 27B, orcarouter) | `none` (off), `low`, `medium`, `xhigh` | `low` |
 
 [Thinking](thinking.md#thinking-by-client) gives what each variant sends.
 
+- The `none` variant of a Qwen model also sends Qwen's sampling for thinking off (temperature 0.7, top_p 0.8, presence penalty 1.5, from the Qwen model cards). Gemma 4 and the custom models use one sampling for all uses, so their `none` variant only turns thinking off (`off_sampling` in `installed-models.json`: `qwen` or `same`).
+
 - `parallel_tool_calls: true`: llama.cpp lets the model call more than one tool in a turn only when the request asks for it. Measured 2026-10-03: 2 reads in one turn with it, 1 without it.
 - **Timeouts:** the provider sets `timeout: false` and `chunkTimeout: 900000` (15 min). A long cold prompt can take many minutes before the first token.
-- **Title agent:** the title agent of OpenCode stays on (earlier versions turned it off). With 2 slots, it runs at the same time as the main session. It does not wait in a queue behind the main session. The prompt cache sends title and summary requests with thinking off.
+- **Title agent:** the title agent of OpenCode stays on (earlier versions turned it off). With 2 slots, it runs at the same time as the main session. It does not wait in a queue behind the main session. The disk cache (`carl-cache`) sends title and summary requests with thinking off.
 
 ### Plugins and agents
 
@@ -35,13 +37,14 @@ The installer writes these settings into `~/.config/opencode/opencode.json` (tem
 |---|---|---|
 | `carl-cache` | `plugin` in `opencode.json` | The disk cache ([Caching](caching.md)). `NO_CACHE=1` leaves it out. |
 | `carl-model-check` | `plugin` in `opencode.json` | Warns when the selected model is not the one that the server runs, is not installed, or loads. `NO_MODEL_CHECK=1` leaves it out. |
+| `carl-background` | `plugin` in `opencode.json` | Runs CARL's coder in the background ([plugins](plugins.md#carl-background-the-coder-in-the-background-opencode)). It comes with the coder. `NO_BACKGROUND_SUBAGENTS=1` leaves it out. |
 | `subagents-sidebar` | `~/.config/opencode/tui.json` | A live list of the subagents. `NO_SIDEBAR=1` leaves it out. |
 | `session-switcher` | `~/.config/opencode/tui.json` | A session switcher in the prompt box, and `/switch`. `NO_SWITCHER=1` leaves it out. |
 | `carl-panel` | `~/.config/opencode/tui.json` | The `/carl` panel ([Clients on other computers](client-sync.md)) |
 | `coder` agent | `agent` in `opencode.json` | [The coder subagent](models.md#the-coder-subagent) |
 | `browser` agent | `agent` in `opencode.json` | The Playwright MCP tools (`carl-browser`). They are off for the main agents and on for this subagent. `NO_BROWSER=1` leaves it out. |
 
-To update the plugins, run `install.sh` again and restart OpenCode.
+To update the plugins, run the setup again (`./carl.sh install`, or a new client package and `./setup` on other computers) and restart OpenCode.
 
 ### Tool switches
 
@@ -80,8 +83,8 @@ The installer writes `~/.pi/agent/models.json` (template: `client/pi/models.json
 |---|---|
 | Provider | `llamacpp` (or `carl`), API `openai-completions`, the key from `~/.config/carl/api-key` |
 | Thinking format | `thinkingFormat: "chat-template"` with `chatTemplateKwargs` ([Thinking by client](thinking.md#thinking-by-client)) |
-| Models | One entry for each installed model: `contextWindow` = its window, `maxTokens` = half the window, at most 32,768 |
-| Defaults in `settings.json` | `defaultProvider` = CARL's provider, `defaultModel` = the model that a start loads, `defaultThinkingLevel` = `low`. The installer sets them only when they are not set or still have CARL's earlier values. |
+| Models | One entry for each installed model: `contextWindow` = its context, `maxTokens` = half the context, at most 32,768 |
+| Defaults in `settings.json` | `defaultProvider` = CARL's provider, `defaultModel` = the same default model as OpenCode's `model`, `defaultThinkingLevel` = `low`. The installer sets them only when they are not set or still have CARL's earlier values. |
 | Tools | `grep`, `find` and `ls` on (`defaultTools`, unless you set your own) |
 | Web search | The MCP server `carl-web-search` in `~/.pi/agent/mcp.json` (`WEB_SEARCH` as for OpenCode) |
 | Browser | The MCP server `carl-browser` in `mcp.json`, loaded when the model needs it. `NO_BROWSER=1` leaves it out. |

@@ -7,3 +7,4 @@ __pycache__/
 client/installed-models.json
 client/remote.json
 client/api-key
+dist/

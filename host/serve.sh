@@ -16,6 +16,8 @@
 #   ./host/serve.sh card NAME [set|unset]  a model's card (tools/carl.py card)
 #   ./host/serve.sh cache [show|trim|clear]   the disk cache of prompt states (tools/carl.py cache)
 #   ./host/serve.sh push                  publish the client config for the clients' sync service
+#   ./host/serve.sh install [opts]        OpenCode and Pi on this Mac (client/setup)
+#   ./host/serve.sh package [--anyway]    the client package for another computer (dist/*.zip)
 #
 # Binds to 127.0.0.1 or the vmnet8 host address (192.168.42.1), never 0.0.0.0:
 # with the macOS firewall off, 0.0.0.0 would expose the model on the LAN.
@@ -31,38 +33,14 @@ show_help() {
   CARL_CMD="$CMD" exec python3 "$HERE/../tools/carl_help.py" "$t"
 }
 
-# install [both|opencode|pi] [--local|--vm [HOST]|--host ADDR] [--port N] [--clients-only|--config-only]:
-# the clients (client/install-clients.sh) and their configs (client/install.sh)
-# in one step. Network options and env switches (CODER, NO_SWITCHER, LLAMA_CTX…)
-# go to install.sh unchanged.
+# install [both|opencode|pi] [OPTIONS]: client/setup, the same setup as on another computer (it
+# asks which clients and options, installs OpenCode and Pi when missing or older, writes their
+# configs). Its options (--yes, --clients, --config-only = --no-install, --clients-only =
+# --no-config, --local, --vm, --host, --port, --key-file…) and the env switches (CODER,
+# NO_SWITCHER, LLAMA_CTX…) go to it unchanged. Without a network option, setup reads
+# client/remote.json: on this Mac that is the local server.
 client_install() {
-  local what=both steps=both net=() a
-  while [[ $# -gt 0 ]]; do
-    a="$1"
-    case "$a" in
-      both|opencode|pi) what="$a" ;;
-      --clients-only) steps=clients ;;
-      --config-only) steps=config ;;
-      --vm) net+=(--vm); if [[ "${2:-}" =~ ^[0-9.]+$ ]]; then net+=("$2"); shift; fi ;;
-      --host) net+=(--host "${2:?--host needs an address}"); shift ;;
-      --local) net+=(--local) ;;
-      --port) net+=(--port "${2:?--port needs a port}"); shift ;;
-      --key-file) net+=(--key-file "${2:?--key-file needs a file}"); shift ;;
-      --key) net+=(--key "${2:?--key needs the key}"); shift ;;
-      *) echo "error: install does not know '$a'. Run $CMD install --help to see the options." >&2; return 2 ;;
-    esac
-    shift
-  done
-  local c="$HERE/../client"
-  if [[ "$steps" != config ]]; then
-    echo "CARL installs the clients ($what)."
-    "$c/install-clients.sh" "$what" || return $?
-  fi
-  if [[ "$steps" != clients ]]; then
-    echo; echo "CARL writes the client configs."
-    "$c/install.sh" ${net[@]+"${net[@]}"} || return $?
-  fi
-  echo; echo "Done. Open a new terminal, then run opencode or pi."
+  exec "$HERE/../client/setup" "$@"
 }
 
 # ---- dispatch -------------------------------------------------------------
@@ -73,7 +51,7 @@ LLAMA_PORT=8080
 # help, nor for a command that doesn't exist).
 case "${1:-}" in
   help|-h|--help|--help-adv|grant|pocket) ;;
-  ""|dashboard|--no-start|install|monitor|fit|models|config|cache|push|card|tune|download|verify|delete|llama|-*) migrate_conf_dir ;;
+  ""|dashboard|--no-start|install|package|monitor|fit|models|config|cache|push|card|tune|download|verify|delete|llama|-*) migrate_conf_dir ;;
 esac
 if [[ $# -eq 0 ]]; then
   # No arguments: the dashboard. Attach to a server that runs already (one model
@@ -128,6 +106,7 @@ case "$1" in
   config) shift; exec python3 "$HERE/../tools/carl.py" config "$@" ;;
   cache) shift; exec python3 "$HERE/../tools/carl.py" cache "$@" ;;
   push) exec python3 "$HERE/../tools/carl.py" push ;;
+  package) shift; exec python3 "$HERE/../tools/carl.py" package "$@" ;;
   card) shift; exec python3 "$HERE/../tools/carl.py" card "$@" ;;
   tune) shift; exec python3 "$HERE/../tools/carl-tune.py" "$@" ;;
   download|verify|delete) exec "$HERE/models.sh" "$@" ;;

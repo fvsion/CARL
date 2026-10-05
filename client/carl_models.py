@@ -41,6 +41,8 @@ class ClientModel:
     label: str
     ctx: int
     thinking: str
+    off_sampling: str = "qwen"   # "qwen": the none variant sends Qwen's non-thinking sampling; "same": it only
+                                  # turns thinking off (Gemma 4: one sampling for every use)
 
     def title(self, ctx: Optional[int] = None) -> str:
         return f"{self.label} — llama.cpp, {(ctx or self.ctx) // 1024}K"
@@ -76,7 +78,10 @@ def parse_list(doc: Any, where: str = LIST_FILE) -> ModelList:
             raise ValueError(f"{at}: ctx must be a token count")
         if thinking not in THINKING:
             raise ValueError(f"{at}: thinking must be one of {', '.join(THINKING)}")
-        out.append(ClientModel(mid, label, ctx, thinking))
+        off = m.get("off_sampling", "qwen")             # lists from before 1.7.0 have none: Qwen's, as before
+        if off not in ("qwen", "same"):
+            raise ValueError(f"{at}: off_sampling must be qwen or same")
+        out.append(ClientModel(mid, label, ctx, thinking, off))
     default = doc.get("default")
     return ModelList(out, default if isinstance(default, str) and default in [m.id for m in out] else None)
 
@@ -100,7 +105,7 @@ def _ctx_for(m: ClientModel, running: Optional[str], running_ctx: Optional[int])
 def opencode_model(m: ClientModel, ctx: int) -> Dict[str, Any]:
     """One OpenCode model entry: its family's variants, the others disabled."""
     on = OC_ON[m.thinking]
-    variants: Dict[str, Any] = {"none": dict(NO_THINK)}
+    variants: Dict[str, Any] = {"none": dict(NO_THINK) if m.off_sampling == "qwen" else {"reasoningEffort": "none"}}
     for lvl in OC_LEVELS:
         variants[lvl] = {"reasoningEffort": lvl} if lvl in on else {"disabled": True}
     return {

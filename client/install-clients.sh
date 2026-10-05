@@ -9,7 +9,7 @@
 #
 # Both ship on npm. Pi needs Node >= 22.19, so if the system Node is missing
 # or older, Node 22 LTS (Linux or macOS build) is fetched from nodejs.org (SHA-256 verified) into
-# ~/.local/lib/nodejs. Run ./install.sh afterwards (or before) for the configs.
+# ~/.local/lib/nodejs. client/setup runs this script, then ./install.sh for the configs.
 set -euo pipefail
 
 # The width of the help page: COLUMNS, else the terminal's, else 80.
@@ -51,6 +51,8 @@ usage() {
   wrap_help <<'HELP'
 CARL: install the coding agents OpenCode and Pi for this user.
 
+Run ./setup instead. It installs OpenCode and Pi when they are missing or older (with this script), then writes their configs. This script is an internal part of the setup.
+
 Usage: ./install-clients.sh [both | opencode | pi]
 
   both\tInstall OpenCode and Pi. This is the default.
@@ -64,7 +66,7 @@ Both agents come from npm. Pi needs Node 22.19 or newer. If Node is missing or o
 
 The script adds ~/.local/bin to PATH in ~/.zshrc and ~/.bashrc, if these files exist. It makes a backup of each file first.
 
-Then run ./install.sh. It connects OpenCode and Pi to the CARL server. On the server Mac, run ./carl.sh install.
+Then the setup runs ./install.sh. It connects OpenCode and Pi to the CARL server. On the server Mac, ./carl.sh install runs the setup.
 HELP
 }
 
@@ -151,4 +153,4 @@ echo
 [[ "$WHAT" == both || "$WHAT" == pi ]] && echo "pi       $(pi --version 2>/dev/null || echo 'is not on PATH')  -> $(command -v pi || true)"
 echo
 echo "Open a new terminal, or run: source ~/.zshrc. Then run opencode or pi."
-[[ -f "$HOME/.config/carl/api-key" || -f "$HOME/.config/llm-deploy/api-key" || -f "$HOME/.config/mtplx/api-key" ]] || echo "There is no CARL config yet. Run ./install.sh to connect OpenCode and Pi to the server."
+[[ -f "$HOME/.config/carl/api-key" || -f "$HOME/.config/llm-deploy/api-key" || -f "$HOME/.config/mtplx/api-key" ]] || echo "There is no CARL config yet. Run ./setup to connect OpenCode and Pi to the server."

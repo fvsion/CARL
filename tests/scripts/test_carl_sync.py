@@ -20,6 +20,7 @@ CLIENT = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.ab
 class FakeApi:
     def __init__(self) -> None:
         self.doc = {"version": "v1", "published": "now", "models": {"schema": 1, "models": [{"id": "m"}]}}
+        self.carl_version = "1.7.0"
         api = self
 
         class H(BaseHTTPRequestHandler):
@@ -40,6 +41,7 @@ class FakeApi:
                     return
                 if self.headers.get("If-None-Match", "").strip('"') == api.doc["version"]:
                     self.send_response(304)
+                    self.send_header("X-Carl-Version", api.carl_version)
                     self.end_headers()
                     return
                 data = json.dumps(api.doc).encode()
@@ -96,6 +98,12 @@ class SyncTest(unittest.TestCase):
             self.assertEqual(json.load(f)["models"], [{"id": "m"}])
         self.sync("once")
         self.assertEqual(self.installs().count("run"), 1)                                 # 304: nothing again
+
+    def test_the_server_version_is_noted_from_every_reply(self) -> None:
+        """/carl compares the client package with the server's CARL version, also after a server update."""
+        self.assertEqual(self.sync("once").get("applied"), "v1")
+        self.api.carl_version = "1.8.0"                                                   # the server is updated
+        self.assertEqual(self.sync("once").get("server_version"), "1.8.0")               # a 304 carries it too
 
     def test_auto_apply_off_keeps_it_waiting(self) -> None:
         self.sync("auto", "off")

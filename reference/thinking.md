@@ -4,12 +4,12 @@
 
 ## How thinking works
 
-Qwen models write hidden reasoning between `<think>` and `</think>`, before the answer. The **chat template** is a Jinja program in the model file. It decides if that block opens. It uses variables that the server gives to it:
+Qwen models write hidden reasoning between `<think>` and `</think>`, before the answer. Gemma 4 models write it in their own thinking block. The **chat template** is a Jinja program in the model file. It decides if that block opens. It uses variables that the server gives to it:
 
 | Template variable | Meaning |
 |---|---|
 | `enable_thinking` | `false` → the template writes an empty, closed `<think></think>`, and the model answers directly. Not set or `true` → thinking on. |
-| `reasoning_effort` | Qwen3.8 27B only: sets how much the model thinks. The Qwen3.6 35B and the 9B do not use it. |
+| `reasoning_effort` | Qwen3.8 27B only: sets how much the model thinks. The Qwen3.6 35B, the 9B and Gemma 4 do not use it for levels. |
 | `preserve_thinking` | `true` → the reasoning of earlier turns stays in the prompt. The RAM cache and the disk cache need this. |
 
 llama.cpp gives these request fields to the template:
@@ -35,15 +35,15 @@ llama.cpp gives these request fields to the template:
 
 ## Thinking by model
 
-| | Qwen3.8-27B (stock unsloth; abliterated orcarouter) | Qwen3.6-35B-A3B (stock unsloth; Heretic) | Qwen3.8-9B Distill |
-|---|---|---|---|
-| Catalogue `thinking` | `effort` | `on-off` | `on-off` |
-| On/off switch | `enable_thinking` | `enable_thinking` | `enable_thinking` |
-| Effort levels | `low`, `medium`, `xhigh` | none: the template ignores each `reasoning_effort` value | none |
-| Default if the request sends nothing | thinking on, effort `xhigh` | thinking on | thinking on |
-| Effort value that is not valid (for example `high`, or `none` without the patch) | **the template raises an error**, and the request fails | ignored | ignored |
-| Measured (the same prompt, "Is 91 prime?") | `low` 32–39 reasoning chars, `xhigh` 115–165, off 0 | low 1027, high 861, xhigh 984, off 0 | not measured |
-| `preserve_thinking` | supported | supported | added by the patch |
+| | Qwen3.8-27B (stock unsloth; abliterated orcarouter) | Qwen3.6-35B-A3B (stock unsloth; Heretic) | Qwen3.8-9B Distill | Gemma 4 (E4B, 12B, 26B-A4B, 31B) |
+|---|---|---|---|---|
+| Catalogue `thinking` | `effort` | `on-off` | `on-off` | `on-off` |
+| On/off switch | `enable_thinking` | `enable_thinking` | `enable_thinking` | `enable_thinking` (`reasoning_effort: none` with the patch) |
+| Effort levels | `low`, `medium`, `xhigh` | none: the template ignores each `reasoning_effort` value | none | none |
+| Default if the request sends nothing | thinking on, effort `xhigh` | thinking on | thinking on | thinking on (llama-server sets it; the template alone defaults to off) |
+| Effort value that is not valid (for example `high`, or `none` without the patch) | **the template raises an error**, and the request fails | ignored | ignored | ignored |
+| Measured (the same prompt, "Is 91 prime?") | `low` 32–39 reasoning chars, `xhigh` 115–165, off 0 | low 1027, high 861, xhigh 984, off 0 | not measured | not measured |
+| `preserve_thinking` | supported | supported | added by the patch | no: the template drops earlier reasoning ([Whether a state fits](caching.md#whether-a-state-fits)) |
 
 - The stock Qwen3.8-27B template was not checked. CARL assumes that it is the same as the template of the abliterated build.
 - **Abliteration does not change thinking.** It removes refusals.
@@ -64,7 +64,7 @@ llama.cpp gives these request fields to the template:
 **OpenCode precedence:** provider options → model `options` → agent `options` → **variant**.
 - OpenCode merges the variant last, so the variant has priority.
 - If the variant name is unknown (an old config), OpenCode uses the base options of the model. It gives no warning.
-- For this reason, fully restart OpenCode after `install.sh`.
+- For this reason, fully restart OpenCode after the setup.
 
 ---
 
@@ -80,7 +80,7 @@ What you select → what occurs. The provider is `llamacpp` (or `carl` when you 
 | | `low` (default) | `low` | short thinking |
 | | `medium` | `medium` | medium |
 | | `xhigh` | `xhigh` | long thinking |
-| `on-off` (for example `llamacpp/qwen3.6-35b-a3b`, `llamacpp/qwen3.8-9b`) | `none` | `none` | **off** |
+| `on-off` (for example `llamacpp/qwen3.6-35b-a3b`, `llamacpp/qwen3.8-9b`, `llamacpp/gemma-4-12b`) | `none` | `none` | **off** |
 | | `high` (default) | `high` | on (the template ignores the level) |
 
 - `effort` models: `minimal` and `high` are disabled. `minimal` would only repeat `none` (off). `high` is not a Qwen3.8 level (the template raises an error).

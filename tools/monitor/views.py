@@ -6,7 +6,7 @@ from __future__ import annotations
 import time
 from typing import Callable, List, Optional, Sequence, Tuple
 
-from carl_core.domain.units import duration, speed, tokens
+from carl_core.domain.units import duration, file_size, speed, tokens
 
 from .cards import (REQ_HEAD, STOPPED, View, card_requests, card_stopped, column, live_sentence, log_view,
                     req_row, status_of, wrapped)
@@ -108,11 +108,15 @@ def body_connect(v: View, ui: UIState, d: ServerData, cols: int, height: int,
                 else "no other computer syncs yet")
         return (top + indent(draw_card("clients", "CLIENTS", f"{DIM}{summ}{R}",
                                        clients_lines(v, here, stale, tw), w, 1)))[:height + len(top)]
-    ui.keys = [("i", "install on this Mac"), ("u", "update the model lists"), ("o p c", "copy a config"), ("k", "show key"),
-               ("P", "send the config"), ("↑↓", "scroll the config"), ("[ ]", "Setup / Clients")]
+    ui.keys = [("i", "install on this Mac"), ("u", "update the model lists"), ("z", "make the client package"),
+               *([("f", "show it in the Finder")] if package_path(ui) else []), ("o p c", "copy a config"),
+               ("k", "show key"), ("P", "send the config"), ("↑↓", "scroll the config"), ("[ ]", "Setup / Clients")]
     if ui.install_ask:
         ui.keys = [("y", "run the installer"), ("n Esc", "cancel")]
-    ui.keys_more = ["x closes the installer's output. Click a button, or press its key."]
+    ui.keys_more = ["x closes the output of the installer and the card of the client package. Click a button, or "
+                    "press its key.",
+                    "The client package holds the API key of the server: keep it secret, and delete it after the "
+                    "copy."]
     steps, about = setup_parts(v, ui, here, tw, stale, installed)
     beside = tw >= 150
     if beside:
@@ -124,6 +128,8 @@ def body_connect(v: View, ui: UIState, d: ServerData, cols: int, height: int,
     room = max(height - len(rows) - 3, 3)
     if ui.install and ui.install_shown:
         rows += draw_card("install", "INSTALLER", install_summary(ui.install), install_lines(ui, room, tw), w, 1)
+    elif ui.package and ui.package_shown:
+        rows += draw_card("package", "CLIENT PACKAGE", package_summary(ui), package_lines(ui, tw, v.home), w, 1)
     else:
         kind = ui.preview
         note = (f"{GRN}copied to the clipboard ✓{R}" if ui.copied == kind else
@@ -204,12 +210,13 @@ def clients_lines(v: View, here: List[Tuple[str, str]], stale: Sequence[Drift], 
         return [*L, "", *button_rows("  ", [("Send the config to them (P)", "inspush"), (forget, "clforget")], mw)]
 
     tip = ("Press P to send the installed models to every computer that syncs." if v.clients
-           else "To add a computer: copy the client folder to it, then run its installer there.")
+           else "To add a computer: make the client package in Setup (z), then run ./setup on the computer.")
     return with_side(main, tip, [
         ("Who is in the list", ["OpenCode and Pi on this Mac, and each computer whose installer set up the sync. Such a "
                                 "computer has a copy of the client folder. It gets the config that you send."]),
-        ("Add a computer", [f"Copy the client folder to the computer. Run {CYN}./install-clients.sh{R} there, then "
-                            f"{CYN}./install.sh{R}. The folder has the address and the key of the server."])],
+        ("Add a computer", [f"In Setup, make the client package (z, or {CYN}./carl.sh package{R}). Copy the zip to the "
+                            f"computer, unzip it and run {CYN}./setup{R} there. The package has the address and the "
+                            f"key of the server."])],
         tw, main_w=100)
 
 
@@ -236,8 +243,8 @@ def setup_parts(v: View, ui: UIState, here: List[Tuple[str, str]], tw: int, stal
         elif not here:
             L.append(f"{DIM}OpenCode and Pi on this Mac are not set up for this server.{R}")
         if ui.install_ask:
-            what = ("installs OpenCode and Pi if they are not installed (a download from npm). Then it writes their "
-                    "configs" if ui.install_ask == "all" else "writes the OpenCode and Pi configs for this server")
+            what = ("installs OpenCode and Pi when they are missing or older (a download from npm). Then it writes "
+                    "their configs" if ui.install_ask == "all" else "writes the OpenCode and Pi configs for this server")
             L += cwrap(f"{YEL}Run ./carl.sh install{' --config-only' if ui.install_ask == 'config' else ''} now? It "
                        f"{what}.{R}", mw)
             L.append(buttons("  ", [("Run it (y)", "insyes"), ("Cancel (n)", "insno")]))
@@ -249,8 +256,10 @@ def setup_parts(v: View, ui: UIState, here: List[Tuple[str, str]], tw: int, stal
         L += ["", heading("A VM or another computer", mw)]
         L += cwrap(f"1. Start the server for the VM: {CYN}./carl.sh --vm{R} "
                    + (f"{GRN}(it runs so: {v.host}){R}" if vm_ready else f"{YEL}(now: this Mac only){R}"), mw, "   ")
-        L += cwrap(f"2. Copy the client folder to it. Run {CYN}./install-clients.sh{R}, then {CYN}./install.sh{R} "
+        L += cwrap(f"2. Make the client package. Copy the zip to the computer, unzip it and run {CYN}./setup{R} "
                    f"there.", mw, "   ")
+        L.append(buttons("  ", [("Make the client package (z)", "pkgmake")]
+                         + ([("Show it in the Finder (f)", "pkgshow")] if package_path(ui) else [])))
         L += cwrap("3. Other computers sync their config: " + (f"{GRN}{v.listeners} connected now{R}" if v.api else
                                                                 f"{YEL}the dashboard API is not running{R}")
                    + f"{DIM} (the Clients tab lists them){R}", mw, "   ")
@@ -263,19 +272,65 @@ def setup_parts(v: View, ui: UIState, here: List[Tuple[str, str]], tw: int, stal
         return L
 
     about: List[Section] = [
-        ("On this Mac", [f"One command does it: {CYN}./carl.sh install{R}. It installs OpenCode and Pi if they are not "
-                         f"installed (into ~/.local, no sudo). Then it connects them to this server. It keeps your "
-                         f"providers, your default model and your agents. It writes a backup first."]),
-        ("In a VM", ["Start the server for the VM with --vm. Copy the client folder into the VM. Then run the "
-                     "installer there. The folder has the address and the key of the server (remote.json and "
-                     "api-key). CARL writes them at each server start, so the installer needs no arguments."]),
-        ("Other computers", ["On a different computer, the installer adds a sync service. The service keeps one "
+        ("On this Mac", [f"One command does it: {CYN}./carl.sh install{R}, the same setup as on other computers. It "
+                         f"installs OpenCode and Pi when they are missing or older (into ~/.local, no sudo). Then it "
+                         f"connects them to this server. The buttons here use the choices of your last setup. It "
+                         f"keeps your providers, your default model and your agents. It writes a backup first."]),
+        ("A VM or another computer", ["Start the server for it with --vm (or another network). Then make the client "
+                                      "package: a zip in dist/ with the client folder, the address and the key of "
+                                      "the server. Copy it to the computer, unzip it and run ./setup (on a Mac, a "
+                                      "double click on setup.command). The setup asks one time which clients and "
+                                      "options you want. To update, unzip a new package over the folder and run "
+                                      "./setup again.",
+                                      "The package holds the API key: keep it secret, and delete the zip after "
+                                      "the copy. When the server serves only this Mac, CARL makes no package and "
+                                      "tells you how to change the network."]),
+        ("Other computers", ["On a different computer, the setup adds a sync service. The service keeps one "
                              "connection to this dashboard and opens no port on the computer. It applies the config "
                              "that you send, and it makes backups."]),
         ("By hand", ["Each button copies one provider block (named carl) to the clipboard. The block adds a provider. "
                      "It does not replace your providers."])]
     return main, about
 
+
+
+def package_path(ui: UIState) -> str:
+    """The zip of the last client package made in this session ("" when none)."""
+    run = ui.package
+    return run.outcome.path if run and run.outcome else ""
+
+
+def package_summary(ui: UIState) -> str:
+    """The client package card's title info."""
+    run = ui.package
+    if run is None or not run.done or run.outcome is None:
+        return f"{YEL}CARL makes it…{R}"
+    o = run.outcome
+    return (f"{RED}not made{R}" if o.error else f"{GRN}made: {o.files} files, {file_size(o.size)}{R}")
+
+
+def package_lines(ui: UIState, tw: int, home: str) -> List[CardLine]:
+    """The client package: the zip and the key warning, or why CARL made none; then its buttons."""
+    run = ui.package
+    if run is None:
+        return []
+    if not run.done or run.outcome is None:
+        return [f"{DIM}CARL makes the client package…{R}"]
+    o = run.outcome
+    out: List[CardLine] = []
+    if o.error:
+        out += cwrap(f"{RED}{o.error}{R}", tw)
+    else:
+        out += cwrap("The client package is ready:", tw)
+        out += cwrap(f"  {B}{home_short(o.path, home)}{R}", tw, "  ")
+    for note in o.notes:
+        text, *commands = note.split("\n")
+        warn = text.startswith("CAUTION")
+        out += cwrap(f"{YEL}{text}{R}" if warn else text, tw)
+        out += [x for c in commands for x in cwrap(f"  {CYN}{c}{R}", tw, "  ")]
+    out.append(buttons("", ([("Show it in the Finder (f)", "pkgshow")] if o.path else [])
+                       + [("Make it again (z)", "pkgmake"), ("Close (x)", "pkgclose")]))
+    return out
 
 
 def install_summary(ins: InstallRun) -> str:

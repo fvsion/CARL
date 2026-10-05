@@ -6,6 +6,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Optional, Protocol, Tuple, Union
 
+from carl_core.domain.package import Outcome
+
 from .card_form import CardForm
 from .cards import LEVEL_NAMES
 from .model import ModelInfo
@@ -129,6 +131,15 @@ class InstallRun:
 
 
 @dataclass
+class PackageRun:
+    """The client package from the Connect tab (carl_core/adapters/client_package.py, the code of
+    ./carl.sh package): it runs in a thread; outcome is set when it is done."""
+    started: float
+    outcome: Optional[Outcome] = None
+    done: bool = False
+
+
+@dataclass
 class UIState:
     """Everything the screen shows besides the snapshot: tab, scroll, dialogs, Settings, jobs."""
     tab: int = 0
@@ -187,6 +198,8 @@ class UIState:
     install: Optional[InstallRun] = None
     install_shown: bool = False     # its output replaces the config preview until a copy button
     install_after_restart: bool = False             # a mode switch: update this Mac's configs once it is up
+    package: Optional[PackageRun] = None            # the last client package (z) made in this session
+    package_shown: bool = False     # its card replaces the config preview until a copy button or x
 
     @property
     def full(self) -> bool:

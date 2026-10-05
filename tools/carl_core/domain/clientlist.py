@@ -21,8 +21,11 @@ _CONTROL = re.compile(r"[\x00-\x1f\x7f-\x9f]")
 def client_entry(m: ModelInfo, ctx: int) -> JsonObject:
     """One installed model for the client configs."""
     label = _CONTROL.sub("", str(m.get("label") or m.get("name", "")))[:LABEL_MAX]
+    # Qwen has a separate non-thinking sampling (its model cards); Gemma 4 and other models use one
+    # sampling for every use, so their "none" variant only turns thinking off
+    qwen = str(m.get("family") or "").startswith("qwen")
     return {"id": m.get("name", ""), "label": label or m.get("name", ""), "ctx": int(ctx),
-            "thinking": m.get("thinking") or DEFAULT_THINKING}
+            "thinking": m.get("thinking") or DEFAULT_THINKING, "off_sampling": "qwen" if qwen else "same"}
 
 
 def client_list(models: List[ModelInfo], ctx_of: Callable[[ModelInfo], int], default: Optional[str]) -> JsonObject:

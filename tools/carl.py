@@ -44,6 +44,9 @@ CLI (./carl.sh models | download | verify use it through host/models.sh)
                                        holds, trim it to cache.disk_gb, or remove every file
   carl.py push                         publish the client config (the installed models) for the clients'
                                        sync service on other computers (the dashboard's API serves it)
+  carl.py package [--anyway] [--out DIR]   the client package: dist/carl-client-VERSION-HOST.zip, the
+                                       client folder with the server's address and key, for ./setup on
+                                       another computer (carl_core/adapters/client_package.py)
 
 This module is also the public API of the monitor (tools/llama-monitor.py): the functions
 below take and return plain dicts. The logic lives in tools/carl_core.
@@ -72,6 +75,8 @@ from carl_core.domain.settings import (MODEL_KEYS as _MODEL, SCHEMA as SCHEMA, S
 from carl_core.domain.types import (Catalog, CustomCard, CustomInfo, HfFileList, JsonObject, JsonValue,  # noqa: E402
                                     LocalDb, ModelInfo, SettingSource, SettingValue, Settings, Zone)
 from carl_core.domain.units import file_size  # noqa: E402
+from carl_core.adapters.client_package import make_package as _make_package  # noqa: E402
+from carl_core.domain.package import Outcome as PackageOutcome  # noqa: E402
 from carl_core.wiring import REPO as REPO, CarlPaths, build_carl  # noqa: E402
 from carl_help import columns, width, wrap  # noqa: E402
 
@@ -540,6 +545,45 @@ def cmd_get(name: str, field: str) -> None:
     print("" if v is None else v)
 
 
+def make_package(out_dir: Optional[str] = None, anyway: bool = False, cmd: str = "./carl.sh") -> PackageOutcome:
+    """The client package (./carl.sh package and the dashboard): the zip of client/ with the server's address
+    and key. The server's remote.json and api-key come from CARL_CLIENT_DIR when it is set, else client/."""
+    client_dir = os.environ.get("CARL_CLIENT_DIR") or os.path.join(REPO, "client")
+    return _make_package(REPO, client_dir, out_dir or os.path.join(REPO, "dist"), client_models(),
+                         load_config(), cmd, anyway)
+
+
+def cmd_package(argv: Sequence[str]) -> int:
+    use = "package [--anyway] [--out DIR]"
+    out_dir: Optional[str] = None
+    anyway = False
+    i = 0
+    while i < len(argv):
+        if argv[i] == "--anyway":
+            anyway = True
+        elif argv[i] == "--out":
+            out_dir = _arg(argv, i + 1, use)
+            i += 1
+        else:
+            raise ConfigError(f"package does not know '{argv[i]}'. Usage: ./carl.sh {use}")
+        i += 1
+    res = make_package(out_dir, anyway, os.environ.get("CARL_CMD") or "./carl.sh")
+    w = width()
+
+    def para(note: str) -> str:
+        text, *commands = note.split("\n")                 # the commands: as they are, to copy
+        return "\n".join(wrap(text, w) + [f"  {c}" for c in commands])
+    if res.error:
+        print("\n".join([para(res.error), *map(para, res.notes)]), file=sys.stderr)
+        return 1
+    print(f"CARL made the client package ({res.files} files, {file_size(res.size)}):")
+    print(f"  {res.path}")
+    for n in res.notes:
+        print()
+        print(para(n))
+    return 0
+
+
 def main(argv: List[str]) -> int:
     cmd = argv[0] if argv else "list"
     a = argv[1:]
@@ -602,6 +646,8 @@ def main(argv: List[str]) -> int:
         print("\n".join(wrap(f"CARL is ready to send the client config to other computers (version {version}). "
                              "The dashboard sends it while it runs. OpenCode and Pi apply it at their next start.",
                              width())))
+    elif cmd == "package":
+        return cmd_package(a)
     elif cmd == "launch-env":
         model = _arg(a, a.index("--model") + 1, "launch-env [--model NAME|PATH] [--no-config]") if "--model" in a else None
         env, note = launch_env(model, use_config="--no-config" not in a)

@@ -115,13 +115,16 @@ class ClientListTest(unittest.TestCase):
         self.assertEqual([(m["id"], m["thinking"]) for m in cast(List[Dict[str, JsonValue]], doc["models"])], [("mine", "effort")])
 
     def test_only_downloaded_models(self) -> None:
-        ms: list[ModelInfo] = [{"name": "a", "label": "A · Q4", "status": "downloaded", "thinking": "effort"},
+        ms: list[ModelInfo] = [{"name": "a", "label": "A · Q4", "status": "downloaded", "thinking": "effort",
+                                "family": "qwen3.8-27b"},
                                {"name": "b", "status": "missing"},
                                {"name": "c", "label": "C\x1b[2J", "status": "downloaded"}]
         doc = client_list(ms, lambda m: 65536, default="b")
         self.assertEqual(doc["default"], None)                               # not installed: no default
-        self.assertEqual(doc["models"], [{"id": "a", "label": "A · Q4", "ctx": 65536, "thinking": "effort"},
-                                         {"id": "c", "label": "C[2J", "ctx": 65536, "thinking": "on-off"}])
+        self.assertEqual(doc["models"], [{"id": "a", "label": "A · Q4", "ctx": 65536, "thinking": "effort",
+                                          "off_sampling": "qwen"},                 # a Qwen family: Qwen's off sampling
+                                         {"id": "c", "label": "C[2J", "ctx": 65536, "thinking": "on-off",
+                                          "off_sampling": "same"}])
         self.assertEqual(client_entry({"name": "x"}, 4096)["label"], "x")
 
     def test_app_client_models(self) -> None:
@@ -130,7 +133,8 @@ class ClientListTest(unittest.TestCase):
                   config={"schema": 1, "models": {"small": {"ctx": 131072}}})
         doc = w.carl.client_models(w.carl.load_config())
         self.assertEqual(doc["default"], "small")
-        self.assertEqual(doc["models"], [{"id": "small", "label": "small", "ctx": 131072, "thinking": "on-off"}])
+        self.assertEqual(doc["models"], [{"id": "small", "label": "small", "ctx": 131072, "thinking": "on-off",
+                                          "off_sampling": "same"}])
 
 
 if __name__ == "__main__":

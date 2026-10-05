@@ -339,6 +339,94 @@ class AppTest(unittest.TestCase):
         self.assertIn("npm: network down", text)
         self.assertIn("The installer stopped with an error", self.ui.toast_msg[0])
 
+    # ---- Connect > Setup: the client package (z), the same code as ./carl.sh package
+    def client_folder(self, remote: object = None, key: str = "pkgkey") -> str:
+        """A client folder in the test repo (no git there: the package walks the folder), with the server's files."""
+        c = os.path.join(self.tmp.name, "client")
+        os.makedirs(os.path.join(c, "__pycache__"), exist_ok=True)
+        for name in ("setup", "setup.command", "install.sh", "configure.py", "__pycache__/x.pyc", "opencode.json.bak.1"):
+            with open(os.path.join(c, name), "w", encoding="utf-8") as f:
+                f.write("x\n")
+        if remote is not None:
+            with open(os.path.join(c, "remote.json"), "w", encoding="utf-8") as f:
+                json.dump(remote, f)
+            with open(os.path.join(c, "api-key"), "w", encoding="utf-8") as f:
+                f.write(key)
+        return c
+
+    def make_package(self) -> str:
+        """z on the Connect tab; waits for the job; the screen as plain text, one line."""
+        import time
+        from unittest import mock
+        with mock.patch.dict(os.environ, {k: v for k, v in os.environ.items() if k != "CARL_CLIENT_DIR"}, clear=True):
+            self.keys("2", "z")
+            run = self.ui.package
+            assert run is not None
+            end = time.time() + 20
+            while not run.done and time.time() < end:
+                time.sleep(0.02)
+        self.assertTrue(run.done)
+        self.app.frame(self.ctl.data)
+        return " ".join(" ".join(x.strip(" │") for x in ANSI.sub("", self.screen()).splitlines()).split())
+
+    def test_connect_offers_the_client_package_and_its_keys(self) -> None:
+        self.keys("2")
+        text = self.screen()
+        self.assertIn("[ Make the client package (z) ]", ANSI.sub("", text))
+        self.assertNotIn("Show it in the Finder", ANSI.sub("", text))      # no package yet
+        self.assertIn("z make the client package", ANSI.sub("", self.app.footer(200)))
+        self.keys("?")
+        card = ANSI.sub("", self.screen())
+        self.assertIn("make the client package", card)
+        self.assertIn("holds the API key", card)
+
+    def test_client_package_before_the_first_server_start(self) -> None:
+        self.client_folder()
+        text = self.make_package()
+        self.assertIn("CLIENT PACKAGE not made", text)
+        self.assertIn("has no remote.json and api-key", text)
+        self.assertIn("Start the server one time", text)
+        self.assertFalse(os.path.exists(os.path.join(self.tmp.name, "dist")))
+
+    def test_client_package_refused_when_the_server_serves_only_this_mac(self) -> None:
+        self.client_folder({"host": "127.0.0.1", "port": 8095, "cache_api": "http://127.0.0.1:8096"})
+        text = self.make_package()
+        self.assertIn("the server serves only this Mac (127.0.0.1)", text)
+        self.assertIn("Settings > Server > Network", text)
+        self.assertIn("config set llama.net vm", text)
+        self.assertFalse(os.path.exists(os.path.join(self.tmp.name, "dist")))
+        self.assertIn("CARL made no client package", ANSI.sub("", self.ui.toast_msg[0]))
+
+    def test_client_package_is_made_shown_and_opened_in_the_finder(self) -> None:
+        import zipfile
+        from unittest import mock
+        self.client_folder({"host": "192.168.42.1", "port": 8095, "cache_api": "http://192.168.42.1:8096"})
+        text = self.make_package()
+        run = self.ui.package
+        assert run is not None and run.outcome is not None
+        path = run.outcome.path
+        self.assertTrue(path.startswith(os.path.join(self.tmp.name, "dist", "carl-client-")))
+        self.assertEqual(os.stat(path).st_mode & 0o777, 0o600)
+        with zipfile.ZipFile(path) as z:
+            names = sorted(z.namelist())
+        self.assertIn("carl-client/api-key", names)
+        self.assertNotIn("carl-client/__pycache__/x.pyc", names)                 # never caches or backups
+        self.assertNotIn("carl-client/opencode.json.bak.1", names)
+        for part in ("CLIENT PACKAGE made:", "The client package is ready:", "CAUTION: the package holds the API key",
+                     "unzip carl-client-", "cd carl-client && ./setup", "[ Show it in the Finder (f) ]"):
+            self.assertIn(part, text)
+        self.assertIn("f show it in the Finder", ANSI.sub("", self.app.footer(200)))
+        with mock.patch("subprocess.Popen") as popen:
+            self.keys("f")
+        self.assertEqual(popen.call_args[0][0], ["open", "-R", path])
+        import shutil
+        for cols in (100, 140, 200):                                            # every line within the width
+            with mock.patch.object(shutil, "get_terminal_size", return_value=os.terminal_size((cols, 60))):
+                self.assertTrue(all(vlen(x) <= cols for x in self.app.frame(self.ctl.data)))
+        self.keys("x")
+        self.assertFalse(self.ui.package_shown)
+        self.assertIn("OPENCODE CONFIG", self.screen())
+
     def test_auto_fit_panel_goal_and_scope_are_saved_at_once(self) -> None:
         self.keys("5", "A")
         p = self.ui.pending

@@ -199,6 +199,8 @@ def custom_defaults(shape: Optional[ModelShape], drafter: bool = False) -> Tuple
     tune["spec"], tune["spec_n"] = (("draft-mtp,ngram-mod", 1) if info["mtp"] else
                                     ("draft-mtp,ngram-mod", 2) if drafter else ("ngram-mod", 2))
     tune["ctx"] = min(CUSTOM_CTX, ctx_train(shape))
+    if shape.get("arch") == "gemma4":
+        tune["top_k"] = 64                      # Google's Gemma 4 sampling: 1.0 / 0.95 / 64 for every use
     return tune, info
 
 

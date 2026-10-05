@@ -11,6 +11,7 @@ import time
 from dataclasses import dataclass
 from typing import List, Optional, Sequence, Tuple
 
+from carl_core.adapters.client_package import carl_version
 from carl_core.domain.units import duration, tokens
 
 from . import cli, diskcache, fsio, system, uiprefs
@@ -176,7 +177,7 @@ class App:
         self._api, self._api_where = None, where
         api = CacheApi(ep.host, ep.port + 1, lambda: self.endpoint.key, self.jobs.paths.slots, self.jobs.cache_conf,
                        lambda model: self.jobs.save_recorded(model, self.ctl.data.router is not None),
-                       os.path.dirname(self.jobs.paths.config_file))
+                       os.path.dirname(self.jobs.paths.config_file), carl_version(self.jobs.paths.repo))
         err = api.start()
         if err:
             self.ui.toast(f"The dashboard API cannot start: {err}. Other computers cannot sync now (the Caching panel "
@@ -283,6 +284,8 @@ class App:
             return f"{CYN}Auto-tune runs for {tn.model}{R} {DIM}(Settings > Auto-tune){R}"
         if ins and not ins.done:
             return f"{CYN}The installer runs{R} {DIM}(the Connect tab){R}"
+        if ui.package and not ui.package.done:
+            return f"{CYN}CARL makes the client package{R} {DIM}(the Connect tab){R}"
         return ""
 
     def footer(self, w: int) -> str:

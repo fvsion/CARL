@@ -114,6 +114,26 @@ class ConfigureTests(unittest.TestCase):
         self.assertEqual(pi[0]["thinkingLevelMap"], {"minimal": None, "low": None, "medium": None, "xhigh": None})
         self.assertEqual(pi[1]["contextWindow"], 65536)
 
+    def test_the_none_variant_sends_qwen_sampling_only_to_qwen(self) -> None:
+        """Qwen has its own non-thinking sampling; Gemma 4 (off_sampling same) only turns thinking off."""
+        self.models = {"schema": 1, "default": "qwen3.6-35b-a3b", "models": [
+            MODELS["models"][0], {"id": "gemma-4-e4b", "label": "Gemma 4 E4B", "ctx": 98304, "thinking": "on-off",
+                                  "off_sampling": "same"}]}
+        p = self.run_configure()
+        self.assertEqual(p.returncode, 0, p.stderr)
+        oc = self.read_json(".config/opencode/opencode.json")["provider"]["llamacpp"]["models"]
+        self.assertEqual(oc["qwen3.6-35b-a3b"]["variants"]["none"]["top_p"], 0.8)          # no field: Qwen's, as before
+        self.assertEqual(oc["gemma-4-e4b"]["variants"]["none"], {"reasoningEffort": "none"})
+
+    def test_the_default_is_the_model_the_server_runs(self) -> None:
+        """Single model: the clients start with the model the server runs now, not the saved one."""
+        p = self.run_configure("--running", "qwen3.8-27b")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(self.read_json(".config/opencode/opencode.json")["model"], "llamacpp/qwen3.8-27b")
+        self.assertEqual(self.read_json(".pi/agent/settings.json")["defaultModel"], "qwen3.8-27b")
+        p = self.run_configure("--running", "not-installed")                    # unknown: the saved default
+        self.assertEqual(self.read_json(".config/opencode/opencode.json")["model"], "llamacpp/qwen3.6-35b-a3b")
+
     def test_a_deleted_model_goes_and_our_default_follows(self) -> None:
         self.assertEqual(self.run_configure().returncode, 0)
         self.models = {"schema": 1, "default": "qwen3.8-27b", "models": [MODELS["models"][1]]}
