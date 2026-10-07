@@ -363,12 +363,12 @@ async function runSingleAgent(
 	};
 
 	try {
-		if (agent.systemPrompt.trim()) {
-			const tmp = await writePromptToTempFile(agent.name, agent.systemPrompt);
-			tmpPromptDir = tmp.dir;
-			tmpPromptPath = tmp.filePath;
-			args.push("--append-system-prompt", tmpPromptPath);
-		}
+		// CARL: always, also for an agent with no prompt of its own: with --append-system-prompt Pi does not read
+		// APPEND_SYSTEM.md, which holds CARL's delegation rule (for the main agent only, never a subagent)
+		const tmp = await writePromptToTempFile(agent.name, agent.systemPrompt.trim() ? agent.systemPrompt : "\n");
+		tmpPromptDir = tmp.dir;
+		tmpPromptPath = tmp.filePath;
+		args.push("--append-system-prompt", tmpPromptPath);
 
 		args.push(`Task: ${task}`);
 		let wasAborted = false;

@@ -1,0 +1,124 @@
+{
+ "models": [
+  "fake-model"
+ ],
+ "rules": [
+  {
+   "system_contains": [
+    "You are **coder**",
+    "operating inside pi"
+   ],
+   "tool_results": 0,
+   "reply": {
+    "tool": "write",
+    "arguments": {
+     "path": "textstats/readability.py",
+     "content": "\"\"\"Readability scores.\"\"\"\nfrom __future__ import annotations\n\nimport re\n\nfrom textstats.tokenize import sentences, words\n\n_VOWELS = re.compile(r\"[aeiouy]+\")\n\n\ndef syllable_count(word: str) -> int:\n    w = word.lower()\n    n = len(_VOWELS.findall(w))\n    if w.endswith(\"e\") and not w.endswith((\"le\", \"ee\")) and n > 1:\n        n -= 1\n    return max(1, n)\n\n\ndef sentence_count(text: str) -> int:\n    return len(sentences(text))\n\n\ndef flesch_reading_ease(text: str) -> float:\n    ws = words(text)\n    if not ws:\n        return 0.0\n    s = max(1, sentence_count(text))\n    syl = sum(syllable_count(w) for w in ws)\n    return round(206.835 - 1.015 * len(ws) / s - 84.6 * syl / len(ws), 2)\n"
+    }
+   }
+  },
+  {
+   "system_contains": [
+    "You are **coder**"
+   ],
+   "tool_results": 0,
+   "reply": {
+    "tool": "write",
+    "arguments": {
+     "filePath": "textstats/readability.py",
+     "content": "\"\"\"Readability scores.\"\"\"\nfrom __future__ import annotations\n\nimport re\n\nfrom textstats.tokenize import sentences, words\n\n_VOWELS = re.compile(r\"[aeiouy]+\")\n\n\ndef syllable_count(word: str) -> int:\n    w = word.lower()\n    n = len(_VOWELS.findall(w))\n    if w.endswith(\"e\") and not w.endswith((\"le\", \"ee\")) and n > 1:\n        n -= 1\n    return max(1, n)\n\n\ndef sentence_count(text: str) -> int:\n    return len(sentences(text))\n\n\ndef flesch_reading_ease(text: str) -> float:\n    ws = words(text)\n    if not ws:\n        return 0.0\n    s = max(1, sentence_count(text))\n    syl = sum(syllable_count(w) for w in ws)\n    return round(206.835 - 1.015 * len(ws) / s - 84.6 * syl / len(ws), 2)\n"
+    }
+   }
+  },
+  {
+   "system_contains": [
+    "You are **coder**",
+    "operating inside pi"
+   ],
+   "tool_results": 1,
+   "reply": {
+    "tool": "write",
+    "arguments": {
+     "path": "textstats/__init__.py",
+     "content": "\"\"\"textstats: simple statistics on plain text.\"\"\"\nfrom textstats.readability import flesch_reading_ease, sentence_count, syllable_count\nfrom textstats.stats import longest_word, mean_word_length, top_words, word_count\nfrom textstats.tokenize import sentences, words\n\n__all__ = [\"words\", \"sentences\", \"word_count\", \"top_words\", \"mean_word_length\", \"longest_word\",\n           \"syllable_count\", \"sentence_count\", \"flesch_reading_ease\"]\n__version__ = \"0.1.0\"\n"
+    }
+   }
+  },
+  {
+   "system_contains": [
+    "You are **coder**"
+   ],
+   "tool_results": 1,
+   "reply": {
+    "tool": "write",
+    "arguments": {
+     "filePath": "textstats/__init__.py",
+     "content": "\"\"\"textstats: simple statistics on plain text.\"\"\"\nfrom textstats.readability import flesch_reading_ease, sentence_count, syllable_count\nfrom textstats.stats import longest_word, mean_word_length, top_words, word_count\nfrom textstats.tokenize import sentences, words\n\n__all__ = [\"words\", \"sentences\", \"word_count\", \"top_words\", \"mean_word_length\", \"longest_word\",\n           \"syllable_count\", \"sentence_count\", \"flesch_reading_ease\"]\n__version__ = \"0.1.0\"\n"
+    }
+   }
+  },
+  {
+   "system_contains": [
+    "You are **coder**"
+   ],
+   "reply": {
+    "text": "## Result\nDone: textstats/readability.py, exported from textstats/__init__.py."
+   }
+  },
+  {
+   "user_contains": "<task id=",
+   "last_role": "user",
+   "reply": {
+    "tool": "bash",
+    "arguments": {
+     "command": "python3 -m pytest -q tests/test_tokenize.py",
+     "description": "Run the tests"
+    }
+   }
+  },
+  {
+   "user_contains": "<subagent",
+   "last_role": "user",
+   "reply": {
+    "tool": "bash",
+    "arguments": {
+     "command": "python3 -m pytest -q tests/test_tokenize.py"
+    }
+   }
+  },
+  {
+   "last_role": "tool",
+   "reply": {
+    "text": "The coder works on it; I check its result when it comes back."
+   }
+  },
+  {
+   "has_tool": "task",
+   "reply": {
+    "reasoning": "A new module plus tests: large. Delegate.",
+    "tool": "task",
+    "arguments": {
+     "description": "readability module",
+     "prompt": "Write textstats/readability.py (readability).",
+     "subagent_type": "coder",
+     "background": true
+    }
+   }
+  },
+  {
+   "has_tool": "subagent",
+   "reply": {
+    "reasoning": "A new module plus tests: large. Delegate.",
+    "tool": "subagent",
+    "arguments": {
+     "agent": "coder",
+     "task": "Write textstats/readability.py (readability).",
+     "background": true
+    }
+   }
+  }
+ ],
+ "default": {
+  "text": "OK"
+ }
+}

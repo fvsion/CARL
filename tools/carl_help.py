@@ -4,7 +4,7 @@
     python3 tools/carl_help.py [TOPIC]      # what ./carl.sh -h and ./carl.sh help TOPIC print
 
 Every topic is written in ASD-STE100 simplified technical English with the names of
-docs/phase21/glossary.md. The text wraps to the terminal: COLUMNS when it is set, else the
+reference/glossary.md. The text wraps to the terminal: COLUMNS when it is set, else the
 terminal's width, else 80 columns (at most MAX_WIDTH, at least MIN_WIDTH). tools/carl.py
 and tools/llama-fit.py use width() and the wrap helpers for their output too.
 """

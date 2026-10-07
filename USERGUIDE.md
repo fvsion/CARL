@@ -677,26 +677,34 @@ The setup adds a specialist **coder** subagent, and a rule that tells the main a
 - The setup checks the server that runs. Run it again after you change the model or the slots.
 - The answer `on` (`--coder on`, or `CODER=1`) installs the coder in all conditions. `off` (`--coder off`, or `NO_CODER=1`) never installs it.
 
-**When the main agent uses the coder.** The main agent delegates **on its own**, and only in these conditions:
+**When the main agent uses the coder.** The main agent delegates **on its own**, in these conditions:
 1. **It is stuck:** a fix for the same code failed two times. These are its own attempts, or attempts that you tell it failed.
 2. **The task is large:** 3 or more files, or ~150 or more lines. Examples: a new module, package or CLI, an implementation with tests, a multi-step feature or refactor.
 
 The main agent keeps the questions, the explanations, the code searches and the small edits.
 
+**The reminder.** Local models often forget the rule after they read some code. Thus, CARL adds one line to the end of each of your messages in the main session: `[CARL reminder] Large coding work or a fix that already failed goes to coder …`. The line is the same each time, so the caches stay valid. In the tests, it moved the most large and stuck tasks to the coder. `NO_REMINDER=1 ./setup --yes` turns it off (`./carl.sh install` on the server Mac).
+
+**`/code TASK`** gives a task straight to the coder. The main agent does not decide.
+
+**How the main agent writes the task.** The coder sees only the task. The main agent writes it in a fixed form, from your request and the project's files: `Mode`, `Goal`, `Files`, `Requirements`, `Acceptance`, `Constraints`, and for a fix that failed, `Error` and `Tried`.
+
 **How the coder works:**
-- It starts with a new context, and works one step at a time.
-- Before it fixes a failure, it reproduces the failure.
-- It runs the tests or the build.
-- It does not leave placeholders.
+- It works in one of two modes in each task. **`Mode: code`:** it writes the program code and runs the tests, but it does not change the tests. **`Mode: test`:** it writes tests from the requirements and does not change the program code. For code with tests, the main agent can send the test task first, then the code task.
+- It changes only the files that the task names, and it checks each acceptance item.
+- It starts with a new context, and works one step at a time. Before it fixes a failure, it reproduces the failure. It runs the tests or the build. It does not leave placeholders.
 - After three failed approaches, it stops and reports.
-- Its report gives the result, the changed files, the verification, the root cause and the open issues. The main agent checks the report before it answers you.
+- Its report gives the result, the changed files, each acceptance item, the verification, the root cause and the open issues. The main agent checks the report before it answers you.
+- Only the main agent gets the delegation rule and the reminder. The coder and the other subagents never get them.
 
-**Tested (35B, 2 slots, 2026-10-01):**
+**Tested (2026-10-05 to 2026-10-07, OpenCode / Pi, the large and stuck tasks that went to the coder):**
 
-| Client | Large tasks delegated | Stuck tasks delegated | Questions and small edits |
-|---|---|---|---|
-| OpenCode | 3 of 3 | 2 of 2 | Done by the main agent |
-| Pi | 2 of 3 | Yes | Done by the main agent |
+| Model | The rule only | With the reminder and the two modes |
+|---|---|---|
+| Qwen3.6 35B A3B Q4 | large 2/5, 3/5; stuck 0/4, 0/4 | large 5/5, 5/5; stuck 2/4, 2/4 |
+| Gemma 4 12B | large 1/5, 2/5; stuck 0/4, 1/4 | large 5/5, 5/5; stuck 3/4, 3/4 |
+
+The main agents kept the small tasks and the questions. The method, the other models and an advanced setting (the new-file gate) are in [the hand-off to the coder](reference/delegation.md).
 
 Delegation depends on the judgment of the model. Thus, it occurs "usually", not "always". When you ask for it, it always occurs.
 
@@ -754,6 +762,7 @@ The setup (`./carl.sh install`, `./setup`) adds these to OpenCode and Pi. Each o
 | **Disk cache** (`carl-cache`) | OpenCode, Pi | Fast starts: each agent's prompt and each session saved on the server's disk ([Fast starts](#7-fast-starts-the-disk-cache)) | `NO_CACHE=1` |
 | **Model check** (`carl-model-check`) | OpenCode | A warning when the model that you select is not the model that the server runs, is not installed, or loads now | `NO_MODEL_CHECK=1` |
 | **Coder in the background** (`carl-background`) | OpenCode | The coder subagent runs in the background, so the main session stays free | `NO_BACKGROUND_SUBAGENTS=1` |
+| **Hand-off** (`carl-delegation`) | OpenCode, Pi | The delegation rule for the main agent only, and the reminder at the end of your messages ([The coder subagent](#the-coder-subagent-opencode-and-pi)) | `NO_REMINDER=1` (the reminder); `NO_CODER=1` (all) |
 | **Subagent tool** (`subagent`) | Pi | The `subagent` tool: the coder and other agents, one, several at the same time, a chain, or in the background; `/subagents` | `NO_CODER=1` |
 | **Subagents panel** (`subagents-sidebar`) | OpenCode | The running and finished subagents in the sidebar ([The Subagents panel](#the-subagents-panel-opencode)) | `NO_SIDEBAR=1` |
 | **Session switcher** (`session-switcher`) | OpenCode | `‹ 2/3 ● title ›` in the prompt box, `/switch` ([Switching sessions](#switching-sessions-opencode)) | `NO_SWITCHER=1` |

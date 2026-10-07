@@ -103,6 +103,8 @@ Switches (environment variables, for example NO_CACHE=1 ./install.sh):
   NO_SIDEBAR=1\tDo not install the subagents sidebar of OpenCode.
   CODER=1, NO_CODER=1\tAlways install the coder subagent, or never. Without them, the script installs the coder when the server runs 2 or more slots.
   NO_BACKGROUND_SUBAGENTS=1\tThe main session waits for the coder.
+  NO_REMINDER=1\tNo reminder about the coder at the end of each message of the main session (it is on by default: it is what moves large and stuck tasks to the coder).
+  DELEGATION_GATE=N\tAdvanced, not recommended: stop the main agent at its Nth new file in a turn and tell it to use the coder (1-99; 0, the default, is off). Small tasks that need new files then go to the coder too.
   NO_BROWSER=1\tDo not install the browser tools.
   BROWSER_HEADED=1\tShow the browser on the screen.
   WEB_SEARCH=PROVIDER\texa (the default), parallel or off.
@@ -375,12 +377,15 @@ fi
 # your own named "llamacpp" stays, and ours is added as "carl"; your
 # default model, agents and extensions are kept. Our MTPLX pieces from before
 # 1.2.0 are removed, and the pieces named llm-deploy get CARL's names. Backups: *.bak.<time>.
+[[ "${DELEGATION_GATE:-0}" =~ ^([0-9]|[1-9][0-9])$ ]] \
+  || { echo "error: DELEGATION_GATE must be a number from 0 (off) to 99, not '${DELEGATION_GATE}'." >&2; exit 2; }
 python3 "$HERE/configure.py" --bundle "$HERE" --home "$HOME" --host "$HOST" --clients "$clients" \
   --llama-port "$LLAMA_PORT" --ctx "$ctx" --models "$models_arg" ${running:+--running "$running"} --coder "$CODER" --sidebar "$([[ "${NO_SIDEBAR:-0}" == 1 ]] && echo 0 || echo 1)" \
   --switcher "$([[ "${NO_SWITCHER:-0}" == 1 ]] && echo 0 || echo 1)" \
   --model-check "$([[ "${NO_MODEL_CHECK:-0}" == 1 ]] && echo 0 || echo 1)" \
   --web-search "$web_search" --lsp "$([[ "${NO_LSP:-0}" == 1 || "${LSP:-1}" == 0 ]] && echo 0 || echo 1)" \
   --background "$([[ "${NO_BACKGROUND_SUBAGENTS:-0}" == 1 ]] && echo 0 || echo 1)" \
+  --reminder "$([[ "${NO_REMINDER:-0}" == 1 ]] && echo 0 || echo 1)" --gate "${DELEGATION_GATE:-0}" \
   --profile "$([[ "${NO_PROFILE:-0}" == 1 ]] && echo 0 || echo 1)" \
   --cache "$([[ "${NO_CACHE:-0}" == 1 || "${NO_PREFIX_CACHE:-0}" == 1 ]] && echo 0 || echo 1)" \
   --browser "$([[ "${NO_BROWSER:-0}" == 1 ]] && echo 0 || echo 1)" --browser-headed "$([[ "${BROWSER_HEADED:-0}" == 1 ]] && echo 1 || echo 0)"
@@ -442,7 +447,7 @@ UNIT
 if [[ "${CARL_SYNC:-0}" != 1 ]]; then
   ( umask 077; mkdir -p "$HOME/.config/carl"
     for k in CLIENTS CODER NO_CODER WEB_SEARCH NO_LSP LSP NO_BROWSER BROWSER_HEADED NO_SIDEBAR NO_SWITCHER \
-             NO_MODEL_CHECK NO_BACKGROUND_SUBAGENTS NO_CACHE LLAMA_CTX; do
+             NO_MODEL_CHECK NO_BACKGROUND_SUBAGENTS NO_CACHE LLAMA_CTX NO_REMINDER DELEGATION_GATE; do
       [[ -n "${!k:-}" ]] && printf '%s=%s\n' "$k" "${!k}"
     done > "$HOME/.config/carl/client-install.env" ) || true
   if [[ "$MODE" == local || ! -s "$HERE/remote.json" || "${NO_SYNC_SERVICE:-0}" == 1 ]]; then

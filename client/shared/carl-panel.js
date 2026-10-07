@@ -6,7 +6,7 @@
 // sections(client) -> [{ id, title, summary, lines, details, actions }]; an action runs carl-sync.py with its
 // args, and outcome() says what happened. `lines` are plain sentences (what the part does, its state);
 // `details` hold the addresses, the versions and the installer's switches. Every line is at most 90
-// characters: OpenCode's dialog cuts at about 100 columns. The words follow docs/phase21/glossary.md.
+// characters: OpenCode's dialog cuts at about 100 columns. The words follow reference/glossary.md.
 // Read-only except run(); a file that can't be read shows as "not installed".
 
 import { spawn } from "node:child_process";

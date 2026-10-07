@@ -1,5 +1,5 @@
 """The CLI's text (Phase 21): every command has a help page that fits the terminal (COLUMNS, else 80),
-the output uses the glossary's names (docs/phase21/glossary.md) and one unit per kind of number
+the output uses the glossary's names (reference/glossary.md) and one unit per kind of number
 (GB for files, GiB for memory, K = 1024 tokens), and the launcher's start lines say where each
 setting comes from. Runs ./carl.sh with a throw-away home, settings folder, catalogue and models
 folder; the launcher with a fake llama-server (never the real one, never port 8080)."""

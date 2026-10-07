@@ -64,10 +64,13 @@ class ConfigureTests(unittest.TestCase):
         check = self.path(".config/opencode/plugins/carl-model-check")
         cache = self.path(".config/opencode/plugins/carl-cache")
         bg = self.path(".config/opencode/plugins/carl-background")
+        deleg = self.path(".config/opencode/plugins/carl-delegation")
         self.assertEqual(oc["plugin"], [["file:" + check, {"provider": "llamacpp"}],     # the model warnings
                                         ["file:" + cache, {"provider": "llamacpp",       # the prompt cache
                                                            "cacheApi": "http://192.168.42.1:8081"}],
-                                        ["file:" + bg, {"provider": "llamacpp"}]])       # the coder in the background
+                                        ["file:" + bg, {"provider": "llamacpp"}],        # the coder in the background
+                                        ["file:" + deleg, {"provider": "llamacpp", "reminder": True,  # the hand-off
+                                                           "gate": 0, "coder": "coder"}]])
         self.assertEqual(self.read_json(".pi/agent/carl.json")["cache_api"], "http://192.168.42.1:8081")
         with open(os.path.join(cache, "package.json"), encoding="utf-8") as f:
             self.assertIn("./server", json.load(f)["exports"])
@@ -162,7 +165,10 @@ class ConfigureTests(unittest.TestCase):
         self.assertEqual(oc["plugin"][:2], ["/home/u/mine.js", [entry, {"provider": "carl"}]])  # ours is "carl" here
         p = self.run_configure("--model-check", "0", "--cache", "0", "--background", "0")
         self.assertEqual(p.returncode, 0, p.stderr)
-        self.assertEqual(self.read_json(".config/opencode/opencode.json")["plugin"], ["/home/u/mine.js"])
+        deleg = "file:" + self.path(".config/opencode/plugins/carl-delegation")    # stays with the coder
+        self.assertEqual(self.read_json(".config/opencode/opencode.json")["plugin"],
+                         ["/home/u/mine.js", [deleg, {"provider": "carl", "reminder": True, "gate": 0,
+                                                       "coder": "coder"}]])
         self.assertFalse(os.path.exists(self.path(".config/opencode/plugins/carl-model-check")))
         self.assertIn("removed   OpenCode plugin carl-model-check", p.stdout)
         self.assertFalse(os.path.exists(self.path(".pi/agent/extensions/carl-cache")))
@@ -362,7 +368,7 @@ class ConfigureTests(unittest.TestCase):
         self.assertEqual(oc["provider"]["llamacpp"]["options"]["apiKey"],
                          "{file:" + self.home + "/.config/carl/api-key}")             # rewritten to the new key path
         self.assertEqual(oc["plugin"][0], "/home/u/my-plugin")                         # the user's plugin stays
-        self.assertEqual(len(oc["plugin"]), 4)                                          # + CARL's three plugins
+        self.assertEqual(len(oc["plugin"]), 5)                                          # + CARL's four plugins
         self.assertFalse(os.path.exists(self.path(".config/opencode/plugins/mtplx-session-headers")))
         self.assertEqual(self.read_json(".config/opencode/carl.json")["providers"], {"llamacpp": "llamacpp"})
         self.assertFalse(os.path.exists(self.path(".config/opencode/llm-deploy.json")))   # the old state file
@@ -427,6 +433,61 @@ class ConfigureTests(unittest.TestCase):
         with open(self.path(".pi/agent/APPEND_SYSTEM.md"), encoding="utf-8") as f:
             self.assertIn('agent "coder"', f.read())
         self.assertFalse(os.path.exists(self.path(".pi/agent/agents/carl-coder.md")))
+
+    def test_rule_for_main_agents_only(self) -> None:
+        """OpenCode gives its instructions to every agent: the rule is marked and carl-delegation takes it out of
+        subagents' prompts (a coder that read it acted as the main session, 2026-10-06); Pi's rule has no marks
+        (the subagent tool keeps APPEND_SYSTEM.md from subagents). --coder 0: no plugin, no rule."""
+        self.assertEqual(self.run_configure("--coder", "1").returncode, 0)
+        with open(self.path(".config/opencode/carl/delegation.md"), encoding="utf-8") as f:
+            oc = f.read()
+        self.assertTrue(oc.startswith(cfg.RULE_BEGIN + "\n## Delegating to the coder subagent"), oc[:80])
+        self.assertTrue(oc.endswith(cfg.RULE_END + "\n"))
+        with open(self.path(".pi/agent/APPEND_SYSTEM.md"), encoding="utf-8") as f:
+            self.assertNotIn(cfg.RULE_BEGIN, f.read())
+        oc_cfg = self.read_json(".config/opencode/opencode.json")
+        self.assertIn("plugins/carl-delegation", json.dumps(oc_cfg["plugin"]))
+        self.assertTrue(os.path.isfile(self.path(".config/opencode/plugins/carl-delegation/index.js")))
+        self.assertEqual(self.run_configure("--coder", "0").returncode, 0)
+        self.assertNotIn("carl-delegation", json.dumps(self.read_json(".config/opencode/opencode.json")["plugin"]))
+        self.assertFalse(os.path.exists(self.path(".config/opencode/plugins/carl-delegation")))
+
+    def test_reminder_and_gate_settings(self) -> None:
+        """The hand-off's settings in both clients: the reminder on and the gate off by default; --reminder 0 and
+        --gate N change them; the Pi extension and the shared file are installed with the coder."""
+        self.assertEqual(self.run_configure("--coder", "1").returncode, 0)
+        entry = [p for p in self.read_json(".config/opencode/opencode.json")["plugin"] if "carl-delegation" in p[0]][0]
+        self.assertEqual((entry[1]["reminder"], entry[1]["gate"]), (True, 0))
+        self.assertEqual(self.read_json(".pi/agent/carl.json")["delegation"], {"reminder": True, "gate": 0})
+        for d in (".config/opencode/plugins/carl-delegation", ".pi/agent/extensions/carl-delegation"):
+            self.assertTrue(os.path.isfile(self.path(d + "/carl-delegation.js")), d)
+        self.assertTrue(os.path.isfile(self.path(".pi/agent/extensions/carl-delegation/index.ts")))
+        self.assertEqual(self.run_configure("--coder", "1", "--reminder", "0", "--gate", "3").returncode, 0)
+        entry = [p for p in self.read_json(".config/opencode/opencode.json")["plugin"] if "carl-delegation" in p[0]][0]
+        self.assertEqual((entry[1]["reminder"], entry[1]["gate"]), (False, 3))
+        self.assertEqual(self.read_json(".pi/agent/carl.json")["delegation"], {"reminder": False, "gate": 3})
+        self.assertNotEqual(self.run_configure("--coder", "1", "--gate", "100").returncode, 0)   # 0-99 only
+        self.assertEqual(self.run_configure("--coder", "0").returncode, 0)
+        self.assertNotIn("delegation", self.read_json(".pi/agent/carl.json"))
+        self.assertFalse(os.path.exists(self.path(".pi/agent/extensions/carl-delegation")))
+
+    def test_code_command_in_both_clients(self) -> None:
+        """/code goes in with the coder (the task straight to the coder), points at its installed name, leaves a
+        code.md of the user's alone and goes again with --coder 0."""
+        self.assertEqual(self.run_configure("--coder", "1").returncode, 0)
+        oc, pi = ".config/opencode/command/code.md", ".pi/agent/prompts/code.md"
+        with open(self.path(oc), encoding="utf-8") as f:
+            text = f.read()
+        self.assertIn("agent: coder\nsubtask: true", text)
+        self.assertIn("Mode: code\nGoal: $ARGUMENTS", text)
+        with open(self.path(pi), encoding="utf-8") as f:
+            self.assertIn('agent "coder"', f.read())
+        self.assertEqual(self.run_configure("--coder", "0").returncode, 0)
+        self.assertFalse(os.path.exists(self.path(oc)) or os.path.exists(self.path(pi)))
+        self.write_text(oc, "---\ndescription: my own\n---\nmine\n")
+        self.assertEqual(self.run_configure("--coder", "1").returncode, 0)
+        with open(self.path(oc), encoding="utf-8") as f:
+            self.assertEqual(f.read(), "---\ndescription: my own\n---\nmine\n")          # the user's stays
 
     def test_background_subagents_in_the_delegation_rule(self) -> None:
         """On (the default): each client's own "run the coder in the background" paragraph, Pi's extension

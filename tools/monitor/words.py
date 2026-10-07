@@ -1,5 +1,5 @@
 """The glossary's names for values the server and config.json keep in their own form
-(docs/phase21/glossary.md): speculation modes, the context memory type, the network, the download
+(reference/glossary.md): speculation modes, the context memory type, the network, the download
 status, Auto fit's goal and candidates, counts with their plural, and the server's uptime. Config
 keys and flags keep their names; the full detail level shows them next to these words. Pure."""
 from __future__ import annotations

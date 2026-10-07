@@ -1,0 +1,2 @@
+timestamp=2026-10-05T14:53:12.196Z level=INFO run=cacba177 message=evaluated permission=read pattern=README.md action.permission=read action.pattern=* action.action=allow
+timestamp=2026-10-05T14:53:12.337Z level=INFO run=cacba177 message=evaluated permission=edit pattern=notes/due.py action.permission=* action.action=allow action.pattern=*

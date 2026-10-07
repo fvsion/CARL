@@ -1,0 +1,1 @@
+timestamp=2026-10-05T14:52:51.198Z level=INFO run=f4c77f6b message=evaluated permission=task pattern=coder action.permission=* action.action=allow action.pattern=*

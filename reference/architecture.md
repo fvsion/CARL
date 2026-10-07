@@ -122,6 +122,9 @@ The top-level keys `default` and `default_small` are the offline fallback of Aut
 | `client/agents/browser.md` | The **browser** subagent of OpenCode (the Playwright MCP tools) |
 | `client/shared/carl-cache.js` | The disk cache core ([Caching](caching.md)). `configure.py` copies it next to the plugin and the extension. |
 | `client/shared/carl-panel.js` | The `/carl` panel core: for each section, its lines (plain sentences), its details and its actions |
+| `client/shared/carl-delegation.js` | The hand-off rules: the delegation rule for main agents only, the reminder, the new-file gate ([the hand-off to the coder](delegation.md)). `configure.py` copies it next to the plugin and the extension. |
+| `client/opencode/plugins/carl-delegation/`, `client/pi/extensions/carl-delegation/` | The hand-off in OpenCode (it takes the rule out of subagents' prompts, adds the reminder, runs the gate) and in Pi (the reminder, the gate). With the coder. |
+| `client/opencode/commands/code.md`, `client/pi/prompts/code.md` | `/code`: a task straight to the coder. With the coder. |
 | `client/opencode/plugins/carl-cache/`, `client/pi/extensions/carl-cache/` | The disk cache in OpenCode (it wraps `fetch`; `chat.headers` marks the session and the agent) and in Pi (`before_provider_request`, `message_end`) |
 | `client/opencode/plugins/carl-panel/`, `client/pi/extensions/carl-panel/` | The `/carl` panel: each CARL piece on this computer with its state, and the actions of the config sync ([Clients on other computers](client-sync.md)) |
 | `client/opencode/plugins/carl-model-check/` | An OpenCode server plugin (see below) |
@@ -169,6 +172,7 @@ The top-level keys `default` and `default_small` are the offline fallback of Aut
 | `tools/llama-ab.sh`, `tools/llama-ab-measure.py`, `tools/llama-kv-longctx.py` | The A/B test of the context memory type and `-ub`, and the ~64K needle test |
 | `tools/llama-sesstest.py` | A long-session test. It uses the same prompt corpus as `llama-kv-longctx.py`. |
 | `tools/carl_bench.py` | Shared helpers for the small benchmark tools: the API key, chat requests, the server PID (`netstat`), the server memory |
+| `tools/agent-bench/` | The agent bench: does the main agent of OpenCode and Pi give coding tasks to the coder? Fixture projects, 17 requests (+2 extra), the setup's variants, a harness HOME, the server for each model, fetch and drop of model copies, a resumable results file and its report (`bench.py`; its README). Tests: `python3 -m unittest discover -s tests/agent_bench -t tests/agent_bench`. |
 
 - `tools/carl.py` is the one place for the models and the settings: the catalogue, the models on this Mac, `config.json` (validated) and the settings order.
 - Its commands: `list`, `download`, `hf-files`, `verify`, `delete`, `path`, `get`, `default`, `downloaded`, `launch-env`, `router-preset`, `client-models`, `config`, `card`, `cache`, `push`, `package`.

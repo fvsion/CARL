@@ -13,6 +13,7 @@ Type `/carl` in OpenCode or Pi to see each piece and its state on this computer.
 | `carl-cache` | OpenCode, Pi | server plugin / extension | The disk cache: fast starts, sessions back after a restart | `NO_CACHE=1` |
 | `carl-model-check` | OpenCode | server plugin | A warning when the model that you select is not the model that the server runs | `NO_MODEL_CHECK=1` |
 | `carl-background` | OpenCode | server plugin | The coder runs in the background | `NO_BACKGROUND_SUBAGENTS=1` |
+| `carl-delegation` | OpenCode, Pi | server plugin / extension | The hand-off to the coder: the delegation rule for main agents only (OpenCode), the reminder, the new-file gate | comes with the coder; `NO_REMINDER=1`, `DELEGATION_GATE=N` |
 | `subagent` | Pi | extension | The `subagent` tool: the coder and other agents, also in the background | comes with the coder (`NO_CODER=1`) |
 | `subagents-sidebar` | OpenCode | TUI plugin | The Subagents panel in the sidebar | `NO_SIDEBAR=1` |
 | `session-switcher` | OpenCode | TUI plugin | `‹ 2/3 ● title ›` in the prompt box, `/switch` | `NO_SWITCHER=1` |
@@ -28,7 +29,7 @@ Put a switch in front of the setup, for example `NO_SIDEBAR=1 ./carl.sh install 
 | Pi | `~/.pi/agent/extensions/NAME/` | Pi loads every folder in `extensions/`. |
 
 - The source is in `client/opencode/plugins/` and `client/pi/extensions/`.
-- The code that more than one piece uses is in `client/shared/`: `carl-cache.js` (the disk cache), `carl-panel.js` (the /carl panel) and `carl-tui.js` (the TUI helpers of the session switcher and the subagents panel). The setup copies each file into each piece that uses it.
+- The code that more than one piece uses is in `client/shared/`: `carl-cache.js` (the disk cache), `carl-panel.js` (the /carl panel), `carl-delegation.js` (the hand-off rules) and `carl-tui.js` (the TUI helpers of the session switcher and the subagents panel). The setup copies each file into each piece that uses it.
 - OpenCode and Pi load the pieces when they start. After a setup, restart OpenCode or Pi.
 - To get new versions of the pieces on another computer, unzip a new client package over the old folder and run `./setup` again.
 
@@ -76,6 +77,17 @@ OpenCode's task tool waits for a subagent, unless the model asks for the backgro
 - It needs `OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=1`, which the setup puts in `~/.config/carl/opencode.env`.
 - The setup adds it only with the coder (2 slots or more, or `--coder on`).
 
+## carl-delegation: the hand-off to the coder (OpenCode and Pi)
+
+The rules are in `client/shared/carl-delegation.js`. The details and the measurements are in [the hand-off to the coder](delegation.md).
+
+- **OpenCode** (server plugin, with the options `reminder`, `gate` and `coder` in its `plugin` entry):
+  - `experimental.chat.system.transform`: in a subagent's session (a session with a parent), it takes CARL's marked delegation rule out of the system prompt. It changes OpenCode's list in place.
+  - `experimental.chat.messages.transform`: it adds the reminder to the end of each user message of a main session.
+  - `tool.execute.before`: with a gate, it stops the main agent's write that makes the Nth new file of a turn (`chat.message` starts a new turn).
+- **Pi** (extension; the settings are `"delegation"` in `~/.pi/agent/carl.json`): the `input` event adds the reminder to your messages; `tool_call` blocks with the gate. In a subagent (`CARL_AGENT` set) it does nothing.
+- The setup installs it with the coder, and removes it with `--coder off`.
+
 ## subagent: the subagent tool (Pi)
 
 Pi has no subagents of its own. CARL installs the `subagent` extension (from Pi's examples, with changes marked `CARL:`).
@@ -89,7 +101,7 @@ Pi has no subagents of its own. CARL installs the `subagent` extension (from Pi'
 
 - **CARL's changes:**
   - The tool's description lists the installed agents and when to use each one.
-  - The delegation rule goes into Pi's system prompt.
+  - The delegation rule goes into Pi's system prompt (`APPEND_SYSTEM.md`), for the main agent only: the tool starts every agent with `--append-system-prompt` (its own prompt, or an empty one), and with that option Pi does not read `APPEND_SYSTEM.md`.
   - An agent file can say `exclude-tools:`. The agent then gets every tool except those, the MCP tools included. The coder says `exclude-tools: subagent, tool_search`: it gets web search when it is installed, but it cannot start nested subagents or load the browser tools.
   - Each subagent's process gets `CARL_AGENT`, so its prompt file has its own name.
   - The coder has no browser. Its report has a "Needs a browser check" part; the main agent starts the app and does the check (OpenCode: the browser subagent; Pi: its own browser tools).

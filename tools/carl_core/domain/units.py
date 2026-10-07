@@ -1,4 +1,4 @@
-"""The units every screen shows (docs/phase21/glossary.md, section 9): one formatter per kind of number.
+"""The units every screen shows (reference/glossary.md, section 9): one formatter per kind of number.
 
 - Files, downloads and disk: GB / MB (1000-based), as Hugging Face and Finder show them.
 - Memory (RAM, GPU, context memory, memory needed, kept free): GiB / MiB (1024-based).

@@ -29,6 +29,90 @@ test("carl-background: CARL's coder goes to the background unless the call says"
   assert.equal(await call({ subagent_type: "coder" }, "bash"), undefined);
 });
 
+/** carl-delegation staged as the installer lays it out (its index.js next to the shared carl-delegation.js). */
+const delegationDir = mkdtempSync(join(tmpdir(), "carl-delegation-"));
+copyFileSync(join(REPO, "client/opencode/plugins/carl-delegation/index.js"), join(delegationDir, "index.js"));
+copyFileSync(join(REPO, "client/shared/carl-delegation.js"), join(delegationDir, "carl-delegation.js"));
+const delegationMod = await import(pathToFileURL(join(delegationDir, "index.js")).href);
+const { RULE_BEGIN, RULE_END, withoutRule } = delegationMod;
+const delegation = delegationMod.default;
+
+test("carl-delegation: subagents never get the delegation rule; the main agent keeps it", async () => {
+  const rule = `${RULE_BEGIN}\n## Delegating to the coder subagent\nDelegate large work.\n${RULE_END}`;
+  const sys = `You are opencode.\n\nInstructions from: /x/delegation.md\n${rule}\n\nInstructions from: AGENTS.md\nUse tabs.`;
+  assert.equal(withoutRule(sys), "You are opencode.\n\nInstructions from: /x/delegation.md\n\nInstructions from: AGENTS.md\nUse tabs.");
+  assert.equal(withoutRule(`a\n${rule}\nb\n${rule}`), "a\n\nb");
+  assert.equal(withoutRule(`keep\n${RULE_BEGIN}\nhalf a rule`), "keep");          // never half of it
+  assert.equal(withoutRule("no rule here"), "no rule here");
+  const asked = [];
+  const client = { session: { get: async ({ path }) => (asked.push(path.id), { data: { parentID: path.id === "c2" ? "m" : undefined } }) } };
+  const hooks = await delegation.server({ client }, { provider: "llamacpp" });
+  const run = async (sessionID) => {
+    const system = [sys, "other"];
+    const output = { system };
+    await hooks["experimental.chat.system.transform"]({ sessionID }, output);
+    assert.equal(output.system, system);                                   // the same array: OpenCode reads its own
+    return system[0];
+  };
+  await hooks.event({ event: { type: "session.created", properties: { info: { id: "c1", parentID: "m" } } } });
+  await hooks.event({ event: { type: "session.created", properties: { info: { id: "m" } } } });
+  assert.ok(!(await run("c1")).includes("Delegating"));                    // a subagent seen in an event
+  assert.ok((await run("m")).includes("Delegating"));                      // the main agent keeps it
+  assert.ok(!(await run("c2")).includes("Delegating"));                    // a subagent asked from OpenCode
+  assert.ok((await run("u")).includes("Delegating"));                      // unknown: kept (the main agent's case)
+  assert.deepEqual(asked, ["c2", "u"]);
+  await run("c2");
+  assert.deepEqual(asked, ["c2", "u"]);                                     // asked once a session
+  const none = await delegation.server({}, {});                            // no client: kept, no error
+  const out = { system: [sys] };
+  await none["experimental.chat.system.transform"]({ sessionID: "z" }, out);
+  assert.equal(out.system[0], sys);
+});
+
+test("carl-delegation: the reminder on main sessions only; off with reminder: false", async () => {
+  const client = { session: { get: async ({ path }) => ({ data: { parentID: path.id === "sub" ? "m" : undefined } }) } };
+  const msgs = (sid) => ({ messages: [
+    { info: { role: "user", sessionID: sid }, parts: [{ type: "text", text: "Add a CLI." }, { type: "text", text: "x", synthetic: true }] },
+    { info: { role: "assistant", sessionID: sid }, parts: [{ type: "text", text: "OK" }] }] });
+  const on = await delegation.server({ client }, { coder: "carl-coder" });
+  const main = msgs("main");
+  await on["experimental.chat.messages.transform"]({}, main);
+  assert.match(main.messages[0].parts[0].text, /^Add a CLI\.\n\n\[CARL reminder\] .*subagent_type "carl-coder"/);
+  assert.equal(main.messages[0].parts[1].text, "x");                       // a synthetic part stays as it is
+  assert.equal(main.messages[1].parts[0].text, "OK");
+  await on["experimental.chat.messages.transform"]({}, main);               // the same line once (cache-safe)
+  assert.equal(main.messages[0].parts[0].text.split("[CARL reminder]").length, 2);
+  const sub = msgs("sub");
+  await on["experimental.chat.messages.transform"]({}, sub);
+  assert.equal(sub.messages[0].parts[0].text, "Add a CLI.");                // a subagent: no reminder
+  const off = await delegation.server({ client }, { reminder: false });
+  const quiet = msgs("main");
+  await off["experimental.chat.messages.transform"]({}, quiet);
+  assert.equal(quiet.messages[0].parts[0].text, "Add a CLI.");
+});
+
+test("carl-delegation: the gate is off unless set; then it stops the main agent at the Nth new file", async () => {
+  const client = { session: { get: async () => ({ data: {} }) } };
+  const dir = mkdtempSync(join(tmpdir(), "gate-"));
+  const call = async (hooks, tool, args, sessionID = "m") => {
+    try {
+      await hooks["tool.execute.before"]({ tool, sessionID }, { args });
+      return "";
+    } catch (e) {
+      return String(e.message);
+    }
+  };
+  const none = await delegation.server({ client, directory: dir }, {});
+  assert.equal(await call(none, "write", { filePath: "a.py" }), "");        // off by default
+  const two = await delegation.server({ client, directory: dir }, { gate: 2 });
+  assert.equal(await call(two, "write", { filePath: "a.py" }), "");         // the 1st new file passes
+  assert.match(await call(two, "write", { filePath: "b.py" }), /^\[CARL\] Blocked: b\.py is a new file/);
+  await two["chat.message"]({ sessionID: "m" });                             // a new turn counts again
+  assert.equal(await call(two, "write", { filePath: "c.py" }), "");
+  assert.equal(await call(two, "task", { subagent_type: "coder" }), "");
+  assert.equal(await call(two, "write", { filePath: "d.py" }), "");         // after the coder: no gate
+});
+
 test("carl-model-check: the warning for each situation", () => {
   const single = parseModels({ data: [{ id: "a" }] });
   assert.deepEqual(single, { router: false, models: [{ id: "a", status: undefined }] });

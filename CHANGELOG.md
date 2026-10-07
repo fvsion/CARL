@@ -3,6 +3,26 @@
 All notable changes to CARL. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Dates are local dates on the development Mac (M3 Pro, 36 GB).
 
+## 1.8.0 - 2026-10-07
+
+Phase 23: the hand-off to the coder, measured and made consistent. The main agent now gives large and stuck coding tasks to the coder much more often, with any model, and the coder never acts as a main agent. The details and the measurements: `reference/delegation.md`.
+
+### Added
+- **The reminder** (`carl-delegation`, OpenCode plugin and Pi extension): one line at the end of each of your messages in the main session says that large coding work and fixes that already failed go to the coder. The line is the same each time, so the RAM cache and the disk cache stay valid. Measured with the real OpenCode 1.18.34 and Pi 1.0.2 (the agent bench, `tools/agent-bench/`): with the coder's modes, large tasks to the coder went from 2/5 and 3/5 to 5/5 and 5/5 on the Qwen3.6 35B A3B Q4 (OpenCode / Pi), and from 1/5 and 2/5 to 5/5 and 5/5 on the Gemma 4 12B; stuck fixes from 0-1 of 4 to 2-3 of 4; small tasks and questions stayed with the main agent. On by default; `NO_REMINDER=1` turns it off.
+- **The coder's two modes:** each coder task starts with `Mode: code` (it writes the program code and runs the tests, but never changes them) or `Mode: test` (it writes tests from the requirements and never changes the program code). For code with tests, the main agent can send the test task first.
+- **The hand-off form:** the main agent writes each coder task as `Mode`, `Goal`, `Files`, `Requirements`, `Acceptance`, `Constraints`, and `Error` and `Tried` for a fix that failed. The coder changes only the files in `Files`, reports each acceptance item, and follows the project's constraints before its own defaults.
+- **`/code TASK`** in OpenCode (`~/.config/opencode/command/code.md`, run on the coder) and Pi (`~/.pi/agent/prompts/code.md`): the task goes straight to the coder. A `code.md` of your own stays.
+- **The new-file gate** (advanced, not recommended, off by default): `DELEGATION_GATE=N` stops the main agent's write that makes the Nth new file of a turn and tells it to use the coder. With N = 1 it also sent small tasks that need one new file to the coder.
+- **The agent bench** (`tools/agent-bench/`, tests in `tests/agent_bench/`): runs OpenCode and Pi against CARL's server on fixture projects and records each decision (strict: the first tool call; practical: the first decisive action), the variants of the setup, full runs with hidden tests, and a report.
+- Tests: `tests/js/carl-delegation.test.mjs` (the rules), the plugin's tests in `tests/js/opencode-plugins.test.mjs`, and the settings, the marked rule and `/code` in `tests/scripts/test_configure.py`.
+
+### Fixed
+- **A coder that acted as the main agent.** OpenCode gives its global instructions to every agent, so the coder got the delegation rule. A small model then said that it gave the task to the coder, and did nothing (the Gemma 4 E4B: no file changed, 0 of 4 hidden tests; after the fix, 3 of 4). Now the setup marks the rule, and `carl-delegation` takes it out of the prompt of every subagent. In Pi, the `subagent` tool now starts every agent with `--append-system-prompt`, so no subagent reads `APPEND_SYSTEM.md`.
+
+### Changed
+- `client/agents/coder.md` and `client/agents/delegation.md`: the two modes and the hand-off form. The coder's prompt now says first that it does the work itself.
+- The glossary moved from the development notes to `reference/glossary.md`; the code and the tests point there.
+
 ## 1.7.0 - 2026-10-04
 
 Phase 22: the client package. One zip and one `./setup` for every client computer.
@@ -55,7 +75,7 @@ Phase 21.1: custom Gemma 4 models get the MTP drafter of their size.
 
 ## 1.5.0 - 2026-10-04
 
-Phase 21, the console rewrite: one name for each thing (`docs/phase21/glossary.md`) in the dashboard, the CLI, the launcher, `/carl` and the docs, one unit for each kind of number, and screens that say the state first in plain sentences.
+Phase 21, the console rewrite: one name for each thing (`reference/glossary.md`) in the dashboard, the CLI, the launcher, `/carl` and the docs, one unit for each kind of number, and screens that say the state first in plain sentences.
 
 ### Added
 - **Dashboard: two detail levels.** `D` changes between simple and full detail on every screen (a click on `detail: simple (D)` does the same). The dashboard saves the level in `~/.config/carl/dashboard.json`, next to `config.json` (it never writes `config.json` for this). `--expand` gives full detail for one run.

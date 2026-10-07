@@ -1,0 +1,2 @@
+timestamp=2026-10-05T14:53:08.054Z level=INFO run=5bb2ab16 message=evaluated permission=read pattern=README.md action.permission=read action.pattern=* action.action=allow
+timestamp=2026-10-05T14:53:08.206Z level=INFO run=5bb2ab16 message=evaluated permission=task pattern=coder action.permission=* action.action=allow action.pattern=*

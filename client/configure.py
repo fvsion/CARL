@@ -130,11 +130,15 @@ BROWSER_OFF = ("bash", "edit", "write", "lsp", "task", "todowrite", "question", 
 CHROME_APP = "/Applications/Google Chrome.app"
 MODEL_CHECK = "carl-model-check"
 BACKGROUND = "carl-background"                          # the coder in the background (OpenCode plugin)
+DELEGATION = "carl-delegation"                          # the hand-off: rule for main agents, reminder, gate (both)
+# Around CARL's delegation rule in OpenCode's instructions file: carl-delegation takes it out of subagents' prompts
+RULE_BEGIN, RULE_END = "<!-- carl:main-agents-only begin -->", "<!-- carl:main-agents-only end -->"
 CACHE = "carl-cache"                                    # the disk cache: OpenCode plugin and Pi extension
 OLD_CACHE = "carl-prefix-cache"                         # its OpenCode plugin before 11.5 (removed)
 CACHE_CORE = "shared/carl-cache.js"                     # the code both carry
 PANEL = "carl-panel"                                    # the /carl panel: OpenCode TUI plugin and Pi extension
 PANEL_CORE = "shared/carl-panel.js"
+DELEGATION_CORE = "shared/carl-delegation.js"           # the hand-off rules both clients' carl-delegation carry
 TUI_CORE = "shared/carl-tui.js"                         # the helpers the sidebar and the switcher carry
 CODER = "coder"                                         # the coder subagent's name in both clients
 CODER_ALT = "carl-coder"                                # ... when the user has their own "coder"
@@ -172,6 +176,8 @@ class Options:
     browser: bool = True
     browser_headed: bool = False
     cache: bool = True
+    reminder: bool = True     # the per-turn reminder about the coder (carl-delegation)
+    gate: int = 0             # the new-file gate: stop the main agent at its Nth new file in a turn (0: off)
     profile: bool = True      # append the pointer to ~/.zshrc / ~/.bashrc (NO_PROFILE=1: print it instead)
     clients: str = "both"     # both | opencode | pi: the configs to write (the other client's stay as they are)
 
@@ -242,6 +248,8 @@ def parse_args(argv: list[str]) -> Options:
     ap.add_argument("--profile", type=switch_arg, default=True)
     ap.add_argument("--cache", "--prefix-cache", dest="cache", type=switch_arg, default=True)
     ap.add_argument("--clients", choices=CLIENTS, default="both")
+    ap.add_argument("--reminder", type=switch_arg, default=True)
+    ap.add_argument("--gate", type=int, default=0, choices=range(0, 100), metavar="0-99")
     a = ap.parse_args(argv)
     try:
         models = carl_models.load_list(a.models)
@@ -251,7 +259,7 @@ def parse_args(argv: list[str]) -> Options:
                    running=a.running, coder=a.coder, sidebar=a.sidebar, switcher=a.switcher,
                    model_check=a.model_check, web_search=a.web_search, lsp=a.lsp, background=a.background,
                    browser=a.browser, browser_headed=a.browser_headed, profile=a.profile,
-                   cache=a.cache, clients=a.clients)
+                   cache=a.cache, clients=a.clients, reminder=a.reminder, gate=a.gate)
 
 
 # ================================================================== merge rules (no I/O)
@@ -282,7 +290,7 @@ def name_agent(text: str, name: str) -> str:
     """Point the coder / delegation texts at the installed agent name."""
     if name == CODER:
         return text
-    text = re.sub(r"^name: coder$", f"name: {name}", text, flags=re.M)
+    text = re.sub(r"^(name|agent): coder$", rf"\1: {name}", text, flags=re.M)
     return (text.replace("`coder`", f"`{name}`").replace('"coder"', f'"{name}"')
                 .replace("If you ARE the coder subagent", f"If you ARE the {name} subagent")
                 .replace("You are **coder**", f"You are **{name}**"))
@@ -300,6 +308,12 @@ class CoderPlan:
 
 CLIENT_BLOCK = re.compile(r"<!-- carl:(\w+) (\w+) -->\n(.*?)(?=<!-- carl:)", re.S)
 CLIENT_END = re.compile(r"<!-- carl:\w+ end -->\n\n?")
+
+
+def oc_rule_text(rule: str) -> str:
+    """OpenCode's delegation rule file: the rule between RULE_BEGIN and RULE_END. OpenCode gives its instructions to
+    every agent; carl-delegation takes the marked rule out of subagents' prompts, so only a main agent has it."""
+    return f"{RULE_BEGIN}\n{rule.strip()}\n{RULE_END}\n"
 
 
 def delegation_for(text: str, client: str, background: bool, browser: bool = True) -> str:
@@ -1044,7 +1058,7 @@ class Installer:
         if self.fs.isdir(old_specs):
             self.fs.rmtree(old_specs)
 
-        self._oc_coder(cfg, st, agent)
+        self._oc_coder(cfg, st, agent, new_id)
         self._oc_tools(cfg, st)
         self._oc_browser(cfg, st, agent)
         prune_empty(cfg, ("instructions", "agent", "plugin"))
@@ -1072,22 +1086,25 @@ class Installer:
             else:
                 self.report.add("kept", f"{self.short(plug)} (not ours)")
 
-    def _oc_server_plugin(self, cfg: JsonObj, name: str, want_it: bool, provider_id: str, what: str) -> None:
+    def _oc_server_plugin(self, cfg: JsonObj, name: str, want_it: bool, provider_id: str, what: str,
+                          extra: JsonObj | None = None) -> None:
         """One of CARL's OpenCode server plugins: copied into plugins/, one entry in the plugin list
-        with our provider id (an entry of ours is replaced, other entries stay); out when not wanted."""
+        with our provider id and its other options (an entry of ours is replaced, other entries stay); out when
+        not wanted."""
         dest = os.path.join(self.o.oc_dir, "plugins", name)
         entry = "file:" + dest
         if not want_it:
             if merge_plugin_entry(cfg, entry, None, self.fs.isdir(dest), name, self.report):
                 self.fs.rmtree(dest)
             return
-        self.install_folder(os.path.join("opencode/plugins", name), dest,
-                            (CACHE_CORE, PANEL_CORE) if name == CACHE else ())
-        want = [entry, {"provider": provider_id, **({"cacheApi": self.o.cache_api} if name == CACHE else {})}]
+        shared = {CACHE: (CACHE_CORE, PANEL_CORE), DELEGATION: (DELEGATION_CORE,)}.get(name, ())
+        self.install_folder(os.path.join("opencode/plugins", name), dest, shared)
+        want = [entry, {"provider": provider_id, **({"cacheApi": self.o.cache_api} if name == CACHE else {}),
+                        **(extra or {})}]
         merge_plugin_entry(cfg, entry, want, True, f"{name} ({what})", self.report)
 
-    def _oc_coder(self, cfg: JsonObj, st: JsonObj, agent: JsonObj) -> None:
-        """The coder agent and its delegation rule (on with --coder 1, removed with 0): "coder",
+    def _oc_coder(self, cfg: JsonObj, st: JsonObj, agent: JsonObj, provider_id: str) -> None:
+        """The coder agent, its delegation rule and carl-delegation (on with --coder 1, removed with 0): "coder",
         or "carl-coder" next to a user's own "coder". Ours under another name goes."""
         oc, rep = self.o.oc_dir, self.report
         ddir = os.path.join(oc, NAMES.prompt_dir)
@@ -1108,18 +1125,41 @@ class Installer:
         if not plan.install:
             merge_oc_coder(cfg, st, agent, name, None, rule_path, rep)
             self.fs.rmtree(ddir)
+            self._oc_server_plugin(cfg, DELEGATION, False, provider_id, "")
+            self._code_command(os.path.join(oc, "command", "code.md"), "", name, "OpenCode")
             return
         body, desc = split_agent(self.bundle_text("agents/coder.md"))
         prompt_path = os.path.join(ddir, "coder.md")
         self.fs.makedirs(ddir)
         rule = delegation_for(self.bundle_text("agents/delegation.md"), "opencode", self.o.background, self.o.browser)
         for p, t, what in ((prompt_path, name_agent(body, name), "coder prompt"),
-                           (rule_path, name_agent(rule, name), "delegation rule")):
+                           (rule_path, oc_rule_text(name_agent(rule, name)), "delegation rule")):
             old = self.fs.read(p)
             if old is not None and old != t:
                 rep.add("updated", f"OpenCode {what} ({self.short(p)})")
             self.fs.write(p, t)
         merge_oc_coder(cfg, st, agent, name, AgentText(desc, prompt_path), rule_path, rep)
+        self._oc_server_plugin(cfg, DELEGATION, True, provider_id, "the hand-off to the coder",
+                               {"reminder": self.o.reminder, "gate": self.o.gate, "coder": name})
+        self._code_command(os.path.join(oc, "command", "code.md"), "opencode/commands/code.md", name, "OpenCode")
+
+    def _code_command(self, dest: str, src: str, name: str, client: str) -> None:
+        """/code: the user's own switch to give a task straight to the coder (Phase 23). src "": take ours out. A
+        code.md of the user's (no CARL mark in its description) stays."""
+        cur = self.fs.read(dest)
+        if cur is not None and '"CARL: ' not in cur:
+            self.report.add("kept", f"{client} /code ({self.short(dest)} is yours)")
+            return
+        if not src:
+            if cur is not None:
+                self.fs.remove(dest)
+                self.report.add("removed", f"{client} /code")
+            return
+        text = name_agent(self.bundle_text(src), name)
+        if cur != text:
+            self.fs.makedirs(os.path.dirname(dest))
+            self.fs.write(dest, text)
+            self.report.add("updated" if cur is not None else "added", f"{client} /code (the task straight to the coder)")
 
     def _oc_remove_old_prompt_dir(self, cfg: JsonObj) -> None:
         """The prompt folder from before the rename: its delegation rule out of the
@@ -1257,6 +1297,14 @@ class Installer:
         self._pi_extensions_and_coder(st)
         self._pi_ext(CACHE, o.cache, (CACHE_CORE, PANEL_CORE), "the disk cache", st, "cache_ext")
         self._pi_ext(PANEL, True, (PANEL_CORE,), "the /carl panel", st, "panel_ext")
+        coder_on = "coder_agent" in st
+        self._code_command(os.path.join(o.pi_dir, "prompts", "code.md"), "pi/prompts/code.md" if coder_on else "",
+                           str(st.get("coder_agent") or CODER), "Pi")
+        self._pi_ext(DELEGATION, coder_on, (DELEGATION_CORE,), "the hand-off to the coder", st, "delegation_ext")
+        if coder_on:
+            st["delegation"] = {"reminder": o.reminder, "gate": o.gate}
+        else:
+            st.pop("delegation", None)
         if o.cache:
             st["cache_api"] = o.cache_api
         else:

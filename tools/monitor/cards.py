@@ -1,7 +1,7 @@
 """The Live tab's cards (SLOTS, SPEED, MEMORY, CONNECT, HEALTH; in full detail also MODEL and LOG;
 RECENT REQUESTS; SERVER when no server runs) and the state sentence above them, for the llama.cpp
 server. Pure: they render a ServerData snapshot and a View; nothing here reads files, runs commands
-or talks to the server. Words and units: docs/phase21/glossary.md (carl_core.domain.units)."""
+or talks to the server. Words and units: reference/glossary.md (carl_core.domain.units)."""
 from __future__ import annotations
 
 import collections

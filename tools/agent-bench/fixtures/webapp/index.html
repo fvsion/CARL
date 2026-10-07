@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Tiny Todo</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main>
+    <h1>Tiny Todo</h1>
+    <form id="new-item">
+      <input id="new-text" placeholder="What needs doing?" autocomplete="off" required>
+      <button type="submit">Add</button>
+    </form>
+    <ul id="list"></ul>
+    <footer>
+      <span id="left">0 items left</span>
+      <button id="clear-done" type="button">Clear done</button>
+    </footer>
+  </main>
+  <script src="app.js"></script>
+</body>
+</html>

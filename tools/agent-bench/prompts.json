@@ -1,0 +1,143 @@
+{
+  "schema": 1,
+  "expect": {
+    "large": "delegate",
+    "stuck": "delegate",
+    "small": "keep",
+    "question": "keep"
+  },
+  "prompts": [
+    {
+      "id": "large-module",
+      "category": "large",
+      "fixture": "pylib",
+      "prompt": "Add a readability module to textstats. New file textstats/readability.py with three functions: syllable_count(word) -> int (count the groups of vowels a, e, i, o, u, y; a silent e at the end of the word does not count; every word has at least 1), sentence_count(text) -> int (use the existing sentences()), and flesch_reading_ease(text) -> float (206.835 - 1.015 * words/sentences - 84.6 * syllables/words, rounded to 2 decimals, 0.0 for text with no words). Export the three from textstats/__init__.py, write tests for each in tests/test_readability.py, and add a short section about it to the README.",
+      "full": {
+        "hidden": [
+          "test_hidden_readability.py"
+        ]
+      }
+    },
+    {
+      "id": "large-cli",
+      "category": "large",
+      "fixture": "pylib",
+      "prompt": "I want a command-line tool for textstats: `python3 -m textstats` with three subcommands. `count FILE` prints three lines: `words: N`, `sentences: N` and `characters: N` (the length of the file's text). `top FILE [-n N]` prints the N most common words, default 10, one `word count` pair per line. `sentences FILE` prints each sentence on its own line, numbered like `1: First sentence.`. Use argparse in a new textstats/cli.py plus a textstats/__main__.py. If the file does not exist, print a clear error and exit with code 2. Write tests for all three commands and the missing-file case.",
+      "full": {
+        "hidden": [
+          "test_hidden_cli.py"
+        ]
+      }
+    },
+    {
+      "id": "large-refactor",
+      "category": "large",
+      "fixture": "webapp",
+      "prompt": "app.js is getting messy. Please split it into three ES modules: store.js (the items and addItem / toggleItem / removeItem / clearDone, and save the list in localStorage so it survives a reload), view.js (render() and everything that touches the DOM) and app.js (just the wiring). Load app.js from index.html as a module. While you're at it, add filter buttons All / Active / Done above the list, and show how many items each filter has."
+    },
+    {
+      "id": "large-feature",
+      "category": "large",
+      "fixture": "pycli",
+      "prompt": "Add due dates to notes. A note gets an optional due date (YYYY-MM-DD). `notes add TEXT --due 2026-11-01` stores it, and a bad date is rejected with exit code 2. `notes list` shows the date after the text as `(due 2026-11-01)`. `notes list --overdue` shows only the open notes whose due date is before today. And a new command `notes due` lists the open notes that have a due date, soonest first. Old notes files without a due field must keep working. This touches model.py, store.py and cli.py; please add tests for all of it.",
+      "full": {
+        "hidden": [
+          "test_hidden_due.py"
+        ]
+      }
+    },
+    {
+      "id": "large-newpkg",
+      "category": "large",
+      "fixture": "empty",
+      "prompt": "Create a small Python package named wordstat in this folder: a command-line tool (python -m wordstat FILE...) that prints the number of lines, words and characters of each file and the 10 most common words overall, with argparse, type hints, a README and pytest tests for every function. Standard library only.",
+      "note": "The control: the exact request of the Phase 11.8 test (2026-10-04), where the 35B IQ3 delegated in OpenCode and Pi. A new package in an empty folder."
+    },
+    {
+      "id": "stuck-test",
+      "category": "stuck",
+      "fixture": "pylib",
+      "prompt": "test_mean_word_length keeps failing. I've tried to fix mean_word_length in textstats/stats.py twice now and it still fails with the same thing:\n\n```\n    def test_mean_word_length(self) -> None:\n>       self.assertEqual(mean_word_length(\"The cat sat on the mat.\"), 2.8333333333333335)\nE       AssertionError: 3.8333333333333335 != 2.8333333333333335\n\ntests/test_stats.py:15: AssertionError\nFAILED tests/test_stats.py::StatsTest::test_mean_word_length - AssertionError...\n1 failed, 4 passed in 0.02s\n```\n\nCan you sort it out?"
+    },
+    {
+      "id": "stuck-keyerror",
+      "category": "stuck",
+      "fixture": "pycli",
+      "prompt": "My old notes.json (from version 0.2) makes `notes list` crash. I patched store.py twice and it still blows up the same way:\n\n```\nTraceback (most recent call last):\n  File \"notes/cli.py\", line 37, in main\n    for n in store.load_notes():\n  File \"notes/store.py\", line 21, in load_notes\n    return [Note.from_dict(item) for item in data.get(\"notes\", [])]\n  File \"notes/model.py\", line 20, in from_dict\n    return Note(id=int(item[\"id\"]), text=str(item[\"text\"]), tags=list(item[\"tags\"]),\nKeyError: 'tags'\n```\n\nThe old file looks like `{\"notes\": [{\"id\": 1, \"text\": \"Buy milk\", \"done\": false}]}`. Please fix it properly this time."
+    },
+    {
+      "id": "stuck-console",
+      "category": "stuck",
+      "fixture": "webapp",
+      "prompt": "Clicking \"Clear done\" breaks the page when two or more items are ticked. The console says:\n\n```\nUncaught TypeError: Cannot read properties of undefined (reading 'done')\n    at HTMLButtonElement.clearDone (app.js:27:18)\n```\n\nI already changed the loop in clearDone twice and it still throws. Can you fix it?"
+    },
+    {
+      "id": "stuck-zerodiv",
+      "category": "stuck",
+      "fixture": "pylib",
+      "prompt": "mean_word_length should return 0.0 for text with no words, but it crashes. I tried to guard it twice and I still get:\n\n```\n  File \"textstats/stats.py\", line 23, in mean_word_length\n    return len(text) / len(ws)\n           ~~~~~~~~~~^~~~~~~~~\nZeroDivisionError: division by zero\n```\n\nwhen I call mean_word_length(\"\"). Help."
+    },
+    {
+      "id": "small-rename",
+      "category": "small",
+      "fixture": "pycli",
+      "prompt": "Rename the helper _next_id in notes/store.py to _new_note_id. It's only used in that file."
+    },
+    {
+      "id": "small-flag",
+      "category": "small",
+      "fixture": "pycli",
+      "prompt": "Add a --limit N option to `notes list` that shows at most N notes."
+    },
+    {
+      "id": "small-typo",
+      "category": "small",
+      "fixture": "webapp",
+      "prompt": "The \"items left\" counter never goes down when I tick an item. I think it's a typo in countLeft in app.js, can you fix it?"
+    },
+    {
+      "id": "small-test",
+      "category": "small",
+      "fixture": "pylib",
+      "prompt": "Add one test to tests/test_tokenize.py that checks sentences(\"\") returns an empty list."
+    },
+    {
+      "id": "question-explain",
+      "category": "question",
+      "fixture": "pycli",
+      "prompt": "Can you explain how notes/store.py saves and loads the notes? I just want to understand it, don't change anything."
+    },
+    {
+      "id": "question-where",
+      "category": "question",
+      "fixture": "webapp",
+      "prompt": "Where in this app is the \"items left\" counter updated?"
+    },
+    {
+      "id": "question-error",
+      "category": "question",
+      "fixture": "pycli",
+      "prompt": "When I run `notes done abc` I get `notes done: error: argument id: invalid int value: 'abc'`. What does that mean?"
+    },
+    {
+      "id": "question-review",
+      "category": "question",
+      "fixture": "pylib",
+      "prompt": "Could you review top_words in textstats/stats.py? Is there anything wrong with it? Just tell me, no changes please."
+    },
+    {
+      "id": "small-gitignore",
+      "category": "small",
+      "fixture": "pycli",
+      "extra": true,
+      "prompt": "Add a .gitignore to this project that ignores __pycache__/, *.pyc and notes.json."
+    },
+    {
+      "id": "small-newtest",
+      "category": "small",
+      "fixture": "pylib",
+      "extra": true,
+      "prompt": "Add a new test file tests/test_longest.py with one test: longest_word(\"a bb ccc\") returns \"ccc\"."
+    }
+  ]
+}

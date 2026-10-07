@@ -1,0 +1,2 @@
+timestamp=2026-10-05T14:53:19.078Z level=INFO run=3298fb41 message=evaluated permission=bash pattern="ls notes" action.permission=* action.action=allow action.pattern=*
+timestamp=2026-10-05T14:53:19.243Z level=INFO run=3298fb41 message=evaluated permission=bash pattern="cat > notes/due.py <<'EOF'\nprint(1 > 0)\nEOF" action.permission=* action.action=allow action.pattern=*

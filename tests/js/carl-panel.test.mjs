@@ -98,7 +98,7 @@ function texts(s) {
           ...s.lines.map((l) => ["line", l]), ...s.details.map((l) => ["detail", l])];
 }
 
-// docs/phase21/glossary.md: the names that go away (and G16: one path notation)
+// reference/glossary.md: the names that go away (and G16: one path notation)
 const FORBIDDEN = [/prompt cache/i, /auto-apply/i, /\bpush/i, /\bpiece/i, /\bwindow/i, /\bmonitor\b/i, /cache API/,
                    /dashboard's API/, /→/, /\bctx\b/, /conversation/i, /\bdone\b/];
 

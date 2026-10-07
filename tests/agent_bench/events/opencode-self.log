@@ -1,0 +1,1 @@
+timestamp=2026-10-05T14:52:55.440Z level=INFO run=5888a11f message=evaluated permission=read pattern=README.md action.permission=read action.pattern=* action.action=allow

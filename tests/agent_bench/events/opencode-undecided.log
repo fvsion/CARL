@@ -1,0 +1,8 @@
+timestamp=2026-10-05T14:53:23.211Z level=INFO run=29501af1 message=evaluated permission=bash pattern="echo look 0" action.permission=* action.action=allow action.pattern=*
+timestamp=2026-10-05T14:53:23.365Z level=INFO run=29501af1 message=evaluated permission=bash pattern="echo look 1" action.permission=* action.action=allow action.pattern=*
+timestamp=2026-10-05T14:53:23.525Z level=INFO run=29501af1 message=evaluated permission=bash pattern="echo look 2" action.permission=* action.action=allow action.pattern=*
+timestamp=2026-10-05T14:53:23.697Z level=INFO run=29501af1 message=evaluated permission=bash pattern="echo look 3" action.permission=* action.action=allow action.pattern=*
+timestamp=2026-10-05T14:53:23.842Z level=INFO run=29501af1 message=evaluated permission=bash pattern="echo look 4" action.permission=* action.action=allow action.pattern=*
+timestamp=2026-10-05T14:53:23.987Z level=INFO run=29501af1 message=evaluated permission=bash pattern="echo look 5" action.permission=* action.action=allow action.pattern=*
+timestamp=2026-10-05T14:53:24.143Z level=INFO run=29501af1 message=evaluated permission=bash pattern="echo look 6" action.permission=* action.action=allow action.pattern=*
+timestamp=2026-10-05T14:53:24.296Z level=INFO run=29501af1 message=evaluated permission=bash pattern="echo look 7" action.permission=* action.action=allow action.pattern=*

@@ -1,4 +1,4 @@
-"""The shared units (tools/carl_core/domain/units.py; docs/phase21/glossary.md, section 9)."""
+"""The shared units (tools/carl_core/domain/units.py; reference/glossary.md, section 9)."""
 from __future__ import annotations
 
 import unittest

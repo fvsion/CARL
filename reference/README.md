@@ -21,4 +21,6 @@ Each behaviour in this reference was checked against the source code (pi-ai 0.99
 | [Verifying behaviour](verifying.md) | How to see what a client sends |
 | [OpenCode and Pi configs](client-configs.md) | The OpenCode and Pi configs that CARL writes, and the prompt budget |
 | [The plugins and extensions](plugins.md) | Every OpenCode plugin and Pi extension CARL installs: what it does, how, its switch |
+| [The hand-off to the coder](delegation.md) | How the main agent gives tasks to the coder: the rule, the reminder, the two modes, the hand-off form, `/code`, the gate, and what was measured |
+| [Glossary](glossary.md) | The words and units on every screen and in the docs: one name for each thing |
 | [Performance](performance.md) | Measured speeds of the Qwen 27B and 35B |

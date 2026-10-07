@@ -34,7 +34,7 @@ Goal = Literal["everyday", "hard-code"]
 Scope = Literal["catalogue", "downloaded"]
 GOALS: Tuple[Goal, ...] = ("everyday", "hard-code")
 SCOPES: Tuple[Scope, ...] = ("catalogue", "downloaded")
-# The words every screen uses (docs/phase21/glossary.md): the goal "hard code" (config: hard-code),
+# The words every screen uses (reference/glossary.md): the goal "hard code" (config: hard-code),
 # the candidates, memory in GiB, the context in K = 1024 tokens.
 GOAL_TEXT: Dict[Goal, str] = {"everyday": "everyday (fast models first)",
                                "hard-code": "hard code (dense models first: better code, slower)"}

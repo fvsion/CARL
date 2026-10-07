@@ -1,6 +1,6 @@
 """Every screen read as text (Phase 21): at 100, 140 and 200 columns, in simple and full detail, with no server,
 a server at work and a dialog open. Each line fits the width; no word is repeated next to itself ("fit fits");
-the simple detail level uses the glossary's names only (docs/phase21/glossary.md); the footer keeps "? all keys"
+the simple detail level uses the glossary's names only (reference/glossary.md); the footer keeps "? all keys"
 and "q quit"; D switches the detail level and the dashboard keeps it for its next start."""
 from __future__ import annotations
 
@@ -30,7 +30,7 @@ CMD = ("llama-server -m /m/big.gguf --alias big --host 127.0.0.1 --port 8095 -c 
        "--kv-unified-per-slot 98304 -ctk q4_0 -ctv q4_0 --spec-type draft-mtp,ngram-mod --spec-draft-n-max 1 "
        "--cache-ram 2560 --temp 1.0 --top-k 20 --top-p 0.95 --min-p 0 --presence-penalty 0 --repeat-penalty 1.0 "
        "-ub 512 -fa on --ctx-checkpoints 8 --checkpoint-min-step 4096 --metrics")
-# Names the glossary replaced: never in simple detail (docs/phase21/glossary.md, "Not this").
+# Names the glossary replaced: never in simple detail (reference/glossary.md, "Not this").
 FORBIDDEN = [r"prompt cache", r"\bGENERATING\b", r"\bOFFLINE\b", r"(?<!tok)\bt/s\b", r"\d(\.\d)?G\b(?!i?B)",
              r"\d(\.\d)?M\b(?!i?B)", r"\b98\.3K\b", r"\bN/A\b", r"\bre-emit\b", r"draft tokens", r"ngram-mod",
              r"draft-mtp", r"\bKV cache\b", r"KV quant", r"\bOverview\b", r"\(exp\.\)", r"\bconversations?\b",
