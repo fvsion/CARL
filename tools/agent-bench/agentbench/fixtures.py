@@ -16,7 +16,8 @@ from .proc import run, tail
 FIXTURES_DIR = os.path.join(BENCH_DIR, "fixtures")
 HIDDEN_DIR = os.path.join(BENCH_DIR, "hidden")
 # The folder name of each fixture's copy: the project's own name (the agent sees it as its working folder).
-PROJECT_NAMES: Dict[str, str] = {"pycli": "notes", "pylib": "textstats", "webapp": "tiny-todo", "empty": "newpkg"}
+PROJECT_NAMES: Dict[str, str] = {"pycli": "notes", "pylib": "textstats", "webapp": "tiny-todo", "empty": "newpkg",
+                                 "pyrules": "notes"}           # pycli with an AGENTS.md (Phase 23.1)
 _IGNORE = shutil.ignore_patterns("__pycache__", "*.pyc", ".pytest_cache", ".DS_Store", ".mypy_cache")
 
 
@@ -101,7 +102,8 @@ def check_hidden(repo: str, fixture: str, hidden: Sequence[str], timeout: float 
     rels = []
     for name in hidden:
         shutil.copy2(os.path.join(hidden_dir, fixture, name), os.path.join(tests, name))
-        rels.append(f"tests/{name}")
+        if name.startswith("test_"):                    # a helper (_rules.py) is copied, not run
+            rels.append(f"tests/{name}")
     py = has_pytest(python)
     env = _test_env()
     out: Dict[str, CheckResult] = {}

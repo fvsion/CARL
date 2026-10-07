@@ -7,7 +7,7 @@ and the client config they sync (clientsync.py; client/carl-sync.py):
                                               new config is published (the client connects out: no
                                               port opens on the client), a comment every 25 s
 
-  GET  /carl/cache/settings                   the Caching settings (prefix, sessions, save, auto_s, disk_gb)
+  GET  /carl/cache/settings                   the Caching settings (prefix, sessions, save, auto_s, disk_gb, move)
   POST /carl/cache/claim    {model, slot}     take a slot for a request (409: another client has it)
   POST /carl/cache/release  {model, slot}
   POST /carl/cache/record   {model, slot, file, task, base}   the session a slot holds
@@ -311,7 +311,7 @@ def handle(state: CacheState, conf: Callable[[], CacheConfig], method: str, path
         if method == "GET" and path == "/carl/cache/settings":
             c = conf()
             return 200, {"prefix": c.prefix, "sessions": c.sessions, "save": c.save, "auto_s": c.auto_s,
-                         "disk_gb": c.disk_gb}
+                         "disk_gb": c.disk_gb, "move": c.move}
         if method == "GET" and path == "/carl/cache/turns":
             tmodel = query.get("model", "")
             if not tmodel or len(tmodel) > MAX_NAME:

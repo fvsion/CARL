@@ -31,7 +31,8 @@ class HandleTest(unittest.TestCase):
 
     def test_settings(self) -> None:
         self.assertEqual(self.call("GET", "/carl/cache/settings"),
-                         (200, {"prefix": True, "sessions": True, "save": "switch", "auto_s": 120, "disk_gb": 10}))
+                         (200, {"prefix": True, "sessions": True, "save": "switch", "auto_s": 120, "disk_gb": 10,
+                                "move": "off"}))
 
     def test_claims_are_the_local_clients_files(self) -> None:
         slot = {"model": "qwen/3.6", "slot": 1}

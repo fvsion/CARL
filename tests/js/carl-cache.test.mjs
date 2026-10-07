@@ -46,6 +46,16 @@ test("relocate puts the moved text in front of the first user message (text or p
   assert.equal(relocate({ messages: [{ role: "user", content: "x" }] }, splitOpenCode).messages[0].content, "x");
 });
 
+test("relocate: system2 adds a second system message; none leaves the request as it was", () => {
+  const p = { messages: [{ role: "system", content: OC_SYSTEM }, { role: "user", content: "hi" }] };
+  const two = relocate(p, splitOpenCode, "system2");
+  assert.deepEqual(two.messages.map((m) => m.role), ["system", "system", "user"]);
+  assert.ok(two.messages[1].content.includes("<env>") && two.messages[2].content === "hi");
+  assert.equal(relocate(p, splitOpenCode, "none"), p);
+  const already = { messages: [{ role: "system", content: OC_SYSTEM }, { role: "system", content: "x" }, { role: "user", content: "hi" }] };
+  assert.equal(relocate(already, splitOpenCode, "system2").messages[2].content.includes("<env>"), true);  // the user message then
+});
+
 test("small helpers", () => {
   assert.equal(commonPrefix([1, 2, 3], [1, 2, 4]), 2);
   assert.deepEqual(rankSlots([{ id: 0, busy: false, n: 50 }, { id: 1, busy: false, n: 0 }, { id: 2, busy: true, n: 0 }])
@@ -69,14 +79,16 @@ test("the disk limit removes the oldest conversations first, then prompts, and t
 // ------------------------------------------------------------------ a fake llama-server
 
 /** Tokens are character codes; a template is "S:<system>|U:<user>|G:<assistant>…|T:<tools>|G:" */
-function fakeServer({ router = false, loaded = true, slots = 2 } = {}) {
+function fakeServer({ router = false, loaded = true, slots = 2, toolsFirst = false, modelPath = "/models/m.gguf" } = {}) {
   const st = {
     slots: Array.from({ length: slots }, (_, id) => ({ id, busy: false, n: 0, task: -1 })),
     files: new Map(), calls: [], task: 0, loaded,
   };
   // the generation prompt "G:" is how a reply starts, so a reply re-renders as generated (a stable template)
-  const render = (b) => b.messages.map((m) => `${m.role === "assistant" ? "G" : m.role[0].toUpperCase()}:${typeof m.content === "string" ? m.content : JSON.stringify(m.content)}` +
-    (m.reasoning_content ? `~${m.reasoning_content}` : "")).join("|") + (b.tools ? `|T:${JSON.stringify(b.tools)}` : "") + "|G:";
+  // toolsFirst: a Qwen-like template (the tools first, then each system message: a second one comes after them)
+  const tools = (b) => (b.tools ? `T:${JSON.stringify(b.tools)}` : "");
+  const render = (b) => (toolsFirst && b.tools ? tools(b) + "|" : "") + b.messages.map((m) => `${m.role === "assistant" ? "G" : m.role[0].toUpperCase()}:${typeof m.content === "string" ? m.content : JSON.stringify(m.content)}` +
+    (m.reasoning_content ? `~${m.reasoning_content}` : "")).join("|") + (!toolsFirst && b.tools ? `|${tools(b)}` : "") + "|G:";
   const json = (x, status = 200) => new Response(JSON.stringify(x), { status, headers: { "Content-Type": "application/json" } });
   const fetch = async (url, init = {}) => {
     const u = new URL(url);
@@ -86,7 +98,7 @@ function fakeServer({ router = false, loaded = true, slots = 2 } = {}) {
     if (path === "/v1/models") return json({ data: [{ id: "m", ...(router ? { status: { value: st.loaded ? "loaded" : "unloaded" } } : {}) }] });
     if (path === "/models/load") { st.loaded = true; return json({ success: true }); }
     if (path === "/slots") return json(st.slots.map((s) => ({ id: s.id, is_processing: s.busy, n_prompt_tokens: s.n, id_task: s.task })));
-    if (path === "/props") return json({ model_path: "/models/m.gguf", build_info: "b1" });
+    if (path === "/props") return json({ model_path: modelPath, build_info: "b1" });
     if (path === "/apply-template") return json({ prompt: render(body) });
     if (path === "/tokenize") return json({ tokens: [...body.content].map((c) => c.charCodeAt(0)) });
     if (path === "/completion") {
@@ -138,13 +150,71 @@ test("a new agent prompt is read once and saved; the request is pinned to that s
   const c = cache(srv.fetch);
   const { payload } = await send(c, request("hello"), { session: "s1", agent: "build" });
   assert.equal(payload.id_slot, 0);
-  assert.ok(!payload.messages[0].content.includes("<env>"));
+  assert.ok(payload.messages[0].content.includes("<env>"));              // a template CARL does not know: in place
   const saved = [...srv.st.files.keys()];
   assert.equal(saved.length, 1);
   assert.match(saved[0], /^carl-prefix\+m\+build\+[0-9a-f]{12}\.bin$/);
   // the prefix is exactly the system text and tools up to the user's message
   const fill = String.fromCharCode(...srv.st.calls.find((x) => x.path === "/completion").body.prompt);
   assert.ok(fill.startsWith("S:You are opencode.") && fill.endsWith("|U:"));
+});
+
+test("Phase 23.1: a Qwen-like template gets the project part as a second system message; the saved prompt ends where it starts", async () => {
+  const srv = fakeServer({ toolsFirst: true });
+  const c = cache(srv.fetch);
+  const { payload } = await send(c, request("hello"), { session: "s1", agent: "build" });
+  assert.deepEqual(payload.messages.map((m) => m.role), ["system", "system", "user"]);
+  assert.ok(!payload.messages[0].content.includes("<env>"));
+  assert.ok(payload.messages[1].content.includes("<env>"));                 // system text again, not the user's
+  assert.equal(payload.messages[2].content, "hello");
+  const fill = String.fromCharCode(...srv.st.calls.find((x) => x.path === "/completion").body.prompt);
+  assert.ok(fill.startsWith("T:") && fill.endsWith("|S:"), fill.slice(-40));  // the tools, the shared text, up to the 2nd
+  // the same shared start for another project: the saved prompt is restored, not read again
+  const d = cache(srv.fetch);
+  const other = request("hi", { messages: [{ role: "system", content: (LONG + OC_SYSTEM).replace(/Working directory: \S+/, "Working directory: /other") }, { role: "user", content: "hi" }] });
+  srv.st.calls.length = 0;
+  await send(d, other, { session: "s2", agent: "build" });
+  assert.ok(!srv.st.calls.some((x) => x.path === "/completion"), "the shared prompt was read again");
+});
+
+test("Phase 23.1: Gemma 4 keeps the project part where the client put it", async () => {
+  const srv = fakeServer({ toolsFirst: true, modelPath: "/models/gemma-4-12B-it-Q4_0.gguf" });
+  const { payload } = await send(cache(srv.fetch), request("hello"), { session: "s1", agent: "build" });
+  assert.equal(payload.messages.length, 2);
+  assert.ok(payload.messages[0].content.includes("<env>"));
+  assert.equal(payload.messages[1].content, "hello");
+});
+
+test("Phase 23.1: by default (cache.move off) an unknown template's project part stays in place; Qwen keeps the second system message", async () => {
+  process.env.CARL_CACHE_MOVE = "off";
+  try {
+    const other = await send(cache(fakeServer().fetch), request("hello"), { session: "s1", agent: "build" });
+    assert.equal(other.payload.messages.length, 2);
+    assert.ok(other.payload.messages[0].content.includes("<env>"));
+    assert.equal(other.payload.messages[1].content, "hello");
+    const qwen = await send(cache(fakeServer({ toolsFirst: true }).fetch), request("hello"), { session: "s1", agent: "build" });
+    assert.deepEqual(qwen.payload.messages.map((m) => m.role), ["system", "system", "user"]);
+  } finally {
+    delete process.env.CARL_CACHE_MOVE;
+  }
+});
+
+test("Phase 23.1: cache.move auto (CARL_CACHE_MOVE=auto) moves an unknown template's project part to the first user message", async () => {
+  process.env.CARL_CACHE_MOVE = "auto";
+  try {
+    const srv = fakeServer();                                                // the tools after the messages
+    const { payload } = await send(cache(srv.fetch), request("hello"), { session: "s1", agent: "build" });
+    assert.deepEqual(payload.messages.map((m) => m.role), ["system", "user"]);
+    assert.ok(payload.messages[1].content.includes("<env>") && payload.messages[1].content.endsWith("hello"));
+  } finally {
+    delete process.env.CARL_CACHE_MOVE;
+  }
+});
+
+test("Phase 23.1: the default leaves an unknown template's project part in place", async () => {
+  const { payload } = await send(cache(fakeServer().fetch), request("hello"), { session: "s1", agent: "build" });
+  assert.equal(payload.messages.length, 2);
+  assert.ok(payload.messages[0].content.includes("<env>"));
 });
 
 test("the next request of the session stays in its slot without a restore", async () => {

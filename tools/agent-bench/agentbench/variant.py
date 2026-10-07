@@ -49,7 +49,12 @@ def load(name: str, folder: str = VARIANTS_DIR) -> Variant:
         raise ValueError(f"{path}: a variant needs DESCRIPTION (str) and apply(home) -> list of changed files")
 
     def apply(home: str) -> List[str]:
-        changed = fn(home)
+        from . import varlib                       # every variant starts with carl-cache's move on (CARL's default)
+        cfg = varlib.carl_config(home)
+        before = varlib.read_text(cfg)
+        changed = varlib.set_move(home, True) + fn(home)
+        if varlib.read_text(cfg) == before:        # a variant that sets the move again: no change in the end
+            changed = [c for c in changed if c != cfg]
         if not isinstance(changed, list):
             raise ValueError(f"variant {name}: apply() must return a list")
         return [str(c) for c in changed]

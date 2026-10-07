@@ -36,7 +36,8 @@ SETTINGS_ACTIONS = ("msort", "mfilter", "msort-", "mfilter-", "msortpick", "mfil
                     "tprev", "tnext", "tpick", "tquick", "trun", "tyes", "tcancel", "tclear", "fuse", "fdl", "fgoal",
                     "fscope")
 CACHE_NAMES = {"disk": "disk limit", "prefix": "saved prompts", "sessions": "saved sessions", "save": "when CARL saves",
-               "auto": "save after", "share": "shared storage", "swa": "Gemma models (sliding window)"}
+               "auto": "save after", "share": "shared storage", "swa": "Gemma models (sliding window)",
+               "move": "other templates"}
 
 
 class SettingsActions:
@@ -400,11 +401,13 @@ class SettingsActions:
             autos = sorted({*AUTO_CHOICES, conf.auto_s})
             new = int(value) if value.isdigit() else autos[(autos.index(conf.auto_s) + step) % len(autos)]
             text = f"after {new} s of reading"
-        elif key in ("save", "swa"):
-            opts = diskcache.SAVES if key == "save" else diskcache.SWAS
-            mode = conf.save if key == "save" else conf.swa
+        elif key in ("save", "swa", "move"):
+            opts = {"save": diskcache.SAVES, "swa": diskcache.SWAS, "move": diskcache.MOVES}[key]
+            mode = {"save": conf.save, "swa": conf.swa, "move": conf.move}[key]
             new = value if value in opts else opts[(opts.index(mode) + step) % len(opts)]
-            text = str(new) + (". It applies at the next start" if key == "swa" else "")
+            text = (str(new) + (". It applies at the next start" if key == "swa" else "") if key != "move" else
+                    ("move to your message" if new == "auto" else "leave in place") +
+                    ". OpenCode and Pi use it from their next request")
         else:
             return
         try:

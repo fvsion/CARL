@@ -118,6 +118,11 @@ PATH_KEYS: Dict[str, SettingSpec] = {"models_dir": _str(DEFAULT_MODELS_DIR)}
 # conversations stored as patches against their agent's prompt file (tools/monitor/slotpack.py).
 SAVE_CHOICES = ("auto", "turn", "switch", "stop")
 SWA_CHOICES = ("auto", "full", "window")
+# move: where the parts of the prompt that change per project go for a template CARL does not know (not Qwen, not
+# Gemma 4): off (the default) = left in place, system text, but each new project reads the whole prompt; auto = the
+# start of the first user message, so one saved prompt serves every project. Qwen and Gemma 4 are not changed by it
+# (Phase 23.1).
+MOVE_CHOICES = ("auto", "off")
 CACHE_KEYS: Dict[str, SettingSpec] = {
     "disk_gb": _int(10, 1, 1000),
     "prefix": SettingSpec("bool", True),
@@ -126,6 +131,7 @@ CACHE_KEYS: Dict[str, SettingSpec] = {
     "auto_s": _int(120, 10, 3600),
     "share": SettingSpec("bool", True),
     "swa": _choice("auto", SWA_CHOICES, "SWA_MODE"),
+    "move": _choice("off", MOVE_CHOICES),
 }
 SECTIONS: Dict[str, Dict[str, SettingSpec]] = {"llama": LLAMA_KEYS, "paths": PATH_KEYS, "cache": CACHE_KEYS}
 

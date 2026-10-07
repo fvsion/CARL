@@ -3,6 +3,21 @@
 All notable changes to CARL. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Dates are local dates on the development Mac (M3 Pro, 36 GB).
 
+## 1.9.0 - 2026-10-07
+
+Phase 23.1: the project's instructions are system text again, with Qwen models.
+
+### Changed
+- **Where the project part of the prompt goes** (`carl-cache`, OpenCode and Pi): the parts of the system prompt that change per project or day (OpenCode: the `<env>` block and the AGENTS.md files of the working folder; Pi: `<project_context>` and `<cwd>`) still come after the part that is the same everywhere, so one saved prompt serves every project. Where they go now depends on the model's chat template, checked once per model with `/apply-template`:
+  - **Qwen 3.6 and 3.8:** a second system message. The template puts the tools first, then the system text, and merges the second system message into it, so the project's instructions stay system text (before, they were the start of your first message). The saved prompt ends exactly where they start.
+  - **Gemma 4:** left where the client put them. CARL saves no prompt for Gemma 4 (its sliding-window cache cannot restore one).
+  - **Any other template:** left in place by default, so the instructions are system text (before 1.9.0 they went to the start of the first user message). **Settings > Caching > Other templates** changes it: "leave in place" (the default) or "move to your message" (one saved prompt serves every project; not for a template that also uses a sliding-window cache). It is the new setting `cache.move` (`off` / `auto`; `CARL_CACHE_MOVE` on another computer), and the dashboard's cache API sends it to clients on other computers.
+- The docs (`reference/caching.md`, the user guide's Fast starts, `reference/plugins.md`) and `/carl` (Disk cache) say where the project part goes.
+
+### Added
+- The agent bench: the `pyrules` fixture (the notes project with an AGENTS.md of three rules that show in the code), four prompts (`rules-func`, `rules-rename`, `rules-flag`, `rules-test`, only with `--with-extra` or by name) with hidden checks that read the code (`hidden/pyrules/`), and the variant `project_in_system` (carl-cache's move off).
+- Tests: the placements in `tests/js/carl-cache.test.mjs` (a Qwen-like template: two system messages and the saved prompt's end; Gemma 4; other templates), the rule checks and the variant in `tests/agent_bench/`.
+
 ## 1.8.0 - 2026-10-07
 
 Phase 23: the hand-off to the coder, measured and made consistent. The main agent now gives large and stuck coding tasks to the coder much more often, with any model, and the coder never acts as a main agent. The details and the measurements: `reference/delegation.md`.

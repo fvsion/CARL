@@ -26,6 +26,7 @@ from .model import JSONDict, jdict
 DEFAULT_GB = 10                 # a 74K-token session on the 35B is ~1 GB
 SAVES = ("auto", "turn", "switch", "stop")
 SWAS = ("auto", "full", "window")
+MOVES = ("off", "auto")             # the project part for templates CARL does not know: off (in place) or auto (moved)
 AUTO_S = 120                    # save = auto: after this much unsaved reading (a crash costs at most that)
 MIN_FREE_BYTES = 10 * 1000 ** 3  # no saves below 10 GB of free disk (the clients' rule too)
 PROMPT, CONVERSATION = "prompt", "conversation"
@@ -40,6 +41,7 @@ class CacheConfig:
     swa: str = "auto"
     auto_s: int = AUTO_S
     share: bool = True
+    move: str = "off"               # the project part for templates CARL does not know: off (in place) or auto (moved)
 
     @property
     def limit(self) -> int:
@@ -55,7 +57,7 @@ def config_of(cfg: JSONDict) -> CacheConfig:
                        sec.get("prefix") is not False, sec.get("sessions") is not False,
                        save if save in SAVES else "auto", swa if swa in SWAS else "auto",
                        auto_s if isinstance(auto_s, int) and not isinstance(auto_s, bool) and auto_s > 0 else AUTO_S,
-                       sec.get("share") is not False)
+                       sec.get("share") is not False, "auto" if sec.get("move") == "auto" else "off")
 
 
 @dataclass

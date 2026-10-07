@@ -225,3 +225,30 @@ def remove_hooks(home: str) -> List[str]:
         _write(p.oc_json, json.dumps(cfg, indent=2) + "\n")
         changed.append(p.oc_json)
     return changed
+
+
+def carl_config(home: str) -> str:
+    return os.path.join(home, ".config", "carl", "config.json")
+
+
+def set_move(home: str, on: bool) -> List[str]:
+    """carl-cache's move of the project part (OpenCode's <env> and AGENTS.md, Pi's project context) to the user
+    message: on is CARL's default (no setting); off writes "cache": {"prefix": false} to the HOME's
+    ~/.config/carl/config.json (the harness's own file, marked), which also turns off the saved prompts. Every
+    variant sets it (variant.py), so no variant runs with the setting of the one before."""
+    path = carl_config(home)
+    cur = _json(path)
+    if on:
+        if cur.get("_agent_bench") and os.path.exists(path):
+            os.remove(path)
+            return [path]
+        return []
+    want = {"_agent_bench": "Phase 23.1: carl-cache's move off (variant project_in_system)", "cache": {"prefix": False}}
+    if cur and not cur.get("_agent_bench"):
+        raise RuntimeError(f"{path} is not the harness's: will not change it")
+    return [path] if _write(path, json.dumps(want, indent=2) + "\n") else []
+
+
+def read_text(path: str) -> Optional[str]:
+    """A file's text, or None when it does not exist."""
+    return _read(path)

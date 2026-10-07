@@ -138,6 +138,58 @@
       "fixture": "pylib",
       "extra": true,
       "prompt": "Add a new test file tests/test_longest.py with one test: longest_word(\"a bb ccc\") returns \"ccc\"."
+    },
+    {
+      "id": "rules-func",
+      "category": "small",
+      "fixture": "pyrules",
+      "extra": true,
+      "prompt": "Add a function count_notes(tag: Optional[str] = None) -> int to notes/store.py. It returns how many notes there are, or how many have that tag.",
+      "full": {
+        "hidden": [
+          "_rules.py",
+          "test_hidden_rules_func.py"
+        ]
+      }
+    },
+    {
+      "id": "rules-rename",
+      "category": "small",
+      "fixture": "pyrules",
+      "extra": true,
+      "prompt": "Rename the helper _next_id in notes/store.py to _new_note_id. It's only used in that file.",
+      "full": {
+        "hidden": [
+          "_rules.py",
+          "test_hidden_rules_rename.py"
+        ]
+      }
+    },
+    {
+      "id": "rules-flag",
+      "category": "small",
+      "fixture": "pyrules",
+      "extra": true,
+      "prompt": "Add a --limit N option to `notes list` that shows at most N notes.",
+      "full": {
+        "hidden": [
+          "_rules.py",
+          "test_hidden_rules_flag.py"
+        ]
+      }
+    },
+    {
+      "id": "rules-test",
+      "category": "small",
+      "fixture": "pyrules",
+      "extra": true,
+      "prompt": "Add tests for load_notes in notes/store.py: one for an empty notes file (an empty JSON list) and one for a file that does not exist.",
+      "full": {
+        "hidden": [
+          "_rules.py",
+          "test_hidden_rules_test.py"
+        ]
+      }
     }
   ]
 }

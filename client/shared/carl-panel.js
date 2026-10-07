@@ -304,7 +304,9 @@ function pieces(client) {
   const cache = {
     on: ["CARL saves each agent's prompt and each session on the server's disk.",
          "They stay when the server stops, restarts or switches the model.",
-         "The dashboard sets the limits of the disk cache (Settings > Caching)."],
+         "The dashboard sets the limits of the disk cache (Settings > Caching).",
+         "The parts of the prompt that change per project (the folder, the date, AGENTS.md) go after the shared part: " +
+         "with Qwen as system text; with Gemma 4 and other models where they are (Settings > Caching > Other templates)."],
     off: ["CARL does not save prompts and sessions on the server's disk."],
     howOn: [turnOff("NO_CACHE"), "On other computers, the disk cache works through the dashboard API."],
     howOff: [turnOn("NO_CACHE")],

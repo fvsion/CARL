@@ -45,7 +45,7 @@ The disk cache saves prompts and sessions on the server's disk, through the serv
 
 For each request, the cache does these steps:
 
-1. It moves the parts of the system prompt that change between projects and days (the folder, the date, AGENTS.md) to the first user message.
+1. It puts the parts of the system prompt that change between projects and days (the folder, the date, AGENTS.md) after the shared part: a second system message with Qwen; with Gemma 4 they stay; with other templates they stay too, unless Settings > Caching > Other templates moves them to the first user message ([Caching](caching.md#before-each-request)).
 2. It claims a free slot (a `.claim+MODEL+SLOT` file) and pins the request to it (`id_slot`).
 3. It marks the slot's turn as running (a `.turn+MODEL+SLOT` file). The mark stays until the turn ends and its save or record is on disk.
 4. If the slot does not hold the session, it puts back the session's file, else the agent's prompt file. If there is no prompt file, it reads the prompt one time and saves it.

@@ -58,7 +58,7 @@ const STATE_NAME = /^carl-(?:prefix|session)\+[A-Za-z0-9._+-]+\.bin$/;
  */
 /**
  * The Caching settings (Settings > Caching on the server).
- * @typedef {{ enabled: boolean, prefix: boolean, sessions: boolean, diskGb: number, save: string, autoS: number }} Settings
+ * @typedef {{ enabled: boolean, prefix: boolean, sessions: boolean, diskGb: number, save: string, autoS: number, move: string }} Settings
  */
 
 // ------------------------------------------------------------------ the debug log
@@ -247,15 +247,17 @@ export function splitPi(text) {
 }
 
 /**
- * The request with the system text's volatile parts at the start of the first user message.
- * @param {Payload} payload
- * @param {(text: string) => [string, string]} split
+ * The request with the parts of the system text that change per project or day (split: [kept, moved]) moved out
+ * of the shared system text, so one saved prompt serves every project (Phase 23.1). how: "system2" = a second
+ * system message (templates that merge it after the tools and the shared text: Qwen); "user" = the start of the
+ * first user message (any other template); "none" = left as the client sent it (Gemma 4: nothing is saved for it).
+ * @param {Payload} payload @param {(text: string) => [string, string]} split @param {"system2" | "user" | "none"} [how]
  * @returns {Payload}
  */
-export function relocate(payload, split) {
+export function relocate(payload, split, how = "user") {
   const msgs = arr(payload.messages);
   const sys = obj(msgs[0]);
-  if (sys.role !== "system") return payload;
+  if (how === "none" || sys.role !== "system") return payload;
   const text = typeof sys.content === "string" ? sys.content
     : Array.isArray(sys.content) ? sys.content.map((p) => { const t = obj(p).text; return typeof t === "string" ? t : ""; }).join("")
     : null;
@@ -263,6 +265,11 @@ export function relocate(payload, split) {
   if (text === null || u < 0) return payload;
   const [kept, moved] = split(text);
   if (!moved) return payload;
+  if (how === "system2" && obj(msgs[1]).role !== "system") {
+    // a second system message right after the shared one: the template (Qwen) merges it into the system text
+    // after the tools and the shared text, so it stays system text and the shared start stays shared
+    return { ...payload, messages: [{ ...sys, content: kept }, { role: "system", content: moved }, ...msgs.slice(1)] };
+  }
   const user = obj(msgs[u]);
   const note = `${moved}\n\n`;
   const content = typeof user.content === "string" ? note + user.content
@@ -443,13 +450,16 @@ export class CarlCache {
     this.sessions = new Map();
     /** @type {Map<string, ModelState>} */
     this.models = new Map();
+    /** @type {Map<string, "system2" | "user" | "none">} model -> where the project part goes (placementFor) */
+    this.placements = new Map();
     /** @type {Map<string, number>} model:slot -> requests of this process about to run there */
     this.claimed = new Map();
     /** @type {Map<string, string>} model:slot -> the session of this process that ran there last */
     this.owner = new Map();
     this.settingsAt = 0;
     /** @type {Settings} */
-    this.settingsCache = { enabled: true, prefix: true, sessions: true, diskGb: DEFAULT_GB, save: "auto", autoS: AUTO_S };
+    this.settingsCache = { enabled: true, prefix: true, sessions: true, diskGb: DEFAULT_GB, save: "auto", autoS: AUTO_S,
+                           move: "off" };
   }
 
   /** Is the slots folder somewhere else (a VM's client) with the dashboard's cache API to use? */
@@ -504,7 +514,7 @@ export class CarlCache {
     this.settingsAt = now;
     /** @type {Settings} */
     const s = { enabled: process.env.CARL_CACHE !== "0", prefix: true, sessions: true, diskGb: DEFAULT_GB, save: "auto",
-                autoS: AUTO_S };
+                autoS: AUTO_S, move: "off" };
     if (this.local || this.fromApi) {
       try {
         const c = this.fromApi ?? obj(obj(parse(fs.readFileSync(join(this.home, ".config", "carl", "config.json"), "utf8"))).cache);
@@ -515,10 +525,13 @@ export class CarlCache {
         if (typeof c.save === "string" && SAVES.includes(c.save)) s.save = c.save;
         const auto = int(c.auto_s);
         if (auto !== undefined && auto > 0) s.autoS = auto;
+        if (c.move === "auto") s.move = "auto";
       } catch { /* no settings file: the defaults */ }
     }
     const env = process.env.CARL_CACHE_SAVE;      // a VM's clients: the Caching panel doesn't reach them
     if (env && SAVES.includes(env)) s.save = env;
+    const move = process.env.CARL_CACHE_MOVE;     // likewise: auto or off
+    if (move === "auto" || move === "off") s.move = move;
     s.enabled = s.enabled && (s.prefix || s.sessions);
     this.settingsCache = s;
     return s;
@@ -657,6 +670,49 @@ export class CarlCache {
     return m.key;
   }
 
+  /**
+   * Where the project part of the system text goes for this model (Phase 23.1), checked once: "none" for Gemma 4
+   * (nothing is saved for it: its window cache cannot restore); "system2" when the template renders a second
+   * system message after the tools and the shared system text (Qwen: then the project part stays system text and
+   * the shared start stays shared); else "user" (the start of the first user message). Any failure: "user".
+   * @param {string} model @param {Payload} payload @returns {Promise<"system2" | "user" | "none">}
+   */
+  async placementFor(model, payload) {
+    const have = this.placements.get(model);
+    if (have) return have;
+    /** @type {"system2" | "user" | "none"} */
+    let how = "user";
+    try {
+      const router = (await this.listModels(5_000)).some((m) => typeof modelStatus(m) === "string");
+      const q = router ? `?model=${encodeURIComponent(model)}` : "";
+      const p = obj(await this.call("GET", `/props${q}`, undefined, 5_000));
+      if (/gemma/i.test(String(p.model_path ?? model))) how = "none";
+      else if (await this.secondSystemWorks(model, router, payload)) how = "system2";
+    } catch (e) {
+      debugLog(`the project part's place for ${model}: ${errorText(e)} (it goes to the user message)`);
+    }
+    this.placements.set(model, how);
+    this.log(`the project part for ${model}: ${how === "system2" ? "a second system message" : how === "user" ? "the first user message" : "left in place"}`);
+    return how;
+  }
+
+  /**
+   * Does the template put a second system message after the tools and the first system text, the first part
+   * the same whatever the second says? (Qwen merges it into the system text; Gemma 4 takes one system message.)
+   * @param {string} model @param {boolean} router @param {Payload} payload @returns {Promise<boolean>}
+   */
+  async secondSystemWorks(model, router, payload) {
+    const shared = "CARL-SHARED-PROBE", fields = templateFields(payload);
+    const render = async (/** @type {string} */ project) => String(obj(await this.call("POST", "/apply-template", {
+      messages: [{ role: "system", content: shared }, { role: "system", content: project }, { role: "user", content: "u" }],
+      ...fields, ...this.withModel(model, router) })).prompt ?? "");
+    const [a, b] = [await render("CARL-PROJECT-A"), await render("CARL-PROJECT-B")];
+    const at = a.indexOf("CARL-PROJECT-A");
+    const tools = arr(fields.tools).map((t) => String(obj(obj(t).function).name ?? "")).filter(Boolean);
+    return at > 0 && b.indexOf("CARL-PROJECT-B") === at && a.slice(0, at) === b.slice(0, at)
+      && a.indexOf(shared) >= 0 && a.indexOf(shared) < at && tools.every((n) => a.indexOf(n) < at);
+  }
+
   /** @param {string} model @param {number} slot */
   isClaimed(model, slot) {
     return (this.claimed.get(`${model}:${slot}`) ?? 0) > 0;
@@ -705,7 +761,10 @@ export class CarlCache {
     const none = { payload, release: () => {} };
     const set = await this.loadSettings();
     if (!set.enabled || !Array.isArray(payload?.messages)) return none;
-    const out = set.prefix && this.split ? relocate(payload, this.split) : payload;
+    let how = set.prefix && this.split ? await this.placementFor(String(payload.model ?? ""), payload) : "none";
+    // a template CARL does not know: left in place unless cache.move is auto (Settings > Caching > Other templates)
+    if (how === "user" && set.move !== "auto") how = "none";
+    const out = how === "none" ? payload : relocate(payload, /** @type {(t: string) => [string, string]} */ (this.split), how);
     const moved = { payload: out, release: () => {} };
     if (NO_PIN_AGENTS.has(meta.agent)) return { ...moved, payload: await this.loadedInstead(quick(out)) };
     try {
@@ -910,12 +969,16 @@ export class CarlCache {
   async prefix(payload, model, router, m, agent) {
     const sys = obj(arr(payload.messages)[0]);
     if (sys.role !== "system") return undefined;
+    // the project part as a second system message (Phase 23.1): the saved prompt ends where it starts, exactly (the
+    // hybrid Qwen models' state goes back only to a checkpoint, so a cut past it would be read again)
+    const second = obj(arr(payload.messages)[1]).role === "system";
     const fields = templateFields(payload);
-    const id = shortHash(JSON.stringify([sys.content, fields]), 16);
+    const id = shortHash(JSON.stringify([sys.content, fields, second]), 16);
     if (m.prefixes.has(id)) return m.prefixes.get(id) ?? undefined;
     const render = async (/** @type {string} */ text) => {
-      const r = await this.call("POST", "/apply-template", { messages: [sys, { role: "user", content: text }], ...fields,
-                                                            ...this.withModel(model, router) });
+      const messages = second ? [sys, { role: "system", content: text }, { role: "user", content: "u" }]
+        : [sys, { role: "user", content: text }];
+      const r = await this.call("POST", "/apply-template", { messages, ...fields, ...this.withModel(model, router) });
       return this.tokens(String(obj(r).prompt ?? ""), model, router);
     };
     const [a, b] = [await render("x"), await render("y")];

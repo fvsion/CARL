@@ -54,7 +54,7 @@ class VariantsTest(unittest.TestCase):
 
     def test_listed(self) -> None:
         for name in ("baseline", "v1_short_rule", "v2_turn_reminder", "v4_read_nudge", "v5_new_file_gate",
-                     "v7_coder_modes", "c1_v2_v5_v7", "c2_v2_v7", "c3_v2_v5n2_v7"):
+                     "v7_coder_modes", "c1_v2_v5_v7", "c2_v2_v7", "c3_v2_v5n2_v7", "project_in_system"):
             self.assertIn(name, variant.available())
             self.assertTrue(variant.load(name).description)
 
@@ -135,6 +135,20 @@ class VariantsTest(unittest.TestCase):
         self.assertIn('"remind,gate:2"', read(oc))
         with self.assertRaises(ValueError):
             varlib.install_hooks(self.home, "gate:x")
+
+    def test_project_in_system_and_back(self) -> None:
+        cfg = varlib.carl_config(self.home)
+        variant.load("project_in_system").apply(self.home)
+        self.assertFalse(json.loads(read(cfg))["cache"]["prefix"])
+        self.assertEqual(variant.load("project_in_system").apply(self.home), [])
+        variant.load("baseline").apply(self.home)                       # the next variant: CARL's default again
+        self.assertFalse(os.path.exists(cfg))
+        os.makedirs(os.path.dirname(cfg), exist_ok=True)
+        with open(cfg, "w") as f:
+            json.dump({"cache": {"disk_gb": 5}}, f)                     # a file that is not the harness's
+        with self.assertRaises(RuntimeError):
+            variant.load("project_in_system").apply(self.home)
+        self.assertEqual(variant.load("baseline").apply(self.home), [])  # and it is never removed
 
     @unittest.skipUnless(shutil.which("node"), "node is not installed")
     def test_hook_rules_js(self) -> None:

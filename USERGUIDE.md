@@ -826,9 +826,10 @@ For the stop saves, OpenCode and Pi leave a small record of the session that eac
 
 ### How the cache works
 
-- **What changes in the prompt:** some parts of the system prompt change between projects and days. These parts move to the first message of each session.
+- **What changes in the prompt:** some parts of the system prompt change between projects and days. The cache puts them after the part that is the same everywhere:
   - OpenCode: the environment block (folder, git, date) and the project's instructions (the AGENTS.md files in the working folder). Instructions from outside the folder stay in the system prompt.
   - Pi: the project context and the folder.
+  - With Qwen models they stay system text: a second system message after the shared part. With Gemma 4 they stay where they are (CARL saves no prompt for Gemma 4). With other models they stay where they are too, unless you set Settings > Caching > Other templates to "move to your message".
   - The model gets the same information. The agent's prompt is then the same in each project, and its saved file fits each session.
 - **Router mode:** before a request for a different model, the plugin loads that model and puts the session back. A switch then costs the load (30 s to 2 min) and about a second. OpenCode's title requests go to the loaded model, so a new session does not cause two switches.
 - **Any model:** the Qwen hybrid models and normal transformer models (tested: Gemma 4 E4B, whose template puts the tools after the system prompt).
@@ -1413,6 +1414,7 @@ The Caching panel controls the [disk cache](#7-fast-starts-the-disk-cache). Its 
 | **Save after** | For auto: the time to read the part that is not saved, before a save: 30 s, 2 min (default), 5 min, 10 min |
 | **Shared storage** | On (the default): store saved sessions as the changes to their saved prompt. Off: store them whole. |
 | **Gemma models** | auto (full when it fits), full cache, window cache (models with sliding-window layers; from the next start) |
+| **Other templates** | For a model whose chat template CARL does not know (not Qwen, not Gemma 4): leave in place (the default: the folder, the date and AGENTS.md stay in the system prompt; each new project reads the whole prompt) or move to your message (one saved prompt serves every project; not for a template that also uses a sliding-window cache) |
 
 - **[ Clear the disk cache (c) ]** asks (**CLEAR THE DISK CACHE?**), then removes each saved prompt and saved session. The server keeps what it holds now.
 - **On the disk:** the space used of the limit, the folder, the space that shared storage saves, and the files: the kind (saved prompt or saved session), the model, the agent or the session, the size and the age.

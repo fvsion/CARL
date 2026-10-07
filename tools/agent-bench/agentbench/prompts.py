@@ -11,7 +11,7 @@ from . import BENCH_DIR
 
 PROMPTS_FILE = os.path.join(BENCH_DIR, "prompts.json")
 CATEGORIES = ("large", "stuck", "small", "question")
-FIXTURES = ("pycli", "pylib", "webapp", "empty")
+FIXTURES = ("pycli", "pylib", "webapp", "empty", "pyrules")
 _ID = re.compile(r"^[a-z0-9][a-z0-9-]{0,40}$")
 
 
@@ -56,7 +56,7 @@ def parse_prompts(doc: Mapping[str, Any]) -> List[Prompt]:
         full: Dict[str, Any] = raw_full if isinstance(raw_full, dict) else {}
         hidden = tuple(str(h) for h in full.get("hidden", []) if isinstance(h, str))
         for h in hidden:
-            if not re.fullmatch(r"test_[a-z0-9_]+\.py", h):
+            if not re.fullmatch(r"(test)?_[a-z0-9_]+\.py", h):     # a test file, or a helper the tests import
                 raise ValueError(f"prompts.json: {pid}: bad hidden test name {h!r}")
         seen.add(pid)
         out.append(Prompt(pid, cat, fix, text, exp, hidden, item.get("extra") is True))

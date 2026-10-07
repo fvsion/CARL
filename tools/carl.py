@@ -351,6 +351,10 @@ KEY_HELP: Dict[str, str] = {
     "cache.share": "Store a saved session as the changes to its saved prompt (less disk).",
     "cache.swa": "Sliding-window models (Gemma): full (full cache), window (window cache) or auto (the full cache "
                  "when it fits).",
+    "cache.move": "Models whose chat template CARL does not know (not Qwen, not Gemma 4): off (the default) leaves "
+                  "the parts of the prompt that change per project (the folder, the date, AGENTS.md) in the system "
+                  "prompt; auto moves them to the start of your first message, so one saved prompt serves every "
+                  "project (Settings > Caching > Other templates).",
     "models.NAME.kv": "The context memory type: q4_0 (q4), q8_0 (q8) or f16.",
     "models.NAME.ctx": "The context of each slot in tokens (96k = 98304).",
     "models.NAME.slots": "The number of slots, or auto (2 slots when they fit).",

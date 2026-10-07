@@ -30,8 +30,9 @@ class PromptsTest(unittest.TestCase):
         for cat in prompts.CATEGORIES:                       # large: 4 + the 11.8 control (large-newpkg)
             self.assertEqual(sum(1 for p in ps if p.category == cat), 5 if cat == "large" else 4, cat)
         extra = [p.id for p in everything if p.extra]        # V5's false positives: small requests with a new file
-        self.assertEqual(extra, ["small-gitignore", "small-newtest"])
-        self.assertEqual(len(prompts.select(everything, with_extra=True)), 19)
+        self.assertEqual(extra, ["small-gitignore", "small-newtest", "rules-func", "rules-rename", "rules-flag",
+                                 "rules-test"])
+        self.assertEqual(len(prompts.select(everything, with_extra=True)), 23)
         self.assertEqual([p.id for p in prompts.select(everything, ids=["small-newtest"])], ["small-newtest"])
         self.assertEqual(len(prompts.select(everything, categories=["small"])), 4)
         self.assertEqual({p.expect for p in ps if p.category in ("large", "stuck")}, {"delegate"})
@@ -226,6 +227,8 @@ class FixturesTest(unittest.TestCase):
     def test_small_projects(self) -> None:
         lines = 0
         for root, _, files in os.walk(fixtures.FIXTURES_DIR):
+            if os.sep + "pyrules" in root:
+                continue                                     # pycli with an AGENTS.md: the same small project
             for f in files:
                 if f.endswith((".py", ".js", ".html", ".css", ".md")):
                     with open(os.path.join(root, f)) as fh:
@@ -440,6 +443,30 @@ class FullReportTest(unittest.TestCase):
         ft = [t for t in report.tables(docs) if t.title == "Full runs"][0]
         col = ft.head.index("Coder")
         self.assertEqual([r[col] for r in ft.rows], ["STALLED", "worked", "-", "-"])
+
+
+class RulesFixtureTest(unittest.TestCase):
+    """Phase 23.1: the pyrules fixture's hidden checks pass when the agent followed AGENTS.md, and fail when not."""
+
+    def solve(self, repo: str, good: bool) -> None:
+        doc = '    """Does: count the notes."""\n' if good else ""
+        with open(os.path.join(repo, "notes", "store.py"), "a", encoding="utf-8") as f:
+            f.write("\n\ndef count_notes(tag: Optional[str] = None) -> int:\n" + doc +
+                    "    return sum(1 for n in load_notes() if tag is None or tag in n.tags)\n")
+        name = "test_rule_empty_file" if good else "test_empty_file"
+        with open(os.path.join(repo, "tests", "test_more.py"), "w", encoding="utf-8") as f:
+            f.write("import unittest\nfrom notes.store import load_notes\n\n\nclass More(unittest.TestCase):\n"
+                    f"    def {name}(self) -> None:\n        self.assertEqual(load_notes('/no/such/file'), [])\n")
+
+    def test_good_and_bad(self) -> None:
+        for good in (True, False):
+            with self.subTest(good=good), tempfile.TemporaryDirectory() as tmp:
+                repo = fixtures.make_fresh("pyrules", tmp)
+                self.assertTrue(os.path.isfile(os.path.join(repo, "AGENTS.md")))
+                self.solve(repo, good)
+                for hidden in ("test_hidden_rules_func.py", "test_hidden_rules_test.py"):
+                    res = fixtures.check_hidden(repo, "pyrules", ["_rules.py", hidden])["hidden"]
+                    self.assertEqual(res.passed, good, hidden + ": " + res.output[-400:])
 
 
 class CloneHomeTest(unittest.TestCase):

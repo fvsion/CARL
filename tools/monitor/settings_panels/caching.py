@@ -17,9 +17,9 @@ from .common import choice_line
 
 DISK_CHOICES = (2, 5, 10, 20, 50)                      # the Caching panel's disk limits (GB)
 AUTO_CHOICES = (30, 120, 300, 600)                    # save = auto: seconds of unsaved reading (default 120)
-CACHE_ROWS = ("disk", "prefix", "sessions", "save", "auto", "share", "swa")   # the rows, in order (↑↓)
+CACHE_ROWS = ("disk", "prefix", "sessions", "save", "auto", "share", "swa", "move")   # the rows, in order (↑↓)
 ROW_LABELS = {"disk": "Disk limit", "prefix": "Saved prompts", "sessions": "Saved sessions", "save": "When to save",
-              "auto": "Save after", "share": "Shared storage", "swa": "Gemma models"}
+              "auto": "Save after", "share": "Shared storage", "swa": "Gemma models", "move": "Other templates"}
 SAVE_HELP = {
     "auto": "auto: CARL saves a session when its unsaved part would take AUTO to read again (Save after). The measured "
             "read speed of the model gives the time. CARL also saves before a session leaves the server: another "
@@ -48,6 +48,15 @@ ROW_HELP = {
     "sessions": "Saved sessions: one session at the end of a turn. When the session continues and the server does not "
                 "hold it, CARL restores it before its next request.",
     "share": "Shared storage: CARL stores a saved session as its changes to its saved prompt. This uses less disk."}
+MOVE_HELP = {
+    "off": "leave in place (the default): for a model whose chat template CARL does not know (not Qwen, not Gemma 4), "
+           "the parts of the prompt that change per project (the folder, the date, AGENTS.md) stay in the system "
+           "prompt. The model reads them as standing instructions, but each new project reads the whole prompt again. "
+           "Qwen models get them as system text after the shared part; Gemma 4 models keep them in place.",
+    "auto": "move to your message: for a model whose chat template CARL does not know, the parts of the prompt that "
+            "change per project go to the start of your first message. Then one saved prompt serves every project. "
+            "Do not use it with a template that also uses a sliding-window cache: CARL cannot restore its prompts."}
+MOVE_TEXT = (("off", "leave in place"), ("auto", "move to your message"))
 
 
 def save_text(conf: CacheConfig) -> Tuple[Tuple[str, str], ...]:
@@ -80,7 +89,8 @@ def caching_panel(ui: UIState, conf: CacheConfig, files: Sequence[CacheFile], fo
             "auto": ([(str(a), duration(a), f"cache:auto:{a}") for a in sorted({*AUTO_CHOICES, conf.auto_s})],
                      str(conf.auto_s)),
             "share": ([(v, t, f"cache:share:{v}") for v, t in onoff], "on" if conf.share else "off"),
-            "swa": ([(k, t, f"cache:swa:{k}") for k, t in SWA_TEXT], conf.swa)}
+            "swa": ([(k, t, f"cache:swa:{k}") for k, t in SWA_TEXT], conf.swa),
+            "move": ([(k, t, f"cache:move:{k}") for k, t in MOVE_TEXT], conf.move)}
         for k in CACHE_ROWS:
             opts, cur = rows[k]
             L += choice_line(ROW_LABELS[k], opts, cur, mw, 18, sel=k == key)
@@ -110,7 +120,7 @@ def caching_panel(ui: UIState, conf: CacheConfig, files: Sequence[CacheFile], fo
         return [*L, "", *button_rows("", [("Clear the disk cache (c)", "cache:clear")], mw)]
 
     about = SAVE_HELP[conf.save].replace("AUTO", duration(conf.auto_s)) if key in ("save", "auto") else \
-        SWA_HELP[conf.swa] if key == "swa" else ROW_HELP[key]
+        SWA_HELP[conf.swa] if key == "swa" else MOVE_HELP[conf.move] if key == "move" else ROW_HELP[key]
     sections: List[Section] = [
         (f"About: {ROW_LABELS[key]}", [about]),
         ("How it works", ["OpenCode and Pi save their prompts and sessions through the server. Then the server does not "
