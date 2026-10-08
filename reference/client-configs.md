@@ -4,7 +4,7 @@
 
 ## OpenCode config
 
-The installer writes these settings into `~/.config/opencode/opencode.json` (template: `client/opencode/opencode.json`). It makes a backup first, and it changes only CARL's own entries (`client/configure.py`).
+The installer writes these settings into `~/.config/opencode/opencode.json` (template: `client/opencode/opencode.json`). It makes a backup first (`FILE.before-carl` once, then one `FILE.bak` with the version before the last change), and it changes only CARL's own entries (`client/configure.py`). With `~/.config/opencode` behind a symbolic link, the plugin paths are written with the link resolved.
 
 ### The provider and the models
 

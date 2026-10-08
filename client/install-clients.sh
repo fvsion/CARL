@@ -141,7 +141,7 @@ for rc in "$HOME/.zshrc" "$HOME/.bashrc"; do
   [[ -f "$rc" ]] || continue
   # "# mtplx-vm-client" marked the same line before 1.2.0: no second copy.
   grep -qE '# (carl|mtplx)-vm-client' "$rc" && continue
-  bak="$rc.bak.$(date +%Y%m%d-%H%M%S)"
+  bak="$rc.bak"                          # one copy (the setup keeps FILE.before-carl and one FILE.bak)
   cp -p "$rc" "$bak"
   printf '\n%s\n' "$line" >> "$rc"
   echo "Added ~/.local/bin to PATH in ~/${rc##*/} (marked # carl-vm-client; backup: ${bak##*/})"

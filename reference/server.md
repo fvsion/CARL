@@ -227,7 +227,7 @@ The setup takes the API key from the first of these sources:
 8. A hidden prompt
 
 - The setup stores the key at `~/.config/carl/api-key` (mode 600). The OpenCode and Pi configs point at that file.
-- If the stored key is different, the setup keeps a backup (`api-key.bak.<time>`).
+- If the stored key is different, the setup keeps a backup of the old key (`api-key.bak`, replaced at the next change).
 - A new run changes old configs to the new path. It does not delete the old client file, because a provider of your own can use it. Delete it when nothing uses it.
 - `--key` leaves the key in the shell history.
 - The smoke test gives the key to `curl` from a file descriptor (`curl -H @<(…)`). Thus, the key does not show in `ps`.

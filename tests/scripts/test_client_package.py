@@ -346,7 +346,7 @@ class SetupCase(PackageCase):
             return []
 
     def backups(self, folder: str) -> List[str]:
-        return [n for n in os.listdir(os.path.join(self.home, folder)) if ".bak." in n]
+        return [n for n in os.listdir(os.path.join(self.home, folder)) if n.endswith(".bak")]   # one per file (23.3)
 
 
 class SetupTest(SetupCase):

@@ -3,6 +3,28 @@
 All notable changes to CARL. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Dates are local dates on the development Mac (M3 Pro, 36 GB).
 
+## 1.11.0 - 2026-10-08
+
+Phase 23.3: fewer config backups, and plugin paths that survive a symbolic link.
+
+### Changed
+- **One backup per file.** The setup, an update and a config from the dashboard keep `FILE.before-carl` (your
+  original, written once) and one `FILE.bak` (the version before CARL's last change). Before, each change left a
+  `FILE.bak.<time>`: on the development Mac, 12 of `opencode.json` and 8 of `models.json`. The API key and the PATH
+  line in the shell profile keep one `.bak` too. A run that changes nothing writes no backup, as before.
+- **The old copies go once.** The next setup removes the `FILE.bak.<YYYYMMDD-HHMMSS>` copies of CARL's files
+  (`opencode.json`, `tui.json`, `models.json`, `settings.json`, `mcp.json`, `APPEND_SYSTEM.md`, CARL's state files,
+  `~/.zshrc`, `~/.bashrc`) and keeps the newest as `FILE.bak`. The summary says how many it removed. A file with
+  another name or pattern, for example a backup of your own, stays.
+
+### Fixed
+- **OpenCode plugins behind a symbolic link.** When `~/.config/opencode` goes through a link, OpenCode resolves its
+  folder but not the `file:` paths of its plugins, so no CARL plugin loaded and nothing said so. The setup now
+  writes the plugin, TUI plugin, agent prompt and instruction paths with the link resolved, and an entry written
+  before through the link is replaced, not doubled.
+- Tests: two changes leave one `FILE.bak`; the clean-up keeps the newest and your own files; a home folder behind a
+  link (`tests/scripts/test_configure.py`).
+
 ## 1.10.0 - 2026-10-08
 
 Phase 23.2: the dashboard, reworked again for what it lost in 1.5.0 and for every terminal size. Made from mock-ups

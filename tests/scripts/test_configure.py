@@ -27,7 +27,7 @@ MODELS = {"schema": 1, "default": "qwen3.6-35b-a3b", "models": [
 class ConfigureTests(unittest.TestCase):
     def setUp(self) -> None:
         self._tmp = tempfile.TemporaryDirectory()
-        self.home = self._tmp.name
+        self.home = os.path.realpath(self._tmp.name)       # (macOS: /var is a link; the symlink case has its own test)
         self.models: Any = MODELS
 
     def tearDown(self) -> None:
@@ -52,6 +52,58 @@ class ConfigureTests(unittest.TestCase):
         os.makedirs(os.path.dirname(self.path(rel)), exist_ok=True)
         with open(self.path(rel), "w", encoding="utf-8") as f:
             json.dump(data, f)
+
+    def test_two_changes_leave_one_backup(self) -> None:
+        """Per file: the original once (FILE.before-carl) and one copy of the last version (FILE.bak), never a
+        FILE.bak.<time> (Phase 23.3)."""
+        self.write_json(".config/opencode/opencode.json", {"theme": "mine"})
+        for host in ("192.168.42.1", "192.168.42.2", "192.168.42.3"):   # three runs, each changes opencode.json
+            p = self.run_configure(host=host)
+            self.assertEqual(p.returncode, 0, p.stderr)
+        names = sorted(f for f in os.listdir(self.path(".config/opencode")) if f.startswith("opencode.json"))
+        self.assertEqual(names, ["opencode.json", "opencode.json.bak", "opencode.json.before-carl"])
+        self.assertEqual(self.read_json(".config/opencode/opencode.json.before-carl"), {"theme": "mine"})
+        bak = self.read_json(".config/opencode/opencode.json.bak")            # the version before the last change
+        self.assertEqual(bak["provider"]["llamacpp"]["options"]["baseURL"], "http://192.168.42.2:8080/v1")
+
+    def test_old_timestamped_backups_are_cleaned_up_once(self) -> None:
+        oc = self.path(".config/opencode")
+        self.write_json(".config/opencode/opencode.json", {"theme": "mine"})
+        for stamp, n in (("20261001-120000", 1), ("20261003-120000", 3), ("20261002-120000", 2)):
+            self.write_json(f".config/opencode/opencode.json.bak.{stamp}", {"n": n})
+        self.write_json(".pi/agent/models.json.bak.20261002-090000", {"n": 9})
+        for own in ("notes.bak.1", "opencode.json.bak.old", "mine.json.bak.20261001-120000"):  # not CARL's: they stay
+            self.write_json(f".config/opencode/{own}", {"own": True})
+        p = self.run_configure()
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("removed   4 files of old backups (FILE.bak.<time>)", p.stdout)
+        left = sorted(f for f in os.listdir(oc) if ".bak" in f)
+        self.assertEqual(left, ["mine.json.bak.20261001-120000", "notes.bak.1", "opencode.json.bak",
+                                "opencode.json.bak.old"])
+        self.assertEqual(self.read_json(".pi/agent/models.json.bak"), {"n": 9})       # the newest became FILE.bak
+        self.assertNotIn("removed   ", self.run_configure().stdout.replace("removed   OpenCode", ""))   # once only
+
+    def test_a_home_behind_a_symlink_gets_resolved_plugin_paths(self) -> None:
+        """OpenCode resolves its folder but not the "file:" paths: with ~ a link, they point to the real folder, and an
+        entry written before through the link is replaced, not doubled."""
+        real = self.home
+        link = os.path.join(os.path.dirname(real), os.path.basename(real) + "-link")
+        os.symlink(real, link)
+        self.addCleanup(os.remove, link)
+        self.home = link
+        p = self.run_configure()
+        self.assertEqual(p.returncode, 0, p.stderr)
+        oc = self.read_json(".config/opencode/opencode.json")
+        paths = [x[0] if isinstance(x, list) else x for x in oc["plugin"]]
+        self.assertTrue(paths and all(x.startswith("file:" + real + "/") for x in paths), paths)
+        tui = self.read_json(".config/opencode/tui.json")
+        self.assertTrue(all(x.startswith("file:" + real + "/") for x in tui["plugin"]), tui["plugin"])
+        oc["plugin"].append(["file:" + link + "/.config/opencode/plugins/carl-cache", {"provider": "llamacpp"}])
+        self.write_json(".config/opencode/opencode.json", oc)              # an old entry through the link
+        self.assertEqual(self.run_configure().returncode, 0)
+        cache = [x for x in self.read_json(".config/opencode/opencode.json")["plugin"]
+                 if isinstance(x, list) and x[0].endswith("/carl-cache")]
+        self.assertEqual(len(cache), 1, cache)
 
     def test_fresh_install(self) -> None:
         p = self.run_configure("--coder", "1", ctx="65536")
@@ -298,7 +350,7 @@ class ConfigureTests(unittest.TestCase):
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertNotIn("added", p.stdout)
         self.assertNotIn("updated", p.stdout)
-        baks = [f for _, _, fs in os.walk(self.home) for f in fs if ".bak." in f]
+        baks = [f for _, _, fs in os.walk(self.home) for f in fs if ".bak." in f or f.endswith(".bak")]
         self.assertEqual(baks, [])
 
     def test_user_owned_entries_are_kept(self) -> None:
@@ -378,8 +430,7 @@ class ConfigureTests(unittest.TestCase):
         self.assertFalse(os.path.exists(self.path(".pi/agent/extensions/mtplx-request-policy.ts")))
         for rel in (".config/opencode/opencode.json", ".pi/agent/models.json"):
             self.assertTrue(os.path.exists(self.path(rel + ".before-carl")), rel)     # the usual backups
-            self.assertTrue(any(f.startswith(os.path.basename(rel) + ".bak.")
-                                for f in os.listdir(os.path.dirname(self.path(rel)))), rel)
+            self.assertTrue(os.path.exists(self.path(rel + ".bak")), rel)              # one copy of the last version
         self.assertIn("OpenCode provider 'mtplx' (MTPLX support was removed", p.stdout)
         self.assertIn("Pi extensions/mtplx-request-policy.ts", p.stdout)
         again = self.run_configure()                                                  # nothing left to remove
@@ -555,7 +606,7 @@ class ConfigureTests(unittest.TestCase):
         self.assertEqual(set(agents), {"coder", "carl-coder"})
         self.assertEqual(agents["coder"], mine)
         self.assertFalse(os.path.exists(self.path(".pi/agent/agents/llm-deploy-coder.md")))
-        self.assertTrue(any(f.startswith("llm-deploy-coder.md.bak.") for f in os.listdir(self.path(".pi/agent/agents"))))
+        self.assertTrue(os.path.exists(self.path(".pi/agent/agents/llm-deploy-coder.md.bak")))
         self.assertTrue(os.path.exists(self.path(".pi/agent/agents/carl-coder.md")))
         self.assertIn("OpenCode agent 'llm-deploy-coder' (ours is now 'carl-coder')", p.stdout)
         # the user removes their own coder: ours takes the plain name on the next run
@@ -650,7 +701,7 @@ class ConfigureTests(unittest.TestCase):
         # the state files: moved to carl.json (same content, plus this run), a copy of the old one kept
         for folder, client in ((".config/opencode", "OpenCode"), (".pi/agent", "Pi")):
             self.assertFalse(os.path.exists(self.path(folder + "/llm-deploy.json")), folder)
-            self.assertTrue(any(f.startswith("llm-deploy.json.bak.") for f in os.listdir(self.path(folder))), folder)
+            self.assertTrue(os.path.exists(self.path(folder + "/llm-deploy.json.bak")), folder)
             st = self.read_json(folder + "/carl.json")
             self.assertEqual((st["providers"], st["coder_agent"]), ({"llamacpp": "llamacpp"}, "coder"), folder)
             self.assertIn(f"{client} state file ~/{folder}/llm-deploy.json -> carl.json", p.stdout)
@@ -738,7 +789,7 @@ class ConfigureTests(unittest.TestCase):
         self.assertIn("carl", oc["provider"])
         self.assertEqual(oc["model"], "carl/qwen3.6-35b-a3b")         # the old file would have said "llamacpp"
         self.assertFalse(os.path.exists(self.path(".config/opencode/llm-deploy.json")))
-        self.assertTrue(any(f.startswith("llm-deploy.json.bak.") for f in os.listdir(self.path(".config/opencode"))))
+        self.assertTrue(os.path.exists(self.path(".config/opencode/llm-deploy.json.bak")))
 
     def test_bad_json_changes_nothing(self) -> None:
         os.makedirs(self.path(".config/opencode"))
@@ -972,7 +1023,7 @@ class InstallScriptTests(unittest.TestCase):
 
     def setUp(self) -> None:
         self._tmp = tempfile.TemporaryDirectory()
-        self.home = self._tmp.name
+        self.home = os.path.realpath(self._tmp.name)       # (macOS: /var is a link; the symlink case has its own test)
         # a copied bundle, as in a VM (no ../tools/carl.py): nothing is written into the repo
         self.bundle = os.path.join(self.home, "client")
         # (without this Mac's own server files: remote.json and api-key are written at every server start)

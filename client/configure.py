@@ -54,8 +54,10 @@ Rules
   is being loaded (router mode). NO_MODEL_CHECK=1 leaves it out.
 - Clients (--clients both|opencode|pi, CLIENTS= in install.sh): the configs of the clients chosen; the
   other client's files are not read or changed.
-- Every changed file is backed up first (<file>.bak.<timestamp>). A config that is not plain
-  JSON stops the run before anything is written.
+- Every changed file is backed up first: <file>.before-carl (the original, once) and <file>.bak (the
+  version before CARL's last change, replaced each time). The old <file>.bak.<timestamp> copies of
+  CARL's files are removed once. A config that is not plain JSON stops the run before anything is
+  written.
 
 Layout: the merge rules are plain functions on the parsed configs (no I/O: "merge rules" below);
 the Installer applies them and does every file operation through the Files port, whose adapter
@@ -64,6 +66,7 @@ LocalFiles is wired in main().
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import json
 import os
 import re
@@ -84,6 +87,11 @@ JsonObj = dict[str, Any]
 """A parsed JSON object (OpenCode / Pi configs are open-ended JSON)."""
 
 ORIGINAL = ".before-carl"      # one copy of each config as it was before CARL first changed it
+BACKUP = ".bak"                # one copy of the version before CARL's last change (replaced each time)
+# Before 1.11.0 each change left FILE.bak.<YYYYMMDD-HHMMSS>; the setup removes those of CARL's files once.
+STAMPED = re.compile(r"^(?P<base>.+)\.bak\.(?P<stamp>\d{8}-\d{6})$")
+MANAGED = {"opencode.json", "tui.json", "models.json", "settings.json", "mcp.json", "APPEND_SYSTEM.md", "carl.json",
+           "llm-deploy.json", "mtplx-request-policy.ts", ".zshrc", ".bashrc"}   # the files CARL writes or removes
 PROVIDER = "llamacpp"
 
 
@@ -177,13 +185,17 @@ class Options:
     browser_headed: bool = False
     cache: bool = True
     reminder: bool = True     # the per-turn reminder about the coder (carl-delegation)
+    oc_real: str = ""         # OpenCode's folder with its symlinks resolved (the Installer sets it)
     gate: int = 0             # the new-file gate: stop the main agent at its Nth new file in a turn (0: off)
     profile: bool = True      # append the pointer to ~/.zshrc / ~/.bashrc (NO_PROFILE=1: print it instead)
     clients: str = "both"     # both | opencode | pi: the configs to write (the other client's stay as they are)
 
     @property
     def oc_dir(self) -> str:
-        return os.path.join(self.home, ".config/opencode")
+        """OpenCode's folder; with oc_real set (the Installer: the folder with its symlinks resolved) that one.
+        OpenCode resolves its own folder but not the "file:" paths in opencode.json, so a path through a link would
+        point one folder off and load no plugin."""
+        return self.oc_real or os.path.join(self.home, ".config/opencode")
 
     @property
     def pi_dir(self) -> str:
@@ -516,13 +528,28 @@ def undo_title_disable(agent: JsonObj, st: JsonObj, legacy: bool, rep: Report) -
     st.pop("title_disabled", None)
 
 
+def same_path(a: object, b: str) -> bool:
+    """a and b name the same file or folder ("file:" prefix allowed): equal, or equal with the symlinks resolved (an
+    entry written before 1.11.0 through a link is still CARL's)."""
+    if not isinstance(a, str):
+        return False
+    if a == b:
+        return True
+    pa, pb = a.removeprefix("file:"), b.removeprefix("file:")
+    return a.startswith("file:") == b.startswith("file:") and os.path.realpath(pa) == os.path.realpath(pb)
+
+
+def plural_files(n: int) -> str:
+    return f"{n} file" if n == 1 else f"{n} files"
+
+
 def merge_plugin_entry(cfg: JsonObj, entry: str, want: list[Any] | None, on_disk: bool,
                        label: str, rep: Report) -> bool:
     """One of CARL's server plugins in opencode.json "plugin": `want` ([entry, options]) replaces
     an entry of ours, other entries stay; want None takes ours out. True when the plugin's folder
     is to be removed."""
     def is_ours(x: object) -> bool:
-        return x == entry or (isinstance(x, list) and len(x) >= 1 and x[0] == entry)
+        return same_path(x, entry) or (isinstance(x, list) and len(x) >= 1 and same_path(x[0], entry))
     plist = cfg.get("plugin")
     plist = plist if isinstance(plist, list) else []
     had = [x for x in plist if is_ours(x)]
@@ -667,6 +694,7 @@ def merge_oc_coder(cfg: JsonObj, st: JsonObj, agent: JsonObj, name: str, text: A
         rep.add("updated" if name in agent else "added", f"OpenCode agent '{name}' + delegation rule")
     agent[name] = new_agent
     ins = cfg.setdefault("instructions", [])
+    ins[:] = [x for x in ins if x == rule_path or not same_path(x, rule_path)]   # one written through a link goes
     if rule_path not in ins:
         ins.append(rule_path)
     st["coder_agent"] = name
@@ -674,13 +702,18 @@ def merge_oc_coder(cfg: JsonObj, st: JsonObj, agent: JsonObj, name: str, text: A
 
 def merge_tui_plugin(tplug: list[Any], entry: str, want: bool, label: str, rep: Report) -> bool:
     """One TUI plugin in tui.json "plugin". True when its folder is to be removed."""
+    old = [x for x in tplug if same_path(x, entry) and x != entry]     # the same plugin through a link
+    for x in old:
+        tplug.remove(x)
     if want:
         if entry not in tplug:
             tplug.append(entry)
-            rep.add("added", f"{label} (tui.json)")
+            if not old:
+                rep.add("added", f"{label} (tui.json)")
         return False
-    if entry in tplug:
-        tplug.remove(entry)
+    if entry in tplug or old:
+        if entry in tplug:
+            tplug.remove(entry)
         rep.add("removed", label)
         return True
     return False
@@ -906,8 +939,9 @@ class ConfigFiles:
         self.written: set[str] = set()             # files written this run (backed up once)
 
     def short(self, path: str) -> str:
-        """The path for display (the home folder as ~)."""
-        return path.replace(self.home, "~")
+        """The path for display (the home folder as ~, also with its links resolved)."""
+        real = self.fs.realpath(self.home)
+        return path.replace(real, "~").replace(self.home, "~") if real != self.home else path.replace(self.home, "~")
 
     def load(self, path: str) -> JsonObj:
         """A JSON object ({} when the file doesn't exist); ConfigError when it isn't one."""
@@ -930,7 +964,7 @@ class ConfigFiles:
     def save_text(self, path: str, text: str, mode: int = 0o600, backup: bool = True) -> None:
         """Write only on a change. Before a change to a file that exists: keep the
         original once (FILE.before-carl, never overwritten) and a copy of the
-        current version (FILE.bak.<time>)."""
+        current version (FILE.bak, replaced each time)."""
         fs = self.fs
         fs.makedirs(os.path.dirname(path))
         if fs.exists(path):
@@ -941,7 +975,7 @@ class ConfigFiles:
                     fs.copy(path, path + ORIGINAL)
                     self.report.add("backed up",
                                     f"{self.short(path)} -> {os.path.basename(path)}{ORIGINAL} (your original)")
-                fs.copy(path, f"{path}.bak.{self.stamp}")
+                fs.copy(path, path + BACKUP)
         link = fs.islink(path)
         fs.write(path, text)                       # through a symlink: the link stays, its target changes
         if not link:
@@ -949,9 +983,35 @@ class ConfigFiles:
         self.written.add(path)
 
     def remove_file(self, path: str) -> None:
-        """Remove a file CARL installed, keeping a copy (FILE.bak.<time>, which the clients don't load)."""
-        self.fs.copy(path, f"{path}.bak.{self.stamp}")
+        """Remove a file CARL installed, keeping a copy (FILE.bak, which the clients don't load)."""
+        self.fs.copy(path, path + BACKUP)
         self.fs.remove(path)
+
+    def clean_old_backups(self, folders: list[str]) -> int:
+        """Once: CARL's old FILE.bak.<YYYYMMDD-HHMMSS> files (only of the files CARL manages, in its folders) go; the
+        newest becomes FILE.bak when there is none. A file of the user's own (another name, another pattern) stays.
+        The number removed."""
+        fs, n = self.fs, 0
+        for folder in folders:
+            if not fs.isdir(folder):
+                continue
+            groups: dict[str, list[tuple[str, str]]] = {}
+            for name in fs.listdir(folder):
+                m = STAMPED.match(name)
+                if m and m.group("base") in MANAGED and fs.isfile(os.path.join(folder, name)):
+                    groups.setdefault(m.group("base"), []).append((m.group("stamp"), name))
+            for base, found in groups.items():
+                found.sort()
+                keep = os.path.join(folder, base + BACKUP)
+                if not fs.exists(keep):
+                    fs.copy(os.path.join(folder, found[-1][1]), keep)
+                for _, name in found:
+                    fs.remove(os.path.join(folder, name))
+                    n += 1
+        if n:
+            self.report.add("removed", f"{plural_files(n)} of old backups (FILE.bak.<time>); CARL now keeps "
+                                       f"FILE.before-carl and one FILE.bak")
+        return n
 
 
 # ================================================================== the installer
@@ -959,7 +1019,10 @@ class Installer:
     """Writes the OpenCode and Pi configs for one set of Options."""
 
     def __init__(self, opts: Options, stamp: str, fs: Files, chrome: bool) -> None:
-        self.o = opts
+        oc = os.path.join(opts.home, ".config/opencode")
+        real = fs.realpath(oc)
+        self.o = dataclasses.replace(opts, oc_real=real) if real != oc else opts      # "file:" paths without links
+        opts = self.o
         self.fs = fs
         self.chrome = chrome                       # Google Chrome is installed (the browser agent drives it)
         self.stamp = stamp
@@ -988,7 +1051,7 @@ class Installer:
             self.cf.load(path)
 
     def save_state(self, folder: str, client: str, st: JsonObj) -> None:
-        """Write NAMES.state; the old-named one goes (a copy stays as FILE.bak.<time>)."""
+        """Write NAMES.state; the old-named one goes (a copy stays as FILE.bak)."""
         self.cf.save(os.path.join(folder, NAMES.state), st, backup=False)
         old = os.path.join(folder, OLD_NAMES.state)
         if self.fs.isfile(old):
@@ -1398,6 +1461,7 @@ def main(argv: list[str]) -> int:
     inst = Installer(opts, time.strftime("%Y%m%d-%H%M%S"), LocalFiles(), chrome)
     try:
         inst.check_configs()
+        inst.cf.clean_old_backups([inst.o.oc_dir, opts.pi_dir, os.path.join(opts.pi_dir, "extensions"), opts.home])
         oc_ids = inst.opencode() if opts.clients != "pi" else None
         pi_ids = inst.pi() if opts.clients != "opencode" else None
     except ConfigError as e:

@@ -24,7 +24,7 @@ brew install llama.cpp aria2 ansifilter zstd
 - If you skip the `brew install`, `./carl.sh` finds the missing tools and asks to install them.
 - If you skip the download, `./carl.sh` asks to download the best model for this Mac.
 - `./carl.sh install` asks one time which clients (OpenCode, Pi or both) and which options you want (the coder, the browser, web search, LSP). `--yes` takes the defaults.
-- **Your own OpenCode and Pi settings stay.** The setup adds CARL next to them. It keeps a backup of each file that it changes (`FILE.before-carl`, `FILE.bak.<time>`).
+- **Your own OpenCode and Pi settings stay.** The setup adds CARL next to them. It keeps a backup of each file that it changes (`FILE.before-carl`, the original, and one `FILE.bak`, the version before CARL's last change).
 
 **Another computer or a VM** (macOS or Linux): start the server for that network (for example `./carl.sh --vm`), then make the client package and run its setup there:
 

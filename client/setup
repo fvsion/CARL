@@ -291,7 +291,7 @@ if (( DO_CONFIG )); then
   rc="${PIPESTATUS[0]}"
   set -e
   if (( rc != 0 )); then
-    say "error: the config step stopped (exit code $rc). Its output is above. Your files have backups (FILE.bak.<time>). Correct the cause, then run ./setup again." >&2
+    say "error: the config step stopped (exit code $rc). Its output is above. Your files have backups (FILE.bak). Correct the cause, then run ./setup again." >&2
     exit "$rc"
   fi
   smoke="$(awk '/^(OK: the server answers|Note: no server runs at)/ { f = 1 } f' "$out" | tr -s ' \n' '  ' | sed 's/ *$//')"
@@ -303,7 +303,7 @@ echo
 say "CARL setup is done."
 for r in ${report[@]+"${report[@]}"}; do say "  $r"; done
 if (( DO_CONFIG )); then
-  say "  Configs: written$([[ "${backups:-0}" != 0 ]] && echo ". Backups of the changed files: FILE.bak.<time> next to each file")."
+  say "  Configs: written$([[ "${backups:-0}" != 0 ]] && echo ". Backups of the changed files: FILE.bak next to each file (the original: FILE.before-carl)")."
   say "  Smoke test: ${smoke:-no result (see the output above)}"
 else
   say "  Configs: not changed (--no-config)."

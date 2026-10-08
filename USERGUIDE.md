@@ -1685,9 +1685,11 @@ Then **fully restart OpenCode or Pi.**
 | Backup | Contents |
 |---|---|
 | `FILE.before-carl` | Your original file, from before CARL changed it the first time. The setup never overwrites this copy. |
-| `FILE.bak.<timestamp>` | The version from before each later change |
+| `FILE.bak` | The version from before CARL's last change. The next change replaces it: there is one `FILE.bak` per file. |
 
 - The summary shows the backups as `backed up`. If nothing changes, the setup writes nothing and makes no backup.
+- Before 1.11.0, the setup kept a copy for each change (`FILE.bak.<timestamp>`). The next setup removes those old copies of CARL's files and keeps the newest as `FILE.bak`. The summary says how many it removed. It does not touch other files, for example a backup of your own.
+- When `~/.config/opencode` goes through a symbolic link, the setup writes the plugin paths with the link resolved, because OpenCode does not resolve the paths of its plugins.
 - To go back to your own config, copy `FILE.before-carl` back to `FILE`. For example: `cp ~/.config/opencode/opencode.json.before-carl ~/.config/opencode/opencode.json`.
 
 **Your choices.** The setup keeps the clients and the options that you chose, and the switches that you gave (`NO_CACHE=1` and the others), in `~/.config/carl/client-install.env`. The next setup uses them as the defaults. A config that the dashboard sends is applied with the same choices, and without changes to your shell profile. With `--coder auto`, a sync decides the coder from the number of slots again.

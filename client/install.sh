@@ -245,7 +245,7 @@ old_key=""
 [[ -f "$KEY_FILE" ]] && old_key="$(tr -d '[:space:]' < "$KEY_FILE")"
 if [[ "$old_key" != "$key" ]]; then
   if [[ -n "$old_key" ]]; then
-    bak="$KEY_FILE.bak.$(date +%Y%m%d-%H%M%S)"
+    bak="$KEY_FILE.bak"                    # one copy of the key before (replaced each time)
     ( umask 077; cp "$KEY_FILE" "$bak" )
     say "Note: the script replaced the API key in $(tilde "$KEY_FILE"). The old key is in $(tilde "$bak"). If this Mac runs the CARL server, the server uses the new key after its next start."
   fi
@@ -376,7 +376,7 @@ fi
 # existing configs without overwriting anything the user owns: a provider of
 # your own named "llamacpp" stays, and ours is added as "carl"; your
 # default model, agents and extensions are kept. Our MTPLX pieces from before
-# 1.2.0 are removed, and the pieces named llm-deploy get CARL's names. Backups: *.bak.<time>.
+# 1.2.0 are removed, and the pieces named llm-deploy get CARL's names. Backups: FILE.before-carl and FILE.bak.
 [[ "${DELEGATION_GATE:-0}" =~ ^([0-9]|[1-9][0-9])$ ]] \
   || { echo "error: DELEGATION_GATE must be a number from 0 (off) to 99, not '${DELEGATION_GATE}'." >&2; exit 2; }
 python3 "$HERE/configure.py" --bundle "$HERE" --home "$HOME" --host "$HOST" --clients "$clients" \
