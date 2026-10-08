@@ -1,12 +1,12 @@
 // @ts-check
-// The /carl panel for OpenCode (TUI plugin, installed by CARL's client/install.sh): every CARL part on this
-// computer with its state (carl-panel.js), one section per part: the client config sync first (whether new
-// configs are applied at once, a config that waits, a check now), then the disk cache, the model check, the
-// session switcher, the subagents sidebar, the coder, the browser, web search and LSP. OpenCode's dialogs are
-// lists, so the sections are a list and each one opens its own dialog (the nearest to tabs): its actions and
-// sentences first, then "‹ back", then the details (addresses, versions, the installer's switches) under
-// their own heading.
-import { outcome, run, sections } from "./carl-panel.js";
+// The /carl panel for OpenCode (TUI plugin, installed by CARL's client/install.sh): a control panel
+// (carl-panel.js). The list has one row for each CARL part: its label and its state ("Coder subagent   on"):
+// the config sync, new configs at once, the coder, the background coder, the delegation reminder, the browser,
+// web search, LSP, the subagents side panel, the session switcher, the disk cache and the model check.
+// OpenCode's dialogs are lists, so a row opens its own dialog: its actions first ("▸ Turn it off"), then what
+// the part does, then "‹ back", then the details (the setup switch, addresses, versions) under their own
+// heading. A switch runs `carl-sync.py set`; a toast says what changed and what must restart.
+import { act, sections } from "./carl-panel.js";
 
 /** @typedef {import("@opencode-ai/plugin/tui").TuiPluginApi} TuiPluginApi */
 /** @typedef {import("@opencode-ai/plugin/tui").TuiPluginModule} TuiPluginModule */
@@ -15,12 +15,13 @@ const BACK = "‹ back";   // not exported: OpenCode may call every export of an
 
 /** @param {TuiPluginApi} api */
 function panel(api) {
+  let running = false;                       // one action at a time: a second select waits for the first
   const top = () => {
     const all = sections("opencode");
     api.ui.dialog.replace(() => api.ui.DialogSelect({
       title: "CARL",
       placeholder: "Filter",
-      options: all.map((s) => ({ title: s.title, value: s.id, description: s.summary })),
+      options: all.map((s) => ({ title: s.row, value: s.id, description: "" })),
       onSelect: (opt) => section(String(opt.value)),
     }));
   };
@@ -29,7 +30,7 @@ function panel(api) {
     const s = sections("opencode").find((x) => x.id === id);
     if (!s) return top();
     api.ui.dialog.replace(() => api.ui.DialogSelect({
-      title: `CARL · ${s.title}`,
+      title: `CARL › ${s.title}`,
       options: [
         ...s.actions.map((a, i) => ({ title: `▸ ${a.label}`, value: `act:${i}`, description: "" })),
         ...s.lines.map((l, i) => ({ title: l, value: `line:${i}`, description: "" })),
@@ -39,12 +40,17 @@ function panel(api) {
       onSelect: async (opt) => {
         const v = String(opt.value);
         if (v === "back") return top();
-        if (!v.startsWith("act:")) return;
+        if (!v.startsWith("act:") || running) return;
         const a = s.actions[Number(v.slice(4))];
         if (!a) return;
-        if (a.busy) api.ui.toast({ message: a.busy, variant: "info" });
-        const said = outcome(a, await run(a.args), "opencode");
-        api.ui.toast({ message: said.message, variant: said.ok ? "success" : "error" });
+        running = true;
+        try {
+          if (a.busy) api.ui.toast({ message: a.busy, variant: "info" });
+          const said = await act(a, "opencode");
+          api.ui.toast({ message: said.message, variant: said.ok ? "success" : "error" });
+        } finally {
+          running = false;
+        }
         section(id);
       },
     }));
@@ -59,7 +65,7 @@ const plugin = {
     const open = panel(api);
     const unreg = api.command?.register?.(() => [{
       title: "CARL", value: "carl.panel", category: "CARL",
-      description: "The CARL parts on this computer and their state: config sync, disk cache, tools",
+      description: "Turn the CARL parts on this computer on or off: the coder, the tools, the config sync",
       slash: { name: "carl" },
       onSelect: () => open(),
     }]);

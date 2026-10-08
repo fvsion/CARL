@@ -186,7 +186,6 @@ class Options:
     cache: bool = True
     reminder: bool = True     # the per-turn reminder about the coder (carl-delegation)
     oc_real: str = ""         # OpenCode's folder with its symlinks resolved (the Installer sets it)
-    gate: int = 0             # the new-file gate: stop the main agent at its Nth new file in a turn (0: off)
     profile: bool = True      # append the pointer to ~/.zshrc / ~/.bashrc (NO_PROFILE=1: print it instead)
     clients: str = "both"     # both | opencode | pi: the configs to write (the other client's stay as they are)
 
@@ -261,7 +260,6 @@ def parse_args(argv: list[str]) -> Options:
     ap.add_argument("--cache", "--prefix-cache", dest="cache", type=switch_arg, default=True)
     ap.add_argument("--clients", choices=CLIENTS, default="both")
     ap.add_argument("--reminder", type=switch_arg, default=True)
-    ap.add_argument("--gate", type=int, default=0, choices=range(0, 100), metavar="0-99")
     a = ap.parse_args(argv)
     try:
         models = carl_models.load_list(a.models)
@@ -271,7 +269,7 @@ def parse_args(argv: list[str]) -> Options:
                    running=a.running, coder=a.coder, sidebar=a.sidebar, switcher=a.switcher,
                    model_check=a.model_check, web_search=a.web_search, lsp=a.lsp, background=a.background,
                    browser=a.browser, browser_headed=a.browser_headed, profile=a.profile,
-                   cache=a.cache, clients=a.clients, reminder=a.reminder, gate=a.gate)
+                   cache=a.cache, clients=a.clients, reminder=a.reminder)
 
 
 # ================================================================== merge rules (no I/O)
@@ -1203,7 +1201,8 @@ class Installer:
             self.fs.write(p, t)
         merge_oc_coder(cfg, st, agent, name, AgentText(desc, prompt_path), rule_path, rep)
         self._oc_server_plugin(cfg, DELEGATION, True, provider_id, "the hand-off to the coder",
-                               {"reminder": self.o.reminder, "gate": self.o.gate, "coder": name})
+                               {"reminder": self.o.reminder, "cacheApi": self.o.cache_api, "coder": name})
+        # (the new-file gate is a setting of the dashboard: carl-delegation reads it through cacheApi, Phase 23.4)
         self._code_command(os.path.join(oc, "command", "code.md"), "opencode/commands/code.md", name, "OpenCode")
 
     def _code_command(self, dest: str, src: str, name: str, client: str) -> None:
@@ -1365,7 +1364,7 @@ class Installer:
                            str(st.get("coder_agent") or CODER), "Pi")
         self._pi_ext(DELEGATION, coder_on, (DELEGATION_CORE,), "the hand-off to the coder", st, "delegation_ext")
         if coder_on:
-            st["delegation"] = {"reminder": o.reminder, "gate": o.gate}
+            st["delegation"] = {"reminder": o.reminder}            # the gate: the dashboard's setting (23.4)
         else:
             st.pop("delegation", None)
         if o.cache:

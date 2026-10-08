@@ -297,6 +297,8 @@ class Controller:
         elif ui.tab == 1 and k in ("i", "u", "x", "P", "z", "f"):
             self.do({"i": "insall", "u": "insconfig", "x": "insclose", "P": "inspush", "z": "pkgmake",
                      "f": "pkgshow"}[k])
+        elif ui.tab == 1 and k == "g" and ui.connect_sp == 0:
+            self.connect.cycle_gate()
         elif ui.tab == 1 and k in ("[", "]"):
             ui.connect_sp = (ui.connect_sp + 1) % len(CONNECT_SUBPANELS)
         elif ui.tab == 3 and k in ("w", "f"):

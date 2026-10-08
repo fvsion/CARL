@@ -55,6 +55,20 @@ class AppTest(unittest.TestCase):
             self.ctl.handle_input(c)
             self.app.frame(self.ctl.data)
 
+    def test_g_steps_the_new_file_gate_in_connect(self) -> None:
+        """The gate is a dashboard setting only (Phase 23.4): g in Connect > Setup steps it off, 1, 2, 3, 5, off and
+        saves config.json delegation.gate; the full level of SET UP shows it."""
+        self.keys("2")
+        seen = []
+        for _ in range(6):
+            self.keys("g")
+            seen.append(self.store.load_config().get("delegation", {}).get("gate", 0))
+        self.assertEqual(seen, [1, 2, 3, 5, 0, 1])
+        self.ui.levels["csetup"] = 2
+        from monitor.fmt import ANSI
+        text = ANSI.sub("", "\n".join(self.app.frame(self.ctl.data)))
+        self.assertRegex(text, r"New-file gate +1: the main agent's new file number 1 of a turn goes to the coder")
+
     def test_tabs_by_key_and_by_click(self) -> None:
         self.keys("2")
         self.assertEqual(self.ui.tab, 1)

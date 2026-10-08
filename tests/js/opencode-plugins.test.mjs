@@ -2,7 +2,7 @@
 // its fetch wrapper, staged with the shared files as the installer lays them out, against a fake server).
 // Run: node --test tests/js (tests/scripts/test_js.py runs it with the other suites).
 import assert from "node:assert/strict";
-import { copyFileSync, mkdtempSync } from "node:fs";
+import { copyFileSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -91,7 +91,7 @@ test("carl-delegation: the reminder on main sessions only; off with reminder: fa
   assert.equal(quiet.messages[0].parts[0].text, "Add a CLI.");
 });
 
-test("carl-delegation: the gate is off unless set; then it stops the main agent at the Nth new file", async () => {
+test("carl-delegation: the gate is off unless the dashboard sets it; then it stops the main agent at the Nth new file", async () => {
   const client = { session: { get: async () => ({ data: {} }) } };
   const dir = mkdtempSync(join(tmpdir(), "gate-"));
   const call = async (hooks, tool, args, sessionID = "m") => {
@@ -102,9 +102,15 @@ test("carl-delegation: the gate is off unless set; then it stops the main agent 
       return String(e.message);
     }
   };
+  const home = mkdtempSync(join(tmpdir(), "gate-home-"));                   // the dashboard's setting (Phase 23.4)
+  const was = process.env.HOME;
+  process.env.HOME = home;
   const none = await delegation.server({ client, directory: dir }, {});
   assert.equal(await call(none, "write", { filePath: "a.py" }), "");        // off by default
-  const two = await delegation.server({ client, directory: dir }, { gate: 2 });
+  mkdirSync(join(home, ".config", "carl"), { recursive: true });
+  writeFileSync(join(home, ".config", "carl", "config.json"), JSON.stringify({ delegation: { gate: 2 } }));
+  const two = await delegation.server({ client, directory: dir }, { gate: 9 });   // the old option: ignored
+  process.env.HOME = was;
   assert.equal(await call(two, "write", { filePath: "a.py" }), "");         // the 1st new file passes
   assert.match(await call(two, "write", { filePath: "b.py" }), /^\[CARL\] Blocked: b\.py is a new file/);
   await two["chat.message"]({ sessionID: "m" });                             // a new turn counts again

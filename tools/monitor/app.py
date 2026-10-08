@@ -123,7 +123,8 @@ class App:
                     listeners=self._api.listeners if self._api else 0, pushed=self.jobs.pushed(),
                     clients=tuple((self._api.registry if self._api else Registry(self._clients_file)).list()),
                     detail=ui.detail, drafter_size=fsio.file_size(md) if md else 0,
-                    model_quant=str(m.get("quant") or "") if m else "", here=self.here_text())
+                    model_quant=str(m.get("quant") or "") if m else "", here=self.here_text(),
+                    gate=self.jobs.cache_conf().gate)
 
     def here_text(self) -> str:
         """OpenCode and Pi on this Mac, for the CONNECT card."""

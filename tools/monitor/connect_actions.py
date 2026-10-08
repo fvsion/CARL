@@ -12,12 +12,16 @@ from .api import FETCH_ERRORS, Endpoint
 from .clients import LABELS, config_text, fill_template, masked, model_list, served
 from .collector import SHAPE_ERRORS
 from .jobs import ServerJobs
-from .model import ServerData, clean
+from .fmt import R, RED
+from .model import ServerData, clean, jdict
 from .state import UIState
 from .store import ModelList
 
 TEMPLATES = {"opencode": "opencode/opencode.json", "pi": "pi/models.json"}     # client config templates in client/
 FORGET_AFTER_S = 7 * 86400          # the Clients panel's Forget: clients not seen for a week
+
+
+GATES = (0, 1, 2, 3, 5)             # the new-file gate's steps (g); 0 = off
 
 
 class ConnectActions:
@@ -32,6 +36,31 @@ class ConnectActions:
         self.repo = repo
         self.home = home
         self.snapshot = snapshot
+
+    def cycle_gate(self) -> None:
+        """g: the new-file gate of carl-delegation, the next of GATES (off, 1, 2, 3, 5): config.json delegation.gate.
+        OpenCode and Pi read it from the dashboard within 10 s (on another computer through the dashboard API). A
+        setting of the dashboard only (user, 2026-10-08); advanced, not recommended."""
+        ui, store = self.ui, self.jobs.svc.store
+        try:
+            cfg = store.load_config()
+            cur = int(jdict(cfg.get("delegation")).get("gate") or 0)
+            nxt = next((g for g in GATES if g > cur), 0)
+            sec = cfg.setdefault("delegation", {})
+            if nxt:
+                sec["gate"] = nxt
+            else:
+                sec.pop("gate", None)
+                if not sec:
+                    cfg.pop("delegation")
+            store.save_config(cfg)
+        except Exception as e:      # config.json unreadable or not writable: say so
+            ui.toast(f"{RED}CARL cannot save config.json: {e}{R}", 10)
+            return
+        self.jobs.cache_conf(fresh=True)
+        ui.toast("New-file gate: off. The main agent writes new files itself." if not nxt else
+                 f"New-file gate: {nxt}. OpenCode and Pi stop the main agent at its new file number {nxt} in a turn "
+                 f"and tell it to use the coder.", 8)
 
     def preview_text(self, kind: str, d: ServerData, mask: bool = False) -> str:
         """Config text for the running server. mask=True hides the key (on-screen preview)."""

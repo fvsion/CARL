@@ -38,7 +38,7 @@ The installer writes these settings into `~/.config/opencode/opencode.json` (tem
 | `carl-cache` | `plugin` in `opencode.json` | The disk cache ([Caching](caching.md)). `NO_CACHE=1` leaves it out. |
 | `carl-model-check` | `plugin` in `opencode.json` | Warns when the selected model is not the one that the server runs, is not installed, or loads. `NO_MODEL_CHECK=1` leaves it out. |
 | `carl-background` | `plugin` in `opencode.json` | Runs CARL's coder in the background ([plugins](plugins.md#carl-background-the-coder-in-the-background-opencode)). It comes with the coder. `NO_BACKGROUND_SUBAGENTS=1` leaves it out. |
-| `carl-delegation` | `plugin` in `opencode.json`, with `reminder`, `gate` and `coder` | The delegation rule for the main agent only, the reminder and the new-file gate ([the hand-off to the coder](delegation.md)). It comes with the coder. `NO_REMINDER=1` turns the reminder off; `DELEGATION_GATE=N` sets the gate. |
+| `carl-delegation` | `plugin` in `opencode.json`, with `reminder`, `cacheApi` and `coder` | The delegation rule for the main agent only, the reminder and the new-file gate ([the hand-off to the coder](delegation.md)). It comes with the coder. `NO_REMINDER=1` (or `/carl`) turns the reminder off. The gate is a setting of the dashboard (Connect > Setup); the plugin reads it through `cacheApi`. |
 | `/code` | `~/.config/opencode/command/code.md` | Gives a task straight to the coder. It comes with the coder. |
 | `subagents-sidebar` | `~/.config/opencode/tui.json` | A live list of the subagents. `NO_SIDEBAR=1` leaves it out. |
 | `session-switcher` | `~/.config/opencode/tui.json` | A session switcher in the prompt box, and `/switch`. `NO_SWITCHER=1` leaves it out. |
@@ -91,5 +91,5 @@ The installer writes `~/.pi/agent/models.json` (template: `client/pi/models.json
 | Web search | The MCP server `carl-web-search` in `~/.pi/agent/mcp.json` (`WEB_SEARCH` as for OpenCode) |
 | Browser | The MCP server `carl-browser` in `mcp.json`, loaded when the model needs it. `NO_BROWSER=1` leaves it out. |
 | Extensions | `carl-cache`, `carl-panel`, `subagent` and `carl-delegation` (both with the coder) |
-| The hand-off | `"delegation": {"reminder": true, "gate": 0}` in `~/.pi/agent/carl.json` ([the hand-off to the coder](delegation.md)); the delegation rule is the last block of `~/.pi/agent/APPEND_SYSTEM.md` (main agent only) |
+| The hand-off | `"delegation": {"reminder": true}` in `~/.pi/agent/carl.json` (the new-file gate comes from the dashboard: `cache_api`) ([the hand-off to the coder](delegation.md)); the delegation rule is the last block of `~/.pi/agent/APPEND_SYSTEM.md` (main agent only) |
 | `/code` | `~/.pi/agent/prompts/code.md`: gives a task straight to the coder (with the coder) |

@@ -2,6 +2,9 @@
 // Run: node --test tests/js (tests/scripts/test_js.py runs it with the other suites).
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import * as D from "../../client/shared/carl-delegation.js";
 
 const none = () => false;                                     // no file exists
@@ -64,4 +67,26 @@ test("the coder in each client's call form", () => {
   assert.ok(!D.isCoderCall("task", { subagent_type: "explore" }));
   assert.ok(D.isCoderCall("subagent", { tasks: [{ agent: "coder", task: "a" }] }));
   assert.ok(!D.isCoderCall("subagent", { agent: "browser" }));
+});
+
+test("the gate comes from the dashboard: config.json on the server Mac, the API elsewhere, else off", async () => {
+  const home = mkdtempSync(join(tmpdir(), "gate-"));
+  assert.equal(await new D.GateSetting({ home }).get(), 0);                     // nothing: off
+  const asked = [];
+  const fetch = async (url, init) => {
+    asked.push([url, init?.headers?.Authorization ?? ""]);
+    return { ok: true, json: async () => ({ gate: 3, move: "off" }) };
+  };
+  mkdirSync(join(home, ".config", "carl"), { recursive: true });
+  writeFileSync(join(home, ".config", "carl", "api-key"), "k3y\n");
+  const remote = new D.GateSetting({ home, cacheApi: "http://10.0.0.2:8081", fetch });
+  assert.equal(await remote.get(), 3);                                          // another computer: the API
+  assert.deepEqual(asked, [["http://10.0.0.2:8081/carl/cache/settings", "Bearer k3y"]]);
+  assert.equal(await remote.get(), 3);
+  assert.equal(asked.length, 1);                                                // read again only after 10 s
+  writeFileSync(join(home, ".config", "carl", "config.json"), JSON.stringify({ delegation: { gate: 5 } }));
+  assert.equal(await new D.GateSetting({ home, cacheApi: "http://10.0.0.2:8081", fetch }).get(), 5);  // local wins
+  const down = new D.GateSetting({ home: mkdtempSync(join(tmpdir(), "gate-")), cacheApi: "http://x:1",
+                                   fetch: async () => { throw new Error("down"); } });
+  assert.equal(await down.get(), 0);                                            // no answer: off
 });

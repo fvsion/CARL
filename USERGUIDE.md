@@ -755,7 +755,7 @@ The setup never replaces your own `coder` agent, Pi `agents/coder.md` or `extens
 
 ### CARL's plugins and extensions
 
-The setup (`./carl.sh install`, `./setup`) adds these to OpenCode and Pi. Each one has a switch for the setup. Type `/carl` in OpenCode or Pi to see which are on. [The plugins and extensions](reference/plugins.md) tells how each one works.
+The setup (`./carl.sh install`, `./setup`) adds these to OpenCode and Pi. Each one has a switch for the setup. Type `/carl` in OpenCode or Pi to see which are on, and to turn them on or off. [The plugins and extensions](reference/plugins.md) tells how each one works.
 
 | Plugin | In | What you get | Off |
 |---|---|---|---|
@@ -766,28 +766,57 @@ The setup (`./carl.sh install`, `./setup`) adds these to OpenCode and Pi. Each o
 | **Subagent tool** (`subagent`) | Pi | The `subagent` tool: the coder and other agents, one, several at the same time, a chain, or in the background; `/subagents` | `NO_CODER=1` |
 | **Subagents panel** (`subagents-sidebar`) | OpenCode | The running and finished subagents in the sidebar ([The Subagents panel](#the-subagents-panel-opencode)) | `NO_SIDEBAR=1` |
 | **Session switcher** (`session-switcher`) | OpenCode | `‹ 2/3 ● title ›` in the prompt box, `/switch` ([Switching sessions](#switching-sessions-opencode)) | `NO_SWITCHER=1` |
-| **The /carl panel** (`carl-panel`) | OpenCode, Pi | Every CARL piece on this computer with its state, and the config sync (apply new configs at once or not, apply a new config now, check for a new config) | (always on) |
+| **The /carl panel** (`carl-panel`) | OpenCode, Pi | A control panel: every CARL piece on this computer with its state and its switch, and the config sync (apply new configs at once or not, apply a new config now, check for a new config) | (always on) |
 
 - Put a switch in front of the setup, for example `NO_SIDEBAR=1 ./carl.sh install --config-only`. The setup then removes the plugin, and keeps it off the next time. `NO_SIDEBAR=0` puts it back.
 - Restart OpenCode or Pi after an install. They load their plugins when they start.
 - Your own plugins and extensions stay. If one of yours has the same name, CARL does not install its own.
 
-**The /carl panel.** Type `/carl` in OpenCode or Pi. The panel shows one section for each CARL piece, with its state. Select a section to open it:
-- The section tells its state and what the piece does, in plain sentences. Then come its actions.
-- Its **Details** part holds the addresses, the config version, the version of the client package, the CARL version of the server when CARL made the package, and the switches of the setup. When these two versions are different, **Config sync** says so.
-- **‹ back** goes back to the list of sections.
+**The /carl panel.** Type `/carl` in OpenCode or Pi. The panel is a control panel: one row for each CARL piece, with its label and its state (`on`, `off`, or the web search provider). For example:
 
-| Section | In | It shows |
+```
+Config sync                connected
+Apply new configs at once  on
+Coder subagent             on
+Background coder           on
+Delegation reminder        on
+Browser                    on
+Web search                 exa
+LSP                        on
+Subagents side panel       on
+Session switcher           off
+Disk cache                 on
+Model check                on
+```
+
+Select a row to open it:
+- First come its actions: **Turn it off** or **Turn it on** (Web search: **Use exa**, **Use parallel**, **Turn it off**).
+- Then what the piece does, in whole sentences.
+- Its **Details** part holds the setup switch of the piece and its value in `~/.config/carl/client-install.env`. For **Config sync**: the addresses, the config version, the version of the client package and the CARL version of the server. When these two versions are different, **Config sync** says so.
+- **‹ back** goes back to the list.
+
+| Row | In | Switch |
 |---|---|---|
-| Config sync | OpenCode, Pi | If new configs are applied at once, the sync service, the last config from the dashboard, a config that waits. Actions: **Do not apply new configs at once** (or **Apply new configs at once**), **Apply the new config now** (only when a config waits), **Check for a new config now**. Details: the server, the dashboard API, the config version. |
-| Disk cache | OpenCode, Pi | On or off, and the switch |
-| Model check, Session switcher, Subagents sidebar | OpenCode | On or off, and the switch |
-| Coder subagent | OpenCode, Pi | On or off, its tools, background on or off |
-| Subagent tool | Pi | On or off |
-| Browser, Web search | OpenCode, Pi | On or off. Web search tells you that its queries go out of this computer. |
-| LSP | OpenCode | On or off |
+| Config sync | OpenCode, Pi | The state of the sync service, the last contact, the last config from the dashboard. Actions: **Apply the new config now** (only when a config waits), **Check for a new config now**. |
+| Apply new configs at once | OpenCode, Pi (only with a server on another computer) | On: a config that the dashboard sends is applied at once. Off: it waits until you apply it. |
+| Coder subagent | OpenCode, Pi | `NO_CODER` |
+| Background coder | OpenCode, Pi | `NO_BACKGROUND_SUBAGENTS` |
+| Delegation reminder | OpenCode, Pi | `NO_REMINDER` |
+| Browser | OpenCode, Pi | `NO_BROWSER` |
+| Web search | OpenCode, Pi | `WEB_SEARCH` (exa, parallel or off). The row tells you that the search queries go outside this computer. |
+| LSP | OpenCode | `NO_LSP` |
+| Subagents side panel | OpenCode | `NO_SIDEBAR` |
+| Session switcher | OpenCode | `NO_SWITCHER` |
+| Disk cache | OpenCode, Pi | `NO_CACHE` |
+| Model check | OpenCode | `NO_MODEL_CHECK` |
 
-- A config that the dashboard sends is applied at once. To keep it waiting, select **Config sync**, then **Do not apply new configs at once**.
+- **A switch** writes the setup switch to `~/.config/carl/client-install.env` and writes the configs of OpenCode and Pi again (`carl-sync.py set`, the same config step as the setup). It uses the models that this computer has now: it does not get a new config from the dashboard. This takes a few seconds. Then a message says what changed and which program must restart: OpenCode, Pi or both. The opened row also says it until you restart.
+- **The setup, the sync and /carl use the same switches.** A piece that you turn off in `/carl` stays off after the next `./setup` and the next config from the dashboard. A switch in front of the setup (`NO_SIDEBAR=1 ./setup`) shows in `/carl` too.
+- OpenCode reads its tool switches (web search, LSP, the background coder) from the shell. After you change one of them, start OpenCode from a new terminal.
+- The setup turns the coder on only when the server runs 2 or more slots. On a 1-slot server, **Turn it on** for the coder changes the switch, but the coder stays off, and the message says so. To always turn it on, run the setup again with `CODER=1`.
+- Without the coder, the **Background coder** and **Delegation reminder** rows show their switch, and say that it has no effect now.
+- The new-file gate (the hand-off to the coder at the Nth new file) is a setting of the dashboard only. It is not in `/carl`.
+- A config that the dashboard sends is applied at once. To keep it waiting, open **Apply new configs at once**, then **Turn it off**.
 - OpenCode and Pi read their configs when they start. After a config is applied, OpenCode shows a message and Pi shows a notice: restart it to use the new config.
 - More: [Clients on other computers](reference/client-sync.md).
 
@@ -1785,7 +1814,7 @@ Both still work alone, for scripts and for the instructions of earlier versions.
 | `error: a server runs on port 8080. Stop it first: two models do not fit in the memory.` from `./carl.sh tune` | Auto-tune needs the GPU for itself. | Stop the server first, or run Auto-tune from the dashboard (Settings, **Auto-tune** panel): it stops and starts the server for you. |
 | `error: another large process (possibly a model) is in memory: …` from `./carl.sh tune` | A different model server, or another process larger than 8 GiB (`BIG_GB`), runs. | Stop it first. If the process is not a model, run with `ALLOW_SECOND_MODEL=1`. |
 | `error: …opencode.json is not plain JSON (comments?)` from the setup | The setup cannot merge a config file with comments (JSONC). | Remove the comments, or move the file. Then run the setup again. It changed nothing. |
-| A config that you send does not arrive on a client computer | The sync service is not running, the dashboard is not running, or new configs wait for you (`/carl`: **Do not apply new configs at once**). | Look at the Clients sub-tab of the Connect tab, and at `/carl` on the client. When a new config waits, select **Apply the new config now** in `/carl`. |
+| A config that you send does not arrive on a client computer | The sync service is not running, the dashboard is not running, or new configs wait for you (`/carl`: **Apply new configs at once** is `off`). | Look at the Clients sub-tab of the Connect tab, and at `/carl` on the client. When a new config waits, select **Apply the new config now** in `/carl`. |
 
 **To see exactly what a client sends** (thinking settings, tool counts): see [Verifying behaviour](reference/verifying.md).
 
@@ -1938,4 +1967,4 @@ The script sends all other arguments after the flags to `llama-server`.
 | OpenCode `/models` (`/mo`), `/variants` (ctrl+t steps) | Changes the model, the thinking level |
 | OpenCode `/switch`, `@coder TASK` | Changes the session; gives a task to the coder |
 | Pi `/model`, `/subagents` | Changes the model; lists and stops background subagents |
-| `/carl` (OpenCode and Pi) | Every CARL piece and its state; the config sync |
+| `/carl` (OpenCode and Pi) | Turn the CARL pieces on or off; the config sync |

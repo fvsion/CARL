@@ -16,7 +16,8 @@ from .types import JsonObject, JsonValue, SettingValue, Settings
 SCHEMA = 1
 DEFAULT_MODELS_DIR = "~/models/gguf"
 CONFIG_COMMENT = ("CARL settings. Change them here or in the Settings tab of the dashboard. "
-                  "Sections: llama, models.<name> (the settings of one model), paths, cache (the disk cache). "
+                  "Sections: llama, models.<name> (the settings of one model), paths, cache (the disk cache), "
+                  "delegation (the hand-off to the coder). "
                   "Order: flags > environment > this file > Auto-tune > catalogue. "
                   "./carl.sh config show lists every setting.")
 # Top-level keys of removed features: ignored on load (None = silently, else this warning)
@@ -133,7 +134,14 @@ CACHE_KEYS: Dict[str, SettingSpec] = {
     "swa": _choice("auto", SWA_CHOICES, "SWA_MODE"),
     "move": _choice("off", MOVE_CHOICES),
 }
-SECTIONS: Dict[str, Dict[str, SettingSpec]] = {"llama": LLAMA_KEYS, "paths": PATH_KEYS, "cache": CACHE_KEYS}
+# The hand-off to the coder (carl-delegation in OpenCode and Pi): gate = stop the main agent's write that makes its
+# Nth new file in a turn and tell it to use the coder (0 = off, the default). Advanced, not recommended: a setting of
+# the dashboard only (Connect > Setup; user, 2026-10-08); the clients read it from the dashboard (Phase 23.4).
+DELEGATION_KEYS: Dict[str, SettingSpec] = {
+    "gate": _int(0, 0, 99),
+}
+SECTIONS: Dict[str, Dict[str, SettingSpec]] = {"llama": LLAMA_KEYS, "paths": PATH_KEYS, "cache": CACHE_KEYS,
+                                               "delegation": DELEGATION_KEYS}
 
 
 def to_json(v: SettingValue) -> JsonValue:
@@ -199,10 +207,11 @@ class Config:
     llama: Settings = field(default_factory=dict)
     paths: Settings = field(default_factory=dict)
     cache: Settings = field(default_factory=dict)
+    delegation: Settings = field(default_factory=dict)
     models: Dict[str, Settings] = field(default_factory=dict)
 
     def section(self, name: str) -> Settings:
-        return {"llama": self.llama, "paths": self.paths, "cache": self.cache}[name]
+        return {"llama": self.llama, "paths": self.paths, "cache": self.cache, "delegation": self.delegation}[name]
 
     def profile(self, model: str) -> Settings:
         """The per-model settings for one model ({} when there are none)."""

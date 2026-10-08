@@ -3,6 +3,34 @@
 All notable changes to CARL. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Dates are local dates on the development Mac (M3 Pro, 36 GB).
 
+## 1.12.0 - 2026-10-08
+
+Phase 23.4: `/carl` is a control panel, and the new-file gate is a setting of the dashboard.
+
+### Added
+- **`/carl` turns things on and off** (OpenCode and Pi): one row per piece with its state, and a toggle: the coder
+  subagent, the background coder, the delegation reminder, the browser, web search (exa, parallel or off; the row
+  says that the queries leave the computer), the disk cache, and in OpenCode LSP, the subagents side panel, the
+  session switcher and the model check; the config sync's "Apply new configs at once". An opened row shows its
+  actions, then what the piece does, in sentences. A toggle runs `carl-sync.py set KEY=VALUE`: it writes the same
+  switch file as the setup (`~/.config/carl/client-install.env`) and runs the setup's config step again, so `/carl`,
+  `./setup` and the dashboard's sync never disagree. The panel then says what changed and which client must restart.
+  Turning the coder on in `/carl` keeps it on also with 1 slot (`CODER=1`).
+- **`carl-sync.py set`**: the switches `NO_CODER`, `NO_BACKGROUND_SUBAGENTS`, `NO_REMINDER`, `NO_BROWSER`, `NO_LSP`,
+  `NO_SIDEBAR`, `NO_SWITCHER`, `NO_CACHE`, `NO_MODEL_CHECK` (`1` or `on`), `WEB_SEARCH` and `CODER`; under the sync's
+  lock; the result as JSON.
+- **The new-file gate in the dashboard** (Connect > Setup, the full level of SET UP, `g`: off, 1, 2, 3, 5). It is
+  saved in `config.json` as `delegation.gate` (`./carl.sh config set delegation.gate N`). OpenCode and Pi read it
+  from the dashboard within 10 s, with no setup run: on the server Mac from `config.json`, on another computer from
+  the dashboard API (`GET /carl/cache/settings` now carries `gate`). Advanced, not recommended, off by default.
+
+### Changed
+- The setup no longer sets the gate: `DELEGATION_GATE` and `configure.py --gate` are gone (the user: "the gate is
+  TUI console settings only"). `carl-delegation` gets the dashboard API's address (`cacheApi`) instead of a number.
+- `/carl` follows the 1.10.0 writing rules: one reading per row, labels with a capital, statements as sentences.
+- Tests: `tests/js/carl-panel.test.mjs` (the rows, the states and the toggles of both clients), the gate in
+  `tests/js/carl-delegation.test.mjs`, `tests/scripts/test_carl_sync_set.py`, the `g` key in the dashboard tests.
+
 ## 1.11.0 - 2026-10-08
 
 Phase 23.3: fewer config backups, and plugin paths that survive a symbolic link.

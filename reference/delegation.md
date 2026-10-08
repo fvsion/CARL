@@ -12,7 +12,7 @@ This page tells how CARL makes the main agent give large and stuck coding tasks 
 | The coder's two modes | `Mode: code` or `Mode: test`, one in each task | `client/agents/coder.md` | comes with the coder |
 | The hand-off form | The fields of each coder task | `client/agents/delegation.md`, `client/agents/coder.md` | comes with the coder |
 | `/code` | Gives your task straight to the coder | OpenCode: `~/.config/opencode/command/code.md`. Pi: `~/.pi/agent/prompts/code.md` | comes with the coder |
-| The new-file gate | Stops the main agent at its Nth new file in a turn | `carl-delegation` | off; `DELEGATION_GATE=N` (advanced, not recommended) |
+| The new-file gate | Stops the main agent at its Nth new file in a turn | `carl-delegation` | off; the dashboard only: Connect > Setup, full level, `g` (advanced, not recommended) |
 
 All parts come with the coder (`--coder on`, or `auto` with 2 or more slots). With the coder off, the setup removes them all.
 
@@ -73,7 +73,9 @@ The coder changes only the files in `Files`, checks and reports each `Acceptance
 The gate stops the main agent's write that makes the Nth new file of a turn. The write fails with `[CARL] Blocked: … is a new file …`, and the message tells the main agent to give the task to the coder. Edits of files that exist pass. After the coder starts, the gate stops nothing more in that turn.
 
 - **Not recommended.** With N = 1 it sent every small task that needs one new file (a `.gitignore`, one test file) to the coder: 4 of 4 on the E4B. With N = 2 it added nothing to the reminder in the measurements.
-- `DELEGATION_GATE=2 ./setup --yes` sets N = 2. `0` (the default) turns it off. 1 to 99 are the valid values.
+- **A setting of the dashboard only** (1.12.0): in the Connect tab, open SET UP at its full level and push `g`. It steps off, 1, 2, 3, 5. The dashboard saves it in `config.json` as `delegation.gate` (`./carl.sh config set delegation.gate N` also works: 0 is off, 1 to 99 are the valid values).
+- OpenCode and Pi read it from the dashboard within 10 s, with no setup run: on the server Mac from `config.json`, on another computer from the dashboard API (`GET /carl/cache/settings`). When the dashboard does not answer, the gate is off.
+- Before 1.12.0 the setup set it (`DELEGATION_GATE=N`). The setup no longer reads that variable.
 
 ## What was measured (Phase 23)
 

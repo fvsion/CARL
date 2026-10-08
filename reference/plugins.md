@@ -4,7 +4,7 @@
 
 The setup (`./carl.sh install` on the server Mac, `./setup` in the client package on another computer) copies these pieces and registers them. It keeps your own plugins and extensions. A piece of yours with the same name stays, and CARL does not install its own.
 
-Type `/carl` in OpenCode or Pi to see each piece and its state on this computer.
+Type `/carl` in OpenCode or Pi to see each piece and its state on this computer, and to turn it on or off.
 
 ## Overview
 
@@ -13,11 +13,11 @@ Type `/carl` in OpenCode or Pi to see each piece and its state on this computer.
 | `carl-cache` | OpenCode, Pi | server plugin / extension | The disk cache: fast starts, sessions back after a restart | `NO_CACHE=1` |
 | `carl-model-check` | OpenCode | server plugin | A warning when the model that you select is not the model that the server runs | `NO_MODEL_CHECK=1` |
 | `carl-background` | OpenCode | server plugin | The coder runs in the background | `NO_BACKGROUND_SUBAGENTS=1` |
-| `carl-delegation` | OpenCode, Pi | server plugin / extension | The hand-off to the coder: the delegation rule for main agents only (OpenCode), the reminder, the new-file gate | comes with the coder; `NO_REMINDER=1`, `DELEGATION_GATE=N` |
+| `carl-delegation` | OpenCode, Pi | server plugin / extension | The hand-off to the coder: the delegation rule for main agents only (OpenCode), the reminder, the new-file gate | comes with the coder; `NO_REMINDER=1` or `/carl`; the gate: the dashboard (Connect > Setup) |
 | `subagent` | Pi | extension | The `subagent` tool: the coder and other agents, also in the background | comes with the coder (`NO_CODER=1`) |
 | `subagents-sidebar` | OpenCode | TUI plugin | The Subagents panel in the sidebar | `NO_SIDEBAR=1` |
 | `session-switcher` | OpenCode | TUI plugin | `‹ 2/3 ● title ›` in the prompt box, `/switch` | `NO_SWITCHER=1` |
-| `carl-panel` | OpenCode, Pi | TUI plugin / extension | The `/carl` panel; the config sync check | always |
+| `carl-panel` | OpenCode, Pi | TUI plugin / extension | The `/carl` control panel: the switches of the pieces; the config sync | always |
 
 Put a switch in front of the setup, for example `NO_SIDEBAR=1 ./carl.sh install --config-only`. The setup then removes that piece, and keeps it off at the next setup and sync. `NO_SIDEBAR=0` puts it back.
 
@@ -81,11 +81,11 @@ OpenCode's task tool waits for a subagent, unless the model asks for the backgro
 
 The rules are in `client/shared/carl-delegation.js`. The details and the measurements are in [the hand-off to the coder](delegation.md).
 
-- **OpenCode** (server plugin, with the options `reminder`, `gate` and `coder` in its `plugin` entry):
+- **OpenCode** (server plugin, with the options `reminder`, `cacheApi` and `coder` in its `plugin` entry):
   - `experimental.chat.system.transform`: in a subagent's session (a session with a parent), it takes CARL's marked delegation rule out of the system prompt. It changes OpenCode's list in place.
   - `experimental.chat.messages.transform`: it adds the reminder to the end of each user message of a main session.
-  - `tool.execute.before`: with a gate, it stops the main agent's write that makes the Nth new file of a turn (`chat.message` starts a new turn).
-- **Pi** (extension; the settings are `"delegation"` in `~/.pi/agent/carl.json`): the `input` event adds the reminder to your messages; `tool_call` blocks with the gate. In a subagent (`CARL_AGENT` set) it does nothing.
+  - `tool.execute.before`: when the dashboard sets the gate (`delegation.gate`, read from `config.json` on the server Mac or the dashboard API elsewhere, every 10 s), it stops the main agent's write that makes the Nth new file of a turn (`chat.message` starts a new turn).
+- **Pi** (extension; the reminder is `"delegation"` in `~/.pi/agent/carl.json`, the gate comes from the dashboard): the `input` event adds the reminder to your messages; `tool_call` blocks with the gate. In a subagent (`CARL_AGENT` set) it does nothing.
 - The setup installs it with the coder, and removes it with `--coder off`.
 
 ## subagent: the subagent tool (Pi)
@@ -138,19 +138,32 @@ The list has the top-level sessions of this project that changed in the last 72 
 
 ## carl-panel: the /carl panel (OpenCode and Pi)
 
-Type `/carl`. The panel shows one section for each CARL piece on this computer, with its state in a few words (for example `checks at start · applies new configs at once`). A section opens a dialog:
-- First, its state and what the piece does, in plain sentences (at most 88 characters on a line), and its actions.
-- A **Details** part: the addresses, the config version, the version of the client package, and the switches of the setup (for example "To turn it off, run the installer again with NO_CACHE=1.").
+Type `/carl`. The panel is a control panel: one row for each CARL piece on this computer, with its label in a column and its state (`Coder subagent             on`). The state values are short and lower case: `on`, `off`, `exa`, `parallel`, `connected`. No row joins values with ` · `. A row opens a dialog:
+- First, its actions: **Turn it off** or **Turn it on** (Web search: **Use exa**, **Use parallel**, **Turn it off**; Config sync: **Apply the new config now**, **Check for a new config now**).
+- Then what the piece does, in whole sentences (at most 88 characters on a line).
+- A **Details** part: label rows (the setup switch and its value in `~/.config/carl/client-install.env`; for Config sync the addresses, the config version, the version of the client package and the CARL version of the server), then sentences.
 - **‹ back** goes back to the list. (OpenCode shows **‹ back** before the details, Pi after them.)
 
-| Section | It shows |
-|---|---|
-| Config sync | If new configs are applied at once, the sync service, the last config from the dashboard ("Last config from the dashboard: today 10:53."), a config that waits. Actions: **Do not apply new configs at once** (or **Apply new configs at once**), **Apply the new config now** (only when a config waits), **Check for a new config now**. Details: the version of the client package (`VERSION` in the client folder) and the CARL version of the server at its last start before the package (`remote.json` in the client folder), the server, the dashboard API, the config version. When the two versions differ, the section says so and tells you to make a new package and run `./setup`. |
-| Disk cache, Model check, Session switcher, Subagents sidebar | On or off, and what it does. Details: the switch. The Subagents sidebar section also explains ✓ and ✗. |
-| Coder subagent | On or off, its tools, background on or off |
-| Browser, Web search, LSP | On or off; web search shows its provider (Exa or Parallel) and says that its queries leave this computer |
+| Row | Client | State from | Action |
+|---|---|---|---|
+| Config sync | OpenCode, Pi | `~/.config/carl/client-sync.json` | `carl-sync.py apply`, `carl-sync.py once` |
+| Apply new configs at once | OpenCode, Pi (only with `remote.json`) | `client-sync.json` `auto_apply` | `carl-sync.py auto on\|off` |
+| Coder subagent | OpenCode, Pi | the coder agent (`opencode.json`; Pi: `agents/coder.md`) | `set NO_CODER=1\|on` |
+| Background coder | OpenCode, Pi | `opencode.env`; Pi: `carl.json` `background_subagents` | `set NO_BACKGROUND_SUBAGENTS=1\|on` |
+| Delegation reminder | OpenCode, Pi | the `carl-delegation` entry's `reminder`; Pi: `carl.json` `delegation.reminder` | `set NO_REMINDER=1\|on` |
+| Browser | OpenCode, Pi | `carl-browser` (OpenCode `mcp`; Pi `mcp.json`) | `set NO_BROWSER=1\|on` |
+| Web search | OpenCode, Pi | `opencode.env`; Pi: `mcp.json` `carl-web-search` | `set WEB_SEARCH=exa\|parallel\|off` |
+| LSP | OpenCode | `"lsp": true` and `opencode.env` | `set NO_LSP=1\|on` |
+| Subagents side panel | OpenCode | `subagents-sidebar` in `tui.json` | `set NO_SIDEBAR=1\|on` |
+| Session switcher | OpenCode | `session-switcher` in `tui.json` | `set NO_SWITCHER=1\|on` |
+| Disk cache | OpenCode, Pi | `carl-cache` in `opencode.json`; Pi: `extensions/carl-cache` | `set NO_CACHE=1\|on` |
+| Model check | OpenCode | `carl-model-check` in `opencode.json` | `set NO_MODEL_CHECK=1\|on` |
 
-- The panel reads the files that the setup wrote. It changes nothing, except through `client/carl-sync.py` (the actions).
-- Without the sync service, the panel checks the server for a pushed config one time when OpenCode or Pi starts.
+- **A switch** runs `client/carl-sync.py set KEY=VALUE` (in the client folder that the setup recorded). It writes the key to `~/.config/carl/client-install.env` (`1`: off; `on`: the line goes, so the default holds; the other lines stay; mode 0600), then runs `install.sh` next to it with the recorded switches and `CARL_SYNC=1`, as a sync does, but with the models that the folder has now (`installed-models.json`): it gets no new config from the dashboard. It holds the sync's lock, so it never runs beside a sync. It does not set `NO_PROFILE`: a switch can add the shell-profile line for OpenCode's tool switches, as `./setup` does. The output of the installer goes to `~/.config/carl/client-sync.log`.
+- `set` prints JSON: `changed` (each key, `from` and `to`), `ok` and `error`, `restart` (the clients that must restart: `opencode`, `pi`; the keys of LSP, the side panel, the switcher and the model check are OpenCode only) and `new_terminal` (OpenCode reads web search, LSP and the background coder from the shell, so it must start from a new terminal). An unknown key or value: exit code 2, and nothing changes.
+- After a switch, the panel reads the row again. A message says what changed and which program must restart ("CARL turned the subagents side panel off. Restart OpenCode to use it."), and the opened row says "Restart OpenCode to use the change." until the program restarts. When the state did not change (the coder on a 1-slot server), the message says so.
+- Without the coder, the Background coder and Delegation reminder rows show their switch from `client-install.env`, and say that it has no effect now.
+- The new-file gate (`delegation.gate`) is not in `/carl`: it is a setting of the dashboard only.
+- Without the sync service, the panel checks the server for a new config one time when OpenCode or Pi starts.
 - When a config from the dashboard is applied while OpenCode or Pi runs, OpenCode shows a message and Pi shows a notice: restart it to use the new config.
-- After an action, a short message says what happened, for example "CARL: new configs from the dashboard now wait for you.".
+- Things that happen now use the -ing form ("CARL is turning the browser off…"); the results are whole sentences ("New configs from the dashboard now wait for you.").

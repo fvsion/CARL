@@ -20,12 +20,26 @@ Usage: carl-sync.py COMMAND
   register on|off For install.sh: the sync service is installed (on) or not
                   (off). Without the service, OpenCode and Pi check for a new
                   config when they start.
+  set KEY=VALUE [KEY=VALUE ...]
+                  Change switches of the setup and write the configs again with
+                  the models that this computer has now (no new config from the
+                  dashboard). The /carl panel uses it. The keys:
+                    NO_CODER, NO_BACKGROUND_SUBAGENTS, NO_REMINDER, NO_BROWSER,
+                    NO_LSP, NO_SIDEBAR, NO_SWITCHER, NO_CACHE, NO_MODEL_CHECK:
+                      1 turns the part off, on turns it on again.
+                    WEB_SEARCH: exa, parallel or off.
+                    CODER: 1 (the coder also with 1 slot) or auto (with 2
+                      slots or more). /carl sets CODER=1 when you turn the
+                      coder on.
+                  It shows the result as JSON: what changed, and which client
+                  (OpenCode, Pi) must restart. Exit code 2: a key or a value
+                  that it does not know (it then changes nothing).
 
 The server's address comes from remote.json next to this file. The server writes
 it at every start. The API key comes from api-key next to this file, or from
 ~/.config/carl/api-key. A sync applies again the switches of the last install
 (the clients, the coder, web search, LSP, browser and the others, in
-~/.config/carl/client-install.env: ./setup writes them).
+~/.config/carl/client-install.env: ./setup and "set" write them).
 So a sync changes only what the server decides: the installed models.
 State: ~/.config/carl/client-sync.json. The installer's output:
 ~/.config/carl/client-sync.log.
@@ -59,7 +73,14 @@ INSTALL_ENV = os.path.join(CONF, "client-install.env")
 # the install switches a sync applies again (install.sh records them)
 SWITCHES = ("CLIENTS", "CODER", "NO_CODER", "WEB_SEARCH", "NO_LSP", "LSP", "NO_BROWSER", "BROWSER_HEADED",
             "NO_SIDEBAR", "NO_SWITCHER", "NO_MODEL_CHECK", "NO_BACKGROUND_SUBAGENTS", "NO_CACHE", "LLAMA_CTX",
-            "NO_REMINDER", "DELEGATION_GATE")
+            "NO_REMINDER")
+# the switches that "set" (the /carl panel) changes, and their values: 1 = off, "on" = the line goes (the default)
+OFF_SWITCHES = ("NO_CODER", "NO_BACKGROUND_SUBAGENTS", "NO_REMINDER", "NO_BROWSER", "NO_LSP", "NO_SIDEBAR",
+                "NO_SWITCHER", "NO_CACHE", "NO_MODEL_CHECK")
+SETTABLE = {**{k: ("1", "on") for k in OFF_SWITCHES}, "WEB_SEARCH": ("exa", "parallel", "off"),
+            "CODER": ("1", "auto")}    # /carl turns the coder on with CODER=1: also on a server with 1 slot
+OPENCODE_ONLY = ("NO_LSP", "NO_SIDEBAR", "NO_SWITCHER", "NO_MODEL_CHECK")    # Pi has no such part
+OPENCODE_ENV = ("WEB_SEARCH", "NO_LSP", "NO_BACKGROUND_SUBAGENTS")   # opencode.env: read when the shell starts
 READ_TIMEOUT = 75            # the dashboard sends a comment every 25 s: silence this long = reconnect
 BACKOFF = (5, 10, 30, 60)
 MAX_CONFIG = 1 << 20         # the published config (the installed models) is a few KB
@@ -213,6 +234,79 @@ def apply(doc: Json) -> None:
         raise RuntimeError(f"The installer stopped with an error (exit code {rc}). Its output is in {LOG}.")
 
 
+def parse_set(args: List[str]) -> Dict[str, str]:
+    """KEY=VALUE arguments of "set" as {KEY: VALUE}; ValueError (the message for the user) for anything else."""
+    if not args:
+        raise ValueError("set needs at least one KEY=VALUE, for example: set NO_SIDEBAR=1")
+    out: Dict[str, str] = {}
+    for a in args:
+        k, sep, v = a.partition("=")
+        if not sep or k not in SETTABLE:
+            raise ValueError(f"set does not change '{k if sep else a}'. The keys: {', '.join(SETTABLE)}.")
+        if v not in SETTABLE[k]:
+            raise ValueError(f"{k} takes {' or '.join(SETTABLE[k])}, not '{v}'.")
+        out[k] = v
+    return out
+
+
+def shown(key: str, env: Dict[str, str]) -> str:
+    """A switch as "set" takes it: its value, or the setup's default when the file has no line for it."""
+    return env.get(key) or ("exa" if key == "WEB_SEARCH" else "on")
+
+
+def write_install_env(want: Dict[str, str]) -> None:
+    """client-install.env with the lines of `want` changed ("on": the line goes); every other line stays."""
+    try:
+        with open(INSTALL_ENV, encoding="utf-8") as f:
+            lines = f.read().splitlines()
+    except OSError:
+        lines = []
+    keep = [ln for ln in lines if ln.strip().partition("=")[0] not in want]
+    text = "".join(f"{ln}\n" for ln in keep + [f"{k}={v}" for k, v in want.items() if v != "on"])
+    os.makedirs(CONF, exist_ok=True)
+    fd = os.open(INSTALL_ENV + ".tmp", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        f.write(text)
+    os.chmod(INSTALL_ENV + ".tmp", 0o600)
+    os.replace(INSTALL_ENV + ".tmp", INSTALL_ENV)
+
+
+def set_switches(want: Dict[str, str]) -> Json:
+    """Change the switches in client-install.env, then run the installer again with the models this folder has
+    (installed-models.json: no new config). One at a time with a sync (the same lock). The result: what changed,
+    ok or the error, and which client must restart."""
+    os.makedirs(CONF, exist_ok=True)
+    with open(LOCK, "w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        before = install_env()
+        write_install_env(want)
+        after = install_env()
+        changed = {k: {"from": shown(k, before), "to": shown(k, after)} for k in want
+                   if shown(k, before) != shown(k, after)}
+        # not NO_PROFILE: a switch may need the shell profile's line for OpenCode's tool switches, as ./setup adds it
+        env = {**os.environ, **after, "CARL_SYNC": "1"}
+        for k, v in want.items():
+            if v == "on":
+                env.pop(k, None)                     # a switch from the environment must not undo the change
+        clients = after.get("CLIENTS", "both")
+        apps = [c for c in ("opencode", "pi") if clients in ("both", c)]
+        restart = [c for c in apps if c == "opencode" or any(k not in OPENCODE_ONLY for k in want)]
+        result: Json = {"set": want, "changed": changed, "ok": True, "error": None, "restart": restart,
+                        "new_terminal": "opencode" in restart and any(k in OPENCODE_ENV for k in want)}
+        try:
+            with open(LOG, "w", encoding="utf-8") as log:
+                log.write(f"== {time.strftime('%Y-%m-%d %H:%M:%S')}: set "
+                          f"{' '.join(f'{k}={v}' for k, v in want.items())}\n")
+                log.flush()
+                rc = subprocess.run(["bash", os.path.join(HERE, "install.sh")], env=env, stdin=subprocess.DEVNULL,
+                                    stdout=log, stderr=subprocess.STDOUT, timeout=600).returncode
+            if rc != 0:
+                raise RuntimeError(f"The installer stopped with an error (exit code {rc}). Its output is in {LOG}.")
+        except (OSError, RuntimeError, subprocess.SubprocessError) as e:
+            result.update(ok=False, error=describe(e), restart=[], new_terminal=False)
+        return result
+
+
 def once(apply_waiting: bool = False) -> Json:
     """Check the published config; apply a new one (auto-apply), or keep it waiting."""
     os.makedirs(CONF, exist_ok=True)
@@ -293,6 +387,15 @@ def main(argv: List[str]) -> int:
         print(json.dumps(update(auto_apply=argv[1] == "on"), indent=1))
     elif cmd == "register" and len(argv) == 2 and argv[1] in ("on", "off"):
         update(service=argv[1] == "on", bundle=HERE)
+    elif cmd == "set":
+        try:
+            want = parse_set(argv[1:])
+        except ValueError as e:
+            print(f"error: {e}", file=sys.stderr)
+            return 2
+        result = set_switches(want)
+        print(json.dumps(result, indent=1))
+        return 0 if result["ok"] else 1
     elif cmd == "status":
         print(json.dumps({**state(), "bundle": HERE}, indent=1))
     else:

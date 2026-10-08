@@ -77,6 +77,7 @@ class View:
     next_start: List[CardLine] = field(default_factory=list)    # the SERVER card when no server runs (app.py)
     reuse_from: str = ""                # where the busy request's reused tokens came from (Phase 23.5; mocked now)
     selected: str = ""                  # the selected section (Tab): its title is drawn reversed
+    gate: int = 0                       # config.json delegation.gate: carl-delegation's new-file gate (0 = off)
 
     @property
     def full(self) -> bool:

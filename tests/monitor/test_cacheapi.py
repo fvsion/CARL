@@ -32,7 +32,17 @@ class HandleTest(unittest.TestCase):
     def test_settings(self) -> None:
         self.assertEqual(self.call("GET", "/carl/cache/settings"),
                          (200, {"prefix": True, "sessions": True, "save": "switch", "auto_s": 120, "disk_gb": 10,
-                                "move": "off"}))
+                                "move": "off", "gate": 0}))
+
+    def test_settings_carry_the_new_file_gate(self) -> None:
+        """config.json delegation.gate goes to carl-delegation on other computers (Phase 23.4)."""
+        from monitor.diskcache import config_of
+        self.assertEqual(config_of({"delegation": {"gate": 3}}).gate, 3)
+        for bad in (-1, 100, "2", True, None):
+            self.assertEqual(config_of({"delegation": {"gate": bad}}).gate, 0, bad)
+        conf = config_of({"cache": {"save": "switch"}, "delegation": {"gate": 2}})
+        code, body = handle(self.state, lambda: conf, "GET", "/carl/cache/settings", {}, {})
+        self.assertEqual((code, body["gate"]), (200, 2))
 
     def test_claims_are_the_local_clients_files(self) -> None:
         slot = {"model": "qwen/3.6", "slot": 1}

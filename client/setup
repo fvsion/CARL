@@ -281,8 +281,8 @@ if (( DO_CONFIG )); then
   NO_LSP=0; [[ "$d_lsp" == off ]] && NO_LSP=1
   export NO_BROWSER NO_LSP
   # the switches that setup does not ask for: from the environment, else as in the last setup
-  for k in BROWSER_HEADED NO_SIDEBAR NO_SWITCHER NO_MODEL_CHECK NO_BACKGROUND_SUBAGENTS NO_CACHE LLAMA_CTX NO_REMINDER \
-           DELEGATION_GATE; do
+  for k in BROWSER_HEADED NO_SIDEBAR NO_SWITCHER NO_MODEL_CHECK NO_BACKGROUND_SUBAGENTS NO_CACHE LLAMA_CTX \
+           NO_REMINDER; do
     if [[ -z "${!k:-}" ]]; then v="$(last "$k")"; [[ -z "$v" ]] || export "$k=$v"; fi
   done
   out="$(mktemp)"; trap 'rm -f "$out"' EXIT

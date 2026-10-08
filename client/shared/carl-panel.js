@@ -1,14 +1,15 @@
 // @ts-check
 // The /carl panel's content (client/shared/carl-panel.js: OpenCode's carl-panel plugin and Pi's carl-panel
-// extension each carry a copy): every CARL part on this computer with its state, read from the config files
-// the installer wrote, and the actions the panel offers (the client config sync: carl-sync.py).
+// extension each carry a copy): a control panel. One row for each CARL part on this computer: its label and its
+// state (read from the config files the setup wrote and ~/.config/carl/client-install.env), and the actions that
+// change it. A switch runs `carl-sync.py set KEY=VALUE` (the setup's switches, then the config step again), so
+// /carl, ./setup and the dashboard's sync use the same switches. The config sync has its own rows.
 //
-// sections(client) -> [{ id, title, summary, lines, details, actions }]; an action runs carl-sync.py with its
-// args, and outcome() says what happened. `lines` are plain sentences (what the part does, its state);
-// `details` hold the addresses, the versions and the installer's switches. Every line is at most 90
-// characters: OpenCode's dialog cuts at about 100 columns. The words follow reference/glossary.md.
-// Read-only except run(); a file that can't be read shows as "not installed".
-
+// sections(client) -> [{ id, title, summary, row, lines, details, actions }]: `row` is the list's line (the label
+// column, then the state: "Coder subagent             on"); `lines` (whole sentences) and `details` (label rows:
+// the setup switch, the addresses, the versions) show only when the row is opened. act() runs an action and says
+// what happened. Every line is at most 90 characters: OpenCode's dialog cuts at about 100 columns. The words
+// follow reference/glossary.md and the 23.2 writing rules (one reading per row, whole sentences).
 import { spawn } from "node:child_process";
 import * as fs from "node:fs";
 import { homedir } from "node:os";
@@ -88,9 +89,23 @@ export function appName(client) {
   return client === "pi" ? "Pi" : "OpenCode";
 }
 
-/** What OpenCode and Pi say when a config was applied while they run. @param {Client} client */
-export function restartNotice(client) {
-  return `CARL updated the model list. Restart ${appName(client)} to use it.`;
+/** Program names in a sentence: "OpenCode", "OpenCode and Pi". @param {Client[]} clients */
+function appNames(clients) {
+  return clients.map(appName).join(" and ");
+}
+
+/**
+ * What OpenCode and Pi say when their config changed while they run: what CARL did, then who must restart
+ * (`clients`, this one by default). `newTerminal`: OpenCode reads that switch from the shell (opencode.env).
+ * @param {Client} client
+ * @param {string} [did]
+ * @param {Client[]} [clients]
+ * @param {boolean} [newTerminal]
+ */
+export function restartNotice(client, did = "CARL updated the model list.", clients = [client], newTerminal = false) {
+  const who = clients.length ? clients : [client];
+  return `${did} Restart ${appNames(who)} to use it.`
+    + (newTerminal && who.includes("opencode") ? " Start OpenCode from a new terminal." : "");
 }
 
 /**
@@ -199,9 +214,33 @@ export function when(stamp, now = new Date()) {
 }
 
 /**
- * @typedef {{ id: string, label: string, args: string[], busy?: string }} Action
- * @typedef {{ id: string, title: string, summary: string, lines: string[], details: string[], actions: Action[] }} Section
+ * @typedef {{ id: string, label: string, args: string[], busy?: string, row?: string, want?: string, name?: string }} Action
+ *   A switch's action also has the row it changes, the state it asks for and the part's name in a sentence.
+ * @typedef {{ id: string, title: string, summary: string, row: string, lines: string[], details: string[], actions: Action[] }} Section
+ *   title: the label; summary: the state (on, off, exa); row: the list's line (label column, then the state).
  */
+
+/** The width of the label column (the longest label is 25 characters). */
+const LABEL = 27;
+
+/** One reading on one line: the label column, then the value. @param {string} label @param {string} value */
+export function row(label, value) {
+  return `${label.padEnd(LABEL - 1)} ${value}`;
+}
+
+/** @param {string} s */
+function cap(s) {
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+/**
+ * @param {string} id @param {string} title @param {string} summary
+ * @param {string[]} lines @param {string[]} details @param {Action[]} actions
+ * @returns {Section}
+ */
+function section(id, title, summary, lines, details, actions) {
+  return { id, title, summary, row: row(title, summary), lines, details, actions };
+}
 
 /**
  * The version of the client package (VERSION in the client folder, written by ./carl.sh package) and the CARL
@@ -218,227 +257,359 @@ export function packageVersions(bundle, remote, st = {}) {
   return { client: bundle ? ok(text(join(bundle, "VERSION"))) : "", server: ok(st.server_version) || ok(remote.version) };
 }
 
-const APPLY = "Apply the new config now";
-const INSTALLER = "The installer is ./setup in the client folder, or ./carl.sh install on the server.";
+/**
+ * The setup's switches: ~/.config/carl/client-install.env (KEY=value lines; ./setup and `carl-sync.py set` write it).
+ * @returns {Record<string, string>}
+ */
+export function switches() {
+  /** @type {Record<string, string>} */
+  const out = {};
+  for (const line of text(join(CARL, "client-install.env")).split("\n")) {
+    const m = /^\s*([A-Z_]+)=(.*?)\s*$/.exec(line);
+    if (m) out[m[1]] = m[2];
+  }
+  return out;
+}
 
-/** The client config sync (carl-sync.py's state). @param {Client} client @returns {Section} */
-function syncSection(client) {
+const APPLY = "Apply the new config now";
+const SETUP = "The setup is ./setup in the client folder, or ./carl.sh install on the server.";
+const SAME = "The setup and the sync of the dashboard use the same switches as /carl.";
+
+/** The state of each row before /carl changed it in this run of OpenCode or Pi (it needs a restart). */
+const BEFORE = new Map();
+
+/** A sentence when /carl changed this row since this OpenCode or Pi started. @param {Client} client @param {string} id @param {string} state */
+function restartLine(client, id, state) {
+  return BEFORE.has(id) && BEFORE.get(id) !== state ? [`Restart ${appName(client)} to use the change.`] : [];
+}
+
+/** The client config sync (carl-sync.py's state): its row, and the row that applies new configs at once. @param {Client} client @returns {Section[]} */
+function syncRows(client) {
   const app = appName(client);
   const st = obj(json(join(CARL, "client-sync.json")));
   const bundle = bundleOf(st);
   const remote = bundle ? jsonObject(join(bundle, "remote.json")) : undefined;
   if (!remote) {
-    return {
-      id: "sync", title: "Config sync", summary: "this computer runs the server", details: [], actions: [],
-      lines: para(["The server runs on this computer, so there is nothing to sync.",
-                   "To update the configs of OpenCode and Pi, run ./carl.sh install."]),
-    };
+    return [section("sync", "Config sync", "not needed", para([
+      "The server runs on this computer, so there is nothing to sync.",
+      "To update the configs of OpenCode and Pi, run ./carl.sh install."]), [], [])];
   }
   const alive = typeof st.alive === "number" ? st.alive : 0;
   const live = Boolean(st.service && st.connected && alive && Date.now() / 1000 - alive < 90);  // pinged lately
   const auto = st.auto_apply !== false;
   const restart = appliedSinceStart();
+  const service = !st.service ? "none" : live ? "connected" : "not connected";
   /** @type {string[]} */
   const said = [];
   if (restart) said.push(`A new config came after ${app} started. Restart ${app} to use it.`);
   if (st.pending) said.push(`A new config from the dashboard waits. Select "${APPLY}" to apply it.`);
-  said.push(auto ? "New configs that the dashboard sends are applied at once."
-                 : "New configs that the dashboard sends wait until you apply them.");
-  said.push(!st.service ? "There is no sync service. OpenCode and Pi check for a new config when they start."
-    : live ? `The sync service is connected to the dashboard. Last contact: ${ago(alive)}.`
-    : "The sync service is not connected. Make sure that the dashboard runs on the server.");
-  said.push(st.applied ? `Last config from the dashboard: ${when(st.applied_at)}.` : "No config from the dashboard yet.");
-  if (st.error) said.push(`Last error: ${String(st.error)}`);
+  said.push(!st.service ? "OpenCode and Pi check for a new config when they start."
+    : live ? "The sync service applies each new config that the dashboard sends."
+    : "Make sure that the dashboard runs on the server.");
+  if (st.error) said.push("The last check failed.", String(st.error));
   const pkg = packageVersions(bundle, remote, st);
   if (pkg.client && pkg.server && pkg.client !== pkg.server) {
     said.push(`The client package is version ${pkg.client}, but the server runs CARL ${pkg.server}.`,
               "To update: make a new client package on the server, unzip it here and run ./setup.");
   }
-  const details = para([
-    ...(pkg.client ? [`Client package: version ${pkg.client}`] : []),
-    ...(pkg.server ? [`Server: CARL ${pkg.server} (${st.server_version ? "last contact with the dashboard" : "from the client package"})`] : []),
-    `Server: ${remote.host}:${remote.port}`,
-    `Dashboard API: ${remote.cache_api}`,
-    ...(st.applied ? [`Config version ${st.applied}, applied ${st.applied_at ?? "at an unknown time"}`] : []),
-    ...(st.pending ? [`Waiting config version ${st.pending}`] : []),
-    st.service ? "To remove the sync service, run the installer again with NO_SYNC_SERVICE=1."
-               : "To add the sync service, run the installer again without NO_SYNC_SERVICE=1.",
-    INSTALLER,
-  ]);
+  const lines = [
+    row("Sync service", service),
+    ...(st.service && alive ? [row("Last contact", ago(alive))] : []),
+    row("Last config", st.applied ? when(st.applied_at) : "none yet"),
+    ...para(said),
+  ];
+  const details = [
+    ...(pkg.client ? [row("Client package", `version ${pkg.client}`)] : []),
+    ...(pkg.server ? [row("Server version", `CARL ${pkg.server}`), row("Server version from",
+                          st.server_version ? "the last contact with the dashboard" : "the client package")] : []),
+    row("Server address", `${remote.host}:${remote.port}`),
+    row("Dashboard API", String(remote.cache_api)),
+    ...(st.applied ? [row("Config version", String(st.applied)), row("Applied", String(st.applied_at ?? "at an unknown time"))] : []),
+    ...(st.pending ? [row("Waiting config version", String(st.pending))] : []),
+    ...para([st.service ? "To remove the sync service, run the setup again with NO_SYNC_SERVICE=1."
+                        : "To add the sync service, run the setup again without NO_SYNC_SERVICE=1.", SETUP]),
+  ];
   /** @type {Action[]} */
   const actions = [
-    auto ? { id: "auto-off", label: "Do not apply new configs at once", args: ["auto", "off"] }
-         : { id: "auto-on", label: "Apply new configs at once", args: ["auto", "on"] },
-    ...(st.pending ? [{ id: "apply", label: APPLY, args: ["apply"], busy: "CARL: applying the new config…" }] : []),
-    { id: "check", label: "Check for a new config now", args: ["once"], busy: "CARL: checking for a new config…" },
+    ...(st.pending ? [{ id: "apply", label: APPLY, args: ["apply"], busy: "CARL is applying the new config…" }] : []),
+    { id: "check", label: "Check for a new config now", args: ["once"], busy: "CARL is checking for a new config…" },
   ];
-  const summary = restart ? `new config: restart ${app} to use it`
-    : st.pending ? "a new config waits for you"
-    : `${!st.service ? "checks at start" : live ? "sync service connected" : "sync service not connected"} · `
-      + (auto ? "applies new configs at once" : "new configs wait for you");
-  return { id: "sync", title: "Config sync", summary, lines: para(said), details, actions };
+  const summary = restart ? "restart needed" : st.pending ? "a config waits" : !st.service ? "checks at start" : service;
+  return [
+    section("sync", "Config sync", summary, lines, details, actions),
+    section("auto", "Apply new configs at once", auto ? "on" : "off",
+      para(auto ? ["This setting is on. New configs that the dashboard sends are applied at once."]
+                : ["This setting is off. New configs that the dashboard sends wait until you apply them.",
+                   "When a config waits, open Config sync to apply it."]),
+      [],
+      [auto ? { id: "auto-off", label: "Turn it off", args: ["auto", "off"] }
+            : { id: "auto-on", label: "Turn it on", args: ["auto", "on"] }]),
+  ];
 }
 
 /**
- * @typedef {object} Piece
- * @property {string[]} on        what it does when it is on (the first sentence: its state)
- * @property {string[]} off       when it is off
- * @property {string[]} [howOn]   how to turn it off, and the other switches (when it is on)
- * @property {string[]} [howOff]  how to turn it on (when it is off)
- * @property {string} [extra]     the summary's word in brackets when it is on ("exa")
+ * @typedef {object} Part
+ * @property {string} id
+ * @property {string} title     the label
+ * @property {string} name      its name in a sentence ("the coder subagent")
+ * @property {string} key       the setup's switch (1 turns it off)
+ * @property {boolean} on
+ * @property {string[]} onText  what it does when it is on
+ * @property {string[]} offText when it is off
+ * @property {string[]} [also]  sentences in both states, after the others
+ * @property {string[]} [more]  details (sentences) before the switch rows
  */
 
+/** The switch rows of the details. @param {string} key @param {Record<string, string>} env */
+function switchDetails(key, env) {
+  return [row("Setup switch", key), row("In client-install.env", key in env ? `${key}=${env[key]}` : "not set")];
+}
+
+/** A part with an on / off switch. @param {Client} client @param {Part} p @param {Record<string, string>} env @returns {Section} */
+function toggle(client, p, env) {
+  const state = p.on ? "on" : "off";
+  const want = p.on ? "off" : "on";
+  return section(p.id, p.title, state,
+    para([`${cap(p.name)} is ${state}.`, ...(p.on ? p.onText : p.offText), ...(p.also ?? []),
+          ...restartLine(client, p.id, state)]),
+    [...switchDetails(p.key, env), ...para([...(p.more ?? []), SAME, SETUP])],
+    [{ id: `set:${p.key}`, label: `Turn it ${want}`, args: ["set", `${p.key}=${p.on ? "1" : "on"}`,
+                                                                         ...(p.key === "NO_CODER" && !p.on ? ["CODER=1"] : [])],
+       busy: `CARL is turning ${p.name} ${want}…`, row: p.id, want, name: p.name }]);
+}
+
+/** Web search: exa, parallel or off ("on": Pi's entry has another address). @param {Client} client @param {string} provider @param {Record<string, string>} env @returns {Section} */
+function webRow(client, provider, env) {
+  const state = provider || "off";
+  const where = provider === "on" ? "the address in mcp.json" : provider;
+  return section("web", "Web search", state,
+    para([...(provider ? ["Web search is on.", `The search queries go to ${where}, outside this computer.`]
+                       : ["Web search is off.", "When it is on, the search queries go to exa or parallel, outside this computer."]),
+          "Everything else stays on this computer.", ...restartLine(client, "web", state)]),
+    [...switchDetails("WEB_SEARCH", env), ...para([SAME, SETUP])],
+    ["exa", "parallel", "off"].filter((v) => v !== state).map((v) => ({
+      id: `set:WEB_SEARCH=${v}`, label: v === "off" ? "Turn it off" : `Use ${v}`, args: ["set", `WEB_SEARCH=${v}`],
+      busy: v === "off" ? "CARL is turning web search off…" : `CARL is setting web search to ${v}…`,
+      row: "web", want: v, name: "web search",
+    })));
+}
+
+/** The plugin entry of OpenCode's opencode.json whose path has `name`: its options, or undefined. @param {unknown} plugins @param {string} name */
+function pluginOptions(plugins, name) {
+  for (const e of Array.isArray(plugins) ? plugins : []) {
+    if (Array.isArray(e) && String(e[0]).includes(name)) return obj(e[1]);
+    if (typeof e === "string" && e.includes(name)) return {};
+  }
+  return undefined;
+}
+
 /** @param {Client} client @returns {Section[]} */
-function pieces(client) {
+function parts(client) {
+  const env = switches();
+  const envOn = (/** @type {string} */ key) => env[key] !== "1";
+  const oc = text(join(CARL, "opencode.env"));
+  const noCoder = ["The coder subagent is off, so this setting has no effect now."];
   /** @type {Section[]} */
   const out = [];
-  const add = (/** @type {string} */ id, /** @type {string} */ title, /** @type {boolean} */ on, /** @type {Piece} */ p) => {
-    const summary = on ? (p.extra ? `on (${p.extra})` : "on") : "off";
-    const [first, ...rest] = on ? p.on : p.off;
-    const how = (on ? p.howOn : p.howOff) ?? [];
-    out.push({ id, title, summary, lines: para([`${on ? "On" : "Off"}. ${first}`, ...rest]),
-               details: para([...how, INSTALLER]), actions: [] });
-  };
-  const turnOff = (/** @type {string} */ v) => `To turn it off, run the installer again with ${v}=1.`;
-  const turnOn = (/** @type {string} */ v) => `To turn it on, run the installer again with ${v}=0.`;
-  const cache = {
-    on: ["CARL saves each agent's prompt and each session on the server's disk.",
-         "They stay when the server stops, restarts or switches the model.",
-         "The dashboard sets the limits of the disk cache (Settings > Caching).",
-         "The parts of the prompt that change per project (the folder, the date, AGENTS.md) go after the shared part: " +
-         "with Qwen as system text; with Gemma 4 and other models where they are (Settings > Caching > Other templates)."],
-    off: ["CARL does not save prompts and sessions on the server's disk."],
-    howOn: [turnOff("NO_CACHE"), "On other computers, the disk cache works through the dashboard API."],
-    howOff: [turnOn("NO_CACHE")],
-  };
-  const web = (/** @type {string} */ provider) => ({
-    on: [`The search queries go to ${provider === "on" ? "the address in mcp.json" : provider}, outside this computer.`],
-    off: ["There is no web search tool."],
-    howOn: ["To change the provider, run the installer again with WEB_SEARCH=exa or WEB_SEARCH=parallel.",
-            "To turn it off, use WEB_SEARCH=off."],
-    howOff: ["To turn it on, run the installer again with WEB_SEARCH=exa or WEB_SEARCH=parallel."],
-    extra: provider === "on" ? "" : provider,
-  });
-  const coder = (/** @type {boolean} */ bg, /** @type {string[]} */ tools) => ({
-    on: ["The main agent gives large tasks to the coder subagent.", ...tools,
-         ...(bg ? ["Background: on. The main session goes on while the coder works.", "Then both slots are busy."]
-                : ["Background: off. The main session waits for the coder."])],
-    off: ["The installer turns the coder on when the server runs 2 slots."],
-    howOn: ["The installer turns the coder on when the server runs 2 or more slots.",
-            "CODER=1 always turns it on. NO_CODER=1 turns it off.",
-            bg ? "To turn the background off, run the installer again with NO_BACKGROUND_SUBAGENTS=1."
-               : "To turn the background on, run the installer again with NO_BACKGROUND_SUBAGENTS=0."],
-    howOff: ["The installer turns the coder on when the server runs 2 or more slots.",
-             "CODER=1 always turns it on."],
-  });
-  const env = text(join(CARL, "opencode.env"));
+  const add = (/** @type {Part} */ p) => out.push(toggle(client, p, env));
+  let coderOn, bg, reminder, browser, search;
+  /** @type {string[]} */
+  let tools;
   if (client === "opencode") {
     const cfg = obj(json(join(OC, "opencode.json")));
-    const tui = obj(json(join(OC, "tui.json")));
     const agents = obj(cfg.agent);
-    const plugins = JSON.stringify(cfg.plugin ?? []);
-    const tuiPlugins = JSON.stringify(tui.plugin ?? []);
-    add("cache", "Disk cache", plugins.includes("carl-cache"), cache);
-    add("check", "Model check", plugins.includes("carl-model-check"), {
-      on: ["OpenCode tells you when the server runs a different model than the one you select."],
-      off: ["OpenCode does not compare your model with the model on the server."],
-      howOn: [turnOff("NO_MODEL_CHECK")], howOff: [turnOn("NO_MODEL_CHECK")],
-    });
-    add("switcher", "Session switcher", tuiPlugins.includes("session-switcher"), {
-      on: ["The prompt box shows the sessions of this project.",
-           "Use ‹ and › to go to the next session, or /switch to select one."],
-      off: ["The prompt box shows no session switcher."],
-      howOn: [turnOff("NO_SWITCHER")], howOff: [turnOn("NO_SWITCHER")],
-    });
-    add("sidebar", "Subagents sidebar", tuiPlugins.includes("subagents-sidebar"), {
-      on: ["The sidebar shows the subagents of this session and what they do.",
-           "In its first line, ✓ counts the subagents that finished and ✗ those that failed."],
-      off: ["The sidebar does not show the subagents."],
-      howOn: [turnOff("NO_SIDEBAR")], howOff: [turnOn("NO_SIDEBAR")],
-    });
-    add("coder", "Coder subagent", Boolean(agents.coder || agents["carl-coder"]), coder(
-      /OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=1/.test(env),
-      ["The coder has every tool but task. It also has LSP and web search when they are on.",
-       "It has no browser. It gives the checks of live pages back to the browser agent."]));
-    add("browser", "Browser", Boolean(obj(cfg.mcp)["carl-browser"]), {
-      on: ["The browser subagent opens and checks web pages. Only it has the browser tools."],
-      off: ["There is no browser subagent."],
-      howOn: [turnOff("NO_BROWSER"), "To see the browser on the screen, run the installer again with BROWSER_HEADED=1."],
-      howOff: [turnOn("NO_BROWSER")],
-    });
-    add("web", "Web search", Boolean(openCodeSearch(env)), web(openCodeSearch(env)));
-    add("lsp", "LSP", cfg.lsp === true && /OPENCODE_EXPERIMENTAL_LSP_TOOL=1/.test(env), {
-      on: ["OpenCode downloads and runs language servers for your code."],
-      off: ["OpenCode does not run language servers."],
-      howOn: [turnOff("NO_LSP")], howOff: [turnOn("NO_LSP")],
-    });
+    coderOn = Boolean(agents.coder || agents["carl-coder"]);
+    bg = coderOn ? /OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=1/.test(oc) : envOn("NO_BACKGROUND_SUBAGENTS");
+    const deleg = pluginOptions(cfg.plugin, "carl-delegation");
+    reminder = coderOn && deleg ? deleg.reminder !== false : envOn("NO_REMINDER");
+    browser = Boolean(obj(cfg.mcp)["carl-browser"]);
+    search = openCodeSearch(oc);
+    tools = ["The coder has every tool but task. It also has LSP and web search when they are on.",
+             "It has no browser. It gives the checks of live pages back to the browser agent."];
   } else {
     const mcp = obj(json(join(PI, "mcp.json")));
     const servers = obj(mcp.mcpServers ?? mcp.servers);
-    add("cache", "Disk cache", exists(join(PI, "extensions", "carl-cache", "index.ts")), cache);
-    const bg = obj(json(join(PI, "carl.json"))).background_subagents !== false;
-    add("coder", "Coder subagent", exists(join(PI, "agents", "coder.md")) || exists(join(PI, "agents", "carl-coder.md")),
-        coder(bg, ["The coder has every tool but subagent and tool_search. It has web search when it is on.",
-                   "It has no browser. It gives the checks of live pages back to the main agent.",
-                   ...(bg ? ["Use /subagents to see the subagents that run in the background."] : [])]));
-    add("subagent", "Subagent tool", exists(join(PI, "extensions", "subagent", "index.ts")), {
-      on: ["Pi has the subagent tool. The coder needs it."],
-      off: ["Pi has no subagent tool. It comes with the coder."],
-      howOn: ["The installer adds it with the coder."], howOff: ["The installer adds it with the coder."],
-    });
-    add("browser", "Browser", Boolean(servers["carl-browser"]), {
-      on: ["Pi loads the browser tools (an MCP server) when it needs them."],
-      off: ["Pi has no browser tools."],
-      howOn: [turnOff("NO_BROWSER")], howOff: [turnOn("NO_BROWSER")],
-    });
-    const search = piSearch(servers["carl-web-search"]);
-    add("web", "Web search", Boolean(search), web(search));
+    const st = obj(json(join(PI, "carl.json")));
+    coderOn = exists(join(PI, "agents", "coder.md")) || exists(join(PI, "agents", "carl-coder.md"));
+    bg = coderOn ? st.background_subagents !== false : envOn("NO_BACKGROUND_SUBAGENTS");
+    reminder = coderOn ? obj(st.delegation).reminder !== false : envOn("NO_REMINDER");
+    browser = Boolean(servers["carl-browser"]);
+    search = piSearch(servers["carl-web-search"]);
+    tools = ["The coder has every tool but subagent and tool_search. It has web search when it is on.",
+             "It has no browser. It gives the checks of live pages back to the main agent."];
+  }
+  add({ id: "coder", title: "Coder subagent", name: "the coder subagent", key: "NO_CODER", on: coderOn,
+        onText: ["The main agent gives large tasks to the coder subagent.", ...tools],
+        offText: ["The main agent does all the work itself."],
+        more: ["Without a choice, the setup turns the coder on only when the server runs 2 or more slots.",
+               "Turn it on here and it stays on, also with 1 slot: a subagent then takes the slot of the main session.",
+               ...(client === "pi" ? ["The subagent tool of Pi comes with the coder."] : [])] });
+  add({ id: "background", title: "Background coder", name: "the background coder", key: "NO_BACKGROUND_SUBAGENTS",
+        on: bg,
+        onText: ["The main session goes on while the coder works. Then both slots are busy.",
+                 ...(client === "pi" ? ["Use /subagents to see the subagents that run in the background."] : [])],
+        offText: ["The main session waits until the coder is finished."], also: coderOn ? [] : noCoder });
+  add({ id: "reminder", title: "Delegation reminder", name: "the delegation reminder", key: "NO_REMINDER", on: reminder,
+        onText: ["Each of your messages to the main agent ends with a short reminder about the coder.",
+                 "It helps the main agent give large tasks and stuck tasks to the coder."],
+        offText: ["Your messages go to the main agent as you write them."], also: coderOn ? [] : noCoder });
+  add({ id: "browser", title: "Browser", name: "the browser", key: "NO_BROWSER", on: browser,
+        onText: client === "opencode"
+          ? ["The browser subagent opens and checks web pages. Only it has the browser tools."]
+          : ["Pi loads the browser tools (an MCP server) when it needs them."],
+        offText: client === "opencode" ? ["There is no browser subagent."] : ["Pi has no browser tools."],
+        more: ["To see the browser on the screen, run the setup again with BROWSER_HEADED=1."] });
+  out.push(webRow(client, search, env));
+  if (client === "opencode") {
+    const cfg = obj(json(join(OC, "opencode.json")));
+    const tui = obj(json(join(OC, "tui.json")));
+    const plugins = JSON.stringify(cfg.plugin ?? []);
+    const tuiPlugins = JSON.stringify(tui.plugin ?? []);
+    add({ id: "lsp", title: "LSP", name: "LSP", key: "NO_LSP",
+          on: cfg.lsp === true && /OPENCODE_EXPERIMENTAL_LSP_TOOL=1/.test(oc),
+          onText: ["OpenCode downloads and runs language servers for your code."],
+          offText: ["OpenCode does not run language servers."] });
+    add({ id: "sidebar", title: "Subagents side panel", name: "the subagents side panel", key: "NO_SIDEBAR",
+          on: tuiPlugins.includes("subagents-sidebar"),
+          onText: ["The side panel shows the subagents of this session and what they do.",
+                   "In its first line, ✓ counts the subagents that finished and ✗ those that failed."],
+          offText: ["The side panel does not show the subagents."] });
+    add({ id: "switcher", title: "Session switcher", name: "the session switcher", key: "NO_SWITCHER",
+          on: tuiPlugins.includes("session-switcher"),
+          onText: ["The prompt box shows the sessions of this project.",
+                   "Use ‹ and › to go to the next session, or /switch to select one."],
+          offText: ["The prompt box shows no session switcher."] });
+    add(cachePart(plugins.includes("carl-cache")));
+    add({ id: "check", title: "Model check", name: "the model check", key: "NO_MODEL_CHECK",
+          on: plugins.includes("carl-model-check"),
+          onText: ["OpenCode tells you when the server runs a different model than the one you select."],
+          offText: ["OpenCode does not compare your model with the model on the server."] });
+  } else {
+    add(cachePart(exists(join(PI, "extensions", "carl-cache", "index.ts"))));
   }
   return out;
 }
 
-/** Every section for this client: the sync first. @param {Client} client @returns {Section[]} */
+/** The disk cache. @param {boolean} on @returns {Part} */
+function cachePart(on) {
+  return { id: "cache", title: "Disk cache", name: "the disk cache", key: "NO_CACHE", on,
+    onText: ["CARL saves each agent's prompt and each session on the server's disk.",
+             "They stay when the server stops, restarts or switches the model.",
+             "The dashboard sets the limits of the disk cache (Settings > Caching).",
+             "The parts of the prompt that change per project (the folder, the date, AGENTS.md) go after the shared " +
+             "part: with Qwen as system text; with Gemma 4 and other models where they are (Settings > Caching > " +
+             "Other templates)."],
+    offText: ["CARL does not save prompts and sessions on the server's disk."],
+    more: ["On other computers, the disk cache works through the dashboard API."] };
+}
+
+/** Every row for this client: the config sync first. @param {Client} client @returns {Section[]} */
 export function sections(client) {
-  return [syncSection(client), ...pieces(client)];
+  return [...syncRows(client), ...parts(client)];
 }
 
 /**
- * What a toast or a notice says after an action ran (exit code from run(); -1: no carl-sync.py).
+ * The JSON that carl-sync.py printed (`set`: { changed, ok, error, restart, new_terminal }), or {}.
+ * @param {string} out
+ * @returns {JsonObject}
+ */
+function parsed(out) {
+  try {
+    return obj(JSON.parse(out));
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * What a toast or a notice says after an action ran (exit code from run(); -1: no carl-sync.py). A switch's
+ * action also reads the row again, and `result` (what `carl-sync.py set` printed) says who must restart.
  * @param {Action} action
  * @param {number} code
  * @param {Client} client
+ * @param {JsonObject} [result]
  * @returns {{ message: string, ok: boolean }}
  */
-export function outcome(action, code, client) {
+export function outcome(action, code, client, result = {}) {
+  if (code === -1) return { ok: false, message: "CARL cannot find carl-sync.py. Run the setup again." };
+  if (action.args[0] === "set") return switchOutcome(action, code, client, result);
   if (code !== 0) {
-    if (code === -1) return { ok: false, message: "CARL cannot find carl-sync.py. Run the installer again." };
     return { ok: false, message: action.id.startsWith("auto")
       ? "CARL could not change the setting. Open /carl to see the error."
       : "CARL could not get the new config. Open /carl to see the error." };
   }
-  if (action.id === "auto-off") return { ok: true, message: "CARL: new configs from the dashboard now wait for you." };
-  if (action.id === "auto-on") return { ok: true, message: "CARL: new configs from the dashboard are now applied at once." };
+  if (action.id === "auto-off") return { ok: true, message: "New configs from the dashboard now wait for you." };
+  if (action.id === "auto-on") return { ok: true, message: "New configs from the dashboard are now applied at once." };
   const st = obj(json(join(CARL, "client-sync.json")));
   if (st.error) return { ok: false, message: "CARL could not reach the dashboard. Open /carl to see the error." };
-  if (st.pending) return { ok: true, message: "CARL: a new config waits. Open /carl to apply it." };
+  if (st.pending) return { ok: true, message: "A new config waits. Open /carl to apply it." };
   if (appliedSinceStart()) return { ok: true, message: restartNotice(client) };
-  return { ok: true, message: "CARL: there is no new config." };
+  return { ok: true, message: "There is no new config." };
+}
+
+/** After `carl-sync.py set`. @param {Action} action @param {number} code @param {Client} client @param {JsonObject} result */
+function switchOutcome(action, code, client, result) {
+  if (code !== 0) {
+    const why = typeof result.error === "string" && result.error ? result.error
+      : "Its output is in ~/.config/carl/client-sync.log.";
+    return { ok: false, message: `CARL could not change the setting. ${why}` };
+  }
+  const name = action.name ?? "the part";
+  const now = sections(client).find((s) => s.id === action.row)?.summary ?? "";
+  if (action.want && now !== action.want) {
+    return { ok: false, message: `CARL changed the setting, but ${name} is still ${now || "the same"}. The setup's `
+      + "output is in ~/.config/carl/client-sync.log." };
+  }
+  const did = action.want === "on" || action.want === "off" ? `CARL turned ${name} ${action.want}.`
+    : `CARL set ${name} to ${action.want}.`;
+  const apps = /** @type {Client[]} */ ((Array.isArray(result.restart) ? result.restart : [client])
+    .filter((c) => c === "opencode" || c === "pi"));
+  return { ok: true, message: restartNotice(client, did, apps, result.new_terminal === true) };
 }
 
 /**
- * Run carl-sync.py (in the client folder the installer recorded) with args; its exit code (-1: none).
+ * Run carl-sync.py (in the client folder the setup recorded) with args: its exit code (-1: none) and what it printed.
+ * @param {string[]} args
+ * @returns {Promise<{ code: number, out: string }>}
+ */
+function exec(args) {
+  const bundle = bundleOf(obj(json(join(CARL, "client-sync.json"))));
+  const tool = bundle ? join(bundle, "carl-sync.py") : "";
+  if (!tool || !exists(tool)) return Promise.resolve({ code: -1, out: "" });
+  return new Promise((ok) => {
+    let out = "";
+    const p = spawn("python3", [tool, ...args], { stdio: ["ignore", "pipe", "ignore"] });
+    p.stdout?.on("data", (d) => {
+      if (out.length < 1 << 16) out += String(d);
+    });
+    p.on("close", (code) => ok({ code: code ?? -1, out }));
+    p.on("error", () => ok({ code: -1, out }));
+  });
+}
+
+/**
+ * Run carl-sync.py with args; its exit code (-1: none).
  * @param {string[]} args
  * @returns {Promise<number>}
  */
 export function run(args) {
-  const bundle = bundleOf(obj(json(join(CARL, "client-sync.json"))));
-  const tool = bundle ? join(bundle, "carl-sync.py") : "";
-  if (!tool || !exists(tool)) return Promise.resolve(-1);
-  return new Promise((ok) => {
-    const p = spawn("python3", [tool, ...args], { stdio: "ignore" });
-    p.on("close", (code) => ok(code ?? -1));
-    p.on("error", () => ok(-1));
-  });
+  return exec(args).then((r) => r.code);
+}
+
+/**
+ * Run an action of a row and say what happened (the toast's text). A switch notes the row's state first, so the
+ * opened row can say that OpenCode or Pi must restart.
+ * @param {Action} action
+ * @param {Client} client
+ * @returns {Promise<{ message: string, ok: boolean }>}
+ */
+export async function act(action, client) {
+  if (action.row && !BEFORE.has(action.row)) {
+    const cur = sections(client).find((s) => s.id === action.row);
+    if (cur) BEFORE.set(action.row, cur.summary);
+  }
+  const r = await exec(action.args);
+  return outcome(action, r.code, client, parsed(r.out));
 }
 
 /**

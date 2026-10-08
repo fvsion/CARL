@@ -7,12 +7,12 @@
 //     prompt of every subagent session: the coder, explore, the browser agent, ...
 //   - the reminder (option "reminder", on unless false): the main agent's user messages end with one line about the
 //     coder;
-//   - the gate (option "gate": the number of the new file it stops at; 0 or missing: off).
+//   - the gate: the dashboard's setting delegation.gate (GateSetting; option "cacheApi" on another computer).
 // A session is a subagent's when OpenCode created it with a parent (its events, else the session API). When that is
 // not known, the session counts as a main one: a main agent never loses its rule.
 
 import { existsSync } from "node:fs";
-import { RULE_BEGIN, RULE_END, Turn, gateNumber, withReminder, withoutRule } from "./carl-delegation.js";
+import { GateSetting, RULE_BEGIN, RULE_END, Turn, withReminder, withoutRule } from "./carl-delegation.js";
 
 export { RULE_BEGIN, RULE_END, withoutRule };
 
@@ -22,7 +22,7 @@ export default {
   server: async (ctx, options) => {
     const opts = /** @type {Record<string, unknown>} */ (options ?? {});
     const reminder = opts.reminder !== false;
-    const gate = gateNumber(opts.gate);
+    const gateSetting = new GateSetting({ cacheApi: typeof opts.cacheApi === "string" ? opts.cacheApi : "" });
     const coder = typeof opts.coder === "string" && opts.coder ? opts.coder : "coder";
     const cwd = String(/** @type {any} */ (ctx)?.directory ?? process.cwd());
     /** @type {Map<string, boolean>} session id -> is a subagent session (has a parent) */
@@ -77,6 +77,7 @@ export default {
         if (input?.sessionID) turns.get(input.sessionID)?.reset();
       },
       "tool.execute.before": async (input, output) => {
+        const gate = await gateSetting.get();                     // the dashboard's setting (Connect > Setup)
         if (!gate || !input?.sessionID || (await isSub(input.sessionID))) return;
         const why = turn(input.sessionID).before(gate, "opencode", String(input.tool), output?.args ?? {}, cwd, existsSync,
                                                  coder);

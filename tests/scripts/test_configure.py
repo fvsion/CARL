@@ -122,7 +122,8 @@ class ConfigureTests(unittest.TestCase):
                                                            "cacheApi": "http://192.168.42.1:8081"}],
                                         ["file:" + bg, {"provider": "llamacpp"}],        # the coder in the background
                                         ["file:" + deleg, {"provider": "llamacpp", "reminder": True,  # the hand-off
-                                                           "gate": 0, "coder": "coder"}]])
+                                                           "cacheApi": "http://192.168.42.1:8081",
+                                                           "coder": "coder"}]])
         self.assertEqual(self.read_json(".pi/agent/carl.json")["cache_api"], "http://192.168.42.1:8081")
         with open(os.path.join(cache, "package.json"), encoding="utf-8") as f:
             self.assertIn("./server", json.load(f)["exports"])
@@ -219,8 +220,8 @@ class ConfigureTests(unittest.TestCase):
         self.assertEqual(p.returncode, 0, p.stderr)
         deleg = "file:" + self.path(".config/opencode/plugins/carl-delegation")    # stays with the coder
         self.assertEqual(self.read_json(".config/opencode/opencode.json")["plugin"],
-                         ["/home/u/mine.js", [deleg, {"provider": "carl", "reminder": True, "gate": 0,
-                                                       "coder": "coder"}]])
+                         ["/home/u/mine.js", [deleg, {"provider": "carl", "reminder": True,
+                                                       "cacheApi": "http://192.168.42.1:8081", "coder": "coder"}]])
         self.assertFalse(os.path.exists(self.path(".config/opencode/plugins/carl-model-check")))
         self.assertIn("removed   OpenCode plugin carl-model-check", p.stdout)
         self.assertFalse(os.path.exists(self.path(".pi/agent/extensions/carl-cache")))
@@ -503,21 +504,23 @@ class ConfigureTests(unittest.TestCase):
         self.assertNotIn("carl-delegation", json.dumps(self.read_json(".config/opencode/opencode.json")["plugin"]))
         self.assertFalse(os.path.exists(self.path(".config/opencode/plugins/carl-delegation")))
 
-    def test_reminder_and_gate_settings(self) -> None:
-        """The hand-off's settings in both clients: the reminder on and the gate off by default; --reminder 0 and
-        --gate N change them; the Pi extension and the shared file are installed with the coder."""
+    def test_reminder_setting_and_the_gate_from_the_dashboard(self) -> None:
+        """The hand-off's settings in both clients: the reminder on by default, --reminder 0 turns it off; the new-file
+        gate is a dashboard setting (Phase 23.4), so the setup gives carl-delegation the dashboard API's address
+        instead of a number; the Pi extension and the shared file are installed with the coder."""
         self.assertEqual(self.run_configure("--coder", "1").returncode, 0)
         entry = [p for p in self.read_json(".config/opencode/opencode.json")["plugin"] if "carl-delegation" in p[0]][0]
-        self.assertEqual((entry[1]["reminder"], entry[1]["gate"]), (True, 0))
-        self.assertEqual(self.read_json(".pi/agent/carl.json")["delegation"], {"reminder": True, "gate": 0})
+        self.assertEqual(entry[1], {"provider": "llamacpp", "reminder": True, "cacheApi": "http://192.168.42.1:8081",
+                                    "coder": "coder"})
+        self.assertEqual(self.read_json(".pi/agent/carl.json")["delegation"], {"reminder": True})
         for d in (".config/opencode/plugins/carl-delegation", ".pi/agent/extensions/carl-delegation"):
             self.assertTrue(os.path.isfile(self.path(d + "/carl-delegation.js")), d)
         self.assertTrue(os.path.isfile(self.path(".pi/agent/extensions/carl-delegation/index.ts")))
-        self.assertEqual(self.run_configure("--coder", "1", "--reminder", "0", "--gate", "3").returncode, 0)
+        self.assertEqual(self.run_configure("--coder", "1", "--reminder", "0").returncode, 0)
         entry = [p for p in self.read_json(".config/opencode/opencode.json")["plugin"] if "carl-delegation" in p[0]][0]
-        self.assertEqual((entry[1]["reminder"], entry[1]["gate"]), (False, 3))
-        self.assertEqual(self.read_json(".pi/agent/carl.json")["delegation"], {"reminder": False, "gate": 3})
-        self.assertNotEqual(self.run_configure("--coder", "1", "--gate", "100").returncode, 0)   # 0-99 only
+        self.assertFalse(entry[1]["reminder"])
+        self.assertEqual(self.read_json(".pi/agent/carl.json")["delegation"], {"reminder": False})
+        self.assertNotEqual(self.run_configure("--coder", "1", "--gate", "3").returncode, 0)   # no --gate any more
         self.assertEqual(self.run_configure("--coder", "0").returncode, 0)
         self.assertNotIn("delegation", self.read_json(".pi/agent/carl.json"))
         self.assertFalse(os.path.exists(self.path(".pi/agent/extensions/carl-delegation")))

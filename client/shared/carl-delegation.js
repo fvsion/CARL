@@ -1,6 +1,7 @@
 // @ts-check
 // CARL's delegation helpers, shared by the OpenCode plugin carl-delegation and the Pi extension carl-delegation (each
-// carries a copy, installed by client/configure.py). Pure, no I/O except the `exists` callback. Phase 23 (1.8.0):
+// carries a copy, installed by client/configure.py). Pure, no I/O except the `exists` callback and GateSetting (it
+// reads the dashboard's setting). Phase 23 (1.8.0):
 //   - the delegation rule is for a session's main agent only: OpenCode gives its instructions to every agent, so the
 //     rule sits between RULE_BEGIN and RULE_END and withoutRule() takes it out of a subagent's system prompt;
 //   - the reminder (on by default): every user message of a main session ends with the same line about the coder;
@@ -8,9 +9,12 @@
 //     stuck requests to the coder; reference/delegation.md);
 //   - the gate (off by default; a setting deep in CARL, not recommended): the main agent's write that makes the Nth
 //     new file of a turn is stopped with GATE_MARK and the reason, so it hands the work to the coder; edits of
-//     existing files pass.
+//     existing files pass. Phase 23.4 (1.12.0): the gate is a setting of the dashboard only (config.json
+//     delegation.gate, Connect > Setup); GateSetting reads it, so a change needs no setup run.
 
-import { isAbsolute, resolve } from "node:path";
+import { readFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { isAbsolute, join, resolve } from "node:path";
 
 export const RULE_BEGIN = "<!-- carl:main-agents-only begin -->";
 export const RULE_END = "<!-- carl:main-agents-only end -->";
@@ -36,6 +40,44 @@ export function withoutRule(text) {
 export function gateNumber(n) {
   const v = Number(n);
   return Number.isInteger(v) && v >= 1 && v <= 99 ? v : 0;
+}
+
+const GATE_MS = 10_000;                                       // the dashboard's setting, read again after this
+
+/**
+ * The new-file gate from the dashboard: config.json "delegation".gate on the Mac that runs the server; on another
+ * computer, the dashboard API's settings (GET /carl/cache/settings, with the key of ~/.config/carl/api-key). 0 (off)
+ * when neither answers. Read again every GATE_MS.
+ */
+export class GateSetting {
+  /** @param {{ home?: string, cacheApi?: string, fetch?: typeof fetch }} [o] */
+  constructor(o = {}) {
+    this.home = o.home ?? homedir();
+    this.cacheApi = o.cacheApi ?? "";
+    this.fetch = o.fetch ?? globalThis.fetch;
+    this.value = 0;
+    this.at = -GATE_MS;
+  }
+
+  /** The gate's number now (0: off). @returns {Promise<number>} */
+  async get() {
+    if (Date.now() - this.at < GATE_MS) return this.value;
+    this.at = Date.now();
+    const conf = join(this.home, ".config", "carl");
+    try {                                                       // this Mac runs the server: its config.json
+      const c = JSON.parse(readFileSync(join(conf, "config.json"), "utf8"));
+      this.value = gateNumber(c?.delegation?.gate);
+      return this.value;
+    } catch { /* no config.json here: ask the dashboard */ }
+    if (!this.cacheApi) return (this.value = 0);
+    try {
+      const key = readFileSync(join(conf, "api-key"), "utf8").trim();
+      const r = await this.fetch(this.cacheApi + "/carl/cache/settings", {
+        headers: key ? { Authorization: `Bearer ${key}` } : {}, signal: AbortSignal.timeout(3_000) });
+      if (r.ok) this.value = gateNumber((await r.json())?.gate);
+    } catch { /* the dashboard does not answer: keep the last value */ }
+    return this.value;
+  }
 }
 
 /** How the main agent calls the coder in this client. coder: its installed name ("coder", or "carl-coder" next to

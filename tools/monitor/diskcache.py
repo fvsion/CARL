@@ -42,6 +42,7 @@ class CacheConfig:
     auto_s: int = AUTO_S
     share: bool = True
     move: str = "off"               # the project part for templates CARL does not know: off (in place) or auto (moved)
+    gate: int = 0                   # config.json delegation.gate: the new-file gate of carl-delegation (0 = off)
 
     @property
     def limit(self) -> int:
@@ -57,7 +58,14 @@ def config_of(cfg: JSONDict) -> CacheConfig:
                        sec.get("prefix") is not False, sec.get("sessions") is not False,
                        save if save in SAVES else "auto", swa if swa in SWAS else "auto",
                        auto_s if isinstance(auto_s, int) and not isinstance(auto_s, bool) and auto_s > 0 else AUTO_S,
-                       sec.get("share") is not False, "auto" if sec.get("move") == "auto" else "off")
+                       sec.get("share") is not False, "auto" if sec.get("move") == "auto" else "off",
+                       gate_of(cfg))
+
+
+def gate_of(cfg: JSONDict) -> int:
+    """config.json delegation.gate: 0 (off) to 99; 0 when it is not set or not valid."""
+    g = jdict(cfg.get("delegation")).get("gate")
+    return g if isinstance(g, int) and not isinstance(g, bool) and 0 <= g <= 99 else 0
 
 
 @dataclass

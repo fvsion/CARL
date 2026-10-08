@@ -1,0 +1,166 @@
+"""client/carl-sync.py set: the /carl panel's switches. It changes ~/.config/carl/client-install.env (the other
+lines stay; mode 0600), runs the installer next to it (here a fake that records its environment) without a new
+config from the dashboard, refuses unknown keys and values (exit code 2, nothing changed), says which client must
+restart, and waits for a sync that holds the lock. A copied client folder with its own HOME."""
+from __future__ import annotations
+
+import fcntl
+import json
+import os
+import shutil
+import stat
+import subprocess
+import sys
+import tempfile
+import time
+import unittest
+
+CLIENT = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "client")
+
+# the fake installer: its environment (one KEY=value per line) and a count of its runs; it fails when HOME/fail is there
+FAKE_INSTALL = """env > "$HOME/installer.env"
+echo run >> "$HOME/installs"
+[ -f "$HOME/fail" ] && exit 3
+exit 0
+"""
+
+
+class SetTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tmp = tempfile.mkdtemp()
+        self.home = os.path.join(self.tmp, "home")
+        self.bundle = os.path.join(self.tmp, "client")
+        self.conf = os.path.join(self.home, ".config", "carl")
+        self.env_path = os.path.join(self.conf, "client-install.env")
+        os.makedirs(self.bundle)
+        os.makedirs(self.conf)
+        shutil.copy(os.path.join(CLIENT, "carl-sync.py"), self.bundle)
+        with open(os.path.join(self.bundle, "install.sh"), "w") as f:
+            f.write(FAKE_INSTALL)
+        # a server address that answers nothing: set must not ask the dashboard for a config
+        with open(os.path.join(self.bundle, "remote.json"), "w") as f:
+            json.dump({"host": "127.0.0.1", "port": 9, "cache_api": "http://127.0.0.1:9"}, f)
+        with open(os.path.join(self.bundle, "installed-models.json"), "w") as f:
+            f.write('{"schema": 1, "models": [{"id": "m"}]}')
+        self.write_env("CLIENTS=both\nWEB_SEARCH=exa\nNO_SIDEBAR=1\nLLAMA_CTX=96k\nDELEGATION_GATE=3\n# a comment\n")
+
+    def tearDown(self) -> None:
+        shutil.rmtree(self.tmp)
+
+    def write_env(self, text: str) -> None:
+        with open(self.env_path, "w") as f:
+            f.write(text)
+
+    def env_lines(self) -> list:
+        with open(self.env_path) as f:
+            return f.read().splitlines()
+
+    def run_set(self, *args: str, extra: dict | None = None) -> subprocess.CompletedProcess:
+        env = {k: v for k, v in os.environ.items() if k not in ("NO_PROFILE", "CARL_SYNC")}
+        return subprocess.run([sys.executable, os.path.join(self.bundle, "carl-sync.py"), "set", *args],
+                              capture_output=True, text=True, timeout=30, env={**env, "HOME": self.home, **(extra or {})})
+
+    def installer_env(self) -> dict:
+        with open(os.path.join(self.home, "installer.env")) as f:
+            return dict(line.split("=", 1) for line in f.read().splitlines() if "=" in line)
+
+    def runs(self) -> int:
+        try:
+            with open(os.path.join(self.home, "installs")) as f:
+                return f.read().split().count("run")
+        except OSError:
+            return 0
+
+    def test_set_changes_the_env_file_and_keeps_the_other_lines(self) -> None:
+        p = self.run_set("NO_SIDEBAR=on", "NO_CODER=1", "WEB_SEARCH=off")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(self.env_lines(), ["CLIENTS=both", "LLAMA_CTX=96k", "DELEGATION_GATE=3", "# a comment",
+                                            "NO_CODER=1", "WEB_SEARCH=off"])
+        self.assertEqual(stat.S_IMODE(os.stat(self.env_path).st_mode), 0o600)
+        r = json.loads(p.stdout)
+        self.assertTrue(r["ok"])
+        self.assertIsNone(r["error"])
+        self.assertEqual(r["changed"], {"NO_SIDEBAR": {"from": "1", "to": "on"}, "NO_CODER": {"from": "on", "to": "1"},
+                                        "WEB_SEARCH": {"from": "exa", "to": "off"}})
+        self.assertEqual(r["restart"], ["opencode", "pi"])
+        self.assertTrue(r["new_terminal"])                       # web search: OpenCode reads it from the shell
+        self.assertEqual(self.runs(), 1)
+
+    def test_the_installer_gets_the_switches_and_carl_sync_but_not_no_profile(self) -> None:
+        # a NO_SIDEBAR=1 in the environment must not undo "on"; DELEGATION_GATE is the dashboard's setting now
+        p = self.run_set("NO_SIDEBAR=on", "NO_CACHE=1", extra={"NO_SIDEBAR": "1"})
+        self.assertEqual(p.returncode, 0, p.stderr)
+        env = self.installer_env()
+        self.assertEqual(env.get("CARL_SYNC"), "1")
+        self.assertNotIn("NO_PROFILE", env)
+        self.assertNotIn("NO_SIDEBAR", env)
+        self.assertNotIn("DELEGATION_GATE", env)
+        self.assertEqual((env.get("NO_CACHE"), env.get("WEB_SEARCH"), env.get("LLAMA_CTX"), env.get("CLIENTS")),
+                         ("1", "exa", "96k", "both"))
+        self.assertEqual(env.get("HOME"), self.home)
+
+    def test_set_uses_the_models_here_and_asks_the_dashboard_nothing(self) -> None:
+        before = os.stat(os.path.join(self.bundle, "installed-models.json")).st_mtime_ns
+        p = self.run_set("NO_BROWSER=1")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(os.stat(os.path.join(self.bundle, "installed-models.json")).st_mtime_ns, before)
+        self.assertFalse(os.path.exists(os.path.join(self.conf, "client-sync.json")))   # no check, no error noted
+        with open(os.path.join(self.conf, "client-sync.log")) as f:
+            self.assertIn(": set NO_BROWSER=1", f.readline())
+
+    def test_unknown_keys_and_values_are_refused_and_nothing_changes(self) -> None:
+        before = self.env_lines()
+        for args in ([], ["FOO=1"], ["NO_CODER=0"], ["NO_CODER=off"], ["WEB_SEARCH=bing"], ["WEB_SEARCH=on"],
+                     ["DELEGATION_GATE=2"], ["CODER=0"], ["NO_CODER"], ["NO_CACHE=1", "NO_PROFILE=1"]):
+            p = self.run_set(*args)
+            self.assertEqual(p.returncode, 2, args)
+            self.assertTrue(p.stderr.startswith("error: "), p.stderr)
+            self.assertEqual(p.stdout, "")
+        self.assertIn("WEB_SEARCH takes exa or parallel or off, not 'bing'.", self.run_set("WEB_SEARCH=bing").stderr)
+        self.assertIn("set does not change 'DELEGATION_GATE'", self.run_set("DELEGATION_GATE=2").stderr)
+        self.assertEqual(self.env_lines(), before)
+        self.assertEqual(self.runs(), 0)
+
+    def test_restart_names_only_the_clients_that_have_the_part(self) -> None:
+        r = json.loads(self.run_set("NO_LSP=1").stdout)
+        self.assertEqual((r["restart"], r["new_terminal"]), (["opencode"], True))
+        r = json.loads(self.run_set("NO_SIDEBAR=1").stdout)
+        self.assertEqual((r["restart"], r["new_terminal"], r["changed"]), (["opencode"], False, {}))  # it was 1
+        self.write_env("CLIENTS=pi\n")
+        self.assertEqual(json.loads(self.run_set("NO_SWITCHER=1").stdout)["restart"], [])
+        self.assertEqual(json.loads(self.run_set("NO_CACHE=1").stdout)["restart"], ["pi"])
+
+    def test_a_failed_installer_is_reported(self) -> None:
+        open(os.path.join(self.home, "fail"), "w").close()
+        p = self.run_set("NO_REMINDER=1")
+        self.assertEqual(p.returncode, 1)
+        r = json.loads(p.stdout)
+        self.assertFalse(r["ok"])
+        self.assertIn("exit code 3", r["error"])
+        self.assertEqual(r["restart"], [])
+        self.assertIn("NO_REMINDER=1", self.env_lines())         # the choice stays: the next setup or sync applies it
+
+    def test_without_an_env_file_set_makes_one(self) -> None:
+        os.remove(self.env_path)
+        p = self.run_set("NO_MODEL_CHECK=1", "NO_BACKGROUND_SUBAGENTS=1")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(self.env_lines(), ["NO_MODEL_CHECK=1", "NO_BACKGROUND_SUBAGENTS=1"])
+        self.assertEqual(stat.S_IMODE(os.stat(self.env_path).st_mode), 0o600)
+
+    def test_set_waits_for_a_sync_that_holds_the_lock(self) -> None:
+        with open(os.path.join(self.conf, "client-sync.lock"), "w") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            p = subprocess.Popen([sys.executable, os.path.join(self.bundle, "carl-sync.py"), "set", "NO_CODER=1"],
+                                 env={**os.environ, "HOME": self.home}, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            time.sleep(1)
+            self.assertIsNone(p.poll())
+            self.assertEqual(self.runs(), 0)
+            self.assertNotIn("NO_CODER=1", self.env_lines())   # not even the file changes while a sync runs
+        out, _ = p.communicate(timeout=30)
+        self.assertEqual(p.returncode, 0)
+        self.assertTrue(json.loads(out)["ok"])
+        self.assertEqual(self.runs(), 1)
+
+
+if __name__ == "__main__":
+    unittest.main()

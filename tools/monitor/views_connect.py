@@ -262,6 +262,9 @@ def setup_keys(ui: UIState) -> None:
     ui.keys_more = ["Press i to install OpenCode and Pi on this Mac. Press u to update their model lists. Press z to "
                     "make the client package. Press P to send the config to the computers that sync. Press o, p or c "
                     "to copy a config. Press k to show the key.",
+                    "Press g to set the new-file gate (advanced, not recommended): OpenCode and Pi then stop the main "
+                    "agent at its Nth new file in a turn and tell it to use the coder. The full level of SET UP shows "
+                    "it.",
                     "To scroll the config, select it with Tab, then press ↑↓, PgUp or PgDn. Press x to close the "
                     "installer's output or the client package.",
                     "The client package holds the API key of the server. Keep it secret, and delete it after you copy "
@@ -316,6 +319,9 @@ def setup_lines(v: View, ui: UIState, here: List[Tuple[str, str]], stale: Sequen
         L.append("OpenCode and Pi on this Mac are not set up for this server.")
     if full(ui, "csetup") and here:
         L += [row(c, f"provider {p}") for c, p in here]
+    if full(ui, "csetup"):              # advanced, not recommended: the dashboard is the only place to set it (23.4)
+        L.append(row("New-file gate", ("off" if not v.gate else f"{v.gate}: the main agent's new file number "
+                                       f"{v.gate} of a turn goes to the coder") + f"   {DIM}g changes it{R}"))
     if ui.install_ask:
         what = ("installs OpenCode and Pi when they are missing or older (a download from npm). Then it writes "
                 "their configs" if ui.install_ask == "all" else "writes the OpenCode and Pi configs for this server")
