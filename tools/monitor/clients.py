@@ -91,7 +91,7 @@ def curl_test(s: Served, base: str, key: str) -> str:
 
 def masked(text: str, key: str) -> str:
     """text with the key hidden (on-screen previews; the copy has the real key)."""
-    return text.replace(key, "•" * 16 + key[-4:] + "  (k shows it; the copy has the real key)") if key else text
+    return text.replace(key, "•" * 16 + key[-4:] + "  (Press k to show it. The copy has the real key.)") if key else text
 
 
 def config_text(kind: str, s: Served, templates: Dict[str, JSONDict], base: str, key: str, ml: ModelList) -> str:

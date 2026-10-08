@@ -6,24 +6,38 @@ from __future__ import annotations
 
 import collections
 import os
-from dataclasses import dataclass, field
-from typing import Callable, Dict, List, Optional, Tuple
+from dataclasses import dataclass, field, replace
+from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
 from carl_core.domain.gguf import KV_BPE, kv_bytes_per_token
 from carl_core.domain.units import duration, file_size, memory, memory_pair, percent, speed, tokens
 
 from .cacheapi import Client
-from .fmt import B, CYN, DIM, GRN, MAG, R, RED, YEL, Card, CardLine, Ln, Row, bar, button_rows, cwrap, draw_card, home_short, lv, wrap
+from .fmt import (B, CYN, DIM, GRN, MAG, R, RED, YEL, Card, CardLine, Ln, Row, aligned, bar, button_rows, cwrap,
+                  draw_card, home_short, row, wrap)
 from .logbook import ROUTINE, TS, LogBook, RequestRecord, level_of, offset
 from .model import ServerData, SlotInfo, SlowStats, flag, flag_int
-from .words import kv_name, plural, spec_name
+from .words import plural, spec_name
 
-LEVEL_NAMES = ("slots", "speed", "memory", "connect", "health", "model", "requests", "log", "modelinfo")
+LEVEL_NAMES: List[str] = ["slots", "speed", "memory", "thismac", "connect", "health", "model", "requests", "log",
+                          "server", "modelinfo", "srv", "srvmem", "srvfit", "srvabout", "srvlist", "mlist", "msel",
+                          "reqtab", "logtab"]
+THREE_LEVELS = {"slots", "speed", "memory", "thismac", "connect", "health", "model", "modelinfo", "srv", "srvmem",
+                "mlist", "msel", "requests", "log", "reqtab", "logtab"}
+NO_COLLAPSE = {"reqtab", "logtab"}      # a tab with one section: simple and full only
+
+
+def sections(three: Sequence[str] = (), two: Sequence[str] = ()) -> None:
+    """Register a module's sections (at import, before the UI state exists): three = collapsed / simple / full,
+    two = collapsed / open. Their level is then saved, set by D and cycled by L like Live's."""
+    for nm in (*three, *two):
+        if nm not in LEVEL_NAMES:
+            LEVEL_NAMES.append(nm)
+    THREE_LEVELS.update(three)   # collapsed / simple / full
 NOLOG_TEXT = "No log file: the server writes to its terminal. Start it with ./carl.sh to see the log here."
-REQ_HEAD = (f"{'started':8}  {'context':>8}  {'new tokens':>10}  {'read tok/s':>10}  {'output':>6}  "
-            f"{'write tok/s':>11}  {'took':>6}  {'guesses OK':>10}")
+REQ_HEAD = (f"{'Started':8}  {'Context':>8}  {'New tokens':>10}  {'Read tok/s':>10}  {'Output':>6}  "
+            f"{'Write tok/s':>11}  {'Took':>6}  {'Guesses OK':>10}")
 STOPPED, LOADING, IDLE, READING, WRITING = "STOPPED", "LOADING", "IDLE", "READING", "WRITING"
-GIB_NOTE = "GiB is memory: 1 GiB = 1.07 GB."
 
 
 @dataclass
@@ -61,13 +75,15 @@ class View:
     model_quant: str = ""               # the catalogue's quantization of the loaded model
     here: str = ""                      # OpenCode and Pi on this Mac: "set up", "update needed", "not set up"
     next_start: List[CardLine] = field(default_factory=list)    # the SERVER card when no server runs (app.py)
+    reuse_from: str = ""                # where the busy request's reused tokens came from (Phase 23.5; mocked now)
+    selected: str = ""                  # the selected section (Tab): its title is drawn reversed
 
     @property
     def full(self) -> bool:
         return self.detail == "full"
 
     def level(self, name: str) -> int:
-        """A card's level: 0 collapsed, 1 open."""
+        """A section's level: 0 collapsed, 1 simple, 2 full (two-level sections: 0 or 1)."""
         return self.level_override.get(name, self.levels.get(name, 1))
 
 
@@ -93,12 +109,6 @@ def status_of(d: ServerData, server_pid: Optional[int]) -> Tuple[str, str]:
     return (READING, "43") if d.decoded == 0 else (WRITING, "46")
 
 
-def memory_sentence(pressure: str) -> str:
-    """macOS memory pressure as a sentence ('' when unknown)."""
-    return {"normal": "Memory is normal.", "WARNING": "Memory is low (macOS warns).",
-            "CRITICAL": "Memory is very low: close apps, or use a smaller model."}.get(pressure, "")
-
-
 def _slot_list(ids: List[int]) -> str:
     names = [str(i) for i in ids]
     return names[0] if len(names) == 1 else ", ".join(names[:-1]) + " and " + names[-1]
@@ -113,22 +123,24 @@ def live_sentence(d: ServerData, port: int) -> str:
     """The Live tab's first line: the state in one plain sentence (the next action when stopped is in the
     SERVER card)."""
     label, _ = status_of(d, None)
-    mem = memory_sentence(d.system.pressure)
     if label == STOPPED:
         return "The server stopped." if d.exited else "The server is not running."
     if label == LOADING:
         cur = d.router.current if d.router is not None else None
-        what = f"The router loads {cur.id}" if cur else "The server starts: the model loads"
+        what = f"The router is loading {cur.id}" if cur else "The server is starting: the model is loading"
         return f"{what}. This takes 30 s to 2 min."
     if d.router is not None and not d.alias:
-        return "The server runs in router mode. No model is loaded: OpenCode and Pi load one when they ask for it."
+        bad = [m.id for m in d.router.models if m.failed]
+        if bad:
+            return f"The router could not load {bad[0]}: the log (tab 4) says why. OpenCode and Pi can ask for another model."
+        return "The server is running in router mode. No model is loaded: OpenCode and Pi load one when they ask for it."
     if not d.slots:
         return f"A server runs on port {port}, but it does not answer like llama.cpp. CARL shows only some figures."
     busy = busy_slots(d)
     free = [x.id for x in d.slot_list if not x.busy and x.id is not None]
     parts: List[str] = []
     if len(busy) > 1:
-        doing = [f"slot {x.id} {'writes an answer' if x.decoded else 'reads a prompt'}" for x in busy]
+        doing = [f"slot {x.id} {'is writing an answer' if x.decoded else 'is reading a prompt'}" for x in busy]
         parts.append("Busy: " + ", ".join(doing) + ".")
     elif busy or d.busy:
         sid = busy[0].id if busy else 0
@@ -143,11 +155,9 @@ def live_sentence(d: ServerData, port: int) -> str:
             parts.append(f"Writing an answer in slot {sid}" + (f" at {speed(d.tg_rate)}." if d.tg_rate else "."))
     else:
         n = len(d.slot_list)
-        parts.append("No request runs." + (f" The {n} slots are free." if n > 1 else ""))
+        parts.append("No request is running." + (f" The {n} slots are free." if n > 1 else ""))
     if (busy or d.busy) and free:
         parts.append(f"Slot {free[0]} is free." if len(free) == 1 else f"Slots {_slot_list(free)} are free.")
-    if mem:
-        parts.append(mem)
     return " ".join(parts)
 
 
@@ -216,47 +226,77 @@ def request_line(d: ServerData) -> str:
             f"{plural(d.decoded, 'token')} written so far.")
 
 
+def slot_word(x: SlotInfo) -> str:
+    """What a slot does: writing, reading, keeps a session, free."""
+    if x.busy:
+        return f"{CYN}writing{R}" if x.decoded else f"{YEL}reading{R}"
+    return f"{DIM}keeps a session{R}" if x.prompt + x.decoded else f"{DIM}free{R}"
+
+
+def pool_fill(d: ServerData) -> float:
+    """The share of the context the slots hold now (0..1)."""
+    total = sum(x.n_ctx for x in d.slot_list)
+    return sum(x.prompt + x.decoded for x in d.slot_list) / total if total else 0.0
+
+
 def card_slots(v: View, d: ServerData, w: int = 66) -> Card:
-    """Each slot's fill and what it does; the busy request; in full detail the context memory, the
-    recurrent state and the trained length."""
+    """Each slot's fill and what it does; the busy request; at full the context memory, the recurrent state,
+    the checkpoints, how far it can grow and the trained length."""
     kv = kv_info(d)
     cmd, sl, n_ctx = d.cmd, d.slot_list, d.n_ctx
     nslots = len(sl) or flag_int(cmd, "--parallel", "-np", default=1)
-    bw = max(min(w - 51, 16), 6)
+    narrow = w - 4 < 56                        # the title has the size: a narrow card shows only the fill
+    bw = max(min(w - 4 - (34 if narrow else 42), 24), 6)   # "slot 0  " bar "  41.5K of 96K   keeps a session"
     L: List[CardLine] = []
     for i in range(nslots):
         x = sl[i] if i < len(sl) else None
-        if x:
-            u = x.prompt + x.decoded
-            L.append(f"slot {x.id}  {bar(u / x.n_ctx if x.n_ctx else 0, bw)}  {tokens(u)} of {tokens(x.n_ctx)} · "
-                     f"{slot_state(x)}")
+        u = (x.prompt + x.decoded) if x else 0
+        cap = x.n_ctx if x else n_ctx
+        size = f"{tokens(u):>6}" if narrow else f"{tokens(u):>6} of {tokens(cap) if cap else '–'}"
+        L.append(f"slot {x.id if x else i}  {bar(u / cap if cap else 0, bw)}  {size}   {slot_word(x) if x else ''}")
+    if not d.slots and not sl:
+        L = [f"{DIM}No model is loaded.{R}"]
+    busy = [x for x in sl if x.busy] or ([SlotInfo(0, True, d.task, n_ctx, d.prompt, d.cached, d.processed, d.decoded)]
+                                         if d.busy else [])
+    for x in busy:                       # one block per busy slot: its own request
+        if not x.prompt:
+            continue
+        L.append("")
+        L.append(f"{B}slot {x.id}{R}   {slot_word(x)}")
+        L.append(row("request", f"{tokens(x.prompt)} tokens"))
+        L.append(row("reused", f"{tokens(x.cached)} ({percent(x.cached / x.prompt)})"
+                     + (f"   {DIM}from{R} {v.reuse_from}" if v.reuse_from else "")))
+        if x.decoded == 0:
+            L.append(row("read", tokens(x.processed)))
+            L.append(row("still to read", tokens(max(x.prompt - x.cached - x.processed, 0))))
         else:
-            L.append(f"slot {i}  {bar(0, bw)}  0 of {tokens(n_ctx) if n_ctx else '–'}")
-    req = request_line(d)
-    if req:
-        L += ["", *cwrap(req, w - 4)]
-    swa = swa_line(d)
-    if swa:
-        L += cwrap(swa, w - 4)
+            L.append(row("written", plural(x.decoded, "token")))
+    if kv and kv.k != kv.v:
+        L.append(f"{RED}⚠ K and V types differ ({kv.k}, {kv.v}): prompts read about 5 × more slowly.{R}")
+    if d.shape and d.shape.get("swa_window"):
+        if "--swa-full" in cmd:
+            if v.full:
+                L.append(row("sliding window", "Full cache: saved sessions can be restored."))
+        else:
+            L.append(row("sliding window", f"{YEL}Window cache{R}: saved sessions cannot be restored."))
     if v.full and kv:
-        if kv.k != kv.v:
-            L.append(f"{RED}The two context memory types differ: prompts read about 5 × more slowly.{R}")
         used = sum(x.prompt + x.decoded for x in sl)
         pool_tokens = flag_int(cmd, "-c", "--ctx-size", default=0)
         frac = used / pool_tokens if pool_tokens else 0
-        L.append(f"context memory {MAG}{kv.k}{R} K · {MAG}{kv.v}{R} V: {memory(kv.kv)} for "
-                 f"{plural(kv.slots, 'slot')}, {memory(kv.kv * frac)} in use")
+        L.append("")
+        L.append(row("context memory", f"{MAG}{kv.k}{R} K, {MAG}{kv.v}{R} V"))
+        L.append(row("allocated", f"{memory(kv.kv)} for {plural(kv.slots, 'slot')}"))
+        L.append(row("in use", memory(kv.kv * frac)))
         if kv.rs:
-            L.append(f"recurrent state {memory(kv.rs)} · checkpoints up to {memory(kv.ckpt_max)} "
-                     f"({kv.ckpt_n} per slot)")
+            L.append(row("recurrent state", memory(kv.rs)))
+            L.append(row("checkpoints", f"Up to {memory(kv.ckpt_max)} ({kv.ckpt_n} per slot)"))
+        L.append(row("can grow to", memory(kv.kv + kv.rs + kv.ckpt_max + kv.cache_ram)))
         if n_ctx and pool_tokens and pool_tokens != n_ctx * nslots:
-            L.append(f"one shared pool of {tokens(pool_tokens)} tokens; each slot can use up to {tokens(n_ctx)}")
+            L.append(row("shared pool", f"{tokens(pool_tokens)} tokens, up to {tokens(n_ctx)} per slot"))
+        L.append(row("per token", memory(kv.per_tok)))
         if d.shape:
-            shp = d.shape
-            L.append(f"{memory(kv.per_tok)} per token ({shp['attn_layers']} attention layers × {shp['kvh']} KV "
-                     f"heads × ({shp['kl']} + {shp['vl']}) × {kv.k}) · RAM cache up to {memory(kv.cache_ram)}")
-            L.append(f"The model was trained for {tokens(shp['ctx_train'])} tokens per slot.")
-    summary = f"{nslots} × {tokens(n_ctx)}" if n_ctx else ""
+            L.append(row("trained for", f"{tokens(d.shape['ctx_train'])} tokens per slot"))
+    summary = f"{nslots} × {tokens(n_ctx)}   {percent(pool_fill(d))} used" if n_ctx else ""
     return Card("SLOTS", summary, L)
 
 
@@ -273,168 +313,224 @@ def averages(d: ServerData) -> Tuple[float, float]:
     return pp_avg, tg_avg
 
 
-def card_speed(v: View, d: ServerData) -> Card:
-    """Write and read speed now and on average, the share of correct guesses; in full detail the last
-    request, the guesses per step and position, the totals and the queue."""
+def _num(x: float, decimals: int = 0) -> str:
+    return "–" if not x else f"{x:,.{decimals}f}"
+
+
+def card_speed(v: View, d: ServerData, w: int = 66) -> Card:
+    """A table: read and write tok/s now, on average and in the last request; the share of correct guesses. At
+    full also the tokens per step, the guesses by position, the totals and the queue."""
     m = d.metrics
     pp_avg, tg_avg = averages(d)
     writing = d.busy and d.decoded > 0
     reading = d.busy and d.decoded == 0
-    now_w = f"{speed(d.tg_rate)} now · " if writing and d.tg_rate else ""
-    now_r = f"{speed(d.pp_rate)} now · " if reading and d.pp_rate else ""
+    r = v.log.requests[-1] if v.log.requests else None
+    # the table's label column lines up with the rows below it (aligned(): the longest label + 2)
+    lw = len("largest context" if v.full else "guesses OK") + 2
+    last = "Last" if w - 4 < 50 else "Last request"            # a narrow card: the short header
+    lc = len(last) + 3
+    head = f"{DIM}{'Tok/s':<{lw}}{'Now':>7}{'Average':>10}{last:>{lc}}{R}"
     L: List[CardLine] = [
-        lv("write", f"{now_w}{speed(tg_avg)} average" if tg_avg else now_w.rstrip(" ·") or f"{DIM}not measured yet{R}", 8),
-        lv("read", f"{now_r}{speed(pp_avg)} average" if pp_avg else now_r.rstrip(" ·") or f"{DIM}not measured yet{R}", 8)]
+        head,
+        f"{DIM}{'Read':<{lw}}{R}{_num(d.pp_rate if reading else 0):>7}{_num(pp_avg):>10}{_num(r.pp if r else 0):>{lc}}",
+        f"{DIM}{'Write':<{lw}}{R}{_num(d.tg_rate if writing else 0, 1):>7}{_num(tg_avg, 1):>10}"
+        f"{_num(r.tg if r else 0, 1):>{lc}}"]
     drafted = m.get("spec_decode_num_draft_tokens_total", 0)
     acc = m.get("spec_decode_num_accepted_tokens_total", 0)
     mode = flag(d.cmd, "--spec-type", default="none")
     if drafted:
-        L.append(lv("speculation", f"{percent(acc / drafted)} of the guesses are correct", 13))
+        L.append(row("guesses OK", percent(acc / drafted)))
     else:
-        L.append(lv("speculation", "off" if mode == "none" else f"{DIM}no guesses yet{R}", 13))
+        L.append(row("guesses OK", "off" if mode == "none" else f"{DIM}no guesses yet{R}"))
     if v.full:
-        r = v.log.requests[-1] if v.log.requests else None
-        if r:
-            took = (r.t1 or 0) - (r.t0 or 0)
-            L.append(f"last request: read {speed(r.pp)} · write {speed(r.tg)} · {duration(took)}")
-        L.append(f"{DIM}The averages count every request since the server started.{R}")
         steps = m.get("spec_decode_num_drafts_total", 0)
         n = flag(d.cmd, "--spec-draft-n-max", default="1")
+        L.append(row("speculation", spec_name(mode, n)))
         if steps:
-            L.append(f"{acc / steps:.2f} tokens accepted per step · {spec_name(mode, n)}")
+            L.append(row("per step", f"{acc / steps:.2f} tokens accepted"))
         pos = d.accepted_by_pos
         if pos and steps:
-            L.append("accepted by guess position: " + " · ".join(f"{i + 1}. {percent(pos[i] / steps)}"
-                                                                for i in sorted(pos)[:4]))
+            ks = sorted(pos)[:4]
+            L.append(f"{DIM}{'Guess':<{lw}}{R}" + "".join(f"{i + 1:>7}" for i in ks))
+            L.append(f"{DIM}{'Accepted':<{lw}}{R}" + "".join(f"{percent(pos[i] / steps):>7}" for i in ks))
+        if r:
+            took = (r.t1 or 0) - (r.t0 or 0)
+            L.append(row("last request", duration(took)))
         if d.slots:
-            L.append(f"totals: {tokens(m.get('prompt_tokens_total', 0))} read · "
-                     f"{tokens(m.get('prompt_tokens_cached_total', 0))} reused · "
-                     f"{tokens(m.get('tokens_predicted_total', 0))} written")
-            L.append(f"queue: {m.get('requests_deferred', 0):.0f} waiting · largest context so far "
-                     f"{tokens(m.get('n_tokens_max', 0))} tokens")
-    return Card("SPEED", "", L)
+            L.append("")
+            L.append(row("total read", tokens(m.get("prompt_tokens_total", 0))))
+            L.append(row("total reused", tokens(m.get("prompt_tokens_cached_total", 0))))
+            L.append(row("total written", tokens(m.get("tokens_predicted_total", 0))))
+            L.append(row("waiting", f"{m.get('requests_deferred', 0):.0f}"))
+            L.append(row("largest context", f"{tokens(m.get('n_tokens_max', 0))} tokens"))
+    return Card("SPEED", f"write {speed(tg_avg)}" if tg_avg else "", L)
 
 
 def card_memory(v: View, d: ServerData, w: int = 66) -> Card:
-    """The server's memory: the total of RAM, its parts; in full detail this Mac's memory, swap, GPU,
-    power, the GPU memory limit, CPU and disk."""
+    """The server's memory: the total with a bar, then its parts; at full the GPU memory limit, the GPU memory
+    of all apps and the server's CPU."""
     kv = kv_info(d)
     s = d.system
     rss = d.rss or 0
     weights = v.model_size or 0
     ctx = (kv.kv + kv.rs) if kv else 0
-    pc = GRN if s.pressure == "normal" else YEL if s.pressure == "WARNING" else RED
     L: List[CardLine] = []
     if rss:
-        L.append(f"Server uses {memory_pair(rss, v.total_mem)} RAM. macOS memory pressure: {pc}{s.pressure}{R}.")
-        L.append(bar(rss / v.total_mem if v.total_mem else 0, max(min(w - 16, 50), 10)))
-        parts = [f"model {memory(weights)}"] + ([f"drafter {memory(v.drafter_size)}"] if v.drafter_size else [])
-        parts += [f"context memory {memory(ctx)}", f"buffers {memory(max(rss - weights - v.drafter_size - ctx, 0))}"]
-        L.append(" · ".join(parts))
+        bw = max(min(w - 38, 30), 8)
+        L.append(row("server", f"{bar(rss / v.total_mem if v.total_mem else 0, bw)}  {memory_pair(rss, v.total_mem)}"))
+        if not d.up:                                     # the model loads: no parts yet (not "model 0 KiB")
+            L.append(row("model", f"{YEL}loading{R}"))
+        elif d.router is not None and not d.alias:       # a router with no model loaded
+            L.append(row("model", f"{DIM}none loaded{R}"))
+        else:
+            L.append(row("model", f"{memory(weights):>9}" if weights else f"{'–':>9}"))   # (size not known)
+            if v.drafter_size:
+                L.append(row("drafter", f"{memory(v.drafter_size):>9}"))
+            L.append(row("context memory", f"{memory(ctx):>9}"))
+            L.append(row("buffers", f"{memory(max(rss - weights - v.drafter_size - ctx, 0)):>9}"))
     else:
         L.append(f"{DIM}No server process.{R}")
-    if not v.full:
-        L.append(f"{DIM}{GIB_NOTE}{R}")
-        return Card("MEMORY", "", L)
-    L.append(f"This Mac: {memory_pair(s.used, v.total_mem)} used (wired {memory(s.wired)} · compressed "
-             f"{memory(s.comp)} · free {memory(s.free)})")
+    if v.full:
+        L.append("")
+        if v.gpu_limit:
+            L.append(row("GPU limit", memory(v.gpu_limit[0]) + ("" if "Metal" in v.gpu_limit[1] else
+                                                                  f"   {DIM}{v.gpu_limit[1]}{R}")))
+        if s.gpumem:
+            L.append(row("GPU, all apps", memory(s.gpumem)))
+        L.append(row("server CPU", f"{d.cpu:.0f}%"))
+    return Card("MEMORY", f"server {memory(rss)}" if rss else "", L)
+
+
+HEAT = {"nominal": "normal", "fair": "warm", "serious": "hot", "critical": "very hot"}
+
+
+def card_thismac(v: View, d: ServerData, w: int = 66) -> Card:
+    """This Mac: its memory with a bar, the memory pressure, swap, the GPU with a bar, power and heat; at full
+    the parts of the memory, the load and the free disk. Shown with or without a server."""
+    s = d.system
+    bw = max(min(w - 38, 30), 8)
+    pc = GRN if s.pressure == "normal" else YEL if s.pressure == "WARNING" else RED
+    L: List[CardLine] = []
+    if v.total_mem:
+        L.append(row("memory", f"{bar(s.used / v.total_mem, bw)}  {memory_pair(s.used, v.total_mem)}"))
+    L.append(row("pressure", f"{pc}{s.pressure.lower() if s.pressure != '?' else '–'}{R}"))
     su, st = s.swap
-    swap = f"swap {memory_pair(su, st)}" if st else "swap 0"
-    gpu = f"GPU {s.gpu}% busy" if s.gpu is not None else "GPU –"
-    L.append(f"{swap} · {gpu} · {s.power or 'power –'} · thermal {v.slow.thermal or '–'}")
-    lim = f"GPU memory limit {memory(v.gpu_limit[0])} ({v.gpu_limit[1]})" if v.gpu_limit else "GPU memory limit –"
-    L.append(lim + (f" · GPU memory in use by all apps {memory(s.gpumem)}" if s.gpumem else ""))
-    disk = f" · disk {file_size(v.slow.disk[0])} free of {file_size(v.slow.disk[1])}" if v.slow.disk else ""
-    L.append(f"CPU: the server {d.cpu:.0f}% · load {s.load[0]:.1f} {s.load[1]:.1f} {s.load[2]:.1f}{disk}")
-    return Card("MEMORY", "", L)
+    L.append(row("swap", memory_pair(su, st) if st else f"{DIM}none (no swap file){R}"))
+    if s.gpu is not None:
+        L.append(row("GPU", f"{bar(s.gpu / 100, bw)}  {s.gpu}% busy"))
+    else:
+        L.append(row("GPU", "–"))
+    batt = "battery" in (s.power or "").lower()
+    L.append(row("power", f"{YEL}{s.power}{R}" if batt else (s.power or "–")))
+    th = v.slow.thermal or ""
+    hc = "" if th in ("", "nominal") else YEL if th == "fair" else RED
+    L.append(row("heat", f"{hc}{HEAT.get(th, th or '–')}{R}" if th else "–"))
+    if v.full:
+        L.append("")
+        L.append(row("wired", f"{memory(s.wired):>9}"))
+        L.append(row("compressed", f"{memory(s.comp):>9}"))
+        L.append(row("free", f"{memory(s.free):>9}"))
+        L.append(row("load", f"{s.load[0]:.1f}   {s.load[1]:.1f}   {s.load[2]:.1f}   {DIM}(1, 5, 15 min){R}"))
+        if v.slow.disk:
+            L.append(row("disk free", f"{file_size(v.slow.disk[0])} of {file_size(v.slow.disk[1])}"))
+    if s.gpu is not None and s.gpu >= 90:
+        summary = f"{RED}GPU {s.gpu}%{R}"
+    elif s.pressure not in ("normal", "?"):
+        summary = f"{pc}pressure {s.pressure.lower()}{R}"
+    else:
+        summary = f"pressure {s.pressure.lower()}" if s.pressure != "?" else ""
+    return Card("THIS MAC", summary, L)
 
 
 def reach_of(host: str) -> str:
     return "this Mac only" if host in ("127.0.0.1", "::1", "localhost") else "this Mac and other computers"
 
 
-def card_connect(v: View, d: ServerData) -> Card:
-    """The address, the key (hidden unless shown), the connections, OpenCode and Pi here, the disk
-    cache; in full detail the model name, the key file and the copy buttons."""
+def card_connect(v: View, d: ServerData, w: int = 66) -> Card:
+    """The address, the key (hidden unless shown), the connections, OpenCode and Pi here, the disk cache; at
+    full the model name, the hosts, the key file and the copy buttons."""
     shown = v.key if v.key_shown else (("•" * 8 + v.key[-4:]) if v.key else f"{RED}no key file{R}")
-    hosts = collections.Counter(h for h, _ in d.conns)
-    L: List[CardLine] = [lv("Address", f"{B}{v.base}/v1{R}   {DIM}({reach_of(v.host)}){R}", 9),
-                         Ln(lv("Key", f"{MAG}{shown}{R}   ", 9) + f"{DIM}{'hide' if v.key_shown else 'show'} (k){R}",
+    hosts = collections.Counter("this Mac" if h in ("127.0.0.1", "::1") else h for h, _ in d.conns)
+    L: List[CardLine] = [row("address", f"{B}{v.base}/v1{R}"),
+                         Ln(row("key", f"{MAG}{shown}{R}   ") + f"{DIM}{'hide' if v.key_shown else 'show'} (k){R}",
                             "key")]
-    conns = plural(len(d.conns), "connection")
-    L.append(conns + (f" · OpenCode and Pi {v.here}" if v.here else ""))
-    L.append(f"Disk cache: {v.cache}" if v.cache else f"Disk cache: {DIM}empty{R}")
+    other = [h for h in hosts if h != "this Mac"]
+    L.append(row("connections", str(len(d.conns)) + (f"   {DIM}from{R} {', '.join(hosts)}" if other else "")))
+    if v.here:
+        L.append(row("OpenCode, Pi", v.here))
+    used, _, saved = (v.cache or "").partition("   ")            # "2.4 of 10 GB   12 prompts, 5 sessions"
+    L.append(row("disk cache", used or f"{DIM}empty{R}"))
     if v.full:
+        L.append("")
+        if saved:
+            L.append(row("saved", saved))
         if d.alias:
-            L.append(lv("Model", d.alias, 9))
-        if hosts:
-            L.append(lv("From", ", ".join(hosts), 9))
-        L.append(lv("Key file", home_short(v.key_file, v.home), 9))
-        L += button_rows(f"{DIM}{'Copy':<9}{R}", [("OpenCode config (o)", "opencode"), ("Pi config (p)", "pi"),
-                                                  ("curl test (c)", "curl")], 50)
-    return Card("CONNECT", "", L)
-
-
-def log_counts(v: View) -> str:
-    c = v.log.counts
-    err = plural(c["E"], "error")
-    warn = plural(c["W"], "warning")
-    return (f"log: {RED + err + R if c['E'] else err} · {YEL + warn + R if c['W'] else warn} · "
-            f"{plural(c['notice'], 'routine notice')} · GPU: {plural(c['oom'], 'out-of-memory error')}, "
-            f"{plural(c['compute'], 'compute error')}")
+            L.append(row("model name", d.alias))
+        if hosts and not other:
+            L.append(row("from", ", ".join(hosts)))
+        L.append(row("key file", home_short(v.key_file, v.home)))
+        L += button_rows(f"{DIM}Copy{R}  ", [("OpenCode (o)", "opencode"), ("Pi (p)", "pi"), ("curl (c)", "curl")], w - 4)
+    return Card("CONNECT", reach_of(v.host), L)
 
 
 def card_health(v: View, d: ServerData) -> Card:
-    """One sentence: errors or none, and whether the Mac stays awake; in full detail the log counts,
-    the /health time, the last errors and the sleep events."""
+    """Errors and warnings in the log (or none), whether the Mac stays awake; at full the counts, the /health
+    time, the last errors and the sleep events."""
     c = v.log.counts
     broken = c["oom"] or c["compute"]
-    awake = "The Mac stays awake while the server runs." if d.awake else \
-        f"{YEL}The Mac can sleep while the server runs.{R}"
     if broken:
-        first = f"{RED}{B}✗ The GPU failed (out of memory or a compute error). Restart the server: Settings > Server, a.{R}"
-    elif c["E"]:
-        first = f"{YEL}⚠ {plural(c['E'], 'error')} in the log (tab 4).{R}"
+        first = f"{RED}{B}✗ The GPU failed. Restart the server (Settings > Server, a).{R}"
+    elif c["E"] or c["W"]:
+        first = (f"{YEL}⚠ {plural(c['E'], 'error')}, {plural(c['W'], 'warning')}{R}   {DIM}tab 4{R}")
     else:
         first = f"{GRN}✓{R} No errors."
-    L: List[CardLine] = [f"{first} {awake}"]
+    L: List[CardLine] = [row("log", first),
+                         row("sleep", "The Mac stays awake." if d.awake else f"{YEL}The Mac can sleep.{R}")]
     if v.full:
-        L.append(log_counts(v))
+        L.append("")
+        L.append(row("errors", str(c["E"])))
+        L.append(row("warnings", str(c["W"])))
+        L.append(row("routine notices", str(c["notice"])))
+        L.append(row("GPU errors", f"{c['oom']} out of memory, {c['compute']} compute"))
         if d.health_ms is not None:
-            L.append(f"The server answers a health check in {d.health_ms:.0f} ms.")
+            L.append(row("health check", f"{d.health_ms:.0f} ms"))
         errs = list(v.log.errors)[-3:]
         if errs:
             L.append(f"{B}Last errors{R}")
             L += [f"{RED}{log_line(v.log, e)}{R}" for e in errs]
-        sleeps = [e for e in v.slow.sleep_events if e[1] == "Sleep"]
         if v.slow.sleep_events:
-            L.append(f"{B}Sleep and wake{R} {DIM}(this Mac: {plural(len(sleeps), 'sleep')} since it started){R}")
-            L += [f"{DIM}{t} {kind}: {why}{R}" for t, kind, why in v.slow.sleep_events[-3:]]
-    return Card("HEALTH", "", L)
+            sleeps = [e for e in v.slow.sleep_events if e[1] == "Sleep"]
+            L.append(row("sleeps", f"{len(sleeps)} since the Mac started"))
+            L += [row(t, f"{kind}: {why}") for t, kind, why in v.slow.sleep_events[-3:]]
+    summary = (f"{RED}GPU failed{R}" if broken else f"{YEL}{plural(c['E'] + c['W'], 'problem')}{R}" if c["E"] or c["W"]
+               else "no errors")
+    return Card("HEALTH", summary, L)
 
 
 def card_model(v: View, d: ServerData) -> Card:
-    """Full detail: the loaded file, its weights (and the MTP drafter), speculation, the architecture,
-    thinking, the batch, the process."""
+    """The loaded file and its speculation; at full the weights, the MTP drafter, the layers, the experts,
+    thinking, the batch and the process."""
     shp, cmd = d.shape, d.cmd
     drafter = flag(cmd, "-md")
     L: List[CardLine] = []
     if shp:
-        weights = f"{memory(v.model_size)}" + (f" + MTP drafter {memory(v.drafter_size)}" if drafter else "")
-        L.append(lv("file", os.path.basename(v.model_path or ""), 13))
-        L.append(lv("weights", weights, 13))
-        L.append(lv("speculation", f"{spec_name(flag(cmd, '--spec-type', default='none'), flag(cmd, '--spec-draft-n-max'))}"
-                    f" {DIM}(--spec-type {flag(cmd, '--spec-type', default='none')}){R}", 13))
-        mtp = "a separate MTP drafter" if drafter else (plural(shp['nextn'], "MTP layer") if shp["nextn"] else "no MTP")
-        L.append(lv("layers", f"{shp['blocks']}: {shp['attn_layers']} attention, {shp['rec_layers']} recurrent · {mtp}",
-                    13))
-        L.append(lv("experts", f"{shp['experts_used']} of {shp['experts']} work on each token (MoE)"
-                    if shp.get("experts") else "none (dense: all weights work)", 13))
-        L.append(lv("thinking", ("levels and off" if shp.get("effort_levels") else "on / off")
-                    + (f" {DIM}(CARL's chat template: a client can turn it off){R}" if "--chat-template-file" in cmd
-                       else ""), 13))
-        L.append(lv("server", f"batch {flag(cmd, '-ub', default='–')} · flash attention {flag(cmd, '-fa', default='–')} · "
-                              f"pid {d.pid} · {shp['arch']}", 13))
+        L.append(row("file", os.path.basename(v.model_path or "")))
+        L.append(row("speculation", spec_name(flag(cmd, '--spec-type', default='none'), flag(cmd, '--spec-draft-n-max'))))
+        if v.full:
+            L.append("")
+            L.append(row("weights", memory(v.model_size)))
+            if drafter:
+                L.append(row("MTP drafter", f"{os.path.basename(drafter)}, {memory(v.drafter_size)}"))
+            L.append(row("layers", f"{shp['blocks']}: {shp['attn_layers']} attention, {shp['rec_layers']} recurrent"))
+            L.append(row("MTP", "a separate drafter" if drafter else
+                         (plural(shp['nextn'], "MTP layer") if shp["nextn"] else "none")))
+            L.append(row("experts", f"{shp['experts_used']} of {shp['experts']} per token (MoE)"
+                         if shp.get("experts") else "none (dense)"))
+            L.append(row("thinking", "levels and off" if shp.get("effort_levels") else "on / off"))
+            L.append(row("batch", flag(cmd, '-ub', default='–')))
+            L.append(row("flash attention", flag(cmd, '-fa', default='–')))
+            L.append(row("architecture", shp["arch"]))
+            L.append(row("process", f"pid {d.pid}"))
     else:
         L.append(f"{DIM}The model file is not known: {'an unknown model' if d.pid else 'no server process'}.{R}")
     quant = v.model_quant or (shp["ftype"] if shp else "")
@@ -442,20 +538,19 @@ def card_model(v: View, d: ServerData) -> Card:
 
 
 CardFn = Callable[[View, ServerData], Card]
-CARDS: Dict[str, CardFn] = {"connect": card_connect, "speed": card_speed, "health": card_health, "model": card_model}
+CARDS: Dict[str, CardFn] = {"health": card_health, "model": card_model}
+SIZED = {"slots": card_slots, "memory": card_memory, "thismac": card_thismac, "connect": card_connect, "speed": card_speed}       # these take the card's width
 
 
 def column(v: View, names: List[str], d: ServerData, w: int) -> List[Row]:
-    """The named cards drawn one under the other, w columns wide."""
+    """The named cards drawn one under the other, w columns wide, each at its own level (its title shows it)."""
     rows: List[Row] = []
     for nm in names:
-        if nm == "slots":
-            card = card_slots(v, d, w)
-        elif nm == "memory":
-            card = card_memory(v, d, w)
-        else:
-            card = CARDS[nm](v, d)
-        rows += draw_card(nm, card.title, card.summary, wrapped(card.lines, w - 4), w, v.level(nm))
+        lvl = v.level(nm)
+        vv = replace(v, detail="full" if lvl == 2 else "simple")
+        card = SIZED[nm](vv, d, w) if nm in SIZED else CARDS[nm](vv, d)
+        rows += draw_card(nm, card.title, card.summary, wrapped(aligned(card.lines, w - 4), w - 4), w, lvl,
+                          3 if nm in THREE_LEVELS else 2, nm == v.selected)
     return rows
 
 
@@ -466,28 +561,54 @@ def wrapped(lines: List[CardLine], w: int) -> List[CardLine]:
 
 def card_stopped(v: View, d: ServerData) -> Card:
     """No server runs: the state, the next action, what a start uses (v.next_start, from the app)."""
-    L: List[CardLine] = ["The server stopped." if d.exited else "The server is not running.", ""]
-    L += v.next_start
+    failed = any("start failed" in str(x) for x in v.next_start)
+    L: List[CardLine] = [row("state", f"{RED}stopped{R}" + (". The last start failed." if failed else "")), *v.next_start]
     return Card("SERVER", f"{RED}stopped{R}", L)
 
 
 # ---------------------------------------------------------------- requests and log
+REQ_MORE = f"  {'Reused':>8}"                      # the Requests tab and the full Live card add these columns
+REQ_FULL = f"  {'Slot':>4}  {'Reused from':<12}"
+
+
 def req_row(r: RequestRecord, wall: Callable[[Optional[float]], str]) -> str:
     """One request as a table row (REQ_HEAD); wall turns its start into a clock time."""
     took = r.t1 - r.t0 if r.t1 is not None and r.t0 is not None else None
-    acc = percent(r.acc) if r.acc is not None else "–"
+    acc = f"{RED}{'error':>10}{R}" if r.error else f"{percent(r.acc) if r.acc is not None else '–':>10}"
     return (f"{wall(r.t0):8}  {tokens(r.ctx):>8}  {tokens(r.new):>10}  {(r.pp or 0):>10.0f}  "
-            f"{tokens(r.gen):>6}  {(r.tg or 0):>11.1f}  {duration(took):>6}  {acc:>10}"
-            + (f"  {RED}error{R}" if r.error else ""))
+            f"{tokens(r.gen):>6}  {(r.tg or 0):>11.1f}  {duration(took):>6}  {acc}")
 
 
-def card_requests(v: View, d: ServerData, n: int) -> Card:
-    """The last n finished requests, newest first."""
+def req_table(reqs: List[RequestRecord], wall: Callable[[Optional[float]], str], full: bool, w: int,
+              mean: bool = False) -> List[CardLine]:
+    """The requests as a table: a header row, an optional "mean" row under the speed columns, one row each (newest
+    first as given); full adds the slot and where the reused tokens came from, as columns, or on a second aligned row
+    when w is too narrow for them."""
+    wide = len(REQ_HEAD + REQ_MORE + REQ_FULL) <= w
+    L: List[CardLine] = [f"{DIM}{REQ_HEAD}{REQ_MORE}{REQ_FULL if full and wide else ''}{R}"]
+    done = [r for r in reqs if r.tg]
+    if mean and done:
+        pp = sum(r.pp or 0 for r in done) / len(done)
+        tg = sum(r.tg or 0 for r in done) / len(done)
+        L.append(f"{DIM}{'Mean':8}  {'':>8}  {'':>10}  {R}{pp:>10.0f}  {'':>6}  {tg:>11.1f}")
+    for r in reqs:
+        line = req_row(r, wall) + f"  {tokens(max(r.ctx - r.new - r.gen, 0)):>8}"
+        extra = f"{r.slot:>4}  {r.source or '–':<12}"
+        if full and wide:
+            line += "  " + extra
+        L.append(line)                    # a failed request says "error" in its guesses column
+        if full and not wide:
+            L.append(f"{DIM}{'':8}  Slot {r.slot}.   Reused from: {r.source or '–'}.{R}")
+    return L
+
+
+def card_requests(v: View, d: ServerData, n: int, w: int = 200) -> Card:
+    """The last n finished requests, newest first (the full level adds the slot and the source)."""
     reqs = list(v.log.requests)
-    running = f" · {len(v.log.current)} running" if v.log.current else ""
-    rows = [req_row(r, v.log.wall) for r in reversed(reqs[-n:])] or [f"{DIM}No finished request in this log yet.{R}"]
-    return Card("RECENT REQUESTS", f"{len(reqs)} finished{running} {DIM}· tab 3 for all{R}",
-                [f"{DIM}{REQ_HEAD}{R}", *rows])
+    running = f", {len(v.log.current)} running" if v.log.current else ""
+    rows = req_table(list(reversed(reqs[-n:])), v.log.wall, v.full, w) if reqs else \
+        [f"{DIM}No finished request in this log yet.{R}"]
+    return Card("RECENT REQUESTS", f"{len(reqs)} finished{running}", rows)
 
 
 def routine(line: str) -> bool:
@@ -495,12 +616,13 @@ def routine(line: str) -> bool:
     return any(r in line for r in ROUTINE)
 
 
-def log_line(book: LogBook, line: str) -> str:
-    """A log line with its clock time (the log's own clock is minutes since the server started)."""
+def log_line(book: LogBook, line: str, ms: bool = False) -> str:
+    """A log line with its clock time (the log's own clock is minutes since the server started; ms: with
+    milliseconds)."""
     m = TS.match(line)
     if not m or not book.start:
         return line
-    return f"{book.wall(offset(line))} {m.group(5)} {line[m.end():]}"
+    return f"{book.wall(offset(line), ms)} {m.group(5)} {line[m.end():]}"
 
 
 def log_view(v: View, n: int, width: int) -> List[CardLine]:
@@ -508,13 +630,13 @@ def log_view(v: View, n: int, width: int) -> List[CardLine]:
     warnings yellow, the lines that are normal at a start dim."""
     if not v.log_path:
         return [f"{DIM}{NOLOG_TEXT}{R}"]
-    lines = [ln for ln in v.log.lines if not v.errors_only or (level_of(ln) in ("E", "W") and not routine(ln))]
+    lines = [ln for ln in v.log.lines if not v.errors_only or level_of(ln) in ("E", "W")]   # errors and warnings, all
     end = len(lines) - v.log_scroll
     out: List[CardLine] = []
     for line in lines[max(0, end - n * (4 if v.wrap else 1)):end]:
         lvl = level_of(line)
         col = DIM if routine(line) else RED if lvl == "E" else YEL if lvl == "W" else ""
-        text = log_line(v.log, line)
+        text = log_line(v.log, line, v.full)
         if not v.wrap:
             out.append(col + text)
         else:

@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import signal
 import time
-from typing import Callable, Dict, List, NamedTuple
+from typing import List, NamedTuple
 
 from . import system, uiprefs
 from .api import Endpoint
@@ -19,7 +19,10 @@ from .model import ServerData
 from .settings import Pending, SettingsService
 from .settings_actions import SETTINGS_ACTIONS, SettingsActions
 from .settings_view import SettingsView
-from .state import CONNECT_SUBPANELS, DETAILS, SP_CACHE, SP_FIT, SP_MODELS, SP_SERVER, TABS, UIState
+from .cards import NO_COLLAPSE, THREE_LEVELS
+from .state import CONNECT_SUBPANELS, DETAILS, SP_CACHE, SP_FIT, SP_MODELS, SP_ROUTER, SP_SERVER, SP_TUNE, UIState
+
+SHIFT_TAB = "\x1b[Z"
 
 
 class Region(NamedTuple):
@@ -66,7 +69,8 @@ class Controller:
         elif action.startswith("level:"):
             nm = action[6:]
             if nm in ui.levels:
-                ui.levels[nm] = 0 if ui.levels[nm] else 1
+                ui.section = nm
+                self.cycle_level(nm)
         elif action == "detail":
             self.toggle_detail()
         elif action == "livestart":
@@ -99,7 +103,7 @@ class Controller:
         elif action == "detach":
             pid = d.target_pid
             if pid and not d.exited:
-                ui.exit_msg = (f"The dashboard closed. The server runs on at {self.endpoint.base}.\n"
+                ui.exit_msg = (f"The dashboard closed. The server is still running at {self.endpoint.base}.\n"
                                f"  To open the dashboard again: ./carl.sh\n"
                                f"  To stop the server: ./carl.sh, then q, then s.")
             raise SystemExit
@@ -122,11 +126,36 @@ class Controller:
 
     # ------------------------------------------------------------ the detail level, a start from Live
     def toggle_detail(self) -> None:
-        """D: simple <-> full, everywhere; saved for the next start of the dashboard."""
+        """D: simple <-> full, everywhere: every section takes that level (a collapsed one opens); saved for the
+        next start of the dashboard."""
         ui = self.ui
         ui.detail = DETAILS[(DETAILS.index(ui.detail) + 1) % len(DETAILS)] if ui.detail in DETAILS else DETAILS[0]
+        lvl = 2 if ui.detail == "full" else 1
+        for nm in ui.levels:
+            ui.levels[nm] = lvl if nm in THREE_LEVELS else 1
+        self.save_levels()
+
+    def cycle_level(self, nm: str) -> None:
+        """A section's next level: simple -> full -> collapsed -> simple (two-level sections: open <-> collapsed)."""
+        ui = self.ui
+        cur = ui.levels.get(nm, 1)
+        if nm in NO_COLLAPSE:
+            ui.levels[nm] = 1 if cur == 2 else 2
+        else:
+            ui.levels[nm] = {1: 2, 2: 0, 0: 1}[cur] if nm in THREE_LEVELS else (0 if cur else 1)
+        self.save_levels()
+
+    def select_section(self, step: int) -> None:
+        """Tab / Shift-Tab: the next or previous section of the screen shown."""
+        ui = self.ui
+        if not ui.sections:
+            return
+        i = ui.sections.index(ui.section) if ui.section in ui.sections else -1 if step > 0 else 0
+        ui.section = ui.sections[(i + step) % len(ui.sections)]
+
+    def save_levels(self) -> None:
         if self.prefs:
-            uiprefs.save_detail(self.prefs, ui.detail)
+            uiprefs.save_detail(self.prefs, self.ui.detail, self.ui.levels)
 
     def start_from_live(self) -> None:
         """a on the Live tab with no server: Settings > Server, and its question "start the server?"."""
@@ -145,8 +174,8 @@ class Controller:
                 ui.fit_scroll = max(0, ui.fit_scroll - step)
             elif ui.sp == SP_MODELS:
                 ui.mrow = max(ui.mrow - step, 0)
-            elif ui.sp == SP_CACHE:
-                ui.cache_row = max(ui.cache_row - step, 0)
+            elif ui.sp in (SP_TUNE, SP_ROUTER, SP_CACHE):     # these pages scroll as one (Phase 23.2)
+                ui.page_scroll = max(0, ui.page_scroll - step)
             else:
                 ui.set_scroll = max(0, ui.set_scroll - step)
         elif ui.tab == 3:
@@ -154,7 +183,10 @@ class Controller:
         elif ui.tab == 2:
             ui.req_scroll = max(0, ui.req_scroll - step)
         elif ui.tab == 1:
-            ui.prev_scroll = max(0, ui.prev_scroll - step)
+            if ui.section == "cpreview":                 # the preview has the focus: it scrolls on its own
+                ui.prev_scroll = max(0, ui.prev_scroll - step)
+            else:
+                ui.conn_scroll = max(0, ui.conn_scroll - step)
         else:
             ui.scroll = max(0, ui.scroll - step)
 
@@ -239,7 +271,11 @@ class Controller:
         elif k in ("1", "2", "3", "4", "5"):
             ui.tab = int(k) - 1
         elif k == "\t":
-            ui.tab = (ui.tab + 1) % len(TABS)
+            self.select_section(1)
+        elif k == SHIFT_TAB:
+            self.select_section(-1)
+        elif k == "L" and ui.section in ui.sections:
+            self.cycle_level(ui.section)
         elif k == "?":
             ui.help = not ui.help
         elif k == "D":
@@ -255,9 +291,9 @@ class Controller:
         elif ui.tab == 0 and k == "a" and (self.data.exited or not (self.data.up or self.data.pid)):
             self.do("livestart")
         elif ui.tab == 0 and k in ("+", "="):
-            ui.lines = min(ui.lines + 2, 60)
+            ui.lines = min((ui.lines or 3) + 2, 60)
         elif ui.tab == 0 and k in ("-", "_"):
-            ui.lines = max(ui.lines - 2, 2)
+            ui.lines = max((ui.lines or 5) - 2, 2)
         elif ui.tab == 1 and k in ("i", "u", "x", "P", "z", "f"):
             self.do({"i": "insall", "u": "insconfig", "x": "insclose", "P": "inspush", "z": "pkgmake",
                      "f": "pkgshow"}[k])

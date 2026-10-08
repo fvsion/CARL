@@ -8,10 +8,14 @@ from carl_core.domain.fit import max_ctx
 from mon_support import GIB, FakeStore, model, model_list, shape
 from monitor.fmt import GRN, RED, YEL
 from monitor.model import ServerData
-from monitor.fmt import ANSI
-from monitor.settings import (LLAMA_ADV, MODEL_ROW_KEYS, SET_HELP, SPEC_COMBOS, Schema, SettingsService, env_from_cmd,
+from monitor.fmt import ANSI, aligned
+from monitor.settings import (LLAMA_ADV, MODEL_ROW_KEYS, SET_HELP, SPEC_COMBOS, FitInfo, Schema, SettingsService, env_from_cmd,
                               fit_sentence, fmt_val, llama_fit, net_choices, parse_typed, row_instruction, rows,
-                              running_settings, settings_to_config, shown_value, step_choice, swa_sentence)
+                              running_settings, settings_to_config, shown_value, step_choice)
+from monitor.settings_panels.model_card import ModelCard
+from monitor.settings_panels.model_lines import ModelLines
+from monitor.settings_panels.server import ServerPanel
+from monitor.state import UIState
 
 SCHEMA = Schema(net_choices(["192.168.1.5"]))
 LLAMA_CMD = ("/opt/llama-server -m /m/big.gguf --host 127.0.0.1 -c 196608 --parallel 2 -ctk q4_0 -ctv q4_0 "
@@ -21,6 +25,14 @@ LLAMA_CMD = ("/opt/llama-server -m /m/big.gguf --host 127.0.0.1 -c 196608 --para
 
 def service(store: FakeStore) -> SettingsService:
     return SettingsService(model_list(store), SCHEMA, "192.168.42.1", gpu_limit=lambda: store.limit)
+
+
+def memory_text(f: FitInfo) -> str:
+    """The Server panel's MEMORY section for a fit, as shown (its rows laid out, no colours)."""
+    svc = service(FakeStore())
+    panel = ServerPanel(svc, ModelLines(svc), ModelCard(svc, "/home/u"), "", "/home/u")
+    lines, _ = panel.memory_lines(UIState(), {}, f, "")
+    return ANSI.sub("", "\n".join(str(x) for x in aligned(lines)))
 
 
 class ValuesTest(unittest.TestCase):
@@ -63,7 +75,9 @@ class ValuesTest(unittest.TestCase):
 
     def test_rows(self) -> None:
         llama = rows({}, SCHEMA, lambda: ["auto", "big"])
-        self.assertEqual([r.key for r in llama], ["model", "ctx", "slots", "spec", "kv", "cache", "net", "temp"])
+        self.assertEqual([r.key for r in llama], ["model", "ctx", "slots", "spec", "kv", "swa", "cache", "net", "temp"])
+        svc = service(FakeStore())                                    # the Sliding window row: Gemma models only
+        self.assertNotIn("swa", [r.key for r in svc.rows(dict(SCHEMA.defaults(), model="big"))])
         self.assertEqual([r.label for r in llama][:5], ["Model", "Context", "Slots", "Speculation", "Context memory"])
         self.assertEqual(llama[0].choices, ["auto", "big"])
         self.assertEqual(next(r for r in llama if r.key == "spec").choices, SPEC_COMBOS)   # the mode with its guesses
@@ -156,13 +170,13 @@ class FitMathTest(unittest.TestCase):
         swa = {**shape(kv_elems=2048, rs_bytes=0), "swa_window": 1024, "kv_elems_per_token_swa": 204800}
         f = llama_fit("g", 10 * GIB, swa, "q4_0", 98304, "2", 40 * GIB)
         self.assertTrue(f.fits)
-        self.assertIn("keeps its full cache", swa_sentence(f))
+        self.assertRegex(memory_text(f), r"Sliding window +Full cache")
         f = llama_fit("g", 10 * GIB, swa, "q4_0", 98304, "2", 16 * GIB)          # only the window fits
         self.assertTrue(f.fits)
-        self.assertIn("window cache", ANSI.sub("", swa_sentence(f)))
+        self.assertRegex(memory_text(f), r"Sliding window +Window cache")
         self.assertFalse(llama_fit("g", 10 * GIB, swa, "q4_0", 98304, "2", 16 * GIB, swa="full").fits)
         self.assertGreater(max_ctx(swa, 10 * GIB, 16 * GIB, swa_full=False), max_ctx(swa, 10 * GIB, 16 * GIB))
-        self.assertEqual(swa_sentence(llama_fit("m", 10 * GIB, shape(), "q4_0", 65536, "1", 25 * GIB)), "")
+        self.assertNotIn("Sliding window", memory_text(llama_fit("m", 10 * GIB, shape(), "q4_0", 65536, "1", 25 * GIB)))
 
     def test_max_ctx_is_carl_cores_for_one_q4_0_slot(self) -> None:
         """The lists' "fits" column: carl_core's largest window with 1 slot and a q4_0 KV cache."""

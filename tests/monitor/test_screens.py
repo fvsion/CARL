@@ -1,7 +1,9 @@
-"""Every screen read as text (Phase 21): at 100, 140 and 200 columns, in simple and full detail, with no server,
-a server at work and a dialog open. Each line fits the width; no word is repeated next to itself ("fit fits");
-the simple detail level uses the glossary's names only (reference/glossary.md); the footer keeps "? all keys"
-and "q quit"; D switches the detail level and the dashboard keeps it for its next start."""
+"""Every screen read as text (Phase 21, Phase 23.2): at 100 x 40, 130 x 40, 160 x 50 and 200 x 60, with every
+section simple and with every section full, with no server, a server at work and a dialog open. Each line fits the
+width; no word is repeated next to itself ("fit fits"); no values are joined by " · "; no line in a card holds one
+lone word; the simple level uses the glossary's names only (reference/glossary.md); the section titles show their
+level; the footer keeps "? all keys" and "q quit". D sets every section, Tab selects one, L and a click on its title
+change its level, and the dashboard keeps the levels for its next start."""
 from __future__ import annotations
 
 import os
@@ -18,6 +20,7 @@ from monitor.api import Endpoint
 from monitor.app import App, Machine
 from monitor.cli import Options
 from monitor.collector import Collector
+from monitor.cards import THREE_LEVELS
 from monitor.fmt import ANSI, vlen
 from monitor.jobs import Paths, ServerJobs
 from monitor.model import ServerData, SlotInfo, SystemStats
@@ -25,7 +28,8 @@ from monitor.settings import Schema, SettingsService, net_choices
 from monitor.settings_view import SettingsView
 from monitor.state import Confirm, UIState
 
-WIDTHS = (100, 140, 200)
+SIZES = ((100, 40), (130, 40), (160, 50), (200, 60))
+TAIL = "? all keys   q quit"                           # the footer's end on every screen (no " · ": Phase 23.2)
 CMD = ("llama-server -m /m/big.gguf --alias big --host 127.0.0.1 --port 8095 -c 196608 --parallel 2 "
        "--kv-unified-per-slot 98304 -ctk q4_0 -ctv q4_0 --spec-type draft-mtp,ngram-mod --spec-draft-n-max 1 "
        "--cache-ram 2560 --temp 1.0 --top-k 20 --top-p 0.95 --min-p 0 --presence-penalty 0 --repeat-penalty 1.0 "
@@ -34,7 +38,9 @@ CMD = ("llama-server -m /m/big.gguf --alias big --host 127.0.0.1 --port 8095 -c 
 FORBIDDEN = [r"prompt cache", r"\bGENERATING\b", r"\bOFFLINE\b", r"(?<!tok)\bt/s\b", r"\d(\.\d)?G\b(?!i?B)",
              r"\d(\.\d)?M\b(?!i?B)", r"\b98\.3K\b", r"\bN/A\b", r"\bre-emit\b", r"draft tokens", r"ngram-mod",
              r"draft-mtp", r"\bKV cache\b", r"KV quant", r"\bOverview\b", r"\(exp\.\)", r"\bconversations?\b",
-             r"\bnot here\b", r"\bslot\(s\)", r"\bfile\(s\)", r"●○|○○|●●"]
+             r"\bnot here\b", r"\bslot\(s\)", r"\bfile\(s\)", r"GiB is memory", r"Memory is normal",
+             r"click a title"]
+LONE = re.compile(r"[a-z][a-z).,:;]*[.,:;)]")          # one lone word at the end of a sentence ("GiB.", "min).")
 
 
 def repeated(line: str) -> str:
@@ -93,33 +99,46 @@ class ScreensTest(unittest.TestCase):
             d.busy, d.prompt, d.cached, d.processed, d.decoded, d.tg_rate = True, 52310, 41210, 11100, 412, 38.4
         return d
 
-    def frame(self, d: ServerData, cols: int, rows: int = 50) -> List[str]:
+    def frame(self, d: ServerData, cols: int, rows: int = 40) -> List[str]:
         self.ctl.data = d
         with mock.patch.object(shutil, "get_terminal_size", return_value=os.terminal_size((cols, rows))):
             self.app.frame(d)                       # the first frame sets the keys and the pending values
             return [ANSI.sub("", x) for x in self.app.frame(d)]
 
-    def screens(self) -> Iterator[Tuple[str, ServerData, int]]:
+    def screens(self) -> Iterator[Tuple[str, ServerData, int, int]]:
         """(name, snapshot, width) of every tab and Settings panel, with and without a server."""
         for name, d in (("stopped", ServerData()), ("idle", self.server()), ("writing", self.server("writing"))):
             for tab in range(5):
                 for sp in (range(6) if tab == 4 else range(2) if tab == 1 else [0]):
                     self.ui.tab, self.ui.sp, self.ui.connect_sp = tab, sp, sp
                     self.ui.pending = None
-                    for cols in WIDTHS:
-                        yield f"{name} tab {tab + 1} panel {sp} @{cols}", d, cols
+                    for cols, rows in SIZES:
+                        yield f"{name} tab {tab + 1} panel {sp} @{cols}x{rows}", d, cols, rows
+
+    def set_detail(self, detail: str) -> None:
+        """As D does: every section at simple (1) or full (2; a two-level section stays open)."""
+        self.ui.detail = detail
+        for nm in self.ui.levels:
+            self.ui.levels[nm] = 2 if detail == "full" and nm in THREE_LEVELS else 1
 
     def check(self, detail: str) -> None:
-        self.ui.detail = detail
-        for name, d, cols in self.screens():
-            lines = self.frame(d, cols)
+        self.set_detail(detail)
+        for name, d, cols, rows in self.screens():
+            lines = self.frame(d, cols, rows)
             with self.subTest(screen=name, detail=detail):
                 too_long = [x for x in lines if vlen(x) > cols]
                 self.assertFalse(too_long, too_long[:2])
                 rep = [(x, repeated(x)) for x in lines if repeated(x)]
                 self.assertFalse(rep, rep[:2])
                 footer = lines[-1]
-                self.assertTrue(footer.rstrip().endswith("? all keys · q quit"), footer)
+                self.assertTrue(footer.rstrip().endswith(TAIL), footer)
+                dots = [x for x in lines[2:] if " · " in x and '"name":' not in x]   # (a client's own model names)
+                self.assertFalse(dots, dots[:2])
+                lone = [c.strip() for x in lines[3:-1] for c in x.split("│") if LONE.fullmatch(c.strip())]
+                self.assertFalse(lone, lone[:2])
+                wrong = "●●" if detail == "simple" else "●○"
+                marks = [x for x in lines if f" {wrong}" in x and ("╭─" in x or "──" in x[:4])]
+                self.assertFalse(marks, marks[:2])
                 if detail == "simple":
                     text = "\n".join(lines)
                     for pat in FORBIDDEN:
@@ -141,19 +160,24 @@ class ScreensTest(unittest.TestCase):
         tabs = self.frame(self.server(), 140)[1]
         self.assertIn("[1 Live]", tabs)
         self.assertIn("detail: simple (D)", tabs)
+        self.assertNotIn(" · ", self.frame(self.server(), 140)[0])          # "big   up 1 h 12 min"
 
     def test_live_starts_with_the_state_and_the_next_action(self) -> None:
         text = "\n".join(self.frame(ServerData(), 140))
-        self.assertIn("The server is not running.", text)
-        self.assertIn("To start it: press a", text)
-        self.assertIn("It fits:", text)
+        self.assertIn("SERVER  stopped", text)
+        self.assertIn("Press a, or run ./carl.sh in a terminal.", text)
+        self.assertRegex(text, r"Fits +✓")
+        self.assertIn("THIS MAC", text)                                     # this Mac, also when no server runs
+        self.assertNotIn("The last start failed", text)
         self.assertIn("a start the server", self.frame(ServerData(), 140)[-1])
         lines = self.frame(self.server("writing"), 140)
-        self.assertEqual(lines[3].strip(), "Writing an answer in slot 0 at 38.4 tok/s. Slot 1 is free. Memory is normal.")
+        self.assertEqual(lines[3].strip(), "Writing an answer in slot 0 at 38.4 tok/s. Slot 1 is free.")
         text = "\n".join(lines)
-        for card in ("SLOTS", "SPEED", "MEMORY", "CONNECT", "HEALTH", "RECENT REQUESTS"):
-            self.assertIn(f"╭─ {card}", text)
-        self.assertIn("40.2K reused (79%)", text)
+        for card in ("SLOTS ●○", "SPEED ●○", "MEMORY ●○", "THIS MAC ●○", "CONNECT ●○", "HEALTH ●○", "MODEL ●○",
+                     "RECENT REQUESTS ●○", "LOG ●○"):
+            self.assertIn(f"╭─ ▾ {card}", text)
+        self.assertRegex(text, r"Reused +40\.2K \(79%\)")
+        self.assertRegex(text, r"GPU +█+░+ +38% busy")                     # the GPU bar is back (1.4.0)
 
     def test_a_dialog_shows_its_own_keys(self) -> None:
         self.ui.quit = True
@@ -165,24 +189,27 @@ class ScreensTest(unittest.TestCase):
         self.ui.confirm2 = Confirm("DELETE THE MODEL?", ["Delete big?"], "mdelyes", "big", yes_label="Delete")
         lines = self.frame(self.server(), 100)
         self.assertIn("[ Delete (y) ]", "\n".join(lines))
-        self.assertEqual(lines[-1].strip(), "y delete · n Esc cancel")
+        self.assertEqual(lines[-1].strip(), "y delete   n Esc cancel")
 
     def test_messages_have_their_own_line(self) -> None:
         self.ui.toast("The dashboard API cannot start: port 8096 is in use.", 600)
         lines = self.frame(self.server(), 100)
         self.assertIn("The dashboard API cannot start", lines[-3])
-        self.assertTrue(lines[-1].rstrip().endswith("? all keys · q quit"))
+        self.assertTrue(lines[-1].rstrip().endswith(TAIL))
         self.ui.help = True
         self.assertIn("Recent messages", "\n".join(self.frame(self.server(), 140)))
 
-    def test_d_switches_the_detail_and_it_is_kept(self) -> None:
+    def test_d_sets_every_section_and_it_is_kept(self) -> None:
         prefs = uiprefs.path_for(self.store.config_file)
         self.assertEqual(self.app.prefs, prefs)
-        self.assertNotIn("Server uses", "".join(x for x in self.frame(self.server(), 140) if "This Mac:" in x))
+        self.assertNotRegex("\n".join(self.frame(self.server(), 140)), r"Wired +\d")
         self.ctl.handle_input("D")
         self.assertEqual(self.ui.detail, "full")
         self.assertEqual(uiprefs.load_detail(prefs), "full")
-        self.assertIn("This Mac:", "\n".join(self.frame(self.server(), 140)))       # MEMORY's full lines
+        self.assertEqual(uiprefs.load_levels(prefs)["thismac"], 2)
+        text = "\n".join(self.frame(self.server(), 140))
+        self.assertRegex(text, r"Wired +\d")                                # THIS MAC's full rows
+        self.assertIn("THIS MAC ●●", text)
         self.assertIn("detail: full (D)", self.frame(self.server(), 140)[1])
         self.ctl.handle_input("D")
         self.assertEqual(uiprefs.load_detail(prefs), "simple")
@@ -195,6 +222,36 @@ class ScreensTest(unittest.TestCase):
         with open(prefs, "w") as f:
             f.write("not json")
         self.assertEqual(uiprefs.load_detail(prefs), "simple")       # a broken file: simple
+        self.assertEqual(uiprefs.load_levels(prefs), {})
+
+    def test_tab_selects_a_section_and_l_changes_its_level(self) -> None:
+        prefs = uiprefs.path_for(self.store.config_file)
+        self.frame(self.server(), 130)
+        self.ctl.handle_input("\t")
+        self.assertEqual((self.ui.tab, self.ui.section), (0, "slots"))   # Tab does not change the tab now
+        self.ctl.handle_input("\t\t")
+        self.assertEqual(self.ui.section, "thismac")
+        self.ctl.handle_input("\x1b[Z")                                  # Shift-Tab: back one
+        self.assertEqual(self.ui.section, "memory")
+        self.ctl.handle_input("L")
+        self.assertEqual(self.ui.levels["memory"], 2)
+        text = "\n".join(self.frame(self.server(), 130))
+        self.assertRegex(text, r"MEMORY +●●")                              # (selected: the title is reversed)
+        self.assertIn("detail: mixed (D)", self.frame(self.server(), 130)[1])
+        self.ctl.handle_input("L")
+        self.assertEqual(self.ui.levels["memory"], 0)
+        self.assertRegex("\n".join(self.frame(self.server(), 130)), r"── ▸ +MEMORY +○○  server 17\.9 GiB")
+        self.ctl.handle_input("L")
+        self.assertEqual(self.ui.levels["memory"], 1)
+        self.ctl.do("level:speed")                                        # a click on a title: the same cycle
+        self.assertEqual((self.ui.section, self.ui.levels["speed"]), ("speed", 2))
+        self.assertEqual(uiprefs.load_levels(prefs)["speed"], 2)          # kept for the next start
+        self.ctl.handle_input("2")
+        self.assertEqual(self.ui.tab, 1)                                  # 1-5 still change the tab
+
+    def test_live_columns_follow_the_width(self) -> None:
+        from monitor.views import live_columns
+        self.assertEqual([live_columns(c) for c in (90, 100, 130, 160, 189, 190, 200)], [1, 2, 2, 2, 2, 3, 3])
 
     def test_keys_typed_fast_are_each_handled(self) -> None:
         """"?3" in one read: the ? card opens and tab 3 shows (it was lost in the Settings panels)."""

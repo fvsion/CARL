@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import copy
 import os
+import re
 from dataclasses import dataclass
 from typing import Callable, Dict, List, NamedTuple, Optional, Sequence, Tuple, Union
 
@@ -45,7 +46,6 @@ LLAMA_ADV = [                       # the full detail level's rows (More setting
     SettingRow("ckpt", "Checkpoints", ["8", "4", "16"], "llama:ckpt", "8"),
     SettingRow("ckstep", "Checkpoint step", ["4096", "1024", "2048", "8192"], "llama:ckpt_step", "4096"),
 ]
-MORE_SETTINGS = "presence, sampling, batch size, checkpoints"
 SPEC_COMBOS = ["none|1", "ngram-mod|1", "ngram-mod|2", "ngram-mod|3", "draft-mtp|1", "draft-mtp|2", "draft-mtp|3",
                "draft-mtp|4", "draft-mtp,ngram-mod|1", "draft-mtp,ngram-mod|2", "draft-mtp,ngram-mod|3",
                "draft-mtp,ngram-mod|4"]          # the Speculation row: a mode and its guesses together
@@ -75,6 +75,9 @@ class Schema:
                        "draft-mtp,ngram-mod"),
             SettingRow("specn", "Guesses", ["1", "2", "3", "4"], "m:spec_n", "1"),    # shown inside Speculation
             SettingRow("kv", "Context memory", ["q4_0", "q8_0"], "m:kv", "q4_0"),
+            # Phase 23.2: the sliding-window cache (cache.swa, the same setting as Settings > Caching), shown only for
+            # a model with sliding-window layers (the Gemma 4 models)
+            SettingRow("swa", "Sliding window", ["auto", "full", "window"], "cache:swa", "auto"),
             SettingRow("cache", "RAM cache", ["auto", 1024, 2560, 4096, 6144, 8192], "llama:cache_ram", "auto"),
             SettingRow("net", "Network", list(self.net_choices), "llama:net", "local"),
             SettingRow("temp", "Temperature", ["1.0", "0.6"], "m:temp", "1.0"),
@@ -110,8 +113,12 @@ ADV_WARN = ("Caution: Auto-tune and tests measured these values (reference/perfo
             "slower or its answers worse. Press x to use the recommended settings again.")
 _NET_HELP = ("Who can connect. This Mac only: the default. This Mac and the VM: a VMware Fusion VM can connect too "
              "(192.168.42.1). An address: only that network interface. Other computers on that network can connect.")
+SWA_NAMES = {"auto": "auto", "full": "full cache", "window": "window cache"}
 SET_HELP = {
-    "model": "The list has every model: the catalogue, the models folder and your Hugging Face downloads. auto = start "
+    "swa": "A Gemma model keeps a window of recent tokens per layer. full cache: CARL can restore saved sessions and "
+           "prompts; it needs more memory. window cache: less memory; saved sessions cannot be restored. auto: the "
+           "full cache when it fits. One setting for every Gemma model (also in Settings > Caching).",
+    "model": "The list has every model: the catalogue, the models folder and your Hugging Face downloads. Auto starts "
              "Auto fit's choice for this Mac. The Auto fit panel (A) tells why. To add a model, use the Models panel: "
              "it downloads any GGUF file from Hugging Face.",
     "goal": "The goal of Auto fit. everyday: the fast models first (MoE and small dense models). They are usually good "
@@ -147,6 +154,8 @@ SET_HELP = {
     "ckstep": "The smallest number of tokens between two checkpoints. In the Phase 6 test, 1024 and 4096 gave the same "
               "result.",
 }
+SET_HELP = {k: re.sub(r"(^|[.!?] )([a-z])", lambda m: m.group(1) + m.group(2).upper(), v)    # sentences: a capital
+            for k, v in SET_HELP.items()}
 
 
 def row_instruction(key: str) -> str:
@@ -202,6 +211,8 @@ def shown_value(key: str, v: object, long: bool = False) -> str:
         return net_name(v)
     if key == "spec":
         return spec_name(v)
+    if key == "swa":
+        return SWA_NAMES.get(str(v), str(v))
     return str(v)
 
 
@@ -252,7 +263,8 @@ def running_settings(d: ServerData, vm_addr: str, find: Callable[[str], Optional
             "net": net, "temp": f("--temp"), "presence": f("--presence-penalty"),
             "spec": f("--spec-type", default="none"), "specn": f("--spec-draft-n-max", default="1"),
             "top_k": f("--top-k"), "top_p": f("--top-p"), "min_p": f("--min-p"), "repeat": f("--repeat-penalty"),
-            "ub": f("-ub"), "ckpt": f("--ctx-checkpoints"), "ckstep": f("--checkpoint-min-step")}
+            "ub": f("-ub"), "ckpt": f("--ctx-checkpoints"), "ckstep": f("--checkpoint-min-step"),
+            "swa": "full" if "--swa-full" in cmd else "window"}
 
 
 def settings_to_config(p: Pending, cfg: JSONDict, schema: Schema, model: Optional[str],
@@ -364,16 +376,6 @@ def fit_sentence(f: FitInfo) -> str:
     return f"{RED}✗{R} It does not fit. This model with {plan} needs {need}. This Mac gives the GPU {limit}.{more}"
 
 
-def swa_sentence(f: FitInfo) -> str:
-    """A Gemma model's sliding-window cache in one sentence ('' for other models)."""
-    if f.full is None:
-        return ""
-    if f.full:
-        return "This Gemma model keeps its full cache: CARL can restore saved sessions and prompts."
-    return (f"This Gemma model uses the {YEL}window cache{R}: it uses less memory, but CARL cannot restore saved "
-            f"sessions and prompts (Settings > Caching).")
-
-
 def llama_fit(name: str, weights: int, shape: Shape, kv: str, ctx: int, slots: str, limit: int,
               swa: str = "auto", drafter: int = 0) -> FitInfo:
     """Does the model fit with these settings? Slots and, for a model with sliding-window layers, the
@@ -410,6 +412,8 @@ class SettingsService:
         """The rows shown for p (the model row offers every model; the slots row 3 and 4 only when
         they fit this Mac with the pending model, window and KV cache)."""
         out = rows(p, self.schema, self.models.choices, self.full)
+        if self.fit_cached(p).full is None:                 # no sliding-window layers: no such row
+            out = [r for r in out if r.key != "swa"]
         most = self.max_slots(p)
         return [r._replace(choices=[c for c in (r.choices or []) if not str(c).isdigit() or int(str(c)) <= max(most, 2)])
                 if r.key == "slots" else r for r in out]
@@ -417,7 +421,7 @@ class SettingsService:
     def max_slots(self, p: Pending) -> int:
         """The most slots (up to 4) whose windows fit the GPU limit with these settings (2 when unknown);
         cached per model, window and KV type (it reads the GGUF header)."""
-        key = (self.resolved_model(p), str(p.get("ctx")), str(p.get("kv")), self.swa_mode())
+        key = (self.resolved_model(p), str(p.get("ctx")), str(p.get("kv")), self.swa_mode(p))
         if key not in self._slots:
             self._slots[key] = self._max_slots(p)
         return self._slots[key]
@@ -429,13 +433,16 @@ class SettingsService:
                 return 2
             shape, w = self.store.shape_of(m["path"]), self.weights(m)
             ctx, kv, limit = int(str(p["ctx"])), str(p["kv"]), self.gpu_limit()
-            full = self.swa_mode() == "full"            # auto and window: the window when it has to
+            full = self.swa_mode(p) == "full"           # auto and window: the window when it has to
             return max([n for n in (1, 2, 3, 4) if need_bytes(shape, w, ctx, n, kv, full) <= limit] or [1])
         except Exception:           # an unreadable header, a value that is not a number: no extra slots offered
             return 2
 
-    def swa_mode(self) -> str:
-        """cache.swa (Settings > Caching): auto, full or window; auto when config.json can't be read."""
+    def swa_mode(self, p: Optional[Pending] = None) -> str:
+        """The sliding-window cache: the pending value of the Server panel's row, else cache.swa (Settings >
+        Caching): auto, full or window; auto when config.json can't be read."""
+        if p and p.get("swa") in SWA_NAMES:
+            return str(p["swa"])
         try:
             return str(jdict(self.store.load_config().get("cache")).get("swa") or "auto")
         except Exception:           # an unreadable config: the default
@@ -594,16 +601,24 @@ class SettingsService:
             return FitInfo(name, downloaded=False, weights=int(m.get("bytes", 0)), drafter=draft_bytes(m))
         try:
             return llama_fit(name, self.weights(m), self.store.shape_of(m["path"]), str(p["kv"]),
-                             int(p["ctx"]), str(p["slots"]), self.gpu_limit(), self.swa_mode(), draft_bytes(m))
+                             int(p["ctx"]), str(p["slots"]), self.gpu_limit(), self.swa_mode(p), draft_bytes(m))
         except Exception as e:      # a GGUF that can't be read, a value that is not a number, ...: say so
             return FitInfo(name, error=str(e))
 
     def fit_cached(self, p: Pending) -> FitInfo:
         """fit_line, recomputed only when a pending value changes (it reads the GGUF header)."""
-        key = tuple(sorted((k, str(v)) for k, v in p.items())) + (("swa", self.swa_mode()),)
+        key = tuple(sorted((k, str(v)) for k, v in p.items())) + (("swa", self.swa_mode(p)),)
         if self._fit_key != key:
             self._fit_key, self._fit = key, self.fit_line(p)
         return self._fit
+
+    def swa_needs(self, p: Pending) -> Tuple[float, float]:
+        """The memory a start needs with the full cache and with the window cache (bytes; 0 when unknown)."""
+        out = []
+        for mode in ("full", "window"):
+            f = self.fit_line(dict(p, swa=mode))
+            out.append(f.need if f.known and f.downloaded and not f.error else 0)
+        return out[0], out[1]
 
     def auto_cache_mib(self, p: Pending) -> Optional[int]:
         """The RAM cache that auto gives a start with these settings (MiB), as the launcher sizes it; None

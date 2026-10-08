@@ -252,8 +252,9 @@ if [[ "$LLAMA_MODE" == router ]]; then
   first="$(sed -n 's/^start //p' <<< "$presets")"
   echo "CARL starts the server in router mode at http://$HOST:$PORT. $NET_NOTE"
   echo "OpenCode and Pi can switch the model. The server loads one model at a time. A switch takes 30 s to 2 min."
-  echo "Each switch empties the RAM cache. OpenCode and Pi restore their sessions from the disk cache."
-  echo "Other clients read the whole session again."
+  echo "After a switch, the new model has none of the sessions in memory. A saved session belongs to the model it"
+  echo "ran on: OpenCode and Pi restore it from the disk cache when you switch back to that model (with saved sessions"
+  echo "on, and for a Gemma model the full cache). A session that continues on the new model is read again."
   echo "The models (their settings: $(tilde "$PRESET")):"
   while IFS= read -r line; do
     case "$line" in

@@ -12,7 +12,7 @@ from . import diskcache, fsio
 from .api import Endpoint
 from .arrange import FILTERS, SORTS
 from .card_actions import CardActions
-from .fmt import R, RED, home_short
+from .fmt import R, RED, home_short, row
 from .jobs import ServerJobs
 from .keys import BACKSPACE, DOWN, ENTER, ESC, LEFTKEY, PGDN, PGUP, RIGHT, UP
 from .model import ModelInfo, ServerData, draft_bytes
@@ -24,15 +24,15 @@ from .state import (SP_CACHE, SP_FIT, SP_MODELS, SP_ROUTER, SP_SERVER, SP_TUNE, 
 from .words import plural, status_name
 
 MODEL_KEYS = {"\r": "museit", "\n": "museit", "d": "mdl", "v": "mverify", "x": "mdelete", "h": "mhf", "c": "mcancel",
-              "u": "mtune", "e": "medit", "s": "msort", "f": "mfilter", "S": "msort-", "F": "mfilter-"}
+              "u": "mtune", "e": "medit", "s": "msort", "f": "mfilter", "S": "msort-", "F": "mfilter-", "t": "mspeeds"}
 ARRANGE_KEYS = {"s": "msort", "S": "msort-", "f": "mfilter", "F": "mfilter-"}   # every model list
 FIT_KEYS = {"\r": "fuse", "\n": "fuse", "d": "fdl", "g": "fgoal", "f": "fscope"}
 TUNE_KEYS = {"\r": "trun", "\n": "trun", RIGHT: "tnext", LEFTKEY: "tprev", "c": "tcancel", " ": "tquick", "x": "tclear"}
 SERVER_KEYS = {"a": "setapply", "r": "setrevert", "x": "setdefaults", "A": "setautofit"}
-TUNE_ALL_LABEL = "all downloaded models, one after the other"
+TUNE_ALL_LABEL = "All downloaded models, one after the other"
 # Actions without a prefix the controller routes here by itself (controller.Controller.do).
 SETTINGS_ACTIONS = ("msort", "mfilter", "msort-", "mfilter-", "msortpick", "mfilterpick",
-                    "museit", "mdl", "mverify", "mdelete", "mdelyes", "mhf", "mcancel", "mtune", "mautodl", "medit",
+                    "museit", "mspeeds", "mdl", "mverify", "mdelete", "mdelyes", "mhf", "mcancel", "mtune", "mautodl", "medit",
                     "tprev", "tnext", "tpick", "tquick", "trun", "tyes", "tcancel", "tclear", "fuse", "fdl", "fgoal",
                     "fscope")
 CACHE_NAMES = {"disk": "disk limit", "prefix": "saved prompts", "sessions": "saved sessions", "save": "when CARL saves",
@@ -112,6 +112,9 @@ class SettingsActions:
         if act.startswith("mrow:"):
             ui.mrow = int(act[5:])
             return
+        if act == "mspeeds":                             # t: the list as the speeds table, or back
+            ui.mspeeds = not ui.mspeeds
+            return
         if act.startswith("smodel:"):                    # the Server panel's model list
             self.choose_model(act[7:])
             return
@@ -170,14 +173,14 @@ class SettingsActions:
             self.jobs.verify(m["name"])
         elif act == "mdelete":
             if d.cmd and m["path"] in d.cmd:
-                ui.toast(f"{m['name']} runs now. To delete it, stop the server first (q, then s).", 6)
+                ui.toast(f"{m['name']} is running now: CARL cannot delete it. Start another model first (Settings > "
+                         f"Server).", 8, error=True)
                 return
-            lines = [f"Delete {m['name']} ({file_size(m['bytes'])})? This cannot be undone.",
-                     home_short(m["path"], self.home)]
+            lines = [row("model", f"{file_size(m['bytes']):>8}   {home_short(m['path'], self.home)}")]
             if m.get("draft"):
-                lines += [f"Its MTP drafter goes too ({file_size(draft_bytes(m))}):",
-                          home_short(str(m.get('draft_path', '')), self.home)]
-            lines.append("Then update OpenCode and Pi: press u in the Connect tab.")
+                lines.append(row("MTP drafter", f"{file_size(draft_bytes(m)):>8}   "
+                                                f"{home_short(str(m.get('draft_path', '')), self.home)}"))
+            lines += ["", "This cannot be undone. Then update OpenCode and Pi: the Connect tab, u."]
             ui.confirm2 = Confirm("DELETE THE MODEL?", lines, "mdelyes", m["name"], yes_label="Delete")
         elif act == "mtune":
             ui.tune_model, ui.sp = m["name"], SP_TUNE
@@ -208,7 +211,7 @@ class SettingsActions:
         ui = self.ui
         if act in ("tprev", "tnext"):
             if ui.tune and not ui.tune.done:
-                ui.toast(f"Auto-tune runs for {ui.tune.model}. To change the model, cancel the run first (c).", 6)
+                ui.toast(f"Auto-tune is running for {ui.tune.model}. To change the model, cancel the run first (c).", 6)
                 return
             names = [x["name"] for x in self.models.downloaded()] + [TUNE_ALL]
             if len(names) > 1:
@@ -284,7 +287,7 @@ class SettingsActions:
         elif act == "setautofit":
             ui.sp = SP_FIT
         elif act == "setnofit":
-            ui.toast(self.not_ready(p) or "This setup cannot start.", 8)
+            ui.toast(self.not_ready(p) or "This setup cannot start.", 8, error=True)
         elif act == "setapply" and not ui.restart:
             why = self.not_ready(p)
             if why:
@@ -312,18 +315,27 @@ class SettingsActions:
             running = "router" if d.router is not None else "single" if d.up else None
             now = ("The server restarts in this mode now. Requests in progress stop, and the model loads again."
                    if running and running != mode else "The next server start uses it.")
+            here = bool(fsio.installed_here(self.endpoint.base, self.home))     # as rmodeyes decides
+            configs = ("CARL updates the OpenCode and Pi configs on this Mac." if here else
+                       "Update the OpenCode and Pi configs yourself (./carl.sh install --config-only): CARL did not "
+                       "set them up on this Mac.")
             if mode == "router":
-                lines = ["OpenCode and Pi can then switch the model. Each switch loads the model again (30 s to 2 min).",
-                         "CARL saves this in config.json and updates the OpenCode and Pi configs on this Mac.", now,
-                         "⚠ After a switch, the model reads each session again. OpenCode and Pi restore it from the "
-                         "disk cache in about 1 s. Other clients can wait some minutes for a long session."]
+                lines = ["OpenCode and Pi can then switch the model. Each switch loads the model again: 30 s to 2 "
+                         "minutes.", "",
+                         "After a switch, the new model has none of the sessions in memory. A saved session belongs to "
+                         "the model it ran on: when you switch back to that model, OpenCode and Pi restore it from the "
+                         "disk cache (with Saved sessions on, and for a Gemma model the full cache). A session that continues on the new model is read again: minutes for a long "
+                         "session.", "", configs, now]
+                reg = getattr(self.jobs, "registry", None)
+                if reg is not None and reg.list():                   # computers that sync their configs (#33)
+                    lines.append("The client configs on other computers must list every model (the Connect tab, P).")
                 title = "SWITCH TO ROUTER MODE?"
             else:
-                lines = ["One model runs. You change it in the dashboard (Settings > Server).",
-                         "CARL saves this in config.json and updates the OpenCode and Pi configs on this Mac.", now]
+                lines = ["One model runs. You choose it in Settings > Server.", "", configs, now]
                 title = "SWITCH TO A SINGLE MODEL?"
             if ui.full:
-                lines.append(f"config.json: llama.mode = {mode}")
+                lines += ["", row("config.json", "llama.mode = router" if mode == "router" else
+                                  "llama.mode is removed (single is the default)")]
             ui.confirm2 = Confirm(title, lines, "rmodeyes", mode, yes_label="Switch")
             return
         if act == "rmodeyes":
@@ -374,11 +386,10 @@ class SettingsActions:
                 return
             n = sum(1 for f in files if f.kind == diskcache.PROMPT)
             ui.confirm2 = Confirm("CLEAR THE DISK CACHE?", [
-                f"This removes {plural(len(files), 'file')} ({diskcache.gb(diskcache.used(files))}): "
-                f"{plural(n, 'saved prompt')} and {plural(len(files) - n, 'saved session')} of OpenCode and Pi.",
-                f"Folder: {home_short(folder, self.home)}",
-                "The server keeps what it holds now. After the next start, the server reads each prompt again when a "
-                "client uses it first."], "cache:clearyes", yes_label="Clear")
+                row("saved prompts", str(n)), row("saved sessions", str(len(files) - n)),
+                row("size", diskcache.gb(diskcache.used(files))), row("folder", home_short(folder, self.home)), "",
+                "The server keeps what it holds now. After the next start, it reads each prompt again when a client "
+                "uses it first."], "cache:clearyes", yes_label="Clear")
             return
         if act == "clearyes":
             ui.confirm2 = None
@@ -458,11 +469,12 @@ class SettingsActions:
         elif not fit.pick.downloaded:
             m = self.models.by_name(fit.pick.name)
             ui.confirm2 = Confirm("DOWNLOAD AUTO FIT'S CHOICE?", [
-                f"Auto fit chose {fit.pick.name} for this Mac: {plan_words(fit.plan.slots, fit.plan.ctx)}. It needs "
-                f"{memory(fit.plan.need)} of {memory(fit.budget.allowed)}.",
-                f"The download is {file_size(m['bytes']) if m else 'of unknown size'}. The Models panel shows the "
-                f"progress. After the download, press a in the Server panel to start it.",
-                "If you cancel, the Server panel keeps this choice. It can start only after the download."], "mautodl",
+                row("choice", fit.pick.name), row("with", plan_words(fit.plan.slots, fit.plan.ctx)),
+                row("context memory", str(getattr(fit.plan, "kv", "") or "q4").split("_")[0]),
+                row("needs", f"{memory(fit.plan.need)} of {memory(fit.budget.allowed)} (the GPU limit)"),
+                row("download", file_size(m['bytes']) if m else "size not known"), "",
+                "The Models panel shows the progress. After the download, press a in the Server panel to start it. "
+                "If you cancel, the Server panel keeps this choice; it can start only after the download."], "mautodl",
                 fit.pick.name, yes_label="Download")
         else:
             ui.toast(f"Auto fit's choice is set: {fit.pick.name} with {plan_words(fit.plan.slots, fit.plan.ctx)}. "
@@ -698,7 +710,11 @@ class SettingsActions:
         return True
 
     def tune_key(self, k: str) -> bool:
-        """The Auto-tune panel: ← → the model, space the length, Enter run, c cancel, x recommended."""
+        """The Auto-tune panel: ← → the model, space the length, Enter run, c cancel, x recommended; ↑↓ PgUp
+        PgDn scroll the page."""
+        if k in (UP, DOWN, PGUP, PGDN):
+            self.ui.page_scroll = max(0, self.ui.page_scroll + {UP: -3, DOWN: 3, PGUP: -10, PGDN: 10}[k])
+            return True
         if k in TUNE_KEYS:
             self.action(TUNE_KEYS[k])
             return True
@@ -718,15 +734,21 @@ class SettingsActions:
             self.action(f"{'runload' if m.active else 'rload'}:{m.id}")
         elif k == "u":
             self.run("insconfig")
+        elif k in (PGUP, PGDN):
+            ui.page_scroll = max(0, ui.page_scroll + (-10 if k == PGUP else 10))
         else:
             return False
         return True
 
     def cache_key(self, k: str) -> bool:
-        """The Caching panel: ↑↓ a row, ← → its value (saved at once), c clear (asks first)."""
+        """The Caching panel: ↑↓ a row, ← → its value (saved at once), c clear (asks first), PgUp PgDn scroll
+        the page."""
         ui = self.ui
         if k in (UP, DOWN):
             ui.cache_row = (ui.cache_row + (1 if k == DOWN else -1)) % len(CACHE_ROWS)
+            ui.page_scroll = 0                       # the rows are at the top: keep the selected one in view
+        elif k in (PGUP, PGDN):
+            ui.page_scroll = max(0, ui.page_scroll + (-10 if k == PGUP else 10))
         elif k in (RIGHT, LEFTKEY):
             key = CACHE_ROWS[min(ui.cache_row, len(CACHE_ROWS) - 1)]
             self.action(f"cache:{key}" + ("" if k == RIGHT else ":prev"))

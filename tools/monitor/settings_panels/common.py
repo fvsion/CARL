@@ -15,7 +15,7 @@ from ..state import SUBPANELS, Download
 from ..words import spec_name
 
 GOOD_FOR_COLOUR = {"agent coding": GRN, "hard code": CYN, "chat & writing": B, "uncensored": RED}
-SPEC_HEAD = f"  {DIM}{'speculation':<28}{'prose':>7}{'code':>7}{'edit':>7}{'speed':>8}  (tok/s){R}"
+SPEC_HEAD = f"  {DIM}{'Speculation':<28}{'Prose':>7}{'Code':>7}{'Edit':>7}{'Speed':>8}  (tok/s){R}"
 
 
 def subpanel_bar(sp: int) -> Row:
@@ -40,14 +40,6 @@ def good_for_chip(tag: str) -> str:
     return f"{GOOD_FOR_COLOUR.get(tag, '')}{tag}{R}"
 
 
-def label_wrap(label: str, text: str, w: int, colour: str = "") -> List[CardLine]:
-    """A bold label on the first line, the text wrapped under it."""
-    pad = max(len(label) + 1, 11)                         # the same text column as lv(..., 11)
-    lines = wwrap(text, w - pad)
-    out: List[CardLine] = [f"{B}{label:<{pad}}{R}{colour}{lines[0]}{R}"]
-    return out + [f"{' ' * pad}{colour}{x}{R}" for x in lines[1:]]
-
-
 def choice_line(label: str, opts: Sequence[Tuple[str, str, str]], cur: str, w: int, lw: int = 11,
                 sel: Optional[bool] = None) -> List[CardLine]:
     """A label and clickable options (value, text, action), the current one in brackets and highlighted;
@@ -70,14 +62,20 @@ def choice_line(label: str, opts: Sequence[Tuple[str, str, str]], cur: str, w: i
     return out + [Ln(fit(text, w), spans=spans)]
 
 
-def speed_cell(m: ModelInfo, width: int = 15) -> str:
-    """A model's speed in a table: tok/s (the mean of prose, code and edit), ● measured on this Mac,
-    ○ on another Mac (the catalogue); "not measured" when never measured."""
+def speed_cell(m: ModelInfo, width: int = 13) -> str:
+    """A model's prose speed in a table (tok/s): ● measured on this Mac, ○ on another Mac (the catalogue); – when
+    never measured."""
     sp = speed_of(m)
     if not sp:
-        return f"{DIM}{'not measured':>{width}}{R}"
+        return f"{DIM}{'–':>{width - 2}}{R}  "
     mark = f"{GRN}●{R}" if sp[1] else f"{DIM}○{R}"
-    return f"{sp[0]:>{width - 8}.0f} tok/s {mark}"
+    return f"{sp[0]:>{width - 2}.0f} {mark}"
+
+
+def source_cells(v: Optional[JSONDict]) -> str:
+    """prose, code and edit of one source (speed_sources), 6 columns each; – when not measured there."""
+    return "".join(f"{float(v[k]):>6.0f}" if v and isinstance(v.get(k), (int, float)) else f"{DIM}{'–':>6}{R}"
+                   for k in ("prose", "code", "edit"))
 
 
 def fit_cell(mx: Optional[int], width: int, none: str) -> str:
@@ -101,7 +99,7 @@ def passed_over(rejected: Sequence[Rejection], w: int) -> List[CardLine]:
 def parallel_text(par: object) -> str:
     """Auto-tune's parallel step: total decode speed with n requests at once, and each one's."""
     rows = [r for r in (par if isinstance(par, list) else []) if isinstance(r, list) and len(r) >= 2]
-    return "write speed in total: " + " · ".join(
+    return "write speed in total: " + ", ".join(
         f"{int(r[0])} at once {float(r[1]):.0f} tok/s ({float(r[1]) / r[0]:.0f} each)" for r in rows if r[0])
 
 
@@ -126,12 +124,61 @@ def download_status(dl: Download) -> List[CardLine]:
     what = f"{dl.name} (model + MTP drafter)" if dl.more else dl.name
     if not dl.done:
         frac = dl.have / dl.total if dl.total else 0
-        left = f" · about {duration((dl.total - dl.have) / dl.rate)} left" if dl.rate > 0 and dl.total else ""
-        line = (f"{YEL}CARL checks the file of {dl.name} (SHA-256)…{R}" if any("verifying" in x for x in dl.tail) else
-                f"{B}Downloading {what}{R} {bar(frac, 20)} {percent(frac)} · {file_size(dl.have).replace(' GB', '')} of "
-                f"{file_size(dl.total)} · {file_size(dl.rate)}/s{left}")
+        sep = f"  {DIM}│{R}  "                       # one line at 100 columns: a clear separator (no " · ")
+        left = f"{sep}{duration((dl.total - dl.have) / dl.rate)} left" if dl.rate > 0 and dl.total else ""
+        line = (f"{YEL}CARL is checking the file of {dl.name} (SHA-256)…{R}" if any("verifying" in x for x in dl.tail) else
+                f"{B}Downloading {what}{R} {bar(frac, 20)} {percent(frac)}{sep}{file_size(dl.have).replace(' GB', '')} of "
+                f"{file_size(dl.total)}{sep}{file_size(dl.rate)}/s{left}")
         return [line, buttons("", [("Cancel the download (c)", "mcancel")])]
     if dl.proc.returncode == 0:
         return [f"{GRN}✓ {dl.name} is downloaded and checked.{R}"]
     return [f"{RED}✗ The download of {dl.name} failed: {' '.join(dl.tail)[-100:]}{R}",
             f"{DIM}Press d to try again. The part on the disk stays: the download continues from there.{R}"]
+
+
+def long_date(iso: object) -> str:
+    """'2026-10-03' as '3 Oct 2026' (as it is when it can't be read)."""
+    import time
+    try:
+        t = time.strptime(str(iso)[:10], "%Y-%m-%d")
+    except ValueError:
+        return str(iso or "–")
+    return f"{t.tm_mday} {time.strftime('%b', t)} {t.tm_year}"
+
+
+def speed_sources(m: ModelInfo) -> List[Tuple[str, Optional[JSONDict]]]:
+    """A model's measured speeds by source: this Mac's Auto-tune result and the catalogue's measurement, each
+    {prose, code, edit, machine, date, spec} (None: not measured there)."""
+    t = jdict(jdict(m.get("local")).get("tune"))
+    st = jdict(t.get("settings"))
+    best = jdict(jdict(jdict(t.get("results")).get("speculation")).get(f"{st.get('spec')}:{st.get('spec_n')}"))
+    here = ({"prose": best.get("prose"), "code": best.get("code"), "edit": best.get("edit"),
+             "machine": t.get("machine", "this Mac"), "date": t.get("date"),
+             "spec": spec_name(st.get("spec"), st.get("spec_n"))} if best.get("prose") is not None else None)
+    sp = jdict(m.get("speed"))
+    cat = None
+    if sp.get("prose") is not None:
+        mode, _, n = str(sp.get("mode") or "").partition(" n=")
+        cat = {"prose": sp.get("prose"), "code": sp.get("code"), "edit": sp.get("edit"), "machine": sp.get("machine"),
+               "date": sp.get("date"), "spec": spec_name(mode, n or None) if mode else "–"}
+    return [("this Mac", here), ("catalogue", None if m.get("custom") else cat)]
+
+
+def speeds_table(m: ModelInfo, w: int) -> List[CardLine]:
+    """The speeds of a model by source, one row each (tok/s): this Mac's Auto-tune and the catalogue's, with the
+    Mac, the date and the speculation they were measured with."""
+    narrow = w < 84
+    head = f"{DIM}{'Tok/s':<11}{'Prose':>6}{'Code':>6}{'Edit':>6}   {'Measured on':<20}{'Date':<13}" + \
+        ("" if narrow else "Speculation") + R
+    out: List[CardLine] = [head]
+    for src, v in speed_sources(m):
+        if v is None:
+            what = "Not measured. Run Auto-tune (Settings > Auto-tune)." if src == "this Mac" else "Not measured."
+            out.append(f"{DIM}{src[:1].upper() + src[1:]:<11}{R}{DIM}{what}{R}")
+            continue
+        col = GRN if src == "this Mac" else ""
+        nums = "".join(f"{float(v[k]):>6.0f}" if isinstance(v.get(k), (int, float)) else f"{'–':>6}"
+                       for k in ("prose", "code", "edit"))
+        out.append(f"{DIM}{src[:1].upper() + src[1:]:<11}{R}{col}{nums}{R}   {str(v.get('machine') or '–'):<20}{long_date(v.get('date')):<13}"
+                   + ("" if narrow else str(v.get("spec") or "")))
+    return out

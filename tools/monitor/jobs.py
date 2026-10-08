@@ -7,6 +7,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import signal
 import subprocess
 import sys
@@ -24,7 +25,7 @@ from carl_core.adapters.client_package import make_package as make_client_packag
 from carl_core.domain.package import Outcome
 from carl_core.domain.units import file_size
 
-from .fmt import ANSI, DIM, R, RED
+from .fmt import ANSI, DIM, R, RED, row
 from .model import ServerData, SlotInfo, clean, draft_bytes, jlist
 from .settings import REINSTALL, Pending, SettingsService, env_from_cmd
 from .state import TUNE_ALL, Confirm, Download, Drain, HFLookup, InstallRun, PackageRun, Picker, TuneRun, UIState
@@ -105,10 +106,11 @@ def last_lines(path: str, n: int) -> List[str]:
 _REFUSAL = re.compile(r"^(error|refused)\b", re.I)
 
 
-def launcher_errors(path: str, most: int = 8) -> List[str]:
+def launcher_errors(path: str, most: int = 8, tail: bool = True) -> List[str]:
     """What the launcher said when it refused or failed a start: its first "error:" (or "Refused") line and
     the indented lines after it (the reason comes first, the advice after), at most `most` lines; else
-    its last 3 lines. [] when there is no output."""
+    its last 3 lines (tail=False: nothing, so a normal stop is not shown as a failure). [] when there is no
+    output."""
     lines = [clean(ANSI.sub("", x)).rstrip() for x in (fsio.read_text(path, errors="replace") or "").splitlines()]
     for i, x in enumerate(lines):
         if _REFUSAL.match(x.strip()):
@@ -118,7 +120,7 @@ def launcher_errors(path: str, most: int = 8) -> List[str]:
                     break
                 out.append(y.strip())
             return out[:most]
-    return [x for x in lines if x.strip()][-3:]
+    return [x for x in lines if x.strip()][-3:] if tail else []
 
 
 class ServerJobs:
@@ -166,7 +168,7 @@ class ServerJobs:
         """Save the settings, stop the server, start it with them (in a thread); while a reply is
         being written, ask first (when_idle)."""
         def go() -> None:
-            self.ui.restart, self.ui.restart_t = "CARL saves the settings…", time.time()
+            self.ui.restart, self.ui.restart_t = "CARL is saving the settings…", time.time()
             self.ui.start_error = []
             threading.Thread(target=self._restart, args=(dict(p), d), daemon=True).start()
         self.when_idle(d, "apply the settings (the server restarts)", go)
@@ -184,12 +186,12 @@ class ServerJobs:
                 raise OSError(f"cannot read {path}")
             os.makedirs(os.path.dirname(console), exist_ok=True)
             self.svc.save(p)
-            ui.restart = "CARL saves the sessions in the slots…"
+            ui.restart = "CARL is saving the sessions in the slots…"
             self.save_before_stop(d)
-            ui.restart = "CARL stops the server…"
+            ui.restart = "CARL is stopping the server…"
             self.collector.server_pid = None
             system.stop_pid(old_pid)
-            ui.restart = "The server starts with the new settings: the model loads…"
+            ui.restart = "The server is starting with the new settings: the model is loading…"
             proc = start_server(self.paths, port, {}, console)
             self.collector.follow(port, proc.pid, console)
             chosen = str(p.get("net"))
@@ -213,12 +215,12 @@ class ServerJobs:
                 fsio.write_private(path, old_text)
             back = False
             if old_pid and "llama-server" in old_cmd:
-                ui.restart = "The new settings failed. The old server starts again…"
+                ui.restart = "The new settings failed. The old server is starting again…"
                 proc = start_server(self.paths, port, env_from_cmd(old_cmd), console, append=True)
                 self.collector.follow(port, proc.pid, console)
                 back = self._wait_up(proc, port)
             ui.start_error = errors
-            ui.toast(f"{RED}The new settings failed.{R} " + ("The old server runs again." if back else "No server runs now.")
+            ui.toast(f"{RED}The new settings failed.{R} " + ("The old server is running again." if back else "No server is running now.")
                      + " The Server panel shows why.", 20)
         except Exception as e:      # anything (disk, config, process): the restart stops here and says why
             ui.toast(f"{RED}The restart failed: {e}{R}", 20)
@@ -230,7 +232,7 @@ class ServerJobs:
         """Tune ui.tune_model; asks first when it has to stop a running server."""
         ui = self.ui
         if ui.tune and ui.tune.proc.poll() is None:
-            ui.toast("Auto-tune runs already.", 5)
+            ui.toast("Auto-tune is already running.", 5)
             return
         pid = d.target_pid if not d.exited else None
         model = ui.tune_model or ""
@@ -239,18 +241,19 @@ class ServerJobs:
                 else f"{model} (about 5-10 min)")
         if pid and system.pid_alive(pid) and not confirmed:
             ui.confirm2 = Confirm("STOP THE SERVER FOR AUTO-TUNE?", [
-                "Auto-tune needs the GPU for itself. It stops the server now." + (f" (pid {pid})" if ui.full else ""),
-                f"Then it measures {what}, and it starts the server again with the saved settings.",
-                "Requests in progress stop."], "tyes", yes_label="Stop the server and tune")
+                "Auto-tune needs the GPU for itself. It stops the server now, measures, then starts the server again "
+                "with the saved settings. Requests in progress stop.", "",
+                row("measures", what), *([row("server", f"pid {pid}")] if ui.full else [])], "tyes",
+                yes_label="Stop the server and tune")
             return
         restart = bool(pid and system.pid_alive(pid))
         depth = ui.tune_depth
 
         def work() -> None:
             if restart:
-                ui.restart, ui.restart_t = "CARL saves the sessions in the slots…", time.time()
+                ui.restart, ui.restart_t = "CARL is saving the sessions in the slots…", time.time()
                 self.save_before_stop(d)
-                ui.restart = "CARL stops the server for Auto-tune…"
+                ui.restart = "CARL is stopping the server for Auto-tune…"
                 self.collector.server_pid = None
                 system.stop_pid(pid)
                 ui.restart = None
@@ -275,13 +278,13 @@ class ServerJobs:
         def work() -> None:
             port = self.collector.endpoint.port          # where the server ran before the tune stopped it
             console = self.paths.console(port)
-            self.ui.restart, self.ui.restart_t = "The server starts again with the saved settings…", time.time()
+            self.ui.restart, self.ui.restart_t = "The server is starting again with the saved settings…", time.time()
             proc = start_server(self.paths, port, {}, console)
             self.collector.follow(port, proc.pid, console)
             ok = self._wait_up(proc, port)
             self.ui.restart = None
             self.ui.pending = None
-            self.ui.toast("The server runs again." if ok else f"{RED}The server did not start again.{R} The Log tab tells why.",
+            self.ui.toast("The server is running again." if ok else f"{RED}The server did not start again.{R} The Log tab tells why.",
                           12)
         threading.Thread(target=work, daemon=True).start()
 
@@ -291,7 +294,7 @@ class ServerJobs:
         hf:REPO/FILE.gguf (resumable)."""
         ui = self.ui
         if ui.dl and ui.dl.proc.poll() is None:
-            ui.toast("A download runs already. To cancel it: c in the Models panel.", 6)
+            ui.toast("A download is already running. To cancel it: c in the Models panel.", 6)
             return
         more: List[str] = []
         if spec.startswith("hf:"):
@@ -332,7 +335,7 @@ class ServerJobs:
             self.ui.toast(f"{name}: the file is correct (the checksum agrees)." if ok else
                           f"{RED}{name}: the file is damaged (the checksum is wrong).{R} Download it again (d).", 10)
         threading.Thread(target=work, daemon=True).start()
-        self.ui.toast(f"CARL checks the file of {name} (SHA-256, about 1 min)…", 60)
+        self.ui.toast(f"CARL is checking the file of {name} (SHA-256, about 1 min)…", 60)
 
     def hf_lookup(self, repo: str) -> None:
         """Look up the GGUF files of a Hugging Face repo (in a thread) -> a picker."""
@@ -353,12 +356,12 @@ class ServerJobs:
                 ui.hf = HFLookup(r, f"{r} has no .gguf files.")
                 return
             ui.hf = HFLookup(r, "", files)
-            ui.picker = Picker(title=f"HUGGING FACE · {r}", on_pick="pickhf", noun="GGUF files",
+            ui.picker = Picker(title=f"HUGGING FACE  {r}", on_pick="pickhf", noun="GGUF files",
                                header=f"{DIM}{'':2}{'file':<60} {'download':>9}  checksum{R}",
                                foot="Enter downloads it to the models folder. You can stop and continue the download. "
-                                    "CARL checks the file when it has a checksum.",
+                                    "CARL checks a file that has a checksum (known); it cannot check one with none.",
                                items=[(f, f"{f:<60} {file_size(b):>9}  "
-                                          f"{DIM}{'known' if sha else 'none: CARL cannot check this file'}{R}")
+                                          f"{DIM}{'known' if sha else 'none'}{R}")
                                       for f, b, sha in files])
         except Exception as e:      # bad name, no network, rate limit, unexpected answer: show it
             ui.hf = HFLookup(repo, f"The Hugging Face search failed: {e}")
@@ -498,7 +501,7 @@ class ServerJobs:
         configs pointed at this server), or only the configs; output in the Connect tab."""
         ui = self.ui
         if ui.install and not ui.install.done:
-            ui.toast("The installer runs already. Its output is in the Connect tab.", 6)
+            ui.toast("The installer is already running. Its output is in the Connect tab.", 6)
             return
         port = self.collector.endpoint.port
         log = os.path.join(self.paths.logs, ".install.out")
@@ -506,7 +509,10 @@ class ServerJobs:
         argv = [os.path.join(self.paths.repo, "host", "serve.sh"), "install", "--local", "--port", str(port)]
         argv += ["--config-only"] if config_only else []
         with open(log, "w") as out:
-            proc = subprocess.Popen(argv, env=dict(os.environ, CARL_CMD="./carl.sh"), stdin=subprocess.DEVNULL,
+            from .views_connect import install_width        # the installer wraps its output to the card (Phase 23.2)
+            cols = shutil.get_terminal_size((120, 36)).columns
+            proc = subprocess.Popen(argv, env=dict(os.environ, CARL_CMD="./carl.sh", COLUMNS=str(install_width(cols))),
+                                    stdin=subprocess.DEVNULL,
                                     stdout=out, stderr=subprocess.STDOUT, start_new_session=True)
         ui.install = InstallRun("configs" if config_only else "clients and configs", proc, log)
         ui.install_shown, ui.package_shown = True, False
@@ -517,7 +523,7 @@ class ServerJobs:
         (the zip, the key warning, or why CARL made none) shows in the Connect tab."""
         ui = self.ui
         if ui.package and not ui.package.done:
-            ui.toast("CARL makes the client package already.", 5)
+            ui.toast("CARL is already making the client package.", 5)
             return
         run = PackageRun(time.time())
         ui.package, ui.package_shown, ui.install_shown = run, True, False
@@ -546,7 +552,7 @@ class ServerJobs:
             subprocess.Popen(["open", "-R", path], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                              stderr=subprocess.DEVNULL, start_new_session=True)
         except OSError:
-            self.ui.toast(f"CARL cannot open the Finder. The zip is {path}", 10)
+            self.ui.toast(f"CARL cannot open the Finder. The zip is {path}", 10, error=True)
 
     def cancel_install(self) -> None:
         """Stop the installer (its backups stay; re-running it is safe)."""

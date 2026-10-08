@@ -40,7 +40,7 @@ def parse(argv: Optional[Sequence[str]], description: str, env: Mapping[str, str
     ap = argparse.ArgumentParser(description=description, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--host", default=None, help="server address (default: wherever the server on --port listens)")
     ap.add_argument("--port", type=int, default=_env_int(env, "PORT", 8080), help="server port (default 8080)")
-    ap.add_argument("--lines", type=int, default=6, help="log lines on the Live tab, full detail (default 6)")
+    ap.add_argument("--lines", type=int, default=0, help="log lines on the Live tab (default: by the screen's height)")
     ap.add_argument("--interval", type=float, default=2.0, help="seconds between refreshes (default 2)")
     ap.add_argument("--log", default=None, help="log file (default: the running server's --log-file)")
     ap.add_argument("--server-pid", type=int, default=None, help="PID of the server to watch (set by the launcher)")
@@ -48,7 +48,7 @@ def parse(argv: Optional[Sequence[str]], description: str, env: Mapping[str, str
     ap.add_argument("--console", default=None, help=argparse.SUPPRESS)
     ap.add_argument("--once", action="store_true", help="print one snapshot and exit")
     ap.add_argument("--tab", type=int, default=0, choices=range(0, 6), metavar="N", help=argparse.SUPPRESS)
-    ap.add_argument("--expand", action="store_true", help="start with every card fully detailed")
+    ap.add_argument("--expand", action="store_true", help="every section at its full level for this run")
     a = ap.parse_args(argv)
     home = os.path.expanduser("~")
     return Options(host=a.host, port=a.port, lines=a.lines, interval=a.interval, log=a.log, server_pid=a.server_pid,

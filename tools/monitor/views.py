@@ -1,25 +1,30 @@
-"""The bodies of the Live, Connect, Requests and Log tabs, the ? card, the quit dialog and the
+"""The bodies of the Live, Requests and Log tabs (Connect: views_connect.py), the ? card, the quit dialog and the
 "a turn runs" dialog. Pure: they draw from a View, the UI state and the snapshot (they clamp scroll
 positions and set the keys of the screen they draw: ui.keys for the footer and the ? card)."""
 from __future__ import annotations
 
 import time
-from typing import Callable, List, Optional, Sequence, Tuple
+from dataclasses import replace
+from typing import List, Optional, Sequence, Tuple
 
-from carl_core.domain.units import duration, file_size, speed, tokens
+from carl_core.domain.units import duration
 
-from .cards import (REQ_HEAD, STOPPED, View, card_requests, card_stopped, column, live_sentence, log_view,
-                    req_row, status_of, wrapped)
-from .fmt import (B, CYN, DIM, GRN, R, RED, YEL, CardLine, Key, Ln, Row, Section, button_rows, buttons, cwrap, draw_card,
-                  fit, heading, home_short, indent, lv, side_by_side, with_side)
-from .model import ServerData, clean
-from .clients import Drift
-from .state import CONNECT_SUBPANELS, Drain, InstallRun, UIState
+from .cards import (REQ_FULL, REQ_HEAD, REQ_MORE, STOPPED, View, card_requests, card_stopped, column, live_sentence, log_view,
+                    req_table, status_of, wrapped)
+from .fmt import (reveal, B, DIM, R, RED, CardLine, Key, Row, aligned, buttons, cwrap,
+                  draw_card, row,
+                  heading, home_short, indent, side_by_side)
+from .model import ServerData
+from .state import Drain, UIState
+from .words import plural
+from .views_connect import body_connect, clients_lines  # noqa: F401  (app.py and the tests import them from here)
 
-EVERY_SCREEN: List[Key] = [("1-5 Tab", "the tabs"), ("D", "detail: simple or full (saved)"), ("?", "this list"),
+EVERY_SCREEN: List[Key] = [("1-5", "the tabs"), ("Tab Shift-Tab", "select a section"), ("L", "its level: simple, full, "
+                            "collapsed"), ("D", "every section: simple or full (saved)"), ("space", "read the server "
+                            "again now"), ("?", "this list"),
                            ("q", "quit (CARL asks first)")]
-TWO_COLUMNS = 120           # the Live tab puts its cards in two columns from this width
-THREE_COLUMNS = 180         # ... and in three from this one
+TWO_COLUMNS = 100           # the Live tab puts its cards in two columns from this width
+THREE_COLUMNS = 190         # ... and in three from this one (three of 52 at 160 wrap more than two of 78)
 
 
 def keys_card(keys: Sequence[Key], more: Sequence[str], messages: Sequence[Tuple[float, str]], w: int) -> List[Row]:
@@ -28,7 +33,8 @@ def keys_card(keys: Sequence[Key], more: Sequence[str], messages: Sequence[Tuple
     def table(ks: Sequence[Key]) -> List[CardLine]:
         kw = max((len(k) for k, _ in ks), default=0) + 2
         return [f"  {B}{k:<{kw}}{R}{what}" for k, what in ks]
-    L: List[CardLine] = [heading("This screen", w - 4), *table(keys)]
+    every = {k for k, _ in EVERY_SCREEN} | {"Tab", "L", "D", "?", "q"}
+    L: List[CardLine] = [heading("This screen", w - 4), *table([k for k in keys if k[0] not in every])]
     L += [x for m in more for x in cwrap(f"{DIM}{m}{R}", w - 4)]
     L += ["", heading("Every screen", w - 4), *table(EVERY_SCREEN)]
     if messages:
@@ -38,366 +44,113 @@ def keys_card(keys: Sequence[Key], more: Sequence[str], messages: Sequence[Tuple
     return draw_card("keys", "KEYS", f"{DIM}? closes this list{R}", L, w, 1)
 
 
-PREVIEW_TITLES = {"opencode": "OPENCODE CONFIG", "pi": "PI CONFIG", "curl": "CURL TEST"}
-PREVIEW_WHERE = {
-    "opencode": "→ Add it under \"provider\" in ~/.config/opencode/opencode.json. Do not remove your other providers. "
-                "Restart OpenCode. Then use /models.",
-    "pi": "→ Add it under \"providers\" in ~/.pi/agent/models.json. Do not remove your other providers. Then use /model "
-          "in Pi.",
-    "curl": "→ Run it on a computer that can connect to the server. The server answers \"hello\"."}
+def live_columns(cols: int) -> int:
+    """How many columns of cards the Live tab uses: 3 from THREE_COLUMNS, 2 from TWO_COLUMNS (100: two narrow
+    columns, the page scrolls; user, 2026-10-08), else 1."""
+    if cols >= THREE_COLUMNS:
+        return 3
+    return 2 if cols >= TWO_COLUMNS else 1
 
 
 def body_live(v: View, ui: UIState, d: ServerData, cols: int, height: int) -> List[Row]:
-    """The state in one sentence, then the cards: SLOTS and MEMORY beside SPEED, CONNECT and HEALTH (one
-    column when narrow), RECENT REQUESTS; in full detail also MODEL and the end of the log. No server:
-    the SERVER card with the next action."""
+    """The state in one sentence, then the cards in 1, 2 or 3 columns (live_columns), then RECENT REQUESTS and
+    the LOG, which take the rows left (the page scrolls when it is taller than the screen). No server: SERVER
+    and THIS MAC, then the log."""
     stopped = status_of(d, v.server_pid)[0] == STOPPED
     rows: List[Row] = [] if stopped else [(" " + x, list()) for x in cwrap(live_sentence(d, v.port), cols - 2)]
     rows.append(("", []))
+    ncol = live_columns(cols)
+    v.selected = ui.section
     if stopped:
         card = card_stopped(v, d)
-        rows += indent(draw_card("server", card.title, card.summary, wrapped(card.lines, cols - 5), cols - 1, 1))
-        ui.keys = [("a", "start the server"), ("5", "settings"), ("4", "log")]
+        cw = (cols - 3) // 2 if ncol > 1 else cols - 1
+        server = draw_card("server", card.title, card.summary, wrapped(aligned(card.lines, cw - 4), cw - 4), cw,
+                           v.level("server"), 2, ui.section == "server")
+        mac = column(v, ["thismac"], d, cols - 3 - cw if ncol > 1 else cols - 1)
+        rows += side_by_side(server, mac, cw, pad_left=False) if ncol > 1 else indent(server + mac)
+        ui.sections = ["server", "thismac", "log"]
+        ui.keys = [("a", "start the server"), ("5", "settings"), ("4", "log"), ("Tab", "section"), ("L", "level")]
         ui.keys_more = ["a opens Settings > Server and asks before it starts the server."]
     else:
-        right = ["speed", "connect", "health"] + (["model"] if v.full else [])
-        if cols >= THREE_COLUMNS:
+        if ncol == 3:
             cw = (cols - 4) // 3
-            rows += side_by_side(column(v, ["slots", "memory"], d, cw),
-                                 side_by_side(column(v, ["speed", "health"], d, cw),
-                                              column(v, ["connect"] + (["model"] if v.full else []), d, cols - 4 - 2 * cw),
-                                              cw, pad_left=False), cw, pad_left=False)
-        elif cols >= TWO_COLUMNS:
+            groups = [["slots", "memory"], ["speed", "health", "model"], ["thismac", "connect"]]
+            c1, c2 = column(v, groups[0], d, cw), column(v, groups[1], d, cw)
+            c3 = column(v, groups[2], d, cols - 4 - 2 * cw)
+            rows += side_by_side(c1, side_by_side(c2, c3, cw, pad_left=False), cw, pad_left=False)
+        elif ncol == 2:
             cw = (cols - 3) // 2
-            rows += side_by_side(column(v, ["slots", "memory"], d, cw), column(v, right, d, cols - 3 - cw), cw,
-                                 pad_left=False)
+            groups = [["slots", "memory", "thismac"], ["speed", "connect", "health", "model"]]
+            rows += side_by_side(column(v, groups[0], d, cw), column(v, groups[1], d, cols - 3 - cw), cw, pad_left=False)
         else:
-            rows += indent(column(v, ["slots", *right[:1], "memory", *right[1:]], d, cols - 1))
-        req = card_requests(v, d, 8 if v.full else 3)
-        rows += indent(draw_card("requests", req.title, req.summary, req.lines, cols - 1, v.level("requests")))
-        ui.keys = [("k", "show key"), ("o p c", "copy OpenCode / Pi / curl config"), ("click a title:", "more / less"),
-                   ("↑↓", "scroll")] + ([("+ -", "log lines")] if v.full else [])
-        ui.keys_more = ["Click a card title to collapse or open the card. D shows more figures in every card.",
-                        "space reads the server again now. The mouse wheel scrolls."]
-    if v.full:
-        name = (v.log_path or "").rsplit("/", 1)[-1]
-        lt = f"{DIM}{name} · tab 4 for the full log{R}" if name else f"{DIM}no log file{R}"
-        rows += indent(draw_card("log", "LOG", lt, log_view(v, ui.lines, cols - 5), cols - 1, v.level("log")))
+            groups = [["slots", "speed", "memory", "thismac", "connect", "health", "model"]]
+            rows += indent(column(v, groups[0], d, cols - 1))
+        ui.sections = [n for g in groups for n in g] + ["requests", "log"]
+        ui.keys = [("Tab", "section"), ("L", "level"), ("k", "show key"), ("o p c", "copy a config"), ("↑↓", "scroll")]
+        ui.keys_more = ["o p c copy a config and open the Connect tab. A click on a section's title changes its level.",
+                        "+ and - show more or fewer log lines.",
+                        "The mouse wheel scrolls. The SPEED averages count every request since the server started."]
+    left = height - len(rows)
+    log_n = (max(3, left - 3) if stopped else ui.lines or (3 if height < 44 else 5 if height < 54 else 10))
+    # (stopped: the log fills the rows that are left; + - or --lines set it, else the screen's height does)
+    if not stopped:
+        n_req = max(3, left - (log_n + 2) - 3) if v.level("requests") else 0
+        req = card_requests(replace(v, detail="full" if v.level("requests") == 2 else "simple"), d, n_req, cols - 5)
+        rows += indent(draw_card("requests", req.title, req.summary, req.lines, cols - 1, v.level("requests"), 3,
+                                 ui.section == "requests"))
+    lf = v.level("log") == 2
+    errs = v.log.counts["E"]
+    lsum = (f"{RED}{plural(errs, 'error')}{R}" if errs else "0 errors") + (
+        f"   {DIM}{v.log_path.rsplit('/', 1)[-1]}{R}" if v.log_path else "")
+    where = aligned([row("file", home_short(v.log_path, v.home))], cols - 5) if lf and v.log_path else []   # a row
+    rows += indent(draw_card("log", "LOG", lsum, where + log_view(replace(v, detail="full" if lf else "simple"), log_n, cols - 5),
+                             cols - 1, v.level("log"), 3, ui.section == "log"))
+    reveal(ui, rows, "scroll", height)
     ui.scroll = min(ui.scroll, max(len(rows) - height, 0))
+    ui.more = len(rows) > ui.scroll + height
     return rows[ui.scroll:ui.scroll + height]
-
-
-# ---------------------------------------------------------------- Connect
-def body_connect(v: View, ui: UIState, d: ServerData, cols: int, height: int,
-                 here: List[Tuple[str, str]], preview: str, stale: Sequence[Drift] = (), installed: int = 0) -> List[Row]:
-    """Setup: the steps (this Mac, a VM or another computer, by hand) with their buttons, then the
-    installer's output or the selected config, then the explanations (beside the steps when wide).
-    Clients: the computers that sync."""
-    w = cols - 1
-    tw = w - 4
-    top: List[Row] = [connect_bar(ui.connect_sp),
-                      (f" {DIM}Connect OpenCode and Pi to this server: on this Mac, in a VM or on another computer.{R}",
-                       []), ("", [])]
-    height -= len(top)
-    if ui.connect_sp == 1:
-        ui.keys = [("P", "send the config"), ("[ ]", "Setup / Clients")]
-        ui.keys_more = ["Forget (a button) removes the computers that CARL did not see for a week. A computer comes back "
-                        "when it connects again."]
-        n = len(v.clients)
-        summ = (f"{n} {'computer syncs' if n == 1 else 'computers sync'} their config with this server" if n
-                else "no other computer syncs yet")
-        return (top + indent(draw_card("clients", "CLIENTS", f"{DIM}{summ}{R}",
-                                       clients_lines(v, here, stale, tw), w, 1)))[:height + len(top)]
-    ui.keys = [("i", "install on this Mac"), ("u", "update the model lists"), ("z", "make the client package"),
-               *([("f", "show it in the Finder")] if package_path(ui) else []), ("o p c", "copy a config"),
-               ("k", "show key"), ("P", "send the config"), ("↑↓", "scroll the config"), ("[ ]", "Setup / Clients")]
-    if ui.install_ask:
-        ui.keys = [("y", "run the installer"), ("n Esc", "cancel")]
-    ui.keys_more = ["x closes the output of the installer and the card of the client package. Click a button, or "
-                    "press its key.",
-                    "The client package holds the API key of the server: keep it secret, and delete it after the "
-                    "copy."]
-    steps, about = setup_parts(v, ui, here, tw, stale, installed)
-    beside = tw >= 150
-    if beside:
-        rows = draw_card("guide", "SET UP OPENCODE AND PI", "", with_side(steps, tip_of(here, stale), about, tw,
-                                                                            main_w=92), w, 1)
-    else:
-        rows = draw_card("guide", "SET UP OPENCODE AND PI", "",
-                         [*steps(tw), "", *cwrap(f"{CYN}Quick tip:{R} {tip_of(here, stale)}", tw)], w, 1)
-    room = max(height - len(rows) - 3, 3)
-    if ui.install and ui.install_shown:
-        rows += draw_card("install", "INSTALLER", install_summary(ui.install), install_lines(ui, room, tw), w, 1)
-    elif ui.package and ui.package_shown:
-        rows += draw_card("package", "CLIENT PACKAGE", package_summary(ui), package_lines(ui, tw, v.home), w, 1)
-    else:
-        kind = ui.preview
-        note = (f"{GRN}copied to the clipboard ✓{R}" if ui.copied == kind else
-                f"{DIM}its button (or o, p, c) copies it{R}")
-        plines = preview.splitlines()
-        where = cwrap(f"{DIM}{PREVIEW_WHERE[kind]}{R}", tw)
-        shown = max(room - len(where) - 1, 1)
-        ui.prev_scroll = min(ui.prev_scroll, max(len(plines) - shown, 0))
-        body: List[CardLine] = [*where, *plines[ui.prev_scroll:ui.prev_scroll + shown]]
-        if len(plines) > shown:
-            body.append(f"{DIM}lines {ui.prev_scroll + 1}-{min(ui.prev_scroll + shown, len(plines))} of {len(plines)} · "
-                        f"↑↓ PgUp PgDn scroll · the copy has all of it{R}")
-        rows += draw_card("preview", PREVIEW_TITLES[kind], note, body, w, 1)
-    if not beside:
-        rows += draw_card("guide_about", "HOW IT WORKS", "", [x for t, b in about for x in
-                                                              ([heading(t, tw)] + [y for s in b for y in cwrap(str(s), tw)])],
-                          w, 1)
-    return (top + indent(rows))[:height + len(top)]
-
-
-def connect_bar(sp: int) -> Row:
-    """The Setup / Clients switch: the selected one in brackets and reverse video."""
-    text, spans, col = "", [], 0
-    for i, name in enumerate(CONNECT_SUBPANELS):
-        lab = f"[{name}]" if i == sp else f" {name} "
-        text += (f"\x1b[1;7m{lab}{R}" if i == sp else f"{DIM}{lab}{R}") + "  "
-        spans.append((1 + col, 1 + col + len(lab), f"csp:{i}"))
-        col += len(lab) + 2
-    return " " + text + f"{DIM}   [ ] change{R}", spans
-
-
-def ago(t: float, now: float) -> str:
-    """How long ago, in the units' style: '42 s ago', '3 days ago'."""
-    s = max(0.0, now - t)
-    return f"{int(s // 86400)} days ago" if s >= 172800 else f"{duration(s)} ago"
-
-
-def forget_count(v: View, now: float, after: float = 7 * 86400) -> int:
-    return sum(1 for c in v.clients if c.connected <= 0 and now - c.last_seen > after)
-
-
-def clients_lines(v: View, here: List[Tuple[str, str]], stale: Sequence[Drift], tw: int) -> List[CardLine]:
-    """Every computer: this Mac's configs, then each one that syncs (connected or last seen, its config
-    against the one sent), Send and Forget; beside them what the list is and how to add a computer."""
-    now = time.time()
-    version, _, when = v.pushed.partition(" at ")
-
-    def main(mw: int) -> List[CardLine]:
-        sent = (f"{when}" + (f" {DIM}(version {version}){R}" if v.detail == "full" else "")) if v.pushed else \
-            f"{DIM}nothing sent yet{R}"
-        L: List[CardLine] = [lv("Last config sent", sent, 18),
-                             lv("Sync address", f"{GRN}{v.api}{R} {DIM}(the dashboard API){R}" if v.api
-                                else f"{YEL}not running: other computers cannot sync now{R}", 18), ""]
-        L.append(f"  {DIM}{'computer':<16} {'user':<8} {'syncs':<14} {'last seen':<16} config{R}")
-        mac = (f"{GRN}up to date{R}" if here and not stale else f"{YEL}out of date: Setup, u{R}" if here
-               else f"{DIM}not set up for this server{R}")
-        L.append(f"  {'this Mac':<16} {'':<8} {'OpenCode, Pi':<14} {'now':<16} {mac}")
-        for c in v.clients:
-            seen = f"{GRN}connected{R}" if c.connected > 0 else f"{DIM}{ago(c.last_seen, now)}{R}"
-            how = "all the time" if c.mode == "service" else "at their start"
-            if not version:
-                conf = f"{DIM}nothing sent{R}"
-            elif c.applied == version:
-                conf = f"{GRN}up to date{R}"
-            elif not c.auto_apply:
-                conf = f"{YEL}waits for you to apply it{R}"
-            else:
-                conf = f"{YEL}applies it at the next sync{R}"
-            name = (c.host or c.id)[:16]
-            L.append(f"  {B}{name:<16}{R} {c.user[:8]:<8} {how:<14} " + fit(seen, 16) + f" {conf}")
-            if v.detail == "full":
-                L.append(f"  {DIM}{'':<16} {c.os} · {c.address} · has version {c.applied or 'none'}{R}")
-        if not v.clients:
-            L.append(f"  {DIM}No other computer yet.{R}")
-        old = forget_count(v, now)
-        forget = (f"Forget {old} computer{'' if old == 1 else 's'} not seen for a week" if old
-                  else "Forget the computers not seen for a week")
-        return [*L, "", *button_rows("  ", [("Send the config to them (P)", "inspush"), (forget, "clforget")], mw)]
-
-    tip = ("Press P to send the installed models to every computer that syncs." if v.clients
-           else "To add a computer: make the client package in Setup (z), then run ./setup on the computer.")
-    return with_side(main, tip, [
-        ("Who is in the list", ["OpenCode and Pi on this Mac, and each computer whose installer set up the sync. Such a "
-                                "computer has a copy of the client folder. It gets the config that you send."]),
-        ("Add a computer", [f"In Setup, make the client package (z, or {CYN}./carl.sh package{R}). Copy the zip to the "
-                            f"computer, unzip it and run {CYN}./setup{R} there. The package has the address and the "
-                            f"key of the server."])],
-        tw, main_w=100)
-
-
-def tip_of(here: List[Tuple[str, str]], stale: Sequence[Drift]) -> str:
-    return ("Press u to put the installed models in the OpenCode and Pi configs." if stale
-            else "Press i to set up OpenCode and Pi on this Mac." if not here
-            else "After you add a model or change the context or the slots, press u.")
-
-
-def setup_parts(v: View, ui: UIState, here: List[Tuple[str, str]], tw: int, stale: Sequence[Drift] = (),
-                installed: int = 0) -> Tuple[Callable[[int], List[CardLine]], List[Section]]:
-    """Setup in steps, each with its state and buttons (this Mac; a VM or another computer; by hand), and
-    the explanations."""
-    vm_ready = v.host not in ("127.0.0.1", "::1", "localhost")
-
-    def main(mw: int) -> List[CardLine]:
-        L: List[CardLine] = [heading("This Mac", mw)]
-        for dr in stale:
-            L += cwrap(f"{YEL}⚠ {dr.line(installed)}{R}", mw)
-        if here and not stale:
-            L += cwrap(f"{GRN}✓{R} OpenCode and Pi on this Mac use this server."
-                       + (f" {DIM}(" + ", ".join(f"{c}: provider {p}" for c, p in here) + f"){R}"
-                          if v.detail == "full" else ""), mw)
-        elif not here:
-            L.append(f"{DIM}OpenCode and Pi on this Mac are not set up for this server.{R}")
-        if ui.install_ask:
-            what = ("installs OpenCode and Pi when they are missing or older (a download from npm). Then it writes "
-                    "their configs" if ui.install_ask == "all" else "writes the OpenCode and Pi configs for this server")
-            L += cwrap(f"{YEL}Run ./carl.sh install{' --config-only' if ui.install_ask == 'config' else ''} now? It "
-                       f"{what}.{R}", mw)
-            L.append(buttons("  ", [("Run it (y)", "insyes"), ("Cancel (n)", "insno")]))
-        elif ui.install and not ui.install.done:
-            L.append(buttons("  ", [("Show the installer (i)", "insshow"), ("Stop it", "inscancel")]))
-        else:
-            first = "Install again (i)" if here else "Install on this Mac (i)"
-            L.append(buttons("  ", [(first, "insall"), ("Update the model lists (u)", "insconfig")]))
-        L += ["", heading("A VM or another computer", mw)]
-        L += cwrap(f"1. Start the server for the VM: {CYN}./carl.sh --vm{R} "
-                   + (f"{GRN}(it runs so: {v.host}){R}" if vm_ready else f"{YEL}(now: this Mac only){R}"), mw, "   ")
-        L += cwrap(f"2. Make the client package. Copy the zip to the computer, unzip it and run {CYN}./setup{R} "
-                   f"there.", mw, "   ")
-        L.append(buttons("  ", [("Make the client package (z)", "pkgmake")]
-                         + ([("Show it in the Finder (f)", "pkgshow")] if package_path(ui) else [])))
-        L += cwrap("3. Other computers sync their config: " + (f"{GRN}{v.listeners} connected now{R}" if v.api else
-                                                                f"{YEL}the dashboard API is not running{R}")
-                   + f"{DIM} (the Clients tab lists them){R}", mw, "   ")
-        L.append(buttons("  ", [("Send the config (P)", "inspush")]))
-        L += ["", heading("By hand", mw)]
-        L.append(Ln(f"{DIM}Address{R} {v.base}/v1   {DIM}Key{R} "
-                    + (v.key if v.key_shown else ("•" * 8 + v.key[-4:] if v.key else f"{RED}no key file{R}"))
-                    + f"   {DIM}{'hide' if v.key_shown else 'show'} (k){R}", "key"))
-        L.append(buttons("  ", [("OpenCode config (o)", "opencode"), ("Pi config (p)", "pi"), ("curl test (c)", "curl")]))
-        return L
-
-    about: List[Section] = [
-        ("On this Mac", [f"One command does it: {CYN}./carl.sh install{R}, the same setup as on other computers. It "
-                         f"installs OpenCode and Pi when they are missing or older (into ~/.local, no sudo). Then it "
-                         f"connects them to this server. The buttons here use the choices of your last setup. It "
-                         f"keeps your providers, your default model and your agents. It writes a backup first."]),
-        ("A VM or another computer", ["Start the server for it with --vm (or another network). Then make the client "
-                                      "package: a zip in dist/ with the client folder, the address and the key of "
-                                      "the server. Copy it to the computer, unzip it and run ./setup (on a Mac, a "
-                                      "double click on setup.command). The setup asks one time which clients and "
-                                      "options you want. To update, unzip a new package over the folder and run "
-                                      "./setup again.",
-                                      "The package holds the API key: keep it secret, and delete the zip after "
-                                      "the copy. When the server serves only this Mac, CARL makes no package and "
-                                      "tells you how to change the network."]),
-        ("Other computers", ["On a different computer, the setup adds a sync service. The service keeps one "
-                             "connection to this dashboard and opens no port on the computer. It applies the config "
-                             "that you send, and it makes backups."]),
-        ("By hand", ["Each button copies one provider block (named carl) to the clipboard. The block adds a provider. "
-                     "It does not replace your providers."])]
-    return main, about
-
-
-
-def package_path(ui: UIState) -> str:
-    """The zip of the last client package made in this session ("" when none)."""
-    run = ui.package
-    return run.outcome.path if run and run.outcome else ""
-
-
-def package_summary(ui: UIState) -> str:
-    """The client package card's title info."""
-    run = ui.package
-    if run is None or not run.done or run.outcome is None:
-        return f"{YEL}CARL makes it…{R}"
-    o = run.outcome
-    return (f"{RED}not made{R}" if o.error else f"{GRN}made: {o.files} files, {file_size(o.size)}{R}")
-
-
-def package_lines(ui: UIState, tw: int, home: str) -> List[CardLine]:
-    """The client package: the zip and the key warning, or why CARL made none; then its buttons."""
-    run = ui.package
-    if run is None:
-        return []
-    if not run.done or run.outcome is None:
-        return [f"{DIM}CARL makes the client package…{R}"]
-    o = run.outcome
-    out: List[CardLine] = []
-    if o.error:
-        out += cwrap(f"{RED}{o.error}{R}", tw)
-    else:
-        out += cwrap("The client package is ready:", tw)
-        out += cwrap(f"  {B}{home_short(o.path, home)}{R}", tw, "  ")
-    for note in o.notes:
-        text, *commands = note.split("\n")
-        warn = text.startswith("CAUTION")
-        out += cwrap(f"{YEL}{text}{R}" if warn else text, tw)
-        out += [x for c in commands for x in cwrap(f"  {CYN}{c}{R}", tw, "  ")]
-    out.append(buttons("", ([("Show it in the Finder (f)", "pkgshow")] if o.path else [])
-                       + [("Make it again (z)", "pkgmake"), ("Close (x)", "pkgclose")]))
-    return out
-
-
-def install_summary(ins: InstallRun) -> str:
-    """The installer card's title info: what runs and how it ended."""
-    if not ins.done:
-        return f"{YEL}runs: {ins.what}…{R}"
-    code = ins.proc.returncode
-    return f"{GRN}done: {ins.what}{R}" if code == 0 else f"{RED}stopped with an error (exit code {code}){R}"
-
-
-def install_lines(ui: UIState, room: int, tw: int) -> List[CardLine]:
-    """The installer's last output lines (control characters removed), and its buttons."""
-    ins = ui.install
-    if ins is None:
-        return []
-    out: List[CardLine] = []
-    if ins.done and ins.proc.returncode != 0:
-        out.append(f"{RED}The installer stopped with an error (exit code {ins.proc.returncode}). Its last lines:{R}")
-    body = [f"{DIM}{fit(clean(x), tw)}{R}" for x in ins.lines if x.strip()]
-    out += body[-max(room - 2 - len(out), 1):]
-    if not ins.lines:
-        out.append(f"{DIM}The installer starts…{R}")
-    out.append(buttons("", [("Stop it", "inscancel")] if not ins.done else
-                       [("Close (x)", "insclose"), ("Run it again (i)", "insall")]))
-    return out
 
 
 # ---------------------------------------------------------------- Requests and Log
 def body_requests(v: View, ui: UIState, cols: int, height: int) -> List[Row]:
-    """Every finished request in the log, newest first, with the means of their speeds."""
+    """Every finished request in the log, newest first, with a mean row under the speeds; full adds the slot and
+    where the reused tokens came from. The card is no wider than its table."""
+    full = ui.levels.get("reqtab", 1) == 2
     reqs = list(reversed(v.log.requests))
-    done = [r for r in reqs if r.tg]
     since = v.log.wall(reqs[-1].t0)[:5] if reqs else ""
     head = f"{len(reqs)} since {since}" if reqs else "none yet"
-    if done:
-        head += (f" · mean read {speed(sum(r.pp or 0 for r in done) / len(done))} · "
-                 f"mean write {speed(sum(r.tg or 0 for r in done) / len(done))}")
-    head += f" · {len(v.log.current)} running" if v.log.current else ""
-    room = max(height - 6, 3)
+    head += f", {len(v.log.current)} running" if v.log.current else ""
+    room = max(height - 5, 3)
     ui.req_scroll = min(ui.req_scroll, max(len(reqs) - room, 0))
-    lines: List[CardLine] = [*cwrap(f"{DIM}Each row is one call from a client (a turn makes many). The first request of "
-                                    f"a session reads the whole prompt. The next ones reuse most of it, so they read "
-                                    f"few new tokens.{R}", cols - 5),
-                             f"{DIM}{REQ_HEAD}  {'reused':>8}{R}"]
-    for r in reqs[ui.req_scroll:ui.req_scroll + room]:
-        lines.append(req_row(r, v.log.wall) + f"  {tokens(max(r.ctx - r.new - r.gen, 0)):>8}")
-    if not reqs:
-        lines.append(f"{DIM}No finished request yet.{R}")
-    ui.keys = [("↑↓ PgUp PgDn", "scroll")]
-    ui.keys_more = ["The means are of the requests in this list. The SPEED card on the Live tab counts every request "
+    w = min(cols - 1, len(REQ_HEAD + REQ_MORE + (REQ_FULL if full else "")) + 6)
+    lines = req_table(reqs[ui.req_scroll:ui.req_scroll + room], v.log.wall, full, w - 4, mean=True) if reqs else \
+        [f"{DIM}No finished request yet.{R}"]
+    ui.sections, ui.more = ["reqtab"], len(reqs) > ui.req_scroll + room
+    ui.keys = [("↑↓ PgUp PgDn", "scroll"), ("L", "level")]
+    ui.keys_more = ["Each row is one call from a client (a turn makes many).",
+                    "reused = the context minus the new tokens and the output: the tokens the server did not read again.",
+                    "The mean row is of the requests in this list. The SPEED card on the Live tab counts every request "
                     "since the server started."]
-    return indent(draw_card("requests_tab", "REQUESTS", head, lines, cols - 1, 1))
+    return indent(draw_card("reqtab", "REQUESTS", head, lines, w, ui.levels.get("reqtab", 1), 3, False))
 
 
 def body_log(v: View, ui: UIState, cols: int, n: int) -> List[Row]:
-    """The log, n lines, with its wrap / only-errors / back-to-the-end switches."""
+    """The log, n lines, with its wrap / errors-and-warnings / back-to-the-end switches; full shows the times with
+    milliseconds and the whole path."""
+    full = ui.levels.get("logtab", 1) == 2
     switches = buttons("", [(f"Wrap lines: {'on' if ui.wrap else 'off'} (w)", "wrap"),
-                            (f"Only errors: {'on' if ui.errors_only else 'off'} (f)", "errors"),
+                            (f"Errors and warnings: {'on' if ui.errors_only else 'off'} (f)", "errors"),
                             (("Back to the end (End)" if ui.log_scroll else "At the end"), "follow")])
     path = v.log_path or ""
-    name = home_short(path, v.home) if v.detail == "full" else path.rsplit("/", 1)[-1]
-    summ = f"{DIM}{name or 'no log file'}" + (f" · {ui.log_scroll} lines back" if ui.log_scroll else "") + R
-    note = f"{DIM}The server's own log (llama.cpp). Dim lines are normal at a start.{R}"
-    lines: List[CardLine] = [switches, note, *log_view(v, n - 1, cols - 5)]
-    ui.keys = [("w", "wrap lines"), ("f", "only errors"), ("↑↓ PgUp PgDn", "scroll"), ("End", "back to the end")]
-    ui.keys_more = ["The times are this Mac's clock."]
-    return indent(draw_card("logtab", "LOG", summ, lines, cols - 1, 1))
+    summ = f"{DIM}{path.rsplit('/', 1)[-1] or 'no log file'}{R}" + (f"   {ui.log_scroll} lines back" if ui.log_scroll else "")
+    where = aligned([row("file", home_short(path, v.home))], cols - 5) if full and path else []
+    lines: List[CardLine] = [switches, *where, "", *log_view(replace(v, detail="full" if full else "simple"), n - 2, cols - 5)]
+    ui.sections = ["logtab"]
+    ui.keys = [("w", "wrap lines"), ("f", "errors and warnings"), ("↑↓ PgUp PgDn", "scroll"), ("End", "back to the end"),
+               ("L", "level")]
+    ui.keys_more = ["The server's own log (llama.cpp). Red: errors. Yellow: warnings. Dim: routine lines (normal at "
+                    "any time).", "The times are this Mac's clock; the full level adds milliseconds."]
+    return indent(draw_card("logtab", "LOG", summ, lines, cols - 1, ui.levels.get("logtab", 1), 3, False))
 
 
 # ---------------------------------------------------------------- dialogs
@@ -409,56 +162,67 @@ def centred(card: List[Row], cols: int, w: int, height: int) -> List[Row]:
 
 
 def quit_dialog(d: ServerData, ui: UIState, cols: int, height: int) -> List[Row]:
-    """Quit: stop the server, leave it running, or cancel."""
+    """Quit: stop the server, leave it running, or cancel; one button per row."""
     pid = d.target_pid
     alive = pid and not d.exited and not ui.stopping
-    w = min(84, cols - 4)
+    w = min(72, cols - 4)
     lines: List[CardLine] = [""]
     if alive:
         what = d.alias or "The server"
-        lines += [*cwrap(f"{what} runs{f' (pid {pid})' if ui.full else ''}. Stop it, or leave it running for OpenCode "
-                         f"and Pi?", w - 4), "",
-                  *button_rows("  ", [("Stop the server and quit (s)", "stop"),
-                                      ("Leave it running and quit (l)", "detach"), ("Cancel (Esc)", "cancel")], w - 4),
-                  "", *cwrap(f"{DIM}If you leave it running, run ./carl.sh to open the dashboard again.{R}", w - 4)]
+        lines += [*cwrap(f"{B}{what}{R} is running. Stop it, or leave it running for OpenCode and Pi?", w - 4), ""]
+        lines += [buttons("  ", [(t, a)]) for t, a in (("Stop the server and quit (s)", "stop"),
+                                                       ("Leave it running and quit (l)", "detach"),
+                                                       ("Cancel (Esc)", "cancel"))]
+        lines += ["", *aligned([row("open again", "Run ./carl.sh."), *([row("server", f"pid {pid}")] if ui.full else [])],
+                               w - 4)]
         ui.keys = [("s", "stop the server and quit"), ("l", "leave it running and quit"), ("Esc", "cancel")]
     else:
-        lines += ["No server runs.", "", buttons("  ", [("Quit (q)", "detach"), ("Cancel (Esc)", "cancel")])]
+        lines += ["No server is running.", "", buttons("  ", [("Quit (q)", "detach")]), buttons("  ", [("Cancel (Esc)", "cancel")])]
         ui.keys = [("q", "quit"), ("Esc", "cancel")]
     return centred(draw_card("quitbox", "QUIT", "", lines, w, 1), cols, w, height)
 
 
+def sentence(text: str) -> str:
+    """text as a sentence: a capital first, a full stop at the end."""
+    t = text.strip()
+    return (t[:1].upper() + t[1:] + ("" if t.endswith((".", "?", "!", ":")) else ".")) if t else t
+
+
 def drain_dialog(dr: Drain, cols: int, height: int, ui: Optional[UIState] = None) -> List[Row]:
-    """A client's turn runs while a step would stop the model: wait for the turn, stop now, or cancel."""
+    """A client's turn runs while a step would stop the model: wait for the turn, stop now, or cancel. Each choice
+    with what it does, in sentences."""
     w = min(84, cols - 4)
     tw = w - 4
 
     def slots(ids: List[int]) -> str:
         return ("slot " if len(ids) == 1 else "slots ") + ", ".join(str(i) for i in ids)
-    lines: List[CardLine] = [""]
     if dr.busy:
-        state = f"An agent is working: {slots(dr.busy)} writes an answer."
-        now_text = "Stop now: the answer stops. The client shows an error (Pi tries again). The session goes back to its last save."
+        state = f"An agent is working: {slots(dr.busy)} is writing an answer."
+        now_text = ("The answer stops. The client shows an error (Pi tries again). The session goes back to its last "
+                    "save.")
     elif dr.turns:
-        state = f"An agent is working: its turn runs in {slots(dr.turns)} (a tool runs now)."
-        now_text = "Stop now: the turn stops. The session goes back to its last save."
+        state = f"An agent is working: its turn is running in {slots(dr.turns)}, and a tool is running now."
+        now_text = "The turn stops. The session goes back to its last save."
     else:
-        state = "CARL saves the session." if dr.saving else "The turn ends."
-        now_text = "Stop now: CARL does not wait for the save."
+        state = "CARL is saving the session." if dr.saving else "The turn is ending."
+        now_text = "CARL does not wait for the save."
+    lines: List[CardLine] = ["", *cwrap(state, tw), *cwrap(f"Next step: {dr.what}.", tw), ""]
+
+    def choice(label: str, act: str, what: str) -> List[CardLine]:
+        return [buttons("  ", [(label, act)]), *[f"      {DIM}{x}{R}" for x in cwrap(what, tw - 6)]]
     if dr.waiting:
-        lines += [*cwrap(f"CARL waits for the turn to end ({duration(time.time() - dr.since)} so far). Then it saves the "
-                         f"session and continues: {dr.what}.", tw),
-                  *cwrap(state, tw), "",
-                  *button_rows("  ", [("Stop now (s)", "drain:now"), ("Cancel (Esc)", "drain:cancel")], tw), "",
+        lines = ["", *cwrap(f"CARL is waiting for the turn to end ({duration(time.time() - dr.since)} so far). Then it saves "
+                            f"the session and does the next step: {dr.what}.", tw), *cwrap(state, tw), ""]
+        lines += [*choice("Stop now (s)", "drain:now", now_text), *choice("Cancel (Esc)", "drain:cancel",
+                                                                          "Nothing changes."), "",
                   *cwrap(f"{DIM}A client without the CARL plugin does not mark its turns. For such a client, CARL waits "
                          f"until the slots are free.{R}", tw)]
         keys: List[Key] = [("s", "stop now"), ("Esc", "cancel")]
     else:
-        lines += [*cwrap(state, tw), *cwrap(f"Next step: {dr.what}. This stops the model.", tw), "",
-                  *button_rows("  ", [("Wait for the turn (w)", "drain:wait"), ("Stop now (s)", "drain:now"),
-                                      ("Cancel (Esc)", "drain:cancel")], tw), "",
-                  *cwrap(f"{DIM}Wait: CARL continues after the turn ends and the session is saved.{R}", tw),
-                  *cwrap(f"{DIM}{now_text}{R}", tw)]
+        lines += [*choice("Wait for the turn (w)", "drain:wait", "CARL waits for the turn to end and saves the session. "
+                          "Then it does the next step."),
+                  *choice("Stop now (s)", "drain:now", now_text),
+                  *choice("Cancel (Esc)", "drain:cancel", "Nothing changes.")]
         keys = [("w", "wait for the turn"), ("s", "stop now"), ("Esc", "cancel")]
     if ui is not None:
         ui.keys = keys

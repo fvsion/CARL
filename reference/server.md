@@ -121,7 +121,7 @@ The catalogue (`tune.spec`, `tune.spec_n`) or the Auto-tune result sets the spec
 
 ### The dashboard and the launch model
 
-- The dashboard is `tools/llama-monitor.py` (since 2026-10-01). It has the tabs Live, Connect, Requests, Log and Settings ([The dashboard](architecture.md#the-dashboard)). Each screen has two detail levels: simple and full (`D`).
+- The dashboard is `tools/llama-monitor.py` (since 2026-10-01). It has the tabs Live, Connect, Requests, Log and Settings ([The dashboard](architecture.md#the-dashboard)). Each section of a screen has its own level: collapsed, simple or full (Tab selects a section, `L` changes its level, `D` sets every section).
 - Use only the left click. The dashboard does not use the right click, because terminals such as iTerm2 show their own context menu.
 - A config that you copy from the Connect tab contains the API key. On the screen, the key stays masked until you show it.
 
@@ -190,7 +190,7 @@ The presets INI:
 - A model that fails the start check is left out. A comment in the file and the banner tell why.
 - The command-line arguments of the router override every preset. Thus, the router gets only the host, the port, the key file and the log flags (and `llama.extra_args`).
 - The log of the router holds the lines of its children as `[PORT] M.SS.mmm.uuu L ...`, with the clock of the child. The dashboard removes the prefix and moves the time by the "spawning server instance ... on port PORT" line. It hides the "proxying request" lines of the router (one for each dashboard poll).
-- **Disadvantage:** each switch empties the RAM cache. The new child starts cold. OpenCode and Pi put a session back from the disk cache. Other clients read the whole session again, also when you switch back.
+- **Disadvantage:** each switch empties the RAM cache. The new child starts cold. A saved session belongs to the model it ran on (the model name is in the file name): when you switch back to that model, OpenCode and Pi restore the session from the disk cache (with Saved sessions on, a session of 4,096 tokens or more, and for a Gemma model the full cache). A session that continues on the new model is read again in full; only the agent's saved prompt (the system prompt and the tools) comes from the disk cache.
 
 ### Network modes
 

@@ -36,7 +36,7 @@ class ConnectActions:
     def preview_text(self, kind: str, d: ServerData, mask: bool = False) -> str:
         """Config text for the running server. mask=True hides the key (on-screen preview)."""
         if not d.up:
-            return "(No server runs. The config shows when the model is loaded.)"
+            return "No server is running. The config shows when a model is loaded."
         ep = self.endpoint
         rel = TEMPLATES.get(kind)
         templates = {}
@@ -59,12 +59,12 @@ class ConnectActions:
         ui.preview, ui.prev_scroll, ui.tab = kind, 0, 1
         ui.install_shown = ui.package_shown = False     # the preview takes the place of the installer's output
         if not d.up:
-            ui.toast("No server runs: CARL copied nothing.")
+            ui.toast("No server is running: CARL copied nothing.")
             return
         ok = system.copy_to_clipboard(self.preview_text(kind, d))
         ui.copied = kind if ok else None
         ui.toast(LABELS[kind] + (" copied to the clipboard." if ok else ": CARL cannot use the clipboard here. Select the "
-                                                                        "text on the screen."))
+                                                                        "text on the screen."), error=not ok)
 
     def install_action(self, act: str) -> None:
         """The Connect tab's installer: insall / insconfig ask first, insyes runs it, insno cancels
@@ -79,7 +79,7 @@ class ConnectActions:
         if act in ("insall", "insconfig"):
             if running:
                 ui.install_shown = True
-                ui.toast("The installer runs already. Its output is below.", 5)
+                ui.toast("The installer is already running. Its output is below.", 5)
             else:
                 ui.install_ask = "all" if act == "insall" else "config"
         elif act == "insyes" and ui.install_ask:

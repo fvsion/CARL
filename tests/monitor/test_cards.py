@@ -3,12 +3,13 @@ from __future__ import annotations
 
 import re
 import unittest
+from dataclasses import replace
 from typing import Any
 
 from mon_support import GIB, shape
 from monitor.cards import (View, card_connect, card_health, card_memory, card_requests, card_slots, card_speed, column,
                            kv_info, live_sentence, log_view, req_row, status_of)
-from monitor.fmt import ANSI, Ln, vlen
+from monitor.fmt import ANSI, Ln, aligned, vlen
 from monitor.logbook import LogBook, RequestRecord
 from monitor.model import ServerData, SlotInfo, SlowStats
 
@@ -25,7 +26,13 @@ def view(**kw: Any) -> View:
 
 
 def text(lines: Any) -> str:
-    return "\n".join(ANSI.sub("", x.text if isinstance(x, Ln) else x) for x in lines)
+    """The card's text as shown: its rows laid out (label column), no colours."""
+    return "\n".join(ANSI.sub("", x.text if isinstance(x, Ln) else x) for x in aligned(list(lines)))
+
+
+def table_row(body: str, label: str) -> list[str]:
+    """The cells of the table row that starts with label (the SPEED table)."""
+    return next(ln.split() for ln in body.splitlines() if ln.startswith(label + " "))
 
 
 class StatusTest(unittest.TestCase):
@@ -48,12 +55,12 @@ class StatusTest(unittest.TestCase):
         idle = ServerData(up=True, slots=True, slot_list=[SlotInfo(0, False, 1, 98304, 0, 0, 0, 0),
                                                           SlotInfo(1, False, 1, 98304, 0, 0, 0, 0)])
         idle.system.pressure = "normal"
-        self.assertEqual(live_sentence(idle, 8080), "No request runs. The 2 slots are free. Memory is normal.")
+        self.assertEqual(live_sentence(idle, 8080), "No request is running. The 2 slots are free.")   # pressure: THIS MAC
         writing = ServerData(up=True, slots=True, busy=True, decoded=5, tg_rate=38.4,
                              slot_list=[SlotInfo(0, True, 1, 98304, 10, 0, 0, 5), SlotInfo(1, False, 1, 98304, 0, 0, 0, 0)])
         writing.system.pressure = "normal"
         self.assertEqual(live_sentence(writing, 8080),
-                         "Writing an answer in slot 0 at 38.4 tok/s. Slot 1 is free. Memory is normal.")
+                         "Writing an answer in slot 0 at 38.4 tok/s. Slot 1 is free.")
 
 
 class CardsTest(unittest.TestCase):
@@ -61,7 +68,7 @@ class CardsTest(unittest.TestCase):
         shown = text(card_connect(view(), ServerData(conns=[("10.0.0.2", "5000")])).lines)
         self.assertIn("••••••••1234", shown)
         self.assertNotIn("secretkey", shown)
-        self.assertIn("1 connection", shown)
+        self.assertRegex(shown, r"Connections +1   from 10\.0\.0\.2")
         self.assertIn("10.0.0.2", text(card_connect(view(detail="full"), ServerData(conns=[("10.0.0.2", "5")])).lines))
         self.assertIn("secretkey1234", text(card_connect(view(key_shown=True), ServerData()).lines))
 
@@ -72,23 +79,27 @@ class CardsTest(unittest.TestCase):
         assert kv is not None
         self.assertEqual((kv.k, kv.v, kv.slots, kv.cache_ram), ("q4_0", "q8_0", 2, 4096 * 2**20))
         card = card_slots(view(), d)
-        self.assertEqual(ANSI.sub("", card.summary), "2 × 96K")
+        self.assertEqual(ANSI.sub("", card.summary), "2 × 96K   11% used")   # the pool fill is in the title
         body = text(card.lines)
         self.assertIn("slot 0", body)
         self.assertIn("of 96K", body)
-        self.assertNotIn("differ", body)                              # simple detail: no context memory types
-        self.assertIn("differ", text(card_slots(view(detail="full"), d).lines))
+        self.assertIn("differ", body)                                 # the warning shows at simple when it applies
+        self.assertNotIn("Context memory", body)                      # the types as a row: full only
+        self.assertRegex(text(card_slots(view(detail="full"), d).lines), r"Context memory +q4_0 K, q8_0 V")
 
     def test_memory_in_gib(self) -> None:
-        d = ServerData(rss=int(17.9 * GIB), shape=shape(), n_ctx=98304, cmd=CMD)
+        d = ServerData(up=True, slots=True, rss=int(17.9 * GIB), shape=shape(), n_ctx=98304, cmd=CMD)
         body = text(card_memory(view(), d).lines)
-        self.assertIn("17.9 of 32.0 GiB RAM", body)
-        self.assertIn("model 13.0 GiB", body)
-        self.assertIn("1 GiB = 1.07 GB", body)                        # GiB said once in simple detail
+        self.assertRegex(body, r"Server .*17\.9 of 32\.0 GiB")
+        self.assertRegex(body, r"Model +13\.0 GiB")
+        self.assertNotIn("1.07 GB", body)                             # no unit lesson in the main panels
+        self.assertRegex(text(card_memory(view(), replace(d, up=False)).lines), r"Model +loading")
 
     def test_speed_while_reading(self) -> None:
         d = ServerData(up=True, slots=True, busy=True, prompt=10000, cached=0, processed=4000, pp_rate=200.0)
-        self.assertIn("read    200 tok/s now", text(card_speed(view(), d).lines))
+        body = text(card_speed(view(), d).lines)
+        self.assertEqual(table_row(body, "Tok/s"), ["Tok/s", "Now", "Average", "Last", "request"])
+        self.assertEqual(table_row(body, "Read"), ["Read", "200", "–", "–"])
         self.assertIn("about 30 s left", live_sentence(d, 8080))
 
     def test_averages_need_time_behind_them(self) -> None:
@@ -96,19 +107,19 @@ class CardsTest(unittest.TestCase):
         m = {"prompt_tokens_total": 5000, "prompt_seconds_total": 6.5, "tokens_predicted_total": 1,
              "tokens_predicted_seconds_total": 0.000001}
         body = text(card_speed(view(), ServerData(up=True, slots=True, metrics=m)).lines)
-        self.assertIn("read    769 tok/s average", body)
-        self.assertIn("write   not measured yet", body)
+        self.assertEqual(table_row(body, "Read"), ["Read", "–", "769", "–"])
+        self.assertEqual(table_row(body, "Write"), ["Write", "–", "–", "–"])     # not measured yet
         m.update(tokens_predicted_total=500, tokens_predicted_seconds_total=10.0)
         body = text(card_speed(view(), ServerData(up=True, slots=True, metrics=m)).lines)
-        self.assertIn("write   50.0 tok/s average", body)
+        self.assertEqual(table_row(body, "Write"), ["Write", "–", "50.0", "–"])
 
     def test_health_full_detail_counts(self) -> None:
         book = LogBook()
         book.add("0.00.000.001 E llama_init_from_model: failed: Gemma4Assistant requires ctx_other to be set (normal)")
         book.add("0.00.000.002 W load: control-looking token: 50 '<|tool_response>' was not control-type")
         self.assertEqual((book.counts["E"], book.counts["W"], book.counts["notice"]), (0, 0, 2))
-        self.assertIn("No errors", text(card_health(view(log=book), ServerData()).lines))
-        self.assertIn("2 routine notices", text(card_health(view(log=book, detail="full"), ServerData()).lines))
+        self.assertIn("No errors.", text(card_health(view(log=book), ServerData()).lines))
+        self.assertRegex(text(card_health(view(log=book, detail="full"), ServerData()).lines), r"Routine notices +2\n")
 
     def test_column_rows_are_exactly_w_wide(self) -> None:
         for detail in ("simple", "full"):

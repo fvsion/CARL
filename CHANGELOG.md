@@ -3,6 +3,64 @@
 All notable changes to CARL. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Dates are local dates on the development Mac (M3 Pro, 36 GB).
 
+## 1.10.0 - 2026-10-08
+
+Phase 23.2: the dashboard, reworked again for what it lost in 1.5.0 and for every terminal size. Made from mock-ups
+that the user signed off screen by screen.
+
+### Added
+- **A level for each section.** Every card and section has its own level: collapsed (one row with a summary), simple
+  or full. The title shows it: `▸ NAME ○○`, `▾ NAME ●○`, `▾ NAME ●●`. **Tab** and **Shift-Tab** select a section
+  (its title shows reversed) and bring it on the screen; **L** or a click on its title changes its level; **D** sets
+  every section to simple or full. The levels are kept for the next start (`dashboard.json`). The tab bar says
+  `detail: simple`, `full` or `mixed`. Tab no longer changes the tab: 1-5 and clicks do.
+- **THIS MAC** on the Live tab (it was the SYSTEM card before 1.5.0): this Mac's memory with a bar, the memory
+  pressure, swap ("none" without a swap file), the GPU with a bar, power and heat; full adds wired, compressed,
+  free, the load and the free disk. It shows also when no server runs.
+- **The speeds by source.** The MODEL card (Settings > Server) and the selected model (Settings > Models) show a
+  table: this Mac's Auto-tune result and the catalogue's measurement, each with prose, code and edit tok/s, the Mac,
+  the date and the speculation. From 150 columns the Models list shows both sources' prose / code / edit; **t**
+  shows them at any width.
+- **Sliding window in Settings > Server** for Gemma models: the same setting as Caching's "Gemma models"
+  (`cache.swa`), with the memory of the full cache and of the window cache in About.
+- Requests: a mean row under the speeds; the full level adds the slot and where the reused tokens came from (the
+  data comes in a later release; until then "–"). Log: the full level shows milliseconds.
+- Tests: every screen at 100 x 40, 130 x 40, 160 x 50 and 200 x 60, with every section simple and full, checks that
+  nothing is wider than the screen, no values are joined by " · ", no line holds one lone word, the titles show the
+  right level and the footer keeps its keys (`tests/monitor/test_screens.py`); Tab, L, D and the saved levels.
+
+### Changed
+- **No values joined by " · ".** Every reading has its own row with a label, or a column in a table; the footer
+  joins keys with spaces. Labels start with a capital letter, and every statement is a whole sentence.
+- **Layouts for 100 x 40, 130 x 40, 160 x 50 and 200 x 60.** Live: two columns from 100 columns, three from 190;
+  the requests and the log fill the rows that are left. Every tab and Settings panel scrolls as one page ("↓ more"
+  in the footer), so no part is out of reach at 130 x 40 or 100 x 40. From 160 columns the ? card covers the right
+  half and does not push the page down.
+- Live: SPEED is a table (now, average, last request); MEMORY shows the server's parts as rows; MODEL, RECENT
+  REQUESTS and LOG show on every Live screen; each busy slot shows its own request. Nothing academic on the screens:
+  the line "GiB is memory: 1 GiB = 1.07 GB" and the name of the Metal limit are gone.
+- Settings > Server: sections (SERVER, MEMORY, AUTO FIT, MODEL, ABOUT, MODELS); the flag and config key of the
+  selected setting are in About. Settings > Models: the lists show prose tok/s (● this Mac, ○ the catalogue) and sort
+  by it (before: a weighted score that did not match the figures beside it). Auto fit, Auto-tune, Router and
+  Caching: pages of sections. Connect: sections; Clients is a table, or one block per computer when the table does
+  not fit. Dialogs are centred, with one button per row and what each choice does.
+- The Log filter is "Errors and warnings" (f).
+- The header shows the CARL icon on terminals that show images (iTerm2, Ghostty, WezTerm, kitty), as before; the
+  status pill keeps black text on every terminal.
+
+### Fixed
+- After a normal stop, the dashboard said "The last start failed" above ordinary shut-down lines.
+- While a model loaded, MEMORY said "model 0 KiB"; with two busy slots, only one request showed.
+- The router text claimed that OpenCode and Pi restore a session after every switch. A saved session belongs to the
+  model it ran on: it is restored when you switch back to that model (dashboard, `./carl.sh` banner, `--router`
+  help, `reference/server.md`).
+- The delete question said "stop the server first (q, then s)", which also closes the dashboard.
+- The Auto-tune run showed the tool's own words ("re-emit", "score"); the sliding-window help said 2.1 GiB where
+  the measurement is 2.3 GiB.
+- The installer's output is wrapped to the width of its card (it wrapped at 78 columns).
+- Error messages on the message line are red (they were green), and what is happening now says so ("Slot 0 is
+  writing an answer.", "CARL is checking the file…").
+
 ## 1.9.0 - 2026-10-07
 
 Phase 23.1: the project's instructions are system text again, with Qwen models.

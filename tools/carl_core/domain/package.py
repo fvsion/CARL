@@ -140,7 +140,7 @@ def missing_refusal(missing: Sequence[str], client_dir: str, cmd: str) -> Outcom
 def done_notes(path: str, remote: Remote, cfg: Mapping[str, object], cmd: str) -> Tuple[str, ...]:
     """After a package is written: who can use it, the key warning (how to delete the zip), how to use it."""
     name = path.rsplit("/", 1)[-1]
-    notes = [f"The server in the package: {remote.host}, port {remote.port}. "
+    notes = [f"The package uses the server at {remote.host}, port {remote.port}. "
              + ("Only this Mac can reach this address." if is_local(remote.host)
                 else "Computers that can reach this address can use the server.")]
     net, host = net_setting(cfg)

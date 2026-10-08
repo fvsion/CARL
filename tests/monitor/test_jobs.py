@@ -112,7 +112,7 @@ class JobsTest(unittest.TestCase):
             del os.environ["CTX"]
         msg = self.ui.toast_msg[0]
         self.assertIn("The new settings failed", msg)
-        self.assertIn("No server runs now", msg)
+        self.assertIn("No server is running now", msg)
         self.assertIn("error: the model did not load", " ".join(self.ui.start_error))   # the launcher's error line
         with open(self.paths.console(self.port)) as f:
             self.assertIn("CTX=unset", f.read())

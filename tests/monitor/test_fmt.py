@@ -98,8 +98,8 @@ class NumbersTest(unittest.TestCase):
         tail = [("D", "detail"), ("?", "all keys"), ("q", "quit")]
         for w in (30, 60, 200):
             line = ANSI.sub("", footer_keys(keys, tail, w))
-            self.assertTrue(line.endswith("D detail · ? all keys · q quit"), line)
-            self.assertTrue(len(line) <= w or line == "D detail · ? all keys · q quit")
+            self.assertTrue(line.endswith("D detail   ? all keys   q quit"), line)    # keys: three spaces apart
+            self.assertTrue(len(line) <= w or line == "D detail   ? all keys   q quit")
         self.assertIn("a apply", ANSI.sub("", footer_keys(keys, tail, 200)))
 
     def test_ctx_label(self) -> None:

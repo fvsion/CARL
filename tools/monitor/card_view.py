@@ -14,7 +14,7 @@ from .words import plural
 LABEL_W = 15                                           # the label column
 REV = "\x1b[7m"                                        # reverse video: the selected row's label
 TAG_COLOUR = {"agent coding": GRN, "hard code": CYN, "chat & writing": B, "uncensored": RED}
-LABELS = {"uncensored": "what uncensored means"}         # the form's label where the field's own is too short
+LABELS = {"uncensored": "Uncensored means"}         # the form's label where the field's own is too short
 FORM_KEYS: List[Key] = [("↑↓", "field"), ("Enter", "edit"), ("← → space", "change a choice"), ("x", "clear"), ("s", "save"),
              ("Esc", "cancel")]
 TYPING_KEYS: List[Key] = [("Enter", "keep the text"), ("Esc", "drop it"), ("Backspace", "delete")]
@@ -55,6 +55,7 @@ def row_lines(form: CardForm, it: Item, i: int, first: bool, w: int) -> List[Car
     label is shown once for the tags and the pick-instead entries)."""
     sel = i == form.row
     label = LABELS.get(it.field.key, it.field.label) if first else ""
+    label = label[:1].upper() + label[1:]                 # labels start with a capital (user, 2026-10-08)
     pre = f"{CYN}{B}›{R} " if sel else "  "
     lab = f"{label:<{LABEL_W - 2}}"
     head = pre + (f"{REV}{lab}{R}" if sel else lab) + "  "
@@ -90,7 +91,7 @@ def draw_form(form: CardForm, cols: int, height: int) -> List[Row]:
                   f"the model lists (role, tags), the quality sort and the filters read this card. Auto fit uses the "
                   f"model only if you set Auto fit to yes. Good-for tags: {', '.join(GOOD_FOR)}.{R}", tw)
     foot: List[CardLine] = [""]
-    foot += cwrap(f"{B}{it.field.label}{R}  {DIM}{it.field.help}{R}", tw)
+    foot += cwrap(f"{B}{it.field.label[:1].upper() + it.field.label[1:]}{R}  {DIM}{it.field.help}{R}", tw)
     if form.typing is not None:
         foot += cwrap(f"{YEL}You type now. Enter keeps the text, Esc drops it. You can paste.{R}", tw)
     if form.error:
@@ -107,5 +108,5 @@ def draw_form(form: CardForm, cols: int, height: int) -> List[Row]:
     above = [f"{DIM}  ↑ {plural(top, 'more line')} above{R}"] if top else []
     below = [f"{DIM}  ↓ {plural(len(rows) - top - room, 'more line')} below{R}"] if top + room < len(rows) else []
     L: List[CardLine] = [*intro, "", *above, *shown, *below, *foot]
-    title = f"{B}{form.model}{R}  {DIM}custom model · your card (models.json){' · changed' if form.changed else ''}{R}"
+    title = f"{B}{form.model}{R}  {DIM}{'changed' if form.changed else 'custom model'}{R}"
     return indent(draw_card("cardedit", "EDIT THE CARD", title, L, w, 1))

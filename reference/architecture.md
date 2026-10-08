@@ -23,7 +23,7 @@
       ~/.config/carl/api-key          the shared API key (server and clients; made at the first start)
       ~/.config/carl/slots/           the disk cache (--slot-save-path)
       ~/.config/carl/router-presets.ini   the router presets (router mode only)
-      ~/.config/carl/dashboard.json   the dashboard's detail level (simple / full)
+      ~/.config/carl/dashboard.json   the dashboard's levels (each section: collapsed / simple / full)
 ```
 
 `CARL_CONF_DIR` moves the files of `~/.config/carl` (not the API key) to a different folder. `tools/carl.py`, the launchers and the dashboard use it.
@@ -185,8 +185,8 @@ The `tools/monitor/` package:
 
 | Layer | Modules |
 |---|---|
-| Pure: formats, state, settings, views | `fmt`, `words` (the glossary's names for the values of the server and `config.json`), `model`, `keys`, `state`, `settings`, `cards`, `arrange`, `logbook`, `clients`, `views`, `settings_view`, `card_form`, `card_view` |
-| Adapters | `system` (ps, netstat, sysctl, pmset), `api`, `collector`, `logtail`, `store` (over `carl.py`), `gguf`, `fsio`, `jobs` (restart, Auto-tune, downloads, the disk limit), `terminal`, `uiprefs` (the detail level in `dashboard.json`) |
+| Pure: formats, state, settings, views | `fmt`, `words` (the glossary's names for the values of the server and `config.json`), `model`, `keys`, `state`, `settings`, `cards`, `arrange`, `logbook`, `clients`, `views`, `views_connect` (the Connect tab), `settings_view`, `settings_panels` (one module for each Settings panel; `page`: the sections, the side column and the scroll), `card_form`, `card_view` |
+| Adapters | `system` (ps, netstat, sysctl, pmset), `api`, `collector`, `logtail`, `store` (over `carl.py`), `gguf`, `fsio`, `jobs` (restart, Auto-tune, downloads, the disk limit), `terminal`, `uiprefs` (the levels in `dashboard.json`) |
 | The disk cache | `diskcache` (the limit), `slotpack` (shared storage: saved sessions stored as changes to their saved prompt) |
 | Other computers | `cacheapi` (the dashboard's API), `clientsync` (the pushed client config) |
 | Wiring | `app`, `controller`, `cli` |
@@ -195,9 +195,9 @@ The `tools/monitor/` package:
 
 | Tab | What it does |
 |---|---|
-| Live | The live state of the server and the Mac |
+| Live | The live state of the server and the Mac: SLOTS, SPEED, MEMORY, THIS MAC, CONNECT, HEALTH, MODEL, RECENT REQUESTS, LOG (no server: SERVER, THIS MAC, LOG) |
 | Connect | The address, the key and the client configs to copy. Sub-tabs: **Setup** and **Clients**. `i` installs the clients on this Mac (`u`: the model lists only). `z` makes the client package, `f` shows it in the Finder. `P` sends the client config. |
-| Requests | Each finished request with its speeds |
+| Requests | Each finished request with its speeds, and a mean row |
 | Log | The server log |
 | Settings | Six panels: Server, Models, Auto fit, Auto-tune, Router, Caching |
 
@@ -210,7 +210,8 @@ The `tools/monitor/` package:
 | Router | Router mode, and Load / Unload of a model |
 | Caching | The disk cache: the limit, the switches, **Clear** |
 
-- Each screen has two detail levels, simple and full. `D` changes the level, and `uiprefs` saves it in `dashboard.json` (never in `config.json`). `--expand` starts in full detail for one run.
+- Each screen is made of sections. Each section has its own level: collapsed, simple or full (two levels, collapsed and open, where full adds nothing). Tab / Shift-Tab select a section, `L` changes its level, and `D` sets every section to simple or full. `uiprefs` saves the levels in `dashboard.json` (never in `config.json`). `--expand` shows every section at full for one run.
+- Every tab scrolls as one page. The Live cards are in one column below 100 columns, two from 100, three from 190. The Settings panels and the Connect tab put their help in a side column from 151 columns.
 - The dashboard keeps the disk cache in its limit. OpenCode and Pi fill the cache.
 - The Connect tab runs `host/serve.sh install --local --port N` (the setup, without questions) in the background, after a question. Its output shows in the tab.
 - `z` runs the code of `./carl.sh package` in a thread (`jobs.make_package`). The card **CLIENT PACKAGE** shows the zip and the key warning, or why CARL made no package.

@@ -15,11 +15,10 @@ from monitor.api import Endpoint
 from monitor.app import App, Machine
 from monitor.cli import Options
 from monitor.collector import Collector
-from monitor.fmt import ANSI, RED
+from monitor.fmt import ANSI, RED, aligned
 from monitor.jobs import Paths, ServerJobs
 from monitor.model import ModelInfo, draft_bytes, drafter_missing
 from monitor.settings import Schema, SettingsService, fit_sentence, net_choices
-from monitor.settings_panels.models import drafter_line
 from monitor.settings_view import SettingsView
 from monitor.state import SP_MODELS, Download, UIState
 
@@ -114,7 +113,7 @@ class DashboardTest(unittest.TestCase):
         self.assertIn("not downloaded", text)
         self.assertIn("Download (d)", text)
         self.assertIn("Press d to download its MTP drafter", text)
-        self.assertIn("speculation uses n-gram only", drafter_line(self.store.models[0], "/home/u", False))
+        self.assertRegex(text, r"MTP drafter \S+ MB, not downloaded\. Until you download it \(d\), speculation uses n-gram")
 
     def test_a_custom_gemma_model_is_offered_its_drafter(self) -> None:
         """Phase 21.1: a custom Gemma 4 file with no drafter yet: the offer line and Download (d)."""
@@ -128,8 +127,7 @@ class DashboardTest(unittest.TestCase):
         self.app.ctl.svc.models.get(refresh=True)                   # the list as the dashboard reads it again
         self.keys("5", "]")
         text = self.text()
-        self.assertIn("same size as gemma-4-e4b", text)
-        self.assertIn("Press d to download it", text)
+        self.assertIn("MTP drafter None yet. The drafter of gemma-4-e4b fits it (60 MB): press d.", text)
         self.assertIn("Download (d)", text)
         with mock.patch("monitor.jobs.start_tool", return_value=FakeProc()) as start:
             self.keys("d")
@@ -171,7 +169,9 @@ class DashboardTest(unittest.TestCase):
         self.keys("5", "]", "x")
         confirm = self.ui.confirm2
         assert confirm is not None
-        self.assertIn("Its MTP drafter goes too", " ".join(confirm.lines))
+        shown = ANSI.sub("", "\n".join(map(str, aligned(confirm.lines))))      # one row per file that goes
+        self.assertRegex(shown, r"MTP drafter +63 MB   /m/mtp-gem\.gguf")
+        self.assertRegex(shown, r"Model +4\.3 GB   /m/gem\.gguf")
 
 
 if __name__ == "__main__":

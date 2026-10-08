@@ -73,14 +73,14 @@ opencode
 
 ## The dashboard
 
-The live state of the server: what it does now, the slots, the speed, the memory, and the requests.
+The live state of the server and the Mac: what the server does now, the slots, the speed, the memory, this Mac (memory pressure, swap, GPU, power, heat), the requests and the log.
 
 ![The CARL dashboard](assets/dashboard.gif)
 
 - **Tabs:** Live, Connect (install the clients, make the client package, send their config), Requests, Log, Settings.
 - **Settings (tab 5):** six panels: Server, Models, Auto fit, Auto-tune, Router, Caching. Push `[` or `]` to change the panel.
-- **Detail:** push `D` to change between simple and full detail. The dashboard keeps your choice.
-- The footer shows the keys of the screen that you see. `?` shows all keys of that screen.
+- **Levels:** each section of a screen has its own level: collapsed, simple or full. Push Tab to select a section and `L` to change its level, or click its title. Push `D` to set every section to simple or full. The dashboard keeps your choice.
+- Every tab scrolls as one page. The footer shows the keys of the screen that you see. `?` shows all keys of that screen.
 - More: [The dashboard](USERGUIDE.md#10-the-dashboard).
 
 ![The Settings tab](assets/settings.png)

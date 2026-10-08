@@ -58,7 +58,10 @@ class AppTest(unittest.TestCase):
     def test_tabs_by_key_and_by_click(self) -> None:
         self.keys("2")
         self.assertEqual(self.ui.tab, 1)
-        self.keys("\t")
+        self.keys("\t")                                  # Tab selects a section, not the next tab
+        self.assertEqual(self.ui.tab, 1)
+        self.assertEqual(self.ui.section, self.ui.sections[0])
+        self.keys("3")
         self.assertEqual(self.ui.tab, 2)
         tab4 = next(r for r in self.ctl.regions if r.action == "tab:3")
         self.keys(click(tab4.x0, tab4.y))
@@ -73,7 +76,7 @@ class AppTest(unittest.TestCase):
             if data:
                 self.ctl.handle_input(data)
         self.assertEqual(self.ui.tab, 1)
-        self.assertEqual(self.ui.lines, 6)              # no "-" / "+" taken from the report's digits
+        self.assertEqual(self.ui.lines, 0)              # no "-" / "+" taken from the report's digits (0: by height)
 
     def test_card_levels_lines_help_and_refresh(self) -> None:
         from monitor.model import ServerData
@@ -81,11 +84,13 @@ class AppTest(unittest.TestCase):
         self.app.frame(self.ctl.data)
         title = next(r for r in self.ctl.regions if r.action == "level:connect")
         self.keys(click(title.x0 + 3, title.y))
-        self.assertEqual(self.ui.levels["connect"], 0)          # a click collapses the card
+        self.assertEqual((self.ui.levels["connect"], self.ui.section), (2, "connect"))   # a click: simple -> full
         self.keys(click(title.x0 + 3, title.y))
-        self.assertEqual(self.ui.levels["connect"], 1)          # and opens it again
-        self.keys("D", "++-?")                                  # the log lines: full detail; one read, key by key
-        self.assertEqual((self.ui.lines, self.ui.help), (8, True))
+        self.assertEqual(self.ui.levels["connect"], 0)          # full -> collapsed
+        self.keys("L")
+        self.assertEqual(self.ui.levels["connect"], 1)          # L cycles the selected section: open again
+        self.keys("D", "++-?")                                  # the log lines (from 3: 5, 7, 5); one read, key by key
+        self.assertEqual((self.ui.lines, self.ui.help), (5, True))
         self.assertTrue(self.ctl.handle_input(" "))
 
     def test_quit_dialog(self) -> None:
@@ -237,7 +242,8 @@ class AppTest(unittest.TestCase):
         self.assertEqual(self.ui.tune_model, TUNE_ALL)
         text = " ".join(ANSI.sub("", self.screen()).split())
         self.assertIn("all models (", text)
-        self.assertIn("Last results", text)
+        self.assertIn("Model Tuned Speculation Context memory Slots × context", text)     # the last results, a table
+        self.assertIn("big not tuned on this Mac", text)
         with mock.patch("monitor.jobs.start_tool") as start, mock.patch("threading.Thread") as thread:
             self.app.jobs.run_tune(self.ctl.data, confirmed=True)
             thread.call_args.kwargs["target"]()                 # the work, here and now
@@ -257,7 +263,7 @@ class AppTest(unittest.TestCase):
         self.keys("A")                                          # the Server panel's A opens the Auto fit panel
         self.assertEqual(self.ui.sp, SP_FIT)
         text = self.screen()
-        for part in ("AUTO FIT", "This Mac", "Auto fit suggests", "Use this (Enter)", "Ranking"):
+        for part in ("AUTO FIT", "THIS MAC", "Suggests", "Use this (Enter)", "RANKING"):
             self.assertIn(part, text)
         self.keys("\r")                                         # Use this: the pick (big) is here, back to Server
         self.assertEqual((p["model"], p["ctx"], p["slots"]), ("big", 98304, "auto"))
@@ -272,7 +278,7 @@ class AppTest(unittest.TestCase):
         self.keys("n")                                          # no download (it would start a process)
         self.assertIsNone(self.ui.confirm2)
         self.assertEqual(p["model"], "remote")
-        self.assertTrue(any("remote" in x and "the model that you chose" in x for x in self.server_text(160)))
+        self.assertTrue(any("Suggests  remote ★   your choice" in x for x in self.server_text(160)))   # AUTO FIT section
 
     def fake_serve(self, body: str) -> None:
         """A host/serve.sh in the test repo that the Connect tab's installer runs instead."""
@@ -292,9 +298,9 @@ class AppTest(unittest.TestCase):
 
     def test_connect_tab_says_how_to_install(self) -> None:
         self.keys("2")
-        text = " ".join(self.screen().split())
+        text = " ".join(ANSI.sub("", self.screen()).split())
         for part in ("SET UP OPENCODE AND PI", "./carl.sh install", "[ Install on this Mac (i) ]",
-                     "[ Update the model lists (u) ]", "./carl.sh --vm", "(now: this Mac only)"):
+                     "[ Update the model lists (u) ]", "./carl.sh --vm", "Network this Mac only"):
             self.assertIn(part, text)
 
     def test_connect_install_asks_first_then_runs_and_shows_its_output(self) -> None:
@@ -312,9 +318,9 @@ class AppTest(unittest.TestCase):
         self.finish_install()
         assert self.ui.install is not None
         self.assertEqual(self.ui.install.lines, ["args: install --local --port 8095 --config-only", "CARL_CMD=./carl.sh"])
-        text = self.screen()
-        self.assertIn("INSTALLER", text)
-        self.assertIn("done: configs", text)
+        text = ANSI.sub("", self.screen())
+        self.assertIn("INSTALLER  done", text)
+        self.assertRegex(text, r"Command +\./carl\.sh install --config-only")
         self.assertIn("Open a new terminal", self.ui.toast_msg[0])
         self.keys("x")                                  # close: the config preview is back
         self.assertFalse(self.ui.install_shown)
@@ -325,8 +331,9 @@ class AppTest(unittest.TestCase):
         self.keys("2")
         text = " ".join(" ".join(x.strip(" │") for x in ANSI.sub("", self.screen()).splitlines()).split())
         installed = [m["name"] for m in self.store.models if m["status"] == "downloaded"]
-        self.assertIn(f"OpenCode lists 1 model, {len(installed)} are installed. An update adds", text)
-        self.assertIn("removes gone", text)
+        self.assertIn("⚠ OpenCode on this Mac is out of date.", text)
+        self.assertIn(f"An update adds {', '.join(installed[:-1])} and {installed[-1]}.", text)
+        self.assertIn("An update removes gone.", text)
         self.assertIn("Press u to put the installed models", text)          # the quick tip
 
     def test_connect_install_failure_is_shown(self) -> None:
@@ -334,8 +341,9 @@ class AppTest(unittest.TestCase):
         self.ctl.do("insall")
         self.ctl.do("insyes")
         self.finish_install()
-        text = self.screen()
-        self.assertIn("stopped with an error (exit code 3)", text)
+        text = ANSI.sub("", self.screen())
+        self.assertIn("INSTALLER  stopped with an error", text)
+        self.assertRegex(text, r"Exit code +3")
         self.assertIn("npm: network down", text)
         self.assertIn("The installer stopped with an error", self.ui.toast_msg[0])
 
@@ -374,7 +382,7 @@ class AppTest(unittest.TestCase):
         text = self.screen()
         self.assertIn("[ Make the client package (z) ]", ANSI.sub("", text))
         self.assertNotIn("Show it in the Finder", ANSI.sub("", text))      # no package yet
-        self.assertIn("z make the client package", ANSI.sub("", self.app.footer(200)))
+        self.assertIn("z package", ANSI.sub("", self.app.footer(200)))
         self.keys("?")
         card = ANSI.sub("", self.screen())
         self.assertIn("make the client package", card)
@@ -412,10 +420,10 @@ class AppTest(unittest.TestCase):
         self.assertIn("carl-client/api-key", names)
         self.assertNotIn("carl-client/__pycache__/x.pyc", names)                 # never caches or backups
         self.assertNotIn("carl-client/opencode.json.bak.1", names)
-        for part in ("CLIENT PACKAGE made:", "The client package is ready:", "CAUTION: the package holds the API key",
+        for part in ("CLIENT PACKAGE made", "Zip ~/dist/carl-client-", "⚠ The package holds the API key",
                      "unzip carl-client-", "cd carl-client && ./setup", "[ Show it in the Finder (f) ]"):
             self.assertIn(part, text)
-        self.assertIn("f show it in the Finder", ANSI.sub("", self.app.footer(200)))
+        self.assertIn("f Finder", ANSI.sub("", self.app.footer(200)))
         with mock.patch("subprocess.Popen") as popen:
             self.keys("f")
         self.assertEqual(popen.call_args[0][0], ["open", "-R", path])
@@ -580,14 +588,15 @@ class AppTest(unittest.TestCase):
         lines = " ".join(ANSI.sub("", x if isinstance(x, str) else x.text) for x in clients_lines(view, [], [], 400))
         self.assertIn("vm-1", lines)
         self.assertIn("up to date", lines)
-        self.assertIn("waits for you to apply it", lines)
+        self.assertRegex(lines, r"vm-2 .* at start +on hold ")                    # its Config column
+        self.assertIn("On hold: the computer does not apply a new config at once.", lines)
 
     def test_router_panel_switches_the_mode_after_a_question(self) -> None:
         self.keys("5", "[", "[")                                # back from the first panel: Caching, then Router
         self.assertEqual(self.ui.sp, SP_ROUTER)
         text = " ".join(" ".join(x.strip(" │") for x in ANSI.sub("", self.screen()).splitlines()).split())
         for part in ("ROUTER", "Single model (s)", "Router mode: OpenCode and Pi switch (r)",
-                     "Each switch costs time", "Update the OpenCode and Pi configs (u)"):
+                     "EACH SWITCH COSTS TIME", "Update the OpenCode and Pi configs (u)"):
             self.assertIn(part, text)
         self.assertNotIn("prompt cache", text)
         self.keys("r")                                          # the key asks, as a click does
@@ -630,33 +639,34 @@ class AppTest(unittest.TestCase):
         self.assertNotIn("Connect ⚠", self.screen())
 
     def test_server_card_sections_at_80_160_and_200_columns(self) -> None:
-        """The state, the table and the buttons, Memory, Auto fit suggests; the Quick tip, About and the model
-        list beside them when the card is wide, under them else; no key list in the card (the footer and ? have
-        it)."""
+        """The SERVER section (the state, the table and the buttons), MEMORY, AUTO FIT, the MODEL card; About and the
+        model list beside them when the panel is wide, under them else; no key list in the panel (the footer and ?
+        have it)."""
         self.keys("5")
         for cols in (80, 160, 200):
             with self.subTest(cols=cols):
                 text = self.server_text(cols)
-                heads = {h: next(i for i, x in enumerate(text) if f" {h} ─" in x)
-                         for h in ("Quick tip", "About: Model", "Choose a model", "Memory", "Auto fit suggests")}
-                self.assertLess(heads["Quick tip"], heads["About: Model"])
-                self.assertLess(heads["Memory"], heads["Auto fit suggests"])
-                self.assertFalse(any(" Keys ─" in x for x in text))
+                heads = {h: next(i for i, x in enumerate(text) if f"▾ {h} " in x)
+                         for h in ("SERVER", "MEMORY", "AUTO FIT", "MODEL", "ABOUT: MODEL", "MODELS")}
+                self.assertEqual(heads["SERVER"], 0)
+                self.assertLess(heads["MEMORY"], heads["AUTO FIT"])
+                self.assertLess(heads["MEMORY"], heads["MODEL"])
+                self.assertLess(heads["ABOUT: MODEL"], heads["MODELS"])
+                self.assertFalse(any("KEYS" in x for x in text))
                 buttons = [i for i, x in enumerate(text) if "[ Start the server (a) ]" in x]
                 self.assertEqual(len(buttons), 1)
                 if cols >= 160:                     # beside the table
-                    self.assertLess(heads["Quick tip"], buttons[0])
+                    self.assertLess(heads["ABOUT: MODEL"], buttons[0])
                 else:
-                    self.assertGreater(heads["Quick tip"], buttons[0])
-                card = text[:next(i for i, x in enumerate(text) if "╰" in x)]
-                joined = " ".join(" ".join(x.strip(" │").split()) for x in card)
-                if cols == 80:
-                    self.assertIn("GGUF file from Hugging Face.", joined)                 # the help, in full
-                self.assertIn("The server is not running. Press a to start it", joined)  # the state, the next action
-                self.assertIn("✓ It fits.", joined)
-        footer = ANSI.sub("", self.app.footer(100))
+                    self.assertGreater(heads["ABOUT: MODEL"], buttons[0])
+                joined = " ".join(" ".join(x.replace("│", " ").split()) for x in text)
+                self.assertIn("GGUF file from Hugging Face.", joined)                   # the help, in full
+                self.assertIn("The server is not running. a starts it with these settings.", joined)   # the state
+                self.assertIn("Fits ✓ yes", joined)
+        footer = ANSI.sub("", self.app.footer(130))
         self.assertIn("a apply", footer)
-        self.assertTrue(footer.endswith("D detail · ? all keys · q quit"))
+        self.assertTrue(footer.endswith("Tab section   L level   D detail   ? all keys   q quit"))
+        self.assertTrue(ANSI.sub("", self.app.footer(100)).endswith("Tab section   L level   D detail   ? all keys   q quit"))
 
     def test_every_panel_has_its_keys_a_quick_tip_and_fits(self) -> None:
         """Every Settings panel and Connect sub-tab, at 100, 140 and 200 columns: a quick tip, its own keys
@@ -677,8 +687,13 @@ class AppTest(unittest.TestCase):
                         lines = self.app.frame(self.ctl.data)
                         self.assertTrue(all(vlen(x) <= cols for x in lines))
                         self.assertTrue(self.ui.keys)
-                        if (tab, sub) != (4, 3) or self.store.models:
-                            self.assertIn("Quick tip", ANSI.sub("", "\n".join(lines)))
+                        shown = ANSI.sub("", "\n".join(lines))
+                        if (tab, sub) == (4, 0):        # the Server panel: the selected row's tip opens About
+                            self.assertIn("Press Enter to choose a model from the list.", shown)
+                        elif (tab, sub) == (4, 1):
+                            self.assertIn("Press Enter to use it in the Server panel.", shown)   # the selected model's tip
+                        elif (tab, sub) != (4, 3) or self.store.models:
+                            self.assertIn("quick tip", shown.lower())     # a QUICK TIP section, or a Quick tip heading
         for tab, sp in [(4, n) for n in range(6)] + [(0, 0), (1, 0), (2, 0), (3, 0)]:   # ? works everywhere
             self.ui.tab, self.ui.sp, self.ui.help = tab, sp, False
             self.keys("?")

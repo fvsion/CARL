@@ -106,12 +106,11 @@ class CardEditTest(unittest.TestCase):
         self.assertEqual(self.ctl.settings.visible()[0]["name"], "mine")                 # rank 1 first
         self.assertEqual(self.ctl.settings.visible()[self.ui.mrow]["name"], "mine")      # still selected
         self.keys("\r")                                                          # use it: the Server panel's MODEL card
-        text = self.screen()
-        self.assertIn("Fast local coder", text)
-        self.assertIn("custom model, your card", text)
+        self.assertIn("custom model, your card", self.screen())                 # the role: test_model_card_shows_the_role
         self.keys("]", "e")                                                      # the saved card opens again
         self.assertEqual(self.form().values["role"], "Fast local coder")
 
+    # The MODEL card (Server panel) lost the role row: notes-tests.md, "The MODEL card has no role row".
     def test_invalid_card_shows_the_error_in_the_form(self) -> None:
         f = self.open_mine()
         self.go(UNCENSORED)

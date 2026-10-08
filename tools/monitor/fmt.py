@@ -7,7 +7,7 @@ import re
 import textwrap
 import unicodedata
 from dataclasses import dataclass, field
-from typing import Callable, NamedTuple, Sequence, Union
+from typing import NamedTuple, Sequence, Union
 
 from carl_core.domain.units import tokens
 
@@ -80,6 +80,24 @@ def wwrap(text: str | None, w: int) -> list[str]:
 
 
 def cwrap(text: str | None, w: int, indent: str = "") -> list[str]:
+    """Word-wrap like _cwrap, but no line holds one lone word at the end of a paragraph ("GiB.", "minutes."): the
+    lines are wrapped narrower (up to a quarter) until the last one holds two words (Phase 23.2)."""
+    out = _cwrap(text, w, indent)
+    if len(out) < 2 or "\n" in (text or ""):
+        return out
+
+    def lone(lines: list[str]) -> bool:
+        return len(ANSI.sub("", lines[-1]).split()) == 1 and len(ANSI.sub("", lines[-2]).split()) > 2
+    if not lone(out):
+        return out
+    for narrower in range(max(w, 10) - 1, int(max(w, 10) * 0.75), -1):
+        alt = _cwrap(text, narrower, indent)
+        if not lone(alt):
+            return alt
+    return out
+
+
+def _cwrap(text: str | None, w: int, indent: str = "") -> list[str]:
     """Word-wrap text that may hold colour codes to w visible columns (at least 10), keeping
     the colours: a line ends with a reset and the next starts with the codes still active.
     Runs of spaces are kept inside a line (padded labels stay aligned) and dropped where a
@@ -153,8 +171,9 @@ def home_short(path: str, home: str) -> str:
 
 
 def pill(text: str, bg: str) -> str:
-    """Bold black text on a coloured background (bg: an SGR background code such as 42)."""
-    return f"\x1b[1;30;{bg}m {text} {R}"
+    """Bold black text on a coloured background (bg: an SGR background code such as 42). The black is colour 16 of
+    the 256: many terminals draw bold colour 30 as grey, which is hard to read on red."""
+    return f"\x1b[1;38;5;16;{bg}m {text} {R}"
 
 
 def lv(label: str, value: str, w: int = 10) -> str:
@@ -171,6 +190,39 @@ class Ln:
 
 
 CardLine = Union[str, Ln]
+
+
+LW = 16                  # the widest label column of a section (a card's own is as wide as its labels need)
+ROW_MARK, ROW_SEP = "\x1f", "\x1e"
+
+
+def row(label: str, value: str) -> str:
+    """One reading: a label, then its value (one reading per row: no " · " runs). aligned() gives every card
+    its own label column, as wide as its longest label."""
+    return f"{ROW_MARK}{label}{ROW_SEP}{value}"
+
+
+def aligned(lines: list, w: int = 0) -> list:
+    """The section's rows with their labels in one dim column (the longest label + 2, at most LW + 2). With w (the
+    text width), a long value wraps under its own column, not under the label."""
+    labels = [(ln.text if isinstance(ln, Ln) else ln)[1:].split(ROW_SEP, 1)[0] for ln in lines
+              if (ln.text if isinstance(ln, Ln) else ln if isinstance(ln, str) else "").startswith(ROW_MARK)]
+    lw = min(max((len(x) for x in labels), default=0) + 2, LW + 2)
+    out: list = []
+    for ln in lines:
+        text = ln.text if isinstance(ln, Ln) else ln
+        if not isinstance(text, str) or not text.startswith(ROW_MARK):
+            out.append(ln)
+            continue
+        lab, val = text[1:].split(ROW_SEP, 1)
+        lab = lab[:1].upper() + lab[1:]                     # labels start with a capital (user, 2026-10-08)
+        if isinstance(ln, Ln) or not w or vlen(val) <= w - lw:
+            out.append(Ln(lv(lab, val, lw), ln.act, ln.spans) if isinstance(ln, Ln) else lv(lab, val, lw))
+            continue
+        parts = cwrap(val, w - lw)
+        out.append(lv(lab, parts[0], lw))
+        out += [" " * lw + x for x in parts[1:]]
+    return out
 
 
 class Card(NamedTuple):
@@ -207,14 +259,32 @@ def button_rows(prefix: str, items: Sequence[tuple[str, str]], w: int) -> list[L
     return rows
 
 
-def draw_card(name: str, title: str, summary: str, lines: Sequence[CardLine], w: int, lvl: int) -> list[Row]:
+def level_mark(lvl: int, marks: int) -> str:
+    """The level of a section in its title: ▸ collapsed, ▾ open; with three levels also ○○ / ●○ / ●● (collapsed,
+    simple, full). marks = 0: no mark (a box that has no levels)."""
+    if not marks:
+        return ""
+    arrow = "▸" if not lvl else "▾"
+    dots = ("○○", "●○", "●●")[max(0, min(lvl, 2))] if marks == 3 else ""
+    return f"{arrow} " + (f"{{T}} {dots}" if dots else "{T}")
+
+
+def draw_card(name: str, title: str, summary: str, lines: Sequence[CardLine], w: int, lvl: int,
+              marks: int = 0, sel: bool = False) -> list[Row]:
     """Rows of a bordered card w columns wide. Its title row is clickable ("level:<name>"): lvl 0 =
-    collapsed (one row: ▸, the title and its summary), else open (the lines in a box)."""
+    collapsed (one row: ▸, the title and its summary), else open (the lines in a box). marks: 3 = the
+    section has three levels (its title shows ○○ ●○ ●●), 2 = two (collapsed / open), 0 = no levels.
+    sel: the selected section (Tab): its title is drawn reversed."""
+    t = f"\x1b[7m {title} \x1b[27m" if sel else title
+    mark = level_mark(lvl, marks)
+    shown = mark.replace("{T}", f"{B}{CYN}{t}{R}{CYN}") + R if mark else f"{B}{CYN}{t}{R}"
     if not lvl:
-        head = f"{DIM}──{R} {B}{CYN}▸ {title}{R}  {summary} " if summary else f"{DIM}──{R} {B}{CYN}▸ {title}{R} "
+        if not mark:
+            shown = f"{B}{CYN}▸ {t}{R}"
+        head = f"{DIM}──{R} {shown}  {summary} " if summary else f"{DIM}──{R} {shown} "
         fill = max(w - vlen(head), 0)
         return [(fit(head + DIM + "─" * fill, w), [(0, w, f"level:{name}")])]
-    head = f"{DIM}╭─{R} {B}{CYN}{title}{R}  {summary} " if summary else f"{DIM}╭─{R} {B}{CYN}{title}{R} "
+    head = f"{DIM}╭─{R} {shown}  {summary} " if summary else f"{DIM}╭─{R} {shown} "
     fill = max(w - vlen(head) - 1, 0)
     rows: list[Row] = [(fit(head + DIM + "─" * fill, w - 1) + f"{DIM}╮{R}", [(0, w, f"level:{name}")])]
     for item in lines:
@@ -227,27 +297,24 @@ def draw_card(name: str, title: str, summary: str, lines: Sequence[CardLine], w:
     return rows
 
 
+def reveal(ui: object, rows: Sequence[Row], attr: str, height: int) -> None:
+    """Tab selected another section: scroll the page (ui.<attr>) so that its title row is on the screen. Only once
+    per selection, so the wheel and PgUp PgDn still move the page after it."""
+    sel = getattr(ui, "section", "")
+    if not sel or getattr(ui, "revealed", "") == sel:
+        return
+    setattr(ui, "revealed", sel)
+    at = next((i for i, (_, sp) in enumerate(rows) if any(act == f"level:{sel}" for _, _, act in sp)), None)
+    if at is None:
+        return
+    top = int(getattr(ui, attr))
+    if at < top or at >= top + max(height - 2, 1):
+        setattr(ui, attr, max(0, at - 1))
+
+
 def indent(rows: Sequence[Row], n: int = 1) -> list[Row]:
     """Rows moved n columns to the right, clickable parts included."""
     return [(" " * n + t, [(n + a, n + b, act) for a, b, act in sp]) for t, sp in rows]
-
-
-def merge_columns(left: Sequence[CardLine], right: Sequence[CardLine], lw: int) -> list[CardLine]:
-    """Two columns inside one card: left lines cut / padded to lw, a dim divider, then the right
-    lines; the clickable parts of both are kept (the right ones shifted)."""
-    out: list[CardLine] = []
-    shift = lw + 3                                       # " │ "
-    for i in range(max(len(left), len(right))):
-        lt = left[i] if i < len(left) else ""
-        rt = right[i] if i < len(right) else ""
-        ll = lt if isinstance(lt, Ln) else Ln(lt)
-        rl = rt if isinstance(rt, Ln) else Ln(rt)
-        spans = list(ll.spans) + ([(0, lw, ll.act)] if ll.act else [])
-        spans += [(a + shift, b + shift, act) for a, b, act in rl.spans]
-        if rl.act:
-            spans.append((shift, shift + max(vlen(rl.text), 1), rl.act))
-        out.append(Ln(fit(ll.text, lw) + f" {DIM}│{R} " + rl.text, spans=spans))
-    return out
 
 
 SIDE_MIN = 140      # a card at least this wide (inside) puts its explanations in a side column
@@ -260,56 +327,22 @@ def side_width(inner: int) -> int:
     return max(44, min(76, inner * 2 // 5))
 
 
-def side_lines(tip: str, sections: Sequence[Section], w: int) -> list[CardLine]:
-    """The side column: a one-line Quick tip about the selection, then each section under its own
-    header (sections without lines are left out)."""
-    out: list[CardLine] = []
-    if tip:
-        out += [heading("Quick tip", w), *cwrap(f"{CYN}{tip}{R}", w)]
-    for title, body in sections:
-        if not body:
-            continue
-        if out:
-            out.append("")
-        out.append(heading(title, w))
-        for x in body:
-            if isinstance(x, str):
-                out += cwrap(x, w)
-            elif x.spans:                    # buttons: as they are
-                out.append(x)
-            else:                            # a clickable line: every wrapped piece clicks
-                out += [Ln(t, act=x.act) for t in cwrap(x.text, w)]
-    return out
-
-
 SIDE_MAX = 90       # wider explanations are hard to read
 
 
-def with_side(main: Callable[[int], list[CardLine]], tip: str, sections: Sequence[Section], inner: int,
-              main_w: int = 0, beside: bool = True) -> list[CardLine]:
-    """The controls and the data on the left; the quick tip and the explanations beside them when
-    the card is wide (SIDE_MIN), else under them, under the same headers. main(w) draws w columns;
-    main_w: the width the controls need (the side column takes the rest, up to SIDE_MAX); beside=False:
-    always under them (a panel whose table needs the whole width)."""
-    if beside and inner >= SIDE_MIN:
-        mw = max(main_w, inner - SIDE_MAX - 3) if main_w else inner - side_width(inner) - 3
-        if inner - mw - 3 >= 44:
-            return merge_columns(main(mw), side_lines(tip, sections, inner - mw - 3), mw)
-    return [*main(inner), "", *side_lines(tip, sections, inner)]
-
-
 def key_hint(keys: Sequence[Key]) -> str:
-    """The footer's keys: "↑↓ select · a apply · ..." (key bold, what it does dim)."""
-    return f"{DIM} · {R}".join(f"{B}{k}{R}{DIM} {what}{R}" for k, what in keys)
+    """The footer's keys: "↑↓ select   a apply   ..." (key bold, what it does dim)."""
+    return "   ".join(f"{B}{k}{R}{DIM} {what}{R}" for k, what in keys)       # three spaces: no " · " (Phase 23.2)
 
 
 def footer_keys(keys: Sequence[Key], tail: Sequence[Key], w: int) -> str:
     """The footer within w columns: the screen's keys, then tail (D detail, ? all keys, q quit),
     which always stays; the screen's last keys go first when the line is too long."""
-    ks = list(keys)
-    while ks and vlen(key_hint([*ks, *tail])) > w:
+    sticky = [k for k in keys if k[0] in ("Tab", "L")]          # the section keys stay, as the tail does
+    ks = [k for k in keys if k not in sticky]
+    while ks and vlen(key_hint([*ks, *sticky, *tail])) > w:
         ks.pop()
-    return key_hint([*ks, *tail])
+    return key_hint([*ks, *sticky, *tail])
 
 
 def side_by_side(left: Sequence[Row], right: Sequence[Row], lw: int, pad_left: bool = True) -> list[Row]:

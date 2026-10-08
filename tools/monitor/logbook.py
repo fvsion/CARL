@@ -95,6 +95,7 @@ class RequestRecord:
     tg: Optional[float] = None      # tokens generated per second
     acc: Optional[float] = None     # share of draft tokens accepted
     error: bool = False
+    source: str = ""        # where the reused tokens came from: this slot, the RAM cache, the disk cache (Phase 23.5)
 
 
 class LogBook:
@@ -166,7 +167,10 @@ class LogBook:
                 self.requests.append(c)
                 del self.current[task]
 
-    def wall(self, off: Optional[float]) -> str:
-        """A log offset as the local wall-clock time."""
-        return time.strftime("%H:%M:%S", time.localtime(self.start + off)) if self.start and off is not None else "--:--:--"
+    def wall(self, off: Optional[float], ms: bool = False) -> str:
+        """A log offset as the local wall-clock time (ms: with milliseconds, 13:10:53.265)."""
+        if not self.start or off is None:
+            return "--:--:--"
+        t = self.start + off
+        return time.strftime("%H:%M:%S", time.localtime(t)) + (f".{int(t * 1000) % 1000:03d}" if ms else "")
 

@@ -307,7 +307,7 @@ Use this procedure for clients that are not on the server Mac and not in the VMw
 
 - `orcarouter-27b-q3` is the one exception to the 96K floor, because this build is for 24 GB Macs. The start tells you this. It suggests `./carl.sh tune orcarouter-27b-q3`, which selects the largest context that fits.
 - **Experts only: a larger GPU memory limit.** CAUTION: keep at least 6 GiB for macOS, or the Mac can stop. `sudo sysctl iogpu.wired_limit_mb=18432` gives the GPU more memory until the next restart. Then the stock Q4 `qwen3.8-27b` can run with ~84K. The abliterated Q4 gets only ~16K: use its Q3.
-- **Watch the memory on the Live tab of the dashboard.** Its first line ends with `Memory is normal.` If it says `Memory is low (macOS warns).` or `Memory is very low: …`, use a smaller `--ctx`.
+- **Watch the memory on the Live tab of the dashboard.** The **Pressure** row of the THIS MAC card shows the macOS memory pressure. If it says `warning` or `critical`, use a smaller `--ctx`.
 - **The launcher refuses a model and a context that do not fit.** It shows what they need and the GPU memory limit. It also shows the largest context that fits, and Auto fit's choice. `FIT_CHECK=0` is the expert override.
 - With 1 slot, the setup does not install the coder subagent ([The coder subagent](#the-coder-subagent-opencode-and-pi)).
 - NOTE: These estimates did not get a test on a 24 GB Mac.
@@ -428,7 +428,7 @@ The catalogue has four Gemma 4 models from Google. Each one is Google's QAT buil
 - **Sliding window.** Most Gemma layers look only at the last 1,024 tokens (the E4B: 512).
   - With the **full cache**, those layers keep every token. CARL can restore saved sessions and prompts, but the cache uses much more memory.
   - With the **window cache**, they keep only the last window. It uses less memory, but CARL cannot restore saved sessions and prompts.
-  - The setting `cache.swa` (Settings > Caching, **Gemma models**) decides this ([Models with sliding-window layers](#models-with-sliding-window-layers)).
+  - The setting `cache.swa` decides this: the **Sliding window** row of Settings > Server, or the **Gemma models** row of Settings > Caching ([Models with sliding-window layers](#models-with-sliding-window-layers)).
 - **Speculation: MTP with a drafter.** Gemma 4 has no MTP head in the model file. Google gives a separate drafter file for each model (`mtp-gemma-4-*.gguf`, 60–280 MB). `./carl.sh download NAME` gets the model and its drafter. A start gives the drafter to llama.cpp (`-md`).
   - The catalogue uses MTP + n-gram with 2 guesses. MTP makes new text faster, and n-gram makes edits faster. Measured on all four models (2026-10-04): 55% to 85% faster than no speculation ([the numbers](reference/models.md#gemma-4)).
   - If the drafter is not downloaded, the start uses n-gram speculation and tells you. Run `./carl.sh download NAME` again to get the drafter.
@@ -446,7 +446,7 @@ Router mode is for users who prefer to change models during the work. llama.cpp'
 - A switch takes 30 s to 2 min.
 - The default is **single model**: one model runs. Auto fit or you choose it in the Settings tab.
 
-WARNING: Every switch empties the RAM cache. The model that loads starts cold. OpenCode and Pi put a session back from the [disk cache](#7-fast-starts-the-disk-cache) about a second after the load. Any other client reads the whole session again (minutes for a long session). Keep this in mind before you switch.
+WARNING: After a switch, the new model has none of the sessions in memory. A saved session belongs to the model it ran on. When you switch back to that model, OpenCode and Pi restore the session from the [disk cache](#7-fast-starts-the-disk-cache) (with Saved sessions on, and for a Gemma model the full cache). A session that continues on the new model is read again: minutes for a long session. Keep this in mind before you switch.
 
 **To turn router mode on:**
 1. In the dashboard, push `5` for the Settings tab.
@@ -852,7 +852,8 @@ Gemma 4 models have sliding-window layers. llama.cpp can put their saved states 
 | **full cache** (`full`) | Always the full cache |
 | **window cache** (`window`) | Always the window cache. The least memory. Their sessions are read again after a restart. |
 
-- The start tells you which: `Sliding window: full cache. …` or `Sliding window: window cache. …`. The Memory section of Settings > Server tells you too.
+- The start tells you which: `Sliding window: full cache. …` or `Sliding window: window cache. …`. The **Sliding window** row of the MEMORY section (Settings > Server) tells you too.
+- The **Sliding window** row of Settings > Server is the same setting. When you select it, its ABOUT section shows the memory that a start needs with each cache. A change there applies with the other settings of the Server panel (`a`).
 - The memory check knows the window (from the layer pattern in the GGUF). Thus, such a model can fit a larger context than before.
 
 ### The files and the disk limit
@@ -1081,7 +1082,7 @@ It does these steps. The model loads one time for each speculation mode.
      | More | Very slow (red) |
 
    - The fast zone always includes 96K: CARL never shows 96K or less as slow.
-4. **Parallel requests** (not with `--quick`): the server stops. `llama-batched-bench` then measures the total write and read speed with 1, 2, 3 and 4 requests at the same time (as subagents that work together). The MODEL card shows the result in full detail.
+4. **Parallel requests** (not with `--quick`): the server stops. `llama-batched-bench` then measures the total write and read speed with 1, 2, 3 and 4 requests at the same time (as subagents that work together). The MODEL card (Settings > Server) shows the result at its full level.
 5. **Result:** q4 context memory, the best speculation, the context and the slots (2 if two slots of that context fit).
    - **The context is never less than 96K if 96K fits one slot.** Users need that much context for their work.
    - Above 96K, Auto-tune keeps the catalogue context if a cold read of it is not worse than slow on this Mac, and if it fits. Else, it selects the largest standard context in the fast zone (minimum 96K).
@@ -1106,8 +1107,8 @@ The dashboard is `tools/llama-monitor.py`. It shows the live state of the server
 - When the dashboard opens, a **CARL STARTS** card shows its progress: it reads the server state, the model list and what fits this Mac.
 - `./carl.sh llama` starts the server in the background, in its own process group under `nohup`. Thus, Ctrl-C cannot stop the server by accident. The dashboard then uses the terminal.
 - The server writes its log file (`~/models/logs/llama-server-<time>.log`). Its console output goes to `~/models/logs/.console-<port>.out`. The Log tab shows the log file. If that file is missing or empty, it shows the console file.
-- If the server stops on its own (a crash, a failed start), the header shows **STOPPED**, and the Live tab says "The server stopped.". The SERVER card shows the lines of the launcher ("The last start failed. The launcher said:"). Then `q` opens a short dialog ("No server runs."): push `q` again to quit.
-- **A refused start** (for example, a setup that does not fit) shows the launcher's `error:` line and the lines after it on the Live tab (SERVER card) and in the Memory section of Settings > Server.
+- If the server stops on its own (a crash, a failed start), the header shows **STOPPED**. The SERVER card of the Live tab shows `stopped`. After a failed start, its **State** row says `The last start failed.`, and the card shows the lines of the launcher ("The last start failed. The launcher said:"). Then `q` opens a short dialog ("No server runs."): push `q` again to quit.
+- **A refused start** (for example, a setup that does not fit) shows the launcher's `error:` line and the lines after it on the Live tab (SERVER card) and in the MEMORY section of Settings > Server.
 - `MONITOR=0 ./carl.sh llama` runs the server in the foreground with plain log output. Scripts and `nohup` starts do this automatically.
 
 **To quit:**
@@ -1137,110 +1138,169 @@ Stop, Apply, Auto-tune and a router load stop the model. If an agent's turn is r
 ```bash
 ./carl.sh monitor                       # finds the server's address itself
 ./carl.sh monitor --port 8081           # a server on a different port
-./carl.sh monitor --once --expand       # show one snapshot in full detail
+./carl.sh monitor --once                # print the Live tab one time, at the saved levels
 ```
 
-### Detail: simple or full
+### Levels: collapsed, simple or full
 
-Each screen has two detail levels:
-- **Simple** shows the main values. Each value has a short sentence that tells what it means.
-- **Full** adds the other values. It also shows the llama.cpp flag and the `config.json` key of each setting.
+Each screen is made of **sections**: the cards of the Live tab, and the parts of the Connect tab and of the Settings panels. Each section has its own **level**. Its title shows the level:
 
-Push `D` (or click `detail: simple (D)` at the right of the tab line) to change the level. The level applies to every screen.
-- The dashboard saves the level in `~/.config/carl/dashboard.json`, next to `config.json`. It never writes `config.json` for this.
-- `--expand` (for example `./carl.sh monitor --expand`) uses full detail for one run. It does not change the saved level.
+| Level | Title | Shows |
+|---|---|---|
+| Collapsed | `▸ SLOTS ○○  2 × 96K   27% used` | One row: the title and a short summary |
+| Simple (the default) | `▾ SLOTS ●○  2 × 96K   27% used` | The main values |
+| Full | `▾ SLOTS ●● …` | Also the other values |
+
+- A section where full adds nothing has two levels: collapsed (`▸`) and open (`▾`). Its title has no dots. Examples: the SERVER card of the Live tab, the HOW IT WORKS sections.
+- The Requests tab and the Log tab have one section each. They have no collapsed level: simple and full only.
+- ● and ○ in a title show the level. In a list, they keep their other meanings (downloaded, measured on this Mac, connected).
+
+**To change the level of one section:**
+1. Push Tab (or Shift-Tab) until the section is selected. Its title shows in reverse video, and the page scrolls to it.
+2. Push `L`. The level changes from simple to full, from full to collapsed, and from collapsed to simple.
+
+A click on the title of a section selects it and changes its level in the same way.
+
+**To change every section:** push `D`, or click `detail: … (D)` at the right of the tab line. `D` sets every section to simple, or every section to full. A collapsed section opens.
+
+- The tab line shows `detail: simple`, `detail: full` or `detail: mixed` (the sections of the screen have different levels).
+- The dashboard saves the level of each section in `~/.config/carl/dashboard.json`, next to `config.json`. It never writes `config.json` for this.
+- `--expand` (for example `./carl.sh monitor --expand`) shows every section at full for one run. It does not change the saved levels.
 
 ### Layout
 
 | Part | Contents |
 |---|---|
 | **Header** | The logo, the state word (● when a server runs, ○ when not), the model (in router mode: `router mode (N models)` after it), the uptime, the clock and **[ Quit ]**. The CARL logo shows in iTerm2, Ghostty, WezTerm and kitty. Other terminals show 😎. `CARL_LOGO=0` turns the logo off. |
-| **Tabs** | 1 Live, 2 Connect, 3 Requests, 4 Log, 5 Settings. The tab that you see is in brackets: `[1 Live]`. Click a tab, or push `1`–`5` or Tab. At the right: `detail: simple (D)`. |
+| **Tabs** | 1 Live, 2 Connect, 3 Requests, 4 Log, 5 Settings. The tab that you see is in brackets: `[1 Live]`. Click a tab, or push `1`–`5`. At the right: `detail: simple (D)`, `detail: full (D)` or `detail: mixed (D)`. |
 | **Message line** | Above the footer, at most 2 lines: the progress of a stop or a restart (with its time), short messages, and the downloads, Auto-tune runs and installs that run in the background. The `?` card shows the last 5 messages. |
-| **Footer** | The keys of the screen that you see. It always ends with `D detail · ? all keys · q quit`. A dialog shows only its own keys. |
+| **Footer** | The keys of the screen that you see. It always ends with `D detail   ? all keys   q quit`. On most screens, `Tab section   L level` come before them. When the page continues below the screen, it starts with `↓ more`. A dialog shows only its own keys. |
 
 | State word | Meaning |
 |---|---|
-| STOPPED | No server runs (○). The Live tab tells you how to start one. |
-| LOADING | The model loads. |
-| IDLE | The server waits for a request. |
-| READING | The server reads a prompt. |
-| WRITING | The server writes an answer. |
-| BUSY ×N | N slots work at the same time. |
+| STOPPED | No server is running (○). The Live tab tells you how to start one. |
+| LOADING | The model is loading. |
+| IDLE | The server is waiting for a request. |
+| READING | The server is reading a prompt. |
+| WRITING | The server is writing an answer. |
+| BUSY ×N | N slots are working at the same time. |
 
-**How a screen is laid out** (the Connect tab and the Settings panels):
+**How a screen is laid out:**
 - Each screen starts with the state, and what you can do next.
+- One value is on one row: a label on the left, and the value after it. A table has a header row.
 - A choice that is selected is in brackets, for example `[Setup]`, `[Server]` or `[10 GB]`.
 - The controls and the data are on the left.
-- On a wide terminal, the explanations are in a column on the right. The card must have 140 columns or more, with at least 44 for the explanations. On a narrower terminal, they are below the controls.
-- The explanations start with a **Quick tip**: one line about what you selected, and the key that acts on it.
-- Then come short sections, each with its own header (for example **About: Model** and **Choose a model** in the Server panel).
-- The keys are not in the text. The **footer** shows the keys of the screen that you see. `?` opens the **KEYS** card: the keys of this screen (**This screen**), the keys of every screen (**Every screen**) and the recent messages. Push `?` again to close it.
+- On a terminal of 151 columns or more, the explanations are in a column on the right. On a narrower terminal, they are below the controls.
+- The explanations start with a **QUICK TIP** section: one line about what you selected, and the key that acts on it.
+- Then come short sections, each with its own title (for example **ABOUT: MODEL** in the Server panel).
+- **Every tab scrolls as one page** when it is longer than the screen (↑ ↓, PgUp / PgDn, the wheel). Then the footer starts with `↓ more`. A list in a page scrolls on its own only when it is the selected section (for example the config preview of the Connect tab).
+- The keys are not in the text. The **footer** shows the keys of the screen that you see. `?` opens the **KEYS** card: the keys of this screen (**This screen**), the keys of every screen (**Every screen**) and the recent messages. Push `?` again to close it. On a terminal of 160 columns or more, the card covers the right half of the screen. Else it is in the centre.
+- Dialogs are in the centre of the screen, with one button on each row.
 - Text in a card wraps to the next line.
 - `CARL_DEMO=1` masks the key and the home folder (for screenshots).
 
 | Panel | Sections of the side column |
 |---|---|
-| Connect, Setup | On this Mac, A VM or another computer, Other computers, By hand |
-| Connect, Clients | Quick tip, Who is in the list, Add a computer |
-| Server | Quick tip, About: (the selected setting), Choose a model |
-| Models | (no side column; below the list: the selected model, Quick tip) |
-| Auto fit | Quick tip, How Auto fit chooses, This Mac, Goal, Candidates, The ranking, The other goal |
-| Auto-tune | Quick tip, This model, Length, What it measures (all models: All models, Length) |
-| Router | Quick tip, Who changes the model, Each switch costs time, Settings per model, Load and Unload (router mode only) |
-| Caching | Quick tip, About: (the selected row), Experimental, How it works, RAM cache |
+| Connect, Setup | HOW IT WORKS: Quick tip, On this Mac, A VM or another computer, Other computers, By hand |
+| Connect, Clients | HOW IT WORKS: Quick tip, Who is in the list, Add a computer |
+| Server | ABOUT: (the selected setting), MODELS (the model list) |
+| Models | (no side column; below the list: the selected model) |
+| Auto fit | QUICK TIP, HOW AUTO FIT CHOOSES, THIS MAC, GOAL, CANDIDATES, ABOUT THE RANKING, THE OTHER GOAL |
+| Auto-tune | QUICK TIP, THIS MODEL, LENGTH, WHAT IT MEASURES (all models: ONE AFTER THE OTHER in place of THIS MODEL) |
+| Router | QUICK TIP, WHO CHANGES THE MODEL, EACH SWITCH COSTS TIME, SETTINGS PER MODEL, LOAD AND UNLOAD (router mode only) |
+| Caching | QUICK TIP, ABOUT: (the selected row), HOW IT WORKS, EXPERIMENTAL, RAM CACHE |
 
-**Mouse:** use the left click only (titles, tabs, buttons, choices). The wheel scrolls 3 lines. While a dialog is open, only its buttons work.
+**Mouse:** use the left click only (tabs, section titles, buttons, choices). A click on a section title changes its level. The wheel scrolls 3 lines. While a dialog is open, only its buttons work.
 
 ### The tabs
 
 | Tab | Shows |
 |---|---|
-| **1 Live** | A sentence with the state of the server, for example "No request runs. The 2 slots are free. Memory is normal.". Then the cards: two columns from 120 columns, three columns from 180, else one column ([Live cards](#live-cards)). Below the cards: the RECENT REQUESTS card. |
+| **1 Live** | A sentence with the state of the server, for example "No request is running. The 2 slots are free.". Then the cards, and under them the RECENT REQUESTS card and the LOG card ([Live cards](#live-cards)). |
 | **2 Connect** | Two sub-tabs. **Setup:** OpenCode and Pi on this Mac, a VM or another computer, and by hand (the address, the key and the configs to copy). **Clients:** each computer that syncs, and its config ([Connect tab](#connect-tab)). |
-| **3 Requests** | All finished requests in the log, newest first: `started`, `context`, `new tokens`, `read tok/s`, `output`, `write tok/s`, `took`, `guesses OK` (the % of the guesses that were correct) and `reused` (the tokens that the server did not read again). The title shows the means of these requests, for example `50 since 13:02 · mean read 214 tok/s · mean write 37.4 tok/s`. |
-| **4 Log** | The full server log, which you can scroll. `w` wraps the lines (**[ Wrap lines: off (w) ]**), `f` shows only the errors (**[ Only errors: off (f) ]**), End goes back to the end. Dim lines are normal at a start. |
+| **3 Requests** | All finished requests in the log, newest first: **Started**, **Context**, **New tokens**, **Read tok/s**, **Output**, **Write tok/s**, **Took**, **Guesses OK** (the % of the guesses that were correct) and **Reused** (the tokens that the server did not read again). The **Mean** row under the header gives the mean read and write speeds of the requests in the list. A failed request shows `error` in the Guesses OK column. The title shows the count, for example `50 since 13:02`. The full level adds **Slot** (the slot of the request) and **Reused from** (where the reused tokens came from). Reused from shows `–` for now: a later CARL version fills it. On a narrow terminal, these two values are on a second row under the request. |
+| **4 Log** | The full server log, which you can scroll. `w` wraps the lines (**[ Wrap lines: off (w) ]**). `f` shows only the errors and the warnings (**[ Errors and warnings: off (f) ]**). End goes back to the end. Red lines are errors, yellow lines are warnings, and dim lines are routine lines (they are normal at any time). The full level adds the milliseconds to the times, and the path of the log file (**File** row). |
 | **5 Settings** | Six panels: **Server**, **Models**, **Auto fit**, **Auto-tune**, **Router**, **Caching** ([The Settings tab](#the-settings-tab)) |
 
 ### Live cards
 
-Click the title of a card to collapse it to one line (▸). Click it again to open it. Push `D` for full detail in every card.
+Each card is a section with its own level ([Levels](#levels-collapsed-simple-or-full)). Push Tab to select a card, then `L` to change its level. Or click its title. Push `D` to set every card to simple or full. The title of a card shows a short summary at each level.
 
-If a value is not available, the card shows a dash or a sentence (for example "not measured yet").
+**Where the cards are:**
 
-| Card | Simple detail | Full detail adds |
+| Terminal width | Cards when a server runs |
+|---|---|
+| Below 100 columns | One column: SLOTS, SPEED, MEMORY, THIS MAC, CONNECT, HEALTH, MODEL |
+| 100 columns or more | Two columns: SLOTS, MEMORY and THIS MAC on the left; SPEED, CONNECT, HEALTH and MODEL on the right |
+| 190 columns or more | Three columns: SLOTS and MEMORY; SPEED, HEALTH and MODEL; THIS MAC and CONNECT |
+
+- Under the cards: RECENT REQUESTS and LOG, the full width of the screen. RECENT REQUESTS gets the rows that are left (at least 3). LOG shows 3 lines, 5 lines on a terminal of 50 rows or more, and 10 lines on a terminal of 60 rows or more.
+- When no server runs: the SERVER card and the THIS MAC card (side by side from 100 columns), then the LOG card of the last run.
+- The page scrolls when it is longer than the screen (↑ ↓, PgUp / PgDn, the wheel).
+
+If a value is not available, the card shows a dash or a sentence (for example `no guesses yet`).
+
+| Card (summary in the title) | Simple | Full adds |
 |---|---|---|
-| SLOTS | One bar for each slot: its tokens of the context (`41.5K of 96K`) and what it does (`free (keeps a session)`, `reading`, `writing`). For a request that runs: its tokens, the **reused** tokens and the tokens to read, for example `This request: 51.1K tokens. 40.2K reused (79%), 6.0K read, 4.9K still to read.` | The context memory (its type, its size for all slots, the part in use), the recurrent state and the checkpoints (Qwen), the context memory for each token, the RAM cache limit, the context that the model was trained for, the sliding window (Gemma) |
-| SPEED | The **write speed** and the **read speed** (now and average, tok/s), and the speculation: `77% of the guesses are correct` | The last request, the tokens accepted for each step, the guesses accepted by position, the totals (read, reused, written), the queue and the largest context so far |
-| MEMORY | `Server uses 17.9 of 32.0 GiB RAM. macOS memory pressure: normal.`, a bar, and the parts: model, context memory, buffers | This Mac's memory (wired, compressed, free), swap, GPU busy, power, thermal, the GPU memory limit and the GPU memory in use, CPU and load, free disk |
-| CONNECT | The address, the API key (masked; `k` shows it), the connections, if OpenCode and Pi are set up, and the disk cache (`Disk cache: 7 saved prompts, 3 saved sessions, 0.9 of 10 GB`) | The model, the addresses of the connections, the key file, the copy buttons |
-| HEALTH | One sentence: no errors, the errors in the log, or `✗ The GPU failed (out of memory or a compute error). …`. Then if the Mac stays awake while the server runs. | The log counts, the time of the health check, the last errors, the sleep and wake events |
-| MODEL | (full detail only) | The file, the weights (and the MTP drafter), the speculation (`MTP + n-gram, 1 guess`), the layers, the experts, thinking, the batch, flash attention, the PID |
-| LOG | (full detail only) | The last lines of the server log, with their times. `+` / `-` change the number of lines. `--lines N` sets the number at the start (default 6). |
-| RECENT REQUESTS | The last 3 requests | The last 8 requests |
-| SERVER | (only when no server runs) "The server is not running.", how to start it (push `a`, or run `./carl.sh`), what a start uses and if it fits, the error of the last start, and the log of the last run | |
+| SLOTS (`2 × 96K   27% used`) | One row for each slot: a bar, its tokens of the context (`41.5K of 96K`) and what it does (`writing`, `reading`, `keeps a session`, `free`). For each busy slot, a block: **Request** (its tokens), **Reused** (the tokens that the server did not read again, with the %), then **Read** and **Still to read** while it reads, or **Written** while it writes. A warning when the K and V types of the context memory are different. For a Gemma model with the window cache: a **Sliding window** row. | **Context memory** (its K and V types), **Allocated** (for all slots), **In use**, **Recurrent state** and **Checkpoints** (Qwen), **Can grow to**, **Shared pool**, **Per token**, **Trained for**; the **Sliding window** row also with the full cache |
+| SPEED (`write 42.7 tok/s`) | A table of the read and the write speed (tok/s) in three columns: **Now**, **Average** (every request since the server started) and **Last request**. Then **Guesses OK**: the % of the guesses that were correct, or `off`. | **Speculation** (`MTP + n-gram, 1 guess`), **Per step** (the tokens accepted for each step), the guesses accepted by position, **Last request** (its time), **Total read**, **Total reused**, **Total written**, **Waiting** (the queue), **Largest context** |
+| MEMORY (`server 17.9 GiB`) | **Server**: a bar and the RAM that the server uses (`17.9 of 32.0 GiB`). Then the parts: **Model**, **Drafter** (Gemma), **Context memory**, **Buffers**. While the model loads, **Model** says `loading`. | **GPU limit** (the GPU memory limit), **GPU, all apps** (the GPU memory that all apps use), **Server CPU** |
+| THIS MAC (`pressure normal`; `GPU 95%` when the GPU is 90% busy or more) | **Memory**: a bar and the RAM that this Mac uses. **Pressure**: the macOS memory pressure (`normal`, `warning`, `critical`). **Swap** (`none (no swap file)` when the Mac has no swap file). **GPU**: a bar and `38% busy`. **Power**. **Heat** (`normal`, `warm`, `hot`, `very hot`). The card shows also when no server runs. | **Wired**, **Compressed**, **Free**, **Load** (1, 5 and 15 min), **Disk free** |
+| CONNECT (`this Mac only`) | **Address**, **Key** (masked; `k` shows it), **Connections** (and the computers they come from, when another computer is connected), **OpenCode, Pi** (if they are set up), **Disk cache** (`2.4 of 10 GB`) | **Saved** (the saved prompts and sessions), **Model name**, **From**, **Key file**, the copy buttons |
+| HEALTH (`no errors`, `N problems` or `GPU failed`) | **Log**: `✓ No errors.`, the number of errors and warnings in the log (the same lines as **Errors and warnings** in the Log tab), or `✗ The GPU failed. Restart the server (Settings > Server, a).`. **Sleep**: if the Mac stays awake while the server runs. | **Errors**, **Warnings**, **Routine notices**, **GPU errors**, **Health check** (ms), **Sleeps**, the last errors, the sleep and wake events |
+| MODEL (the quantization, for example `UD-IQ3_XXS`) | **File**, **Speculation** | **Weights**, **MTP drafter** (its file and size), **Layers**, **MTP**, **Experts**, **Thinking**, **Batch**, **Flash attention**, **Architecture**, **Process** (the PID) |
+| RECENT REQUESTS (`50 finished`) | The newest requests, as in the Requests tab | The **Slot** and **Reused from** columns |
+| LOG (the number of errors and the file name) | The last lines of the server log, with their times | The **File** row (the path), and the times with milliseconds |
+| SERVER (`stopped`; only when no server runs; collapsed or open) | **State**, **Next start** (the model, and `auto` or `your choice`), **With** (the slots and the context), **Fits**, **To start** (push `a`, or run `./carl.sh`), **Last log**. After a failed start, the lines of the launcher. | |
 
 ### Connect tab
 
-**Setup sub-tab** (the card **SET UP OPENCODE AND PI**, in three parts: **This Mac**, **A VM or another computer**, **By hand**):
+Each sub-tab is one page of sections. The page scrolls (↑ ↓, PgUp / PgDn, the wheel).
+
+**Setup sub-tab:**
+
+| Section (summary in the title) | Shows |
+|---|---|
+| **SET UP OPENCODE AND PI** (`✓ set up`, `⚠ out of date` or `not set up`) | Three parts: **This Mac**, **A VM or another computer** (steps 1 to 3, with the **Network** and **Sync** rows), **By hand** (the **Address** and **Key** rows). The full level adds the provider name of each client. |
+| **OPENCODE CONFIG**, **PI CONFIG** or **CURL TEST** (`✓ copied` after a copy) | Where to add the config, its lines, and a foot line, for example `Lines 1-8 of 42  │  Press o to copy all of it.`. To scroll the lines, select the section with Tab, then push ↑ ↓ or PgUp / PgDn. |
+| **INSTALLER** (`running`, `done` or `stopped with an error`) | In place of the config: the **Command**, the last lines of its output, and its buttons |
+| **CLIENT PACKAGE** (`made` or `not made`) | In place of the config: the **Zip**, its **Size** and **Files**, the buttons, the key warning and the next steps |
+| **HOW IT WORKS** | The Quick tip, then On this Mac, A VM or another computer, Other computers, By hand |
+
+- Below 151 columns, the sections are in one column. From 151 columns, HOW IT WORKS is beside the steps, and the config is under them. From 190 columns, the steps, the config and HOW IT WORKS are in three columns.
+
+The buttons of the Setup sub-tab:
 
 | Button | Key | Does |
 |---|---|---|
 | **[ Install on this Mac (i) ]** (**[ Install again (i) ]** when OpenCode and Pi are set up) | `i`, then `y` (**[ Run it (y) ]**) | Runs `./carl.sh install` (the setup, with the choices of your last setup, without questions) and shows its output in the card **INSTALLER**. `n` or Esc: no. `x` closes the output. |
 | **[ Update the model lists (u) ]** | `u`, then `y` | Runs `./carl.sh install --config-only` |
-| **[ Make the client package (z) ]** | `z` | Runs the code of `./carl.sh package`. The card **CLIENT PACKAGE** shows the path of the zip, the key warning and the next steps. Or it tells you why CARL made no package (for example: the server serves only this Mac). **[ Make it again (z) ]**. `x` closes the card. |
+| **[ Make the client package (z) ]** | `z` | Runs the code of `./carl.sh package`. The card **CLIENT PACKAGE** shows the path of the zip, its size, the key warning and the next steps. Or it tells you why CARL made no package (for example: the server serves only this Mac). **[ Make it again (z) ]**. **[ Close (x) ]** or `x` closes the card. |
 | **[ Show it in the Finder (f) ]** | `f` | Shows the zip in the Finder. The button shows after `z`. |
 | **[ Send the config (P) ]** | `P` | Sends the client config to the computers that sync |
 | **[ OpenCode config (o) ]**, **[ Pi config (p) ]**, **[ curl test (c) ]** | `o`, `p`, `c` | Copies the config to the clipboard and shows it below. `t` also copies the curl test. |
 
 - The screen masks the key. Push `k` to show or hide it. The copy has the real key.
 - CAUTION: Protect a copied config as you protect the key.
-- When the OpenCode and Pi configs on this Mac do not agree with the installed models, the tab shows **2 Connect ⚠**. The card tells what an update adds and removes, for example `⚠ OpenCode lists 2 models, 5 are installed. An update adds … Press u.` Push `u` to update them.
+- When the OpenCode and Pi configs on this Mac do not agree with the installed models, the tab shows **2 Connect ⚠**. The card tells what an update adds and removes, for example `⚠ OpenCode and Pi on this Mac are out of date.` and `An update adds qwen3.8-27b.` Push `u` to update them.
 
 **Clients sub-tab.** Push `[` or `]` to change between Setup and Clients.
-- The card **CLIENTS** shows when you last sent the config, and the sync address (the dashboard API).
-- It lists this Mac (its OpenCode and Pi configs) and each computer that syncs. For each computer: the name, the user, how it syncs, when it was last seen (or connected), and its config (up to date, or it waits). Full detail adds the system and the address.
-- **[ Send the config to them (P) ]** sends the config. **[ Forget the computers not seen for a week ]** removes old rows.
+- The section **CLIENTS** (for example `2 computers` in its title) shows **Last config sent**, and the **Sync address** (the dashboard API).
+- Then a table: this Mac (its OpenCode and Pi configs) and each computer that syncs.
+
+  | Column | Shows |
+  |---|---|
+  | **Computer** | The whole name of the computer |
+  | **Last seen** | `● connected`, or `○` and how long ago, for example `○ 3 days ago` |
+  | **User** | The user on that computer |
+  | **Syncs** | `always` (the sync service), or `at start` (a check when OpenCode or Pi starts) |
+  | **Config** | `up to date`, `at next sync` (it applies the new config at its next sync), `on hold` (it waits for you: open `/carl` on that computer, then **Apply the new config now**), `out of date` (this Mac: push `u` in Setup), or `nothing sent` |
+  | **OS**, **Address** | The system and the address of the computer |
+
+- The full level adds the **Version** row (the version of the last config sent) and the **Version** column (the version that each computer has).
+- When the table is too wide for the screen, each computer shows as a block: its name and its state, then one row for each column.
+- **[ Send the config to N computers (P) ]** sends the config. **[ Forget N computers not seen for a week ]** removes old rows. It does not ask first. A computer comes back when it connects again.
+- The section **HOW IT WORKS** is beside the table from 151 columns, else under it.
 - More: [Clients on other computers](reference/client-sync.md).
 
 ### The Settings tab
@@ -1249,11 +1309,22 @@ The Settings tab (tab 5) has six panels: **Server**, **Models**, **Auto fit**, *
 
 #### Server panel
 
-The SERVER card starts with the state, for example "The server runs qwen3.6-35b-a3b-iq3 on port 8080 for this Mac only. Your settings match what runs."
+The Server panel has these sections:
+
+| Section (summary in the title) | Shows |
+|---|---|
+| **SERVER** (`running` or `stopped`, `router mode`, the number of changes) | The state, for example "qwen3.6-35b-a3b-iq3 runs on port 8080, this Mac only. Your settings match it.". Then the table of the settings and the buttons. |
+| **MEMORY** (`✓ 15.3 of 25.0 GiB`, or `✗` when it does not fit) | If the settings fit the GPU memory limit |
+| **AUTO FIT** (Auto fit's choice) | Auto fit's choice for this Mac |
+| **MODEL** (the name of the model) | The MODEL card: what the model is for, and its speeds |
+| **ABOUT: (the selected setting)** | What the setting does, how to change it, its llama.cpp **Flag** and its **Config key** |
+| **MODELS** | The model list |
+
+From 151 columns, ABOUT and MODELS are in a column on the right. Below 151 columns, ABOUT comes after AUTO FIT, and MODELS comes last.
 
 **To change the server settings:**
 1. Push `5`, or click **5 Settings**.
-2. Push ↑ ↓ to select a setting. The settings are Model, Context, Slots, Speculation, Context memory, RAM cache, Network and Temperature. In full detail, the **More settings** row changes to Presence, Top k, Top p, Min p, Repeat penalty, Batch size, Checkpoints and Checkpoint step.
+2. Push ↑ ↓ to select a setting. The settings are Model, Context, Slots, Speculation, Context memory, Sliding window (only for a Gemma model), RAM cache, Network and Temperature. At the full level of the SERVER section, the **More settings** row changes to Presence, Top k, Top p, Min p, Repeat penalty, Batch size, Checkpoints and Checkpoint step.
 3. Push ← → to change the value. On the Context row and the other number rows, you can also type a number, then push Enter (`96k` = 96K tokens).
 4. Look at the three columns:
 
@@ -1264,8 +1335,8 @@ The SERVER card starts with the state, for example "The server runs qwen3.6-35b-
    | **Recommended** | The recommended setting for this model, with its source: Auto-tune, the catalogue, or CARL's default |
 
    A value that is very slow, or that does not work on this model, gets a ⚠ sentence under the table. For example: `⚠ Context: this Mac reads more than 144K tokens again very slowly (the context zones of this model).` CARL never warns about a context of 96K or less: 96K for each slot is the floor of the default context. You can still select a larger context.
-5. Read the **MODEL** card below the settings. It tells you what the model is for, and its speed.
-6. Read the **Memory** section. It tells you if the model and these settings fit the GPU memory limit, with a bar. For example: `✓ It fits. This model with 2 slots × 96K tokens needs 15.3 GiB. This Mac gives the GPU 25.0 GiB.` If it does not fit (`✗ It does not fit. …`), you cannot apply the settings (the launcher also refuses the start).
+5. Read the **MODEL** card below the settings. It tells you what the model is for, and its speeds.
+6. Read the **MEMORY** section. It tells you if the model and these settings fit the GPU memory limit: **Fits** (`✓ yes` or `✗ no`), and **Needs** with a bar (`15.3 of 25.0 GiB`). If it does not fit, **At most** gives the largest context per slot that fits, and you cannot apply the settings (the launcher also refuses the start). The full level adds the parts: **Weights**, **Drafter**, **Context memory**, **Recurrent state**, **Buffers** and **GPU limit**.
 7. Push `a` (or click **[ Apply and restart (a) ]**; with no server: **[ Start the server (a) ]**). The dashboard refuses a setup that does not fit.
 8. Push `y` to confirm (**RESTART THE SERVER?**).
 9. Wait while the model loads (about 30 s to 2 min). The message line above the footer shows each step, for example `CARL stops the server (pid 4242)…`.
@@ -1277,12 +1348,15 @@ The SERVER card starts with the state, for example "The server runs qwen3.6-35b-
 - **Slots:** `auto (2)`, 1, 2, 3 or 4. 3 and 4 show only when they fit this Mac.
 - **Speculation:** the mode and its guesses in one value, for example `MTP + n-gram, 1 guess`.
 - **Context memory:** `q4 (small)` or `q8 (large)` ([Context memory](#8-context-memory-q4-or-q8)).
+- **Sliding window** (only for a model with sliding-window layers, the Gemma models): `auto`, `full cache` or `window cache` ([Models with sliding-window layers](#models-with-sliding-window-layers)). The row shows what `auto` chose, for example `auto (full cache)`. This is one setting for every Gemma model (`cache.swa`): the **Gemma models** row of the Caching panel is the same setting. When you select the row, the ABOUT section shows the memory that a start needs with each cache.
 - **RAM cache:** `auto (2.5 GiB)`: CARL sizes it from the free memory.
 - **Network:** this Mac only (the default), this Mac and the VM, and each address of this Mac (for example the LAN address). An address is saved as `llama.host`.
 
-**Auto fit suggests** (under the Memory section): Auto fit's choice for this Mac in one line, if it is downloaded, and its download size. Push `A` for the Auto fit panel.
+**The ABOUT section** tells you what the selected setting does, and how to change it. It also gives the llama.cpp flag (**Flag**) and the `config.json` key (**Config key**) of the setting.
 
-**Choose a model** (beside the settings; below them on a narrow terminal):
+**The AUTO FIT section:** Auto fit's choice for this Mac (**Suggests**, with `your choice` when it is the model that you selected), its slots and context (**With**), its download size when it is not downloaded (**Download**), and what `auto` starts until then (**Until then**). Push `A`, or click the **Suggests** row, for the Auto fit panel.
+
+**The MODELS section** (beside the settings from 151 columns; else at the end of the page):
 - Click a model. Or push `m` to move the keys to the list, then ↑ ↓ and Enter. `m` or Esc gives the keys back to the settings.
 - The list only selects. All the facts about the model are on the MODEL card.
 
@@ -1291,19 +1365,28 @@ The SERVER card starts with the state, for example "The server runs qwen3.6-35b-
 | `●` | Downloaded |
 | `○` | Not downloaded |
 | `★` after a name | Auto fit's choice |
-| `auto (now NAME)` | The model that `auto` starts |
+| `auto (now: NAME)` | The model that `auto` starts |
 | A red name | Does not fit this Mac |
 
-Above the list, `sort: downloaded first (s)` and `show: all (f)` open a list of each option when you click them. `s` / `S` and `f` / `F` step through them.
+Above the list, `Sort: downloaded first (s)` and `Show: all (f)` open a list of each option when you click them. `s` / `S` and `f` / `F` step through them.
 
-**The MODEL card.** Click its title to collapse or open it. The wheel or PgUp / PgDn scroll the panel.
+**The MODEL card.** Its title shows the name of the model, for example `MODEL ●○  Qwen3.6 35B-A3B  IQ3_XXS`. Select it with Tab, then push `L` to change its level. The wheel or PgUp / PgDn scroll the panel.
 
-| Detail | Contents |
+| Level | Contents |
 |---|---|
-| Simple | The role, the **good for** tags, the speed (on this Mac after Auto-tune, else on another Mac from the catalogue), thinking, and the **trade-off** |
-| Full | Also **why use it**, the quality rank, the context zones, the slots at work (measured), the models to **pick instead** and when, what *uncensored* means (abliterated models), the hardware, **why** the selected setting has its recommended value, the Auto-tune table, the description, the source and the file |
+| Simple | **Good for** (the tags), **Thinking**, **Trade-off**, **Why use it**, and the speeds by source (see below) |
+| Full | Also **Type** (MoE or dense), **Quant**, **MTP**, **Quality** (the quality rank), **Context** (the context zones), **Slots at work** (measured), **Pick instead** (the other models, and when), **Uncensored** (abliterated models), **Hardware**, **why** the selected setting has its recommended value, the Auto-tune table, the description, **Source** and **File** |
 
-For a model with sliding-window layers (Gemma), the Memory section tells you which cache the start gets: the full cache (CARL can restore saved sessions and prompts) or the window cache (Settings > Caching, **Gemma models**).
+**The speeds by source** (the MODEL card, and the selected model in the Models panel): a table of the write speeds of the model (tok/s), with one row for each source.
+
+| Row | Source |
+|---|---|
+| **This Mac** | The last Auto-tune result on this Mac. `Not measured.` when Auto-tune did not measure the model here. |
+| **Catalogue** | The speeds in the catalogue, measured on the Mac that **Measured on** names |
+
+The columns: **Prose**, **Code**, **Edit**, **Measured on** (the Mac), **Date** (with the year) and **Speculation** (the mode of the measurement).
+
+For a model with sliding-window layers (Gemma), the MEMORY section tells you which cache the start gets (its **Sliding window** row): the full cache (CARL can restore saved sessions and prompts) or the window cache.
 
 **Other keys of the Server panel:**
 
@@ -1315,15 +1398,15 @@ For a model with sliding-window layers (Gemma), the Memory section tells you whi
 
 **Notes:**
 - CAUTION: **Apply stops the server.** If an agent's turn is running, the dashboard asks first ([A turn is running](#a-turn-is-running)).
-- **If the new server does not start,** the dashboard starts the old server again with its old values. The Memory section shows the launcher's `error:` line.
+- **If the new server does not start,** the dashboard starts the old server again with its old values. The MEMORY section shows the launcher's `error:` line.
 - **The dashboard saves the settings in `~/.config/carl/config.json`** ([The settings file](#the-settings-file)). `./carl.sh llama` uses this file the next time. Flags and environment variables have priority over the file.
   - Server-wide values go to the `llama` section. The dashboard writes only the values that are different from the defaults.
   - Model values (context memory type, context, slots, speculation, sampling) go to the profile of the model (`models.<name>`). The dashboard writes only the values that are different from the recommended values of that model.
 - **After a change of the model, the context or the slots,** run the setup again on each client (`./carl.sh install --config-only` on this Mac, `./setup` on other computers). The clients then get the new context limit, and the coder subagent is added or removed.
 - **If the catalogue or `models.json` cannot be loaded** (for example after a bad edit), the Settings tab shows a **SETTINGS UNAVAILABLE** card with the error. The other tabs continue to work.
 
-**More settings (full detail):**
-1. Push `D` for full detail. The rows Presence, Top k, Top p, Min p, Repeat penalty, Batch size, Checkpoints and Checkpoint step show. Under each setting, full detail also shows its llama.cpp flag and its `config.json` key (for example `-c · ctx`).
+**More settings (the full level):**
+1. Select the SERVER section with Tab, then push `L` until its title shows `●●` (or push `D`). The rows Presence, Top k, Top p, Min p, Repeat penalty, Batch size, Checkpoints and Checkpoint step show. The ABOUT section gives the llama.cpp flag and the `config.json` key of the selected row.
 2. Select a row. Push ← → to select a preset value.
 3. To type a value, type the number (for example `0.05`, or `96k` for a context).
 4. Push Enter to keep the value, or Esc to cancel.
@@ -1338,7 +1421,9 @@ For a model with sliding-window layers (Gemma), the Memory section tells you whi
 
 #### Models panel
 
-The Models panel lists the catalogue models and each `.gguf` in the models folder. For each model: the download size (GB), the status (downloaded, not downloaded, partial), if it fits this Mac (for example `yes, 2 × 96K`, or `no (17.5 GiB)` with the memory that it needs), the speed, and what it is for. Full detail shows the quality rank (**Rank**) and the largest context that fits this Mac (**Max context**, 1 slot, q4).
+The Models panel has two sections: **MODELS** (the list; its title shows for example `16 of 16, 6 downloaded`) and the selected model (its title is the name of the model).
+
+The list has the catalogue models and each `.gguf` in the models folder. For each model: **Download** (the size, GB), **Status** (downloaded, not downloaded, partial), **Fits this Mac** (for example `yes, 2 × 96K`, or `no (17.5 GiB)` with the memory that it needs), **Prose tok/s**, and **What it is for**. The full level of MODELS shows **Rank** (the quality rank) and **Max context** (the largest context that fits this Mac, 1 slot, q4) in place of Fits this Mac.
 
 | Key | Does |
 |---|---|
@@ -1352,35 +1437,38 @@ The Models panel lists the catalogue models and each `.gguf` in the models folde
 | `h` | **[ Add from Hugging Face (h) ]**: type `OWNER/REPO` (or a URL to a `.gguf`). A list of the GGUF files of the repo opens. Select one and push Enter to download it. |
 | `e` | **[ Edit its card (e) ]**: edit the card of a custom model ([Cards for custom models](#cards-for-custom-models)). On a catalogue model, `e` tells you that its card is read-only. |
 | `s` / `S`, `f` / `F` | Sort (next / previous), show (next / previous) |
+| `t` | The speeds view of the list (`t` again: the list) |
 
 - **Sort and show:** `Sort: downloaded first (s)` and `Show: all (f)` above the list. Click one to open a list of its options, or step with the keys.
   - Sort: downloaded first, quality (the rank), speed (fastest first), size, name.
   - Show: all, a use case (agent coding, hard code, chat & writing, uncensored), stock, dense, MoE, downloaded, fits this Mac.
   - The same order applies to each model list (the model list of the Server panel, and the list of the Model row).
-- **Below the list:** the selected model: its role, its download size, if it runs now, what fits this Mac (with the memory), and its speed. For a Gemma 4 model, a line tells you if its MTP drafter is downloaded, for example `MTP drafter (60 MB): downloaded.`
-  - Full detail adds the recommended settings (for example `Recommended: MTP + n-gram, 1 guess · q4 · 96K × 2 (Auto-tune, …)`), the source, the file and the description. The Auto-tune panel shows the full result.
-- **The Speed column** is the mean of the prose, code and edit speeds (tok/s; the weights of Auto-tune):
+- **The selected model** (below the list): its buttons, then **Good for**, **Status** (and if it runs now), **Size** (with its MTP drafter), **On this Mac** (what fits, with the memory), **MTP drafter** (a Gemma 4 model: downloaded or not), **Card** (a custom model), **Quality** (the quality rank), and the [speeds by source](#server-panel).
+  - The full level adds **Recommended** (the recommended settings and their source), **Source**, **File** (or **Saved as** when it is not downloaded), **Drafter file**, **Free disk** and the description. The Auto-tune panel shows the full result.
+- **The Prose tok/s column** is the write speed of the model on prose, in tok/s:
 
   | Mark | Meaning |
   |---|---|
   | `●` | Measured on this Mac by Auto-tune |
-  | `○` | Measured on another Mac (the catalogue's figure; the MODEL card names the Mac) |
-  | `not measured` | Never measured |
+  | `○` | The catalogue's figure, measured on another Mac (the speeds by source name the Mac) |
+  | `–` | Not measured |
 
-  A legend under the list tells the same. `★` marks Auto fit's choice for this Mac. The speed sort uses this column, fastest first. Models without a speed come last: MoE before dense, then smaller files. The ranking of the Auto fit panel shows the same column.
+  A legend under the list tells the same. `★` marks Auto fit's choice for this Mac. The speed sort uses this number, fastest first. Models without a speed come last: MoE before dense, then smaller files. The ranking of the Auto fit panel and the model list of the Model row show the same number.
+- **On a terminal of 156 columns or more,** the list shows the speeds of each source in place of Prose tok/s: **This Mac** and **Catalogue**, each with **Prose**, **Code** and **Edit**.
+- **The speeds view** (`t`): the list shows each model with the speeds of this Mac and of the catalogue (prose, code, edit), the Mac that measured them (**Measured on**), the **Date** and the **Speculation**. Push `t` again for the list.
 
 #### Auto fit panel
 
-The Auto fit panel shows the full [Auto fit](#auto-fit-the-best-model-for-this-mac) answer for this Mac. Its title is the choice, for example `qwen3.6-35b-a3b with 2 slots × 96K tokens`.
+The Auto fit panel shows the full [Auto fit](#auto-fit-the-best-model-for-this-mac) answer for this Mac. The title of its AUTO FIT section shows the choice, for example `AUTO FIT ●○  qwen3.6-35b-a3b`.
 
 | Part | Contents |
 |---|---|
 | **Goal** and **Candidates** | `everyday (fast first)` or `hard code (better code, slower)`; `catalogue` or `downloaded only`. Click one, or push `g` / `f` for the other one. CARL saves them at once (`llama.auto_goal`, `llama.auto_fit`). Then `auto` starts the new choice. |
-| **Auto fit suggests** | The model and its plan (`2 slots × 96K tokens (q4)`), the memory that it needs of what a model can use here, and if it is downloaded. **Why:** the reason for the choice. **Until then:** what `auto` starts until the choice is downloaded. **Passed over:** each model with a better quality rank that Auto fit did not choose, and why. For example: `qwen3.8-27b (quality rank 1) is dense: Auto fit keeps it for the hard code goal.` |
+| The choice | **Suggests** (the model), **With** (`2 slots × 96K tokens`), **Context memory** (`q4`), **Needs** (a bar: the memory that it needs of what a model can use here), **Status** (downloaded, or the download size). **Why:** the reason for the choice. **Until then:** what `auto` starts until the choice is downloaded. **Passed over:** each model with a better quality rank that Auto fit did not choose, and why. For example: `qwen3.8-27b (quality rank 1) is dense: Auto fit keeps it for the hard code goal.` The full level adds how the quality rank is made (**Quality rank**). |
 | **[ Use this (Enter) ]** | The Server panel gets the choice with its context, slots and context memory type. Push `a` there to start it. If the choice is not downloaded, the dashboard asks if it must download it (**DOWNLOAD AUTO FIT'S CHOICE?**). |
 | **[ Download it (d) ]** | Downloads the choice here, with the progress in the panel |
-| **Ranking** | Each model by quality rank: its type (dense or MoE), its download size, the largest context that fits this Mac (**Max context**), its speed, its status, and what Auto fit made of it: `★ its choice`, why it passed over the model, `abliterated: you choose it yourself`, or a custom model that is not in Auto fit |
-| **This Mac**, **The other goal** (side column) | The GPU memory limit, the memory kept free for macOS and apps (10 GiB while VMware's network is up, else 6), and what that leaves for a model. The other goal's choice in one line. |
+| **RANKING** | Each model by quality rank: **Rank**, **Download** (the size), **Prose tok/s** (● this Mac, ○ the catalogue), **Status**, and **Auto fit** (what Auto fit made of it): `★ its choice`, `below the choice`, `hard code goal` (or `everyday goal`), `not downloaded`, `does not fit`, `abliterated`, or `custom` (a custom model that is not in Auto fit). The full level adds **Type** (dense or MoE) and **Max context** (the largest context that fits this Mac). |
+| **THIS MAC**, **THE OTHER GOAL** | The GPU memory limit, the memory kept free for macOS and apps (10 GiB while VMware's network is up, else 6), and what that leaves for a model. The other goal's choice, with its slots, its context and its context memory. |
 
 ↑ ↓, PgUp / PgDn or the wheel scroll the panel.
 
@@ -1392,16 +1480,17 @@ The Auto fit panel shows the full [Auto fit](#auto-fit-the-best-model-for-this-m
 
 - **All models:** push ← from the first model (or select all models in the list). Auto-tune then tunes each downloaded model, one after the other. A model that fails does not stop the others. The panel shows the last result of each model. On the command line: `./carl.sh tune all`.
 - CAUTION: Auto-tune needs the GPU for itself. If a server runs, the panel asks first (**STOP THE SERVER FOR AUTO-TUNE?**; and, if an agent's turn is running, if it must wait for its end). Then it stops the server, runs the tune, and starts the server again with the saved settings and the new tune.
-- **Last result:** the date, the Mac, the chosen settings (for example `MTP + n-gram, 1 guess · q4 context memory · 96K tokens per slot · 2 slots`), the speed of each speculation mode (prose, code, edit and their mean, with `◀ chosen`), the read speeds and the context zones.
+- **Last result** (in the AUTO-TUNE section): **Date**, **Mac**, **Length**, the chosen settings (**Speculation**, **Context memory**, **Context**, **Slots**), the speed of each speculation mode (prose, code, edit and their weighted mean, with `◀ chosen`), the read speeds and the context zones. The full level adds the llama.cpp build (**Build**).
+- While a run runs, the **RUN** section shows its step and the last lines of its output.
 - **[ Use the recommended settings (x) ]** removes your own values for this model from `config.json`. Then the result of Auto-tune applies again.
 
 #### Router panel
 
-See [Router mode](#router-mode-switch-models-from-opencode-or-pi). The keys: `s` single model, `r` router mode (both ask first), `u` update the OpenCode and Pi configs. In router mode, ↑ ↓ select a model, and Enter loads or unloads it.
+See [Router mode](#router-mode-switch-models-from-opencode-or-pi). The sections: **ROUTER** (the mode: **Running now** and **Next start**; the full level adds the config key), **MODELS THE ROUTER OFFERS** and **RECENT SWITCHES** (router mode only), **OPENCODE AND PI ON THIS MAC**. The keys: `s` single model, `r` router mode (both ask first), `u` update the OpenCode and Pi configs. In router mode, ↑ ↓ select a model, and Enter loads or unloads it.
 
 #### Caching panel
 
-The Caching panel controls the [disk cache](#7-fast-starts-the-disk-cache). Its title shows the space that the disk cache uses, and that the panel is experimental.
+The Caching panel controls the [disk cache](#7-fast-starts-the-disk-cache). The title of its CACHING section shows the space that the disk cache uses, for example `2.4 of 10 GB`. The EXPERIMENTAL section tells you that the disk cache is new.
 - It works with the model that runs. The saved prompts and sessions of a different model wait for that model.
 - Push ↑ ↓ to select a row, and ← → to change it. Or click a choice. CARL saves each change at once (the `cache` section of `config.json`). It needs no restart.
 
@@ -1413,12 +1502,11 @@ The Caching panel controls the [disk cache](#7-fast-starts-the-disk-cache). Its 
 | **When to save** | When a session is saved: auto (after 2 min) (the default), every turn, when it leaves, before a stop ([When a session is saved](#when-a-session-is-saved)) |
 | **Save after** | For auto: the time to read the part that is not saved, before a save: 30 s, 2 min (default), 5 min, 10 min |
 | **Shared storage** | On (the default): store saved sessions as the changes to their saved prompt. Off: store them whole. |
-| **Gemma models** | auto (full when it fits), full cache, window cache (models with sliding-window layers; from the next start) |
+| **Gemma models** | auto (full when it fits), full cache, window cache (models with sliding-window layers; from the next start). The **Sliding window** row of the Server panel is the same setting. |
 | **Other templates** | For a model whose chat template CARL does not know (not Qwen, not Gemma 4): leave in place (the default: the folder, the date and AGENTS.md stay in the system prompt; each new project reads the whole prompt) or move to your message (one saved prompt serves every project; not for a template that also uses a sliding-window cache) |
 
+- **The ON THE DISK section:** **Used** (a bar: the space used of the limit), **Files**, **Folder**, **Shared** (the space that shared storage saves), **Other computers** (if the computers that sync use these settings now, through the dashboard API). Then **[ Clear the disk cache (c) ]**, and the files: the kind (saved prompt or saved session), the model, the agent or the session, the size and the age. The list shows 5 files on a terminal of 40 rows, 10 files from 50 rows, and all the files from 60 rows. The full level adds the server flag (`--slot-save-path`), and the kind `shared` for a saved session that is stored as changes.
 - **[ Clear the disk cache (c) ]** asks (**CLEAR THE DISK CACHE?**), then removes each saved prompt and saved session. The server keeps what it holds now.
-- **On the disk:** the space used of the limit, the folder, the space that shared storage saves, and the files: the kind (saved prompt or saved session), the model, the agent or the session, the size and the age.
-- A line tells you if the computers that sync use these settings now (through the dashboard API).
 - The RAM cache (llama.cpp's own, lost when the server stops) is the **RAM cache** row of the Server panel.
 
 ### Keys
@@ -1427,23 +1515,25 @@ The footer shows the keys of the screen that you see. `?` shows all of them: the
 
 | Key | Does |
 |---|---|
-| `1`–`5`, Tab | Change the tab (every screen) |
-| `D` | Detail: simple or full (every screen; the dashboard saves it) |
+| `1`–`5` | Change the tab (every screen) |
+| Tab / Shift-Tab | Select the next / previous section of the screen |
+| `L` | Change the level of the selected section: simple, full, collapsed (a section with two levels: open, collapsed; the Requests and Log tabs: simple, full). The dashboard saves it. |
+| `D` | Set every section to simple or to full (every screen; the dashboard saves it) |
 | `?` | The KEYS card (`?` again closes it) |
 | `q`, Ctrl-C | Quit (asks: stop the server and quit / leave it running and quit / cancel) |
-| ↑ ↓ PgUp PgDn, wheel | Scroll the screen |
+| ↑ ↓ PgUp PgDn, wheel | Scroll the page (the Connect tab: the config preview, when it is the selected section) |
 | space | Read the server again now |
 | `k` | Live and Connect: show or hide the API key |
 | `o` / `p` / `c` | Live and Connect: copy the OpenCode config / the Pi config / the curl test (`t` also copies the curl test) |
 | `a` | Live: start a stopped server |
-| `+` / `-` | Live, full detail: more / fewer lines in the LOG card (2 at a time, 2 to 60) |
+| `+` / `-` | Live: more / fewer lines in the LOG card (else the screen's height sets them: 3, 5 or 10; `--lines N` sets them at the start) |
 | `i` / `u`, then `y` | Connect tab: install OpenCode and Pi and their configs / update the model lists only (`n` or Esc: no). `x` closes the output of the setup. |
 | `z` / `f` | Connect tab: make the client package for another computer / show it in the Finder |
 | `[` / `]` | Connect tab: the Setup and Clients sub-tabs. Settings tab: the previous / next panel. |
 | `P` | Connect tab: send the client config to the computers that sync |
-| `w` / `f`, End | Log tab: wrap the lines / only errors; back to the end |
+| `w` / `f`, End | Log tab: wrap the lines / only the errors and the warnings; back to the end |
 | ↑ ↓, ← →, Enter, `a`, `r`, `x`, `A`, `m`, `s` `S` `f` `F` | Settings tab, Server panel: select a setting, change the value, choose a model (Model row) or keep a typed value, apply, undo, the recommended settings, the Auto fit panel, keys to the model list, sort and show the list |
-| ↑ ↓, Enter, `d`, `v`, `u`, `x`, `e`, `h`, `s` `S` `f` `F`, `c` | Settings tab, Models panel: select a model, use it, download, check, Auto-tune, delete, edit the card, add from Hugging Face, sort and show, cancel the download |
+| ↑ ↓, Enter, `d`, `v`, `u`, `x`, `e`, `h`, `s` `S` `f` `F`, `t`, `c` | Settings tab, Models panel: select a model, use it, download, check, Auto-tune, delete, edit the card, add from Hugging Face, sort and show, the speeds view, cancel the download |
 | Enter, `d`, `g`, `f` | Settings tab, Auto fit panel: use this, download it, the other goal, the other candidates |
 | ← →, space, Enter, `c`, `x` | Settings tab, Auto-tune panel: select a model, the length, run, cancel the run, the recommended settings |
 | `s`, `r`, ↑ ↓, Enter, `u` | Settings tab, Router panel: single model, router mode, select a model, load or unload it (router mode), update the configs |
@@ -1451,7 +1541,7 @@ The footer shows the keys of the screen that you see. `?` shows all of them: the
 | `s` / `l` / Esc | The QUIT dialog: stop the server and quit / leave it running and quit / cancel |
 | `w` / `s` / Esc | AN AGENT IS WORKING (Stop, Apply, Auto-tune, a router load): wait for the turn / stop now / cancel |
 | `y` / `n`, Esc | The other questions: yes / cancel |
-| Click | Tabs, panel names, buttons, choices, card titles, `detail: simple (D)` |
+| Click | Tabs, panel names, buttons, choices, section titles (the level of the section), `detail: … (D)` |
 
 `/carl` in OpenCode or Pi shows each CARL piece on that computer with its state, and the config sync ([The /carl panel](#carls-plugins-and-extensions)).
 
@@ -1524,7 +1614,7 @@ The dashboard and the launchers keep your settings in `~/.config/carl/config.jso
 - `SETTINGS_FILE=none ./carl.sh llama` ignores `config.json`. The Auto-tune result and the catalogue still apply.
 - To go back to the defaults, delete the file, or remove a value with `config unset`.
 - **The settings folder.** `CARL_CONF_DIR=FOLDER` uses a different settings folder (`config.json`, `models.json`, `slots/`, `router-presets.ini`, `dashboard.json`). `tools/carl.py`, the launchers and the dashboard use it. The API key stays in `~/.config/carl`.
-- The dashboard keeps its detail level (simple or full) in `dashboard.json` in the same folder, not in `config.json`.
+- The dashboard keeps the level of each section (collapsed, simple or full) in `dashboard.json` in the same folder, not in `config.json`.
 
 ```bash
 ./carl.sh config show                                 # the file, then every key: what it does, its values, its default
@@ -1765,7 +1855,7 @@ CARL_DOCKER_TESTS=1 python3 -m unittest tests/integration/test_sync_docker.py
 | `./carl.sh` | Opens the dashboard: attaches to a server on 8080, else starts llama.cpp with the saved settings. It first checks for `llama-server`, `aria2c`, `ansifilter` and `zstd` (offers `brew install`), and offers to download a model if none is downloaded. |
 | `./carl.sh llama` | llama.cpp with the model of Auto fit (`qwen3.6-35b-a3b`; the IQ3 build on 24 GB; the Gemma 4 E4B on 16 GB), q4 context memory, 2 slots |
 | `./carl.sh monitor` | Attaches the live dashboard (a server start shows it in the same terminal) |
-| `./carl.sh --no-start` (or `dashboard`) | The dashboard only: attaches to a server, or opens it without a server (no model loads). `--expand`: full detail for this run. |
+| `./carl.sh --no-start` (or `dashboard`) | The dashboard only: attaches to a server, or opens it without a server (no model loads). `--expand`: every section at full for this run. |
 | `./carl.sh llama --local` / `--vm` | Serves only this Mac (the default) / the VM address too |
 | `./carl.sh llama --host ADDR` | Serves on one address of this Mac (LAN, Parallels, …); never 0.0.0.0 |
 | `./carl.sh --router` / `--single` | Router mode (OpenCode and Pi change models) / one model (the default); `llama.mode` saves the choice |

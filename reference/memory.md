@@ -72,7 +72,7 @@ macOS sets a maximum for the memory that the GPU can use (the GPU memory limit):
 **Limits of the calculation:**
 - The ~1 GiB buffer allowance is a conservative estimate. On the 35B, the dashboard measured ~0.5 GiB of "other" memory.
 - The fit check does not include the RAM that macOS and its apps need.
-- CAUTION: Keep ≥ 6 GiB free. Look at the memory pressure in the dashboard (the MEMORY card of the Live tab).
+- CAUTION: Keep ≥ 6 GiB free. Look at the memory pressure in the dashboard (the THIS MAC card of the Live tab).
 
 ## Context length: what a larger context costs
 

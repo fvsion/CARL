@@ -18,11 +18,11 @@ from . import cli, diskcache, fsio, system, uiprefs
 from .cacheapi import CacheApi, Registry
 from .api import Endpoint
 from .card_view import FORM_KEYS, TYPING_KEYS, draw_form
-from .cards import STOPPED, View, status_of
+from .cards import STOPPED, THREE_LEVELS, View, status_of
 from .clients import Drift, drift
 from .collector import Collector
 from .controller import Controller, Region
-from .fmt import (B, CYN, DIM, GRN, R, RED, YEL, CardLine, Key, Row, cwrap, draw_card, fit, footer_keys, indent, pill, vlen,
+from .fmt import (B, CYN, DIM, GRN, R, RED, YEL, CardLine, Key, Row, cwrap, draw_card, fit, footer_keys, indent, pill, row, vlen,
                   wwrap)
 from .jobs import Paths, ServerJobs, launcher_errors
 from .keys import InputBuffer
@@ -86,6 +86,10 @@ class App:
         ui = UIState(lines=opts.lines)
         store = CarlStore()
         ui.detail = "full" if opts.expand else uiprefs.load_detail(uiprefs.path_for(store.config_file))
+        ui.levels.update({k: x for k, x in uiprefs.load_levels(uiprefs.path_for(store.config_file)).items()
+                          if k in ui.levels})
+        if opts.expand:                          # --expand: every section at full for this run (not saved)
+            ui.levels.update({k: 2 if k in THREE_LEVELS else 1 for k in ui.levels})
         models = ModelList(store, on_error=lambda msg: ui.toast(f"{RED}{msg}{R}", 10))
         schema = Schema(net_choices(system.local_addrs(opts.vm_addr)))
         svc = SettingsService(models, schema, opts.vm_addr, gpu_limit=lambda: (collector.gpu_limit or store.gpu_limit())[0],
@@ -131,26 +135,28 @@ class App:
         return ("need an update (tab 2, u)" if stale else "set up (tab 2)") if here else "not set up here (tab 2)"
 
     def next_start(self, d: ServerData) -> List[CardLine]:
-        """The SERVER card when no server runs: how to start it, what a start uses, the last error."""
-        L: List[CardLine] = ["To start it: press a (Settings > Server, Apply), or run ./carl.sh in a terminal."]
+        """The SERVER card when no server runs, one reading per row: what a start uses, whether it fits, how to
+        start it, the last log; the launcher's error lines after a start that failed."""
+        L: List[CardLine] = []
         try:
             p = self.ensure_pending(d)
             f = self.svc.fit_cached(p)
             name = self.svc.resolved_model(p)
-            whose = "auto: Auto fit's choice" if p.get("model") == "auto" else "your choice"
+            L.append(row("next start", f"{name}   {DIM}{'auto' if p.get('model') == 'auto' else 'your choice'}{R}"))
             if f.fits:
                 need, limit = gib_pair(f.need, f.limit)
-                L.append(f"It will start {name} ({whose}) with {plural(f.slots, 'slot')} of {tokens(f.ctx)} tokens. "
-                         f"It fits: {need.replace(' GiB', '')} of {limit}.")
+                L.append(row("with", f"{plural(f.slots, 'slot')} × {tokens(f.ctx)} tokens"))
+                L.append(row("fits", f"{GRN}✓{R} {need.replace(' GiB', '')} of {limit}"))
             else:
                 L.append(fit_sentence(f))
         except Exception as e:      # a broken catalogue or config: the Settings tab says why
             L.append(f"{YEL}CARL cannot read the settings: {e}{R}")
+        L.append(row("to start", "Press a, or run ./carl.sh in a terminal."))
+        if d.log_path and os.path.exists(d.log_path):
+            L.append(row("last log", f"{os.path.basename(d.log_path)}   {DIM}tab 4{R}"))
         errs = self.ui.start_error or (self.exited_errors() if d.exited else [])
         if errs:
-            L += ["", f"{RED}{B}The last start failed. The launcher said:{R}", *[f"{RED}  {e}{R}" for e in errs]]
-        if d.log_path and os.path.exists(d.log_path):
-            L += ["", f"The log of the last run: tab 4 ({os.path.basename(d.log_path)})."]
+            L += ["", f"{RED}{B}The last start failed. The launcher said:{R}", *[f"{RED}{e}{R}" for e in errs]]
         return L
 
     def exited_errors(self) -> List[str]:
@@ -162,7 +168,7 @@ class App:
         except OSError:
             return []
         if self._errors[:2] != (path, mt):
-            self._errors = (path, mt, launcher_errors(path))
+            self._errors = (path, mt, launcher_errors(path, tail=False))   # a normal stop has no error line
         return self._errors[2]
 
     def cache_api(self) -> None:
@@ -181,7 +187,7 @@ class App:
         err = api.start()
         if err:
             self.ui.toast(f"The dashboard API cannot start: {err}. Other computers cannot sync now (the Caching panel "
-                          f"says so too).", 12)
+                          f"says so too).", 12, error=True)
         else:
             self._api = api
             self.jobs.registry = api.registry
@@ -192,8 +198,8 @@ class App:
         if not files:
             return ""
         n = sum(1 for f in files if f.kind == diskcache.PROMPT)
-        return (f"{plural(n, 'saved prompt')}, {plural(len(files) - n, 'saved session')}, "
-                f"{diskcache.gb(diskcache.used(files)).replace(' GB', '')} of {self.jobs.cache_conf().disk_gb} GB")
+        return (f"{diskcache.gb(diskcache.used(files)).replace(' GB', '')} of {self.jobs.cache_conf().disk_gb} GB   "
+                f"{DIM}{plural(n, 'prompt')}, {plural(len(files) - n, 'session')}{R}")
 
     def header(self, d: ServerData, cols: int) -> Tuple[str, str]:
         """The two header lines: CARL, the state word, the model and its uptime, the clock, Quit; the tabs and
@@ -202,10 +208,10 @@ class App:
         label, bg = status_of(d, self.collector.server_pid)
         dot = "○" if label == STOPPED else "●"
         up = uptime(d.etime) if d.up else ""
-        kind = f" · router mode ({plural(len(d.router.models), 'model')})" if d.up and d.router is not None else ""
+        kind = f"   router mode ({plural(len(d.router.models), 'model')})" if d.up and d.router is not None else ""
         name = d.alias or ("no model loaded" if d.router is not None else "no server" if label == STOPPED else "")
         left = (f"{'' if self.logo else '😎 '}{B}CARL{R}  {pill(f'{dot} {label}', bg)}  {B}{name}{R}{DIM}{kind}"
-                f"{f' · up {up}' if up else ''}{R}")
+                f"{f'   up {up}' if up else ''}{R}")
         right = f"{DIM}{time.strftime('%H:%M')}{R}  " + ("" if once else f"{B}{RED}{QUIT_LABEL}{R}")
         head = fit(left, cols - self.logo_cols - vlen(right) - 1) + " " + right
         regions.append(Region(1, cols - len(QUIT_LABEL) + 1, cols + 1, "quit"))
@@ -216,10 +222,14 @@ class App:
             tabs += (f"\x1b[1;7m{lab}{R}" if i == ui.tab else f"{YEL}{lab}{R}" if i == 1 and stale else f"{DIM}{lab}{R}") + " "
             regions.append(Region(2, x, x + len(lab), f"tab:{i}"))
             x += len(lab) + 1
-        det = f"detail: {ui.detail} (D)"
+        shown = {ui.levels.get(nm, 1) for nm in ui.sections if nm in THREE_LEVELS}     # an open two-level one is 1
+        if any(ui.levels.get(nm, 1) == 0 for nm in ui.sections if nm not in THREE_LEVELS):
+            shown.add(0)
+        level = "mixed" if len(shown) > 1 else "full" if shown == {2} else "simple" if shown else ui.detail
+        det = f"detail: {level} (D)"
         room = cols - self.logo_cols - vlen(tabs) - 1
         if room > len(det):
-            tabs += " " * (room - len(det)) + f"{DIM}detail:{R} {B}{ui.detail}{R} {DIM}(D){R}"
+            tabs += " " * (room - len(det)) + f"{DIM}detail:{R} {B}{level}{R} {DIM}(D){R}"
             regions.append(Region(2, cols - len(det) + 1, cols + 1, "detail"))
         return head, fit(tabs, cols - self.logo_cols)
 
@@ -237,10 +247,8 @@ class App:
         regions = self.ctl.regions
         regions.clear()
         self.svc.full = ui.full
-        head, tabs = self.header(d, cols)
-        out = [head, tabs, fit(DIM + "─" * cols, cols)]
         height = (rows - 6) if not once else 10**4
-        ui.keys, ui.keys_more = [], []           # the screen drawn next sets its own
+        ui.keys, ui.keys_more, ui.more = [], [], False    # the screen drawn next sets its own
         if ui.drain:
             body = drain_dialog(ui.drain, cols, height, ui)
         elif ui.quit:
@@ -248,8 +256,20 @@ class App:
         else:
             body = self.body(d, cols, height)
             if ui.help:                          # ?: every key of this screen, then the keys of every screen
-                card = indent(keys_card(ui.keys, ui.keys_more, ui.messages, min(cols - 2, 110)))
-                body = card + self.body(d, cols, max(height - len(card), 4))
+                if cols >= 160:                  # an overlay on the right half: the page stays where it is
+                    cut = 2 + (cols - 3) // 2                 # the overlay covers the right column, not the left
+                    cw = min(cols - cut - 1, 96)
+                    card = keys_card(ui.keys, ui.keys_more, ui.messages, cw)
+                    body = [(fit(t, cut).replace("…", " ") + " " + card[i][0], [s for s in sp if s[1] <= cut] +
+                             [(a + cut + 1, b + cut + 1, act) for a, b, act in card[i][1]]) if i < len(card) else (t, sp)
+                            for i, (t, sp) in enumerate(body)]
+                    body += [(" " * (cut + 1) + c[0], []) for c in card[len(body):]]
+                else:
+                    w = min(cols - 4, 96)
+                    card = indent(keys_card(ui.keys, ui.keys_more, ui.messages, w), (cols - w) // 2)
+                    body = card + self.body(d, cols, max(height - len(card), 4))
+        head, tabs = self.header(d, cols)          # after the body: its sections set the detail shown
+        out = [head, tabs, fit(DIM + "─" * cols, cols)]
         for text, spans in body:
             y = len(out) + 1
             regions.extend(Region(y, a + 1, b + 1, act) for a, b, act in spans)
@@ -271,21 +291,22 @@ class App:
         ui = self.ui
         msg, until = ui.toast_msg
         if ui.stopping:
-            return f"{YEL}The server stops…{R}"
+            return f"{YEL}The server is stopping…{R}"
         if ui.restart:
             return f"{YEL}{ui.restart}{R}" + (f" {DIM}({duration(time.time() - ui.restart_t)}){R}" if ui.restart_t else "")
         if msg and time.time() < until:
-            return f"{GRN}{msg}{R}"
+            return f"{RED if ui.toast_error else GRN}{msg.replace(R, R + (RED if ui.toast_error else GRN))}{R}"
         dl, tn, ins = ui.dl, ui.tune, ui.install
-        if dl and not dl.done:
-            frac = f" {dl.have / dl.total * 100:.0f}%" if dl.total else ""
-            return f"{CYN}Downloading {dl.name}{frac}{R} {DIM}(Settings > Models){R}"
+        if dl and not dl.done and not (ui.tab == 4 and ui.sp in (SP_MODELS, SP_FIT)):   # those panels show it
+            frac = f": {dl.have / dl.total * 100:.0f}%" if dl.total else ""
+            return f"{CYN}CARL is downloading {dl.name}{frac}.{R} {DIM}It is in Settings > Models.{R}"
         if tn and not tn.done:
-            return f"{CYN}Auto-tune runs for {tn.model}{R} {DIM}(Settings > Auto-tune){R}"
+            return f"{CYN}Auto-tune is running for {tn.model}.{R} {DIM}It is in Settings > Auto-tune.{R}"
         if ins and not ins.done:
-            return f"{CYN}The installer runs{R} {DIM}(the Connect tab){R}"
+            return f"{CYN}The installer is running.{R}" + ("" if ui.tab == 1 else f" {DIM}It is in the Connect tab.{R}")
         if ui.package and not ui.package.done:
-            return f"{CYN}CARL makes the client package{R} {DIM}(the Connect tab){R}"
+            return f"{CYN}CARL is making the client package.{R}" + ("" if ui.tab == 1 else f" {DIM}It is in the Connect "
+                                                                                    f"tab.{R}")
         return ""
 
     def footer(self, w: int) -> str:
@@ -296,7 +317,7 @@ class App:
             return footer_keys([("?", "close this list")], [("q", "quit")], w)
         if self.dialog():
             return footer_keys(ui.keys, [], w)
-        return footer_keys(ui.keys, TAIL, w)
+        return footer_keys(([("↓", "more")] if ui.more else []) + ui.keys, TAIL, w)
 
     def body(self, d: ServerData, cols: int, height: int) -> List[Row]:
         """The selected tab's rows."""
@@ -347,6 +368,9 @@ class App:
         """The Settings tab: the panel bar, then the picker, a question, or the selected panel."""
         ui = self.ui
         out: List[Row] = [subpanel_bar(ui.sp), ("", [])]
+        if ui.sp != getattr(self, "_last_sp", ui.sp):     # another panel: its page starts at the top
+            ui.page_scroll = 0
+        self._last_sp = ui.sp
         if ui.picker:
             return out + self.view.picker(ui.picker, cols, height - 2, ui)
         if ui.confirm2:
@@ -365,17 +389,17 @@ class App:
                 stale, n = self.client_drift(fsio.installed_here(self.endpoint.base, self.opts.home))
                 here = bool(fsio.installed_here(self.endpoint.base, self.opts.home))
                 body = self.view.router(ui, d, self.saved_mode(), [(book.wall(t), name) for t, name in book.switches],
-                                        [s.line(n) for s in stale], cols, here)[:height - 2]
+                                        [s.line(n) for s in stale], cols, here, height - 2)
             elif ui.sp == SP_CACHE:
                 folder = self.jobs.paths.slots
                 api = f"{self._api.host}:{self._api.port}" if self._api else ""
                 body = self.view.caching(ui, self.jobs.cache_conf(), diskcache.listing(folder), folder, cols,
-                                         api)[:height - 2]
+                                         api, height - 2)
             elif ui.sp == SP_MODELS:
                 mdir = self.store.models_dir()
                 body = self.view.models(ui, cols, height - 2, ModelsDir(mdir, disk_free(mdir)), d.alias)
             else:
-                body = self.view.tune(ui, cols, d.up)
+                body = self.view.tune(ui, cols, d.up, height - 2)
         except Exception as e:      # the catalogue, models.json or config.json can't be read: say so, keep running
             body = panel_error(e, cols)
         if not ui.keys:

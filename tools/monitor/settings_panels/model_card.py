@@ -1,7 +1,7 @@
-"""The Server panel's MODEL card: what the selected model is for. Simple detail: its role, what it is
-good for, its speed on this Mac, thinking and its trade-off. Full detail adds why to use it, the
-quality rank, the context zones, the alternatives, what "uncensored" means, the reason for the
-selected setting, Auto-tune's measurements, its source and file."""
+"""The Server panel's MODEL card: what the selected model is good for (its tags: the user, 2026-10-08, "for and good
+for are redundant, we only need the tags"), thinking, its trade-off, why to use it and its speeds by source. The
+full level adds its type, quantization, quality rank, context zones, the alternatives, what "uncensored" means, the
+reason for the selected setting, Auto-tune's measurements, its source and file."""
 from __future__ import annotations
 
 import time
@@ -9,11 +9,12 @@ from typing import List
 
 from carl_core.domain.units import tokens
 
-from ..fmt import B, CYN, DIM, GRN, R, RED, YEL, CardLine, Row, cwrap, draw_card, home_short, wwrap
+from ..cards import wrapped
+from ..fmt import B, CYN, DIM, GRN, R, RED, YEL, CardLine, Row, aligned, draw_card, home_short, row
 from ..model import JSONDict, ModelInfo, jdict
 from ..settings import LLAMA_ADV, Pending, SettingsService
 from ..words import THINKING_NAMES
-from .common import good_for_chip, parallel_text, spec_table
+from .common import good_for_chip, parallel_text, spec_table, speeds_table
 
 WHY_KEY = {"specn": "spec", "presence": "temp", "top_k": "temp", "top_p": "temp", "min_p": "temp", "repeat": "temp"}
 CTX_FLOOR = 98304                                       # the fast zone reaches at least this (carl_core.domain.models)
@@ -28,21 +29,6 @@ def short_date(iso: object) -> str:
     return f"{t.tm_mday} {time.strftime('%b', t)}"
 
 
-def speed_line(m: ModelInfo, tune: object) -> str:
-    """This Mac's measured speeds after Auto-tune, else the catalogue's (another Mac)."""
-    t = jdict(tune)
-    st = jdict(t.get("settings"))
-    best = jdict(jdict(jdict(t.get("results")).get("speculation")).get(f"{st.get('spec')}:{st.get('spec_n')}"))
-    if best.get("prose") is not None:
-        return (f"Speed on this Mac: {GRN}{best.get('prose'):.0f} tok/s prose · {best.get('code'):.0f} code · "
-                f"{best.get('edit'):.0f} edit{R} (Auto-tune, {short_date(t.get('date'))}).")
-    sp = jdict(m.get("speed"))
-    if sp.get("prose") is not None:
-        return (f"Speed on another Mac ({sp.get('machine', '?')}): {sp.get('prose'):.0f} tok/s prose · "
-                f"{sp.get('code'):.0f} code · {sp.get('edit'):.0f} edit. {DIM}Auto-tune measures this Mac.{R}")
-    return f"Speed: {DIM}not measured. Auto-tune measures it on this Mac.{R}"
-
-
 def tune_table(tune: object) -> List[CardLine]:
     """Auto-tune's speculation table, the chosen mode marked."""
     t = jdict(tune)
@@ -50,100 +36,88 @@ def tune_table(tune: object) -> List[CardLine]:
     if not res:
         return []
     st = jdict(t.get("settings"))
-    head: List[CardLine] = ["", f"{B}Auto-tune on this Mac{R} {DIM}{short_date(t.get('date'))} · {t.get('machine', '?')}{R}"]
+    head: List[CardLine] = ["", f"{B}Auto-tune on this Mac{R}   {DIM}{short_date(t.get('date'))}, {t.get('machine', '?')}{R}"]
     return head + spec_table(res, f"{st.get('spec')}:{st.get('spec_n')}")
 
 
-def zones_line(svc: SettingsService, m: ModelInfo, tune: JSONDict) -> str:
-    """The context zones of this model on this Mac, in words."""
-    zg, zs, _ = svc.store.ctx_zones(m)
-    measured = jdict(tune.get("ctx_zones"))
-    raw = measured.get("good")
-    floor = (f" {DIM}(CARL's floor: Auto-tune measured {tokens(int(raw))}){R}"
-             if isinstance(raw, int) and raw < CTX_FLOOR <= zg else "")
-    src = "measured on this Mac" if measured else "from the catalogue"
-    return (f"Context zones ({src}): {GRN}up to {tokens(zg)} fast{R}{floor} · {YEL}up to {tokens(zs)} slow{R} · "
-            f"{RED}more is very slow{R} (the time to read a full context again).")
-
-
 class ModelCard:
-    """Draws the MODEL card of the Server panel."""
+    """Draws the MODEL card of the Server panel: one reading per row."""
 
     def __init__(self, svc: SettingsService, home: str) -> None:
         self.svc = svc
         self.home = home
 
-    def draw(self, p: Pending, key: str, w: int, lvl: int = 1, full: bool = False) -> List[Row]:
-        """The card of the model a start uses (auto: Auto fit's choice as resolved now)."""
+    def draw(self, p: Pending, key: str, w: int, lvl: int = 1, full: bool = False, sel: bool = False) -> List[Row]:
+        """The card of the model a start uses (auto: Auto fit's choice as resolved now). lvl: 0 collapsed, 1 simple,
+        2 full (its title shows it)."""
         svc = self.svc
         name = svc.resolved_model(p)
         m = svc.models.by_name(name)
         if not m:
-            return draw_card("modelinfo", "MODEL", "", [f"{RED}{name} is not a known model.{R}"], w, lvl)
+            return draw_card("modelinfo", "MODEL", "", [f"{RED}{name} is not a known model.{R}"], w, lvl, 3, sel)
         tune = jdict(jdict(m.get("local")).get("tune"))
         tw = w - 4
         L: List[CardLine] = []
-        role = str(m.get("role") or "")
-        good = [str(t) for t in (m.get("good_for") or [])]
         if p.get("model") == "auto":
-            L += cwrap(f"{DIM}auto starts {name} now (Auto fit's choice, or the best downloaded model while Auto fit's "
-                       f"choice is not downloaded).{R}", tw)
-        first = (f"{role}." if role else str(m.get("summary") or "")) + (
-            f"   Good for: {' · '.join(good_for_chip(t) for t in good)}" if good else "")
-        if first.strip():
-            L += cwrap(first, tw)
+            L.append(row("auto", f"Starts {name} now."))
+        good = [str(t) for t in (m.get("good_for") or [])]           # the tags say what it is for (user, 2026-10-08)
+        if good:
+            L.append(row("good for", ", ".join(good_for_chip(t) for t in good)))
         think = THINKING_NAMES.get(str(m.get("thinking") or ""), "")
-        L += cwrap(speed_line(m, tune) + (f"   Thinking: {think}." if think else ""), tw)
+        if think:
+            L.append(row("thinking", think))
         if m.get("trade_offs"):
-            L += cwrap(f"{YEL}Trade-off:{R} {m['trade_offs']}", tw, "  ")
+            L.append(row("trade-off", f"{YEL}{m['trade_offs']}{R}"))
+        if m.get("why_use"):
+            L.append(row("why use it", str(m["why_use"])))
+        L += ["", *speeds_table(m, tw)]
         if m.get("custom") and not jdict(m.get("local")).get("card"):
-            L += cwrap(f"{DIM}This model has no card. To write one: the Models panel (]), select it, then e. Or run "
-                       f"./carl.sh card {name}.{R}", tw)
+            L += ["", f"{DIM}No card yet: the Models panel (]), select it, then e.{R}"]
         if full:
             L += self.full_lines(m, key, tune, tw)
-        title = f"{B}{m.get('label') or name}{R}"
+        title = f"{B}{str(m.get('label') or name).replace(' · ', '  ')}{R}"
         if m.get("custom"):
-            title += f" {DIM}· custom model, {'your card' if jdict(m.get('local')).get('card') else 'no card'}{R}"
-        return draw_card("modelinfo", "MODEL", title, L, w, lvl)
+            title += f"   {DIM}custom model, {'your card' if jdict(m.get('local')).get('card') else 'no card'}{R}"
+        return draw_card("modelinfo", "MODEL", title, wrapped(aligned(L, tw), tw), w, lvl, 3, sel)
 
     def full_lines(self, m: ModelInfo, key: str, tune: JSONDict, tw: int) -> List[CardLine]:
         svc = self.svc
         L: List[CardLine] = [""]
-        if m.get("why_use"):
-            L += cwrap(f"{B}Why use it:{R} {m['why_use']}", tw, "  ")
-        tags = [x for x in (str(m.get("arch") or "").replace("moe", "MoE"), str(m.get("quant") or ""),
-                            "MTP head" if m.get("mtp") else "MTP drafter" if m.get("draft") else "",
-                            f"{RED}abliterated{R}" if m.get("abliterated") else "") if x]
+        arch = str(m.get("arch") or "")
+        if arch:
+            L.append(row("type", "MoE" if arch == "moe" else arch))
+        if m.get("quant"):
+            L.append(row("quant", str(m["quant"])))
+        if m.get("mtp") or m.get("draft"):
+            L.append(row("MTP", "an MTP head" if m.get("mtp") else "an MTP drafter"))
+        if m.get("abliterated"):
+            L.append(row("abliterated", f"{RED}yes{R}"))
         if isinstance(m.get("rank"), int):
-            how = ("from your card, not measured" if m.get("custom") else
-                   "from published benchmarks and CARL's code test")
-            L += cwrap(f"Quality rank {m['rank']} (1 = best; {how}).   " + " · ".join(tags), tw)
-        elif tags:
-            L += cwrap(" · ".join(tags), tw)
-        L += cwrap(zones_line(svc, m, tune), tw, "  ")
+            L.append(row("quality", f"Rank {m['rank']} (1 = best)"))
+        zg, zs, _ = svc.store.ctx_zones(m)
+        L.append(row("context", f"{GRN}Fast up to {tokens(zg)}{R}, {YEL}slow up to {tokens(zs)}{R}, {RED}more is very "
+                                f"slow{R}."))
         par = jdict(tune.get("results")).get("parallel") or []
         if par:
-            L += cwrap(f"Slots at work: {parallel_text(par)} (measured on this Mac).", tw, "  ")
-        alts = [jdict(a) for a in (m.get("pick_instead") or [])]
-        if alts:
-            L += cwrap("Pick instead: " + " · ".join(f"{CYN}{a.get('model')}{R} {a.get('when')}" for a in alts), tw, "  ")
+            L.append(row("slots at work", parallel_text(par)))
+        for i, a in enumerate(jdict(x) for x in (m.get("pick_instead") or [])):
+            L.append(row("pick instead" if i == 0 else "", f"{CYN}{a.get('model')}{R}   {a.get('when')}"))
         if m.get("uncensored"):
-            L += cwrap(f"{RED}Uncensored:{R} {m['uncensored']}", tw, "  ")
+            L.append(row("uncensored", f"{RED}{m['uncensored']}{R}"))
         if m.get("hardware"):
-            L += cwrap(f"Hardware: {m['hardware']}", tw, "  ")
+            L.append(row("hardware", str(m["hardware"])))
         labels = {r.key: r.label for r in svc.schema.llama + LLAMA_ADV}
         wk = WHY_KEY.get(key, key)
         why = str(jdict(m.get("why")).get(wk) or "")
         if why and not (wk == "spec" and tune):
-            L += ["", f"{B}Why this {labels.get(key, key).lower()}{R}", *wwrap(why, tw)[:8]]
+            L.append(row(f"why this {labels.get(key, key).lower()}", why))
         L += tune_table(tune)
-        desc = wwrap(m.get("description", ""), tw)
-        if desc and desc != [""]:
-            L += ["", *[f"{DIM}{x}{R}" for x in desc]]
+        if m.get("description"):
+            L += ["", f"{DIM}{m['description']}{R}"]
         hf = jdict(m.get("hf"))
+        L.append("")
         if hf.get("repo"):
-            L += cwrap(f"{DIM}Source: huggingface.co/{hf['repo']} · {hf.get('file')}"
-                       + (f" @ {str(hf.get('revision'))[:8]}" if hf.get("revision") else "") + R, tw, "  ")
-        L += cwrap(f"{DIM}File: {home_short(str(m.get('path', '')), self.home)}{R}", tw, "  ")
+            L.append(row("source", f"huggingface.co/{hf['repo']}   {hf.get('file')}"
+                         + (f" @ {str(hf.get('revision'))[:8]}" if hf.get("revision") else "")))
+        L.append(row("file", home_short(str(m.get("path", "")), self.home)))
         return L
-

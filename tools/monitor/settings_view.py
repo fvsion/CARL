@@ -47,20 +47,20 @@ class SettingsView:
         """Panel 3: auto fit's pick for this Mac, its reasons and the ranking (settings_panels.autofit)."""
         return self._autofit.draw(ui, p, cols, height)
 
-    def tune(self, ui: UIState, cols: int, server_up: bool) -> List[Row]:
+    def tune(self, ui: UIState, cols: int, server_up: bool, height: int = 0) -> List[Row]:
         """Panel 4: Auto-tune (settings_panels.tune)."""
-        return self._tune.draw(ui, cols, server_up)
+        return self._tune.draw(ui, cols, server_up, height)
 
     @staticmethod
     def router(ui: UIState, d: ServerData, saved: str, switches: Sequence[Tuple[str, str]], stale: Sequence[str],
-               cols: int, here: bool = False) -> List[Row]:
+               cols: int, here: bool = False, height: int = 0) -> List[Row]:
         """Panel 5: who switches the model (settings_panels.router)."""
-        return router_panel(ui, d, saved, switches, stale, cols, here)
+        return router_panel(ui, d, saved, switches, stale, cols, here, height)
 
     def caching(self, ui: UIState, conf: CacheConfig, files: Sequence[CacheFile], folder: str, cols: int,
-                api: str = "") -> List[Row]:
+                api: str = "", height: int = 0) -> List[Row]:
         """Panel 6: the disk cache (settings_panels.caching)."""
-        return caching_panel(ui, conf, files, folder, cols, self.home, api)
+        return caching_panel(ui, conf, files, folder, cols, self.home, api, height)
 
     def picker(self, pk: Picker, cols: int, height: int, ui: Optional[UIState] = None) -> List[Row]:
         """An open drop-down (it sets the footer's keys in ui)."""

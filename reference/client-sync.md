@@ -72,5 +72,5 @@ The setup on another computer adds the sync service (`client/carl-sync.py watch`
 The Connect tab has two sub-tabs: **Setup** and **Clients**. Push `[` or `]` to change between them.
 
 - **Clients** lists this Mac (its OpenCode and Pi configs) and each computer that syncs.
-- For each computer: the name, the user, how it syncs (the service, or a check at the start), when it was last seen (or connected), and its config against the config that the dashboard sent. Full detail adds the system and the address.
-- The dashboard keeps the list in `~/.config/carl/clients.json`. **[ Forget the computers not seen for a week ]** removes old rows.
+- For each computer: the name, when it was last seen (`● connected`, or `○` and how long ago), the user, how it syncs (`always`: the service; `at start`: a check at the start), its config against the config that the dashboard sent (`up to date`, `at next sync`, `on hold`), the system and the address. The full level adds the version of the config that each computer has.
+- The dashboard keeps the list in `~/.config/carl/clients.json`. **[ Forget the computers not seen for a week ]** removes old rows. It does not ask first.

@@ -9,6 +9,7 @@ from typing import Callable, Dict, List, Optional, Protocol, Tuple, Union
 from carl_core.domain.package import Outcome
 
 from .card_form import CardForm
+from .fmt import RED
 from .cards import LEVEL_NAMES
 from .model import ModelInfo
 from .settings import Pending
@@ -146,10 +147,11 @@ class UIState:
     detail: str = "simple"          # simple | full (D; saved in the dashboard's own file, uiprefs.py)
     scroll: int = 0                 # Live
     prev_scroll: int = 0            # Connect: the config preview
+    conn_scroll: int = 0            # Connect: the page (rows off the top)
     connect_sp: int = 0             # Connect: 0 Setup, 1 Clients (CONNECT_SUBPANELS)
     req_scroll: int = 0
     log_scroll: int = 0             # lines back from the end
-    lines: int = 6                  # log lines on the Live tab (full detail)
+    lines: int = 0                  # log lines on the Live tab (+ -, --lines); 0 = by the screen's height
     wrap: bool = False
     errors_only: bool = False
     key_shown: bool = False
@@ -160,17 +162,23 @@ class UIState:
     stopping: Optional[Tuple[int, float]] = None    # (server pid, SIGKILL deadline)
     exit_msg: str = ""
     toast_msg: Tuple[str, float] = ("", 0.0)        # (message, shown until): the message line
+    toast_error: bool = False       # the message reports a failure: red
     messages: List[Tuple[float, str]] = field(default_factory=list)   # the last messages (the ? card)
     start_error: List[str] = field(default_factory=list)   # the launcher's "error:" lines of a start that failed
     preview: str = "opencode"       # Connect: opencode | pi | curl
     copied: Optional[str] = None
-    levels: Dict[str, int] = field(default_factory=lambda: {x: 1 for x in LEVEL_NAMES})   # 0 collapsed, 1 open
+    levels: Dict[str, int] = field(default_factory=lambda: {x: 1 for x in LEVEL_NAMES})   # 0 collapsed, 1 simple, 2 full
+    section: str = ""               # the selected section (Tab / Shift-Tab; L changes its level)
+    revealed: str = ""              # the section the page last scrolled to (fmt.reveal)
+    sections: List[str] = field(default_factory=list)   # the sections of the screen shown, in order (set as it draws)
+    more: bool = False              # the page shown goes on below the screen (the footer says "↓ more")
     # Settings
     sp: int = SP_SERVER             # panel: Server, Models, Auto fit, Auto-tune, Router
     pending: Optional[Pending] = None               # Server panel: the values being chosen
     set_run: Pending = field(default_factory=dict)  # what ran when they were first shown
     set_row: int = 0
     set_scroll: int = 0             # Server panel: rows scrolled off the top
+    page_scroll: int = 0            # Auto-tune, Router, Caching: rows scrolled off the top (0 when the panel changes)
     edit: Optional[str] = None      # a number being typed into the selected row
     confirm: bool = False           # Apply: "restart?" asked
     restart: Optional[str] = None   # what a restart is doing now
@@ -180,6 +188,7 @@ class UIState:
     slist: bool = False             # Server panel: the model list beside the settings has the keys
     srow: int = 0                   # Server panel: the cursor in that list
     mfilter: int = 0                # model lists: index into arrange.FILTERS
+    mspeeds: bool = False           # Models panel: the list shows the speeds of each source (t)
     fit_scroll: int = 0             # Auto fit panel: lines scrolled off the top
     cache_row: int = 0              # Caching panel: the selected row
     router_row: int = 0             # Router panel: the selected model
@@ -206,7 +215,9 @@ class UIState:
         """The full detail level: the reasons, the figures, the flags and keys too."""
         return self.detail == "full"
 
-    def toast(self, msg: str, secs: float = 6) -> None:
-        """Show msg on the message line (above the keys) for secs seconds; the ? card keeps the last ones."""
+    def toast(self, msg: str, secs: float = 6, error: bool = False) -> None:
+        """Show msg on the message line (above the keys) for secs seconds; the ? card keeps the last ones. error
+        (or a message that starts in red): the line is red, else green."""
         self.toast_msg = (msg, time.time() + secs)
+        self.toast_error = error or msg.startswith(RED)
         self.messages = [*self.messages[-7:], (time.time(), msg)]

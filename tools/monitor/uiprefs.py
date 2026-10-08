@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import os
+from typing import Dict, Optional
 
 from . import fsio
 from .state import DETAILS
@@ -27,8 +28,19 @@ def load_detail(path: str) -> str:
     return v if v in DETAILS else DETAILS[0]
 
 
-def save_detail(path: str, detail: str) -> bool:
-    """Save the detail level; False when the folder can't be written (the level still applies now)."""
+def load_levels(path: str) -> dict:
+    """The saved level of each section (0 collapsed, 1 simple, 2 full); {} when there are none."""
+    try:
+        with open(path, encoding="utf-8") as f:
+            v = json.load(f).get("levels")
+    except (OSError, ValueError, AttributeError):
+        return {}
+    return {k: x for k, x in v.items() if isinstance(k, str) and x in (0, 1, 2)} if isinstance(v, dict) else {}
+
+
+def save_detail(path: str, detail: str, levels: Optional[Dict[str, int]] = None) -> bool:
+    """Save the detail level (and each section's level); False when the folder can't be written (the levels still
+    apply now)."""
     try:
         try:
             with open(path, encoding="utf-8") as f:
@@ -37,6 +49,8 @@ def save_detail(path: str, detail: str) -> bool:
         except (OSError, ValueError):
             doc = {}
         doc["detail"] = detail
+        if levels is not None:
+            doc["levels"] = dict(levels)
         if not os.path.isdir(os.path.dirname(path)):
             return False
         fsio.write_private(path, json.dumps(doc, indent=2) + "\n")

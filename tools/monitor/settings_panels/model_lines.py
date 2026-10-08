@@ -12,18 +12,23 @@ from ..fmt import CYN, DIM, GRN, R, RED, YEL, fit, vlen
 from ..model import ModelInfo, draft_bytes
 from ..settings import SettingsService
 from ..words import status_name
-from .common import fit_cell, speed_cell
+from .common import fit_cell, long_date, source_cells, speed_cell, speed_sources
 
-NAME_W, FITS_W, SPEED_W = 22, 14, 14
+NAME_W, FITS_W, SPEED_W = 22, 14, 13
+WIDE = 150                          # from this text width the list shows each source's prose / code / edit
 
 
-def model_header(full: bool = False) -> str:
-    """The column names of a model table."""
-    if full:
-        return (f"{DIM}  {'Model':<{NAME_W}} {'Rank':>4} {'Download':>9}  {'Status':<15} {'Max context':>11} "
-                f"{'Speed':>{SPEED_W}}  What it is for{R}")
-    return (f"{DIM}  {'Model':<{NAME_W}} {'Download':>9}  {'Status':<15} {'Fits this Mac':<{FITS_W}} "
-            f"{'Speed':>{SPEED_W}}  What it is for{R}")
+def model_header(full: bool = False, w: int = 0, speeds: bool = False) -> str:
+    """The column names of a model table (w: the text width; speeds: the speeds view, t)."""
+    if speeds:
+        return (f"{DIM}  {'Model':<{NAME_W}}  {'This Mac':<18}   {'Catalogue':<18}   {'Measured on':<20}{'Date':<13}"
+                f"Speculation{R}\n{DIM}  {'':<{NAME_W}}  {'Prose  Code  Edit':>18}   {'Prose  Code  Edit':>18}{R}")
+    lead = (f"  {'Model':<{NAME_W}} {'Rank':>4} {'Download':>9}  {'Status':<15} {'Max context':>11} " if full else
+            f"  {'Model':<{NAME_W}} {'Download':>9}  {'Status':<15} {'Fits this Mac':<{FITS_W}} ")
+    if w >= WIDE:
+        return f"{DIM}{lead}{'This Mac':>18}   {'Catalogue':>18}  What it is for{R}\n" \
+               f"{DIM}{'':<{len(lead)}}{'Prose  Code  Edit':>18}   {'Prose  Code  Edit':>18}{R}"
+    return f"{DIM}{lead}{'Prose tok/s':>{SPEED_W}}  What it is for{R}"
 
 
 class ModelLines:
@@ -50,7 +55,8 @@ class ModelLines:
             return f"{GRN}yes{R}, {plan.slots} × {tokens(plan.ctx)}"
         return f"{RED}no{R} ({memory(plan.need)})"
 
-    def model_line(self, m: ModelInfo, pick: Optional[str] = None, full: bool = False) -> str:
+    def model_line(self, m: ModelInfo, pick: Optional[str] = None, full: bool = False, w: int = 0,
+                   speeds: bool = False) -> str:
         """One model in a table (model_header): name (★ = Auto fit's choice, red = does not fit this Mac),
         download size, status, fits this Mac (full: rank and the largest context), speed, what it is for."""
         st = m["status"]
@@ -63,10 +69,18 @@ class ModelLines:
         what = str(m.get("role") or m.get("summary") or "")
         if m.get("custom") and not m.get("role"):
             what = "Custom model: write its card (e)"
+        if speeds:
+            here, cat = (v for _, v in speed_sources(m))
+            src = cat or here or {}
+            return (f"{name}  {source_cells(here)}   {source_cells(cat)}   {str(src.get('machine') or '–'):<20}"
+                    f"{long_date(src.get('date')):<13}{src.get('spec') or ''}")
         if full:
             rank = m.get("rank") if isinstance(m.get("rank"), int) else "–"
             mid = f"{rank!s:>4} {size:>9}  {status} {fit_cell(self.svc.max_ctx(m), 11, 'none')}"
         else:
             ft = self.fits_text(m)
             mid = f"{size:>9}  {status} {ft}{' ' * max(0, FITS_W - vlen(ft))}"
+        if w >= WIDE:
+            here, cat = (v for _, v in speed_sources(m))
+            return f"{name} {mid} {source_cells(here)}   {source_cells(cat)}  {CYN}{what}{R}"
         return f"{name} {mid} {speed_cell(m, SPEED_W)}  {CYN}{what}{R}"

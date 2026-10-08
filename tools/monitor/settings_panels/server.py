@@ -10,12 +10,15 @@ from typing import Dict, List, Tuple
 from carl_core.domain.units import MIB, file_size, memory
 
 from ..arrange import label as arrange_label
-from ..fmt import (B, CYN, DIM, GRN, R, RED, YEL, CardLine, Ln, Row, bar, button_rows, buttons, cwrap, draw_card, fit,
-                   heading, home_short, indent, merge_columns, side_lines, vlen)
+from carl_core.domain.units import tokens
+
+from ..cards import wrapped
+from ..fmt import (reveal, B, CYN, DIM, GRN, R, RED, YEL, CardLine, Ln, Row, aligned, bar, button_rows, buttons, cwrap, draw_card,
+                   fit, home_short, indent, row, side_by_side, vlen)
 from ..model import JSONDict, ServerData, jdict
-from ..settings import (ADV_WARN, FULL_ONLY, MODEL_ROW_KEYS, MORE_SETTINGS, NOT_RUNNING, NUMERIC, SET_HELP, FitInfo, Pending,
+from ..settings import (ADV_WARN, FULL_ONLY, MODEL_ROW_KEYS, NOT_RUNNING, NUMERIC, SET_HELP, FitInfo, Pending,
                         SettingRow, SettingsService, fit_sentence, fmt_val, gib_pair, plan_words, row_instruction,
-                        shown_value, spec_value, swa_sentence)
+                        shown_value, spec_value)
 from ..state import SP_FIT, UIState
 from ..words import net_name, plural, spec_name
 from .model_card import ModelCard
@@ -31,8 +34,10 @@ FLAGS: Dict[str, str] = {"model": "-m · llama.model", "ctx": "-c · ctx", "slot
                          "net": "--host · llama.net", "temp": "--temp · temp", "presence": "--presence-penalty · presence",
                          "top_k": "--top-k · top_k", "top_p": "--top-p · top_p", "min_p": "--min-p · min_p",
                          "repeat": "--repeat-penalty · repeat", "ub": "-ub · llama.ub",
-                         "ckpt": "--ctx-checkpoints · llama.ckpt", "ckstep": "--checkpoint-min-step · llama.ckpt_step"}
-GIB_NOTE = "GiB is memory: 1 GiB = 1.07 GB."
+                         "ckpt": "--ctx-checkpoints · llama.ckpt", "ckstep": "--checkpoint-min-step · llama.ckpt_step",
+                         "swa": "--swa-full · cache.swa"}
+SIDE_AT = 150                                           # the side column (About, the model list) from this width
+SECTIONS = ["srv", "srvmem", "srvfit", "modelinfo", "srvabout", "srvlist"]
 
 
 def confirm_restart(run: bool, port: int, changes: List[str], w: int) -> List[Row]:
@@ -76,6 +81,8 @@ class ServerPanel:
             return spec_value(p) == f"{run.get('spec')}|{run.get('specn')}"
         if key == "net":
             return str(rv) == str(p[key])
+        if key == "swa":
+            return str(rv) == (("full" if f.full else "window") if p[key] == "auto" else str(p[key]))
         return str(fmt_val(key, rv)) == str(p[key])
 
     def choice_text(self, key: str, p: Pending, run: Pending, f: FitInfo) -> str:
@@ -91,6 +98,8 @@ class ServerPanel:
             return f"auto ({memory(mib * MIB)})" if mib else "auto (CARL sizes it at the start)"
         if key == "spec":
             return spec_name(p.get("spec"), p.get("specn"))
+        if key == "swa" and v == "auto" and f.full is not None:
+            return f"auto ({'full cache' if f.full else 'window cache'})"
         return shown_value(key, v, long=True)
 
     def running_text(self, key: str, p: Pending, run: Pending, f: FitInfo) -> str:
@@ -125,53 +134,80 @@ class ServerPanel:
         return f"{DIM if mine else ''}{text} ({source}){R}"
 
     # ------------------------------------------------------------ the panel
+    def section(self, ui: UIState, name: str, title: str, summary: str, lines: List[CardLine], w: int,
+                marks: int) -> List[Row]:
+        """One section of the panel at its own level (its title shows it; Tab selects it, L changes it)."""
+        lvl = ui.levels.get(name, 1)
+        return draw_card(name, title, summary, wrapped(aligned(lines, w - 4), w - 4), w, lvl, marks, ui.section == name)
+
     def draw(self, ui: UIState, p: Pending, d: ServerData, cols: int, height: int, port: int,
              limit_src: str = "") -> List[Row]:
-        """The panel and, under it, the MODEL card (click its title: open or collapsed). Scrolls with
-        the wheel / PgUp PgDn."""
+        """The sections: SERVER (the settings), MEMORY, AUTO FIT, the MODEL card; beside them from SIDE_AT columns
+        (else under them) ABOUT the selected setting and the model list. The page scrolls (wheel, PgUp PgDn)."""
         svc = self.svc
-        svc.full = ui.full
+        full = ui.levels.get("srv", 1) == 2
+        svc.full = full
         run = svc.running(d)
         rws = svc.rows(p)
         ui.set_row = min(ui.set_row, len(rws) - 1)
         key = rws[ui.set_row].key
         f = svc.fit_cached(p)
         w = cols - 1
-        inner = w - 4
-        side_w = min(max(inner - MAIN_MIN - 3, 0), SIDE_W[1])
-        side = side_w >= SIDE_W[0]
-        main_w = inner - side_w - 3 if side else inner
+        side_w = 60 if w >= SIDE_AT else 0
+        main_w = w - side_w - 1 if side_w else w
         changed = [r for r in rws if r.key not in NOT_RUNNING and run and not self.same(r.key, p, run, f)]
 
-        L = self.intro(p, d, run, f, changed, port, main_w)
-        L += self.table(ui, p, run, f, rws, main_w)
-        L += self.memory_lines(ui, f, limit_src, main_w)
-        L += self.auto_fit_lines(p, main_w)
-        if ui.full:
-            L += ["", heading("Where the settings come from", main_w),
-                  *cwrap(f"Your choices: {home_short(self.config_file, self.home)} (./carl.sh config show). Running "
-                         f"now: the server's flags. Recommended: {self.rec_source(p)}", main_w)]
-        about = [SET_HELP[key], *([f"{YEL}{ADV_WARN}{R}"] if key in FULL_ONLY else [])]
+        L = self.intro(p, d, run, f, changed, port, main_w - 4)
+        L += self.table(ui, p, run, f, rws, main_w - 4, full and main_w - 4 >= 140)
+        if full:
+            L += ["", row("your choices", f"{home_short(self.config_file, self.home)}"),
+                  row("recommended", self.rec_source(p))]
+        state = (f"{GRN}running{R}" if run else f"{RED}stopped{R}") + ("   router mode" if d.router is not None else "")
+        if changed:
+            state += f"   {YEL}{plural(len(changed), 'change')}{R}"
+        main = self.section(ui, "srv", "SERVER", state, L, main_w, 3)
+        mem, mem_sum = self.memory_lines(ui, p, f, limit_src)
+        main += self.section(ui, "srvmem", "MEMORY", mem_sum, mem, main_w, 3)
+        fit_l, fit_sum = self.auto_fit_lines(p)
+        main += self.section(ui, "srvfit", "AUTO FIT", fit_sum, fit_l, main_w, 2)
+        mlvl = ui.levels.get("modelinfo", 1)
+        card = self.card.draw(p, key, main_w, mlvl, mlvl == 2, ui.section == "modelinfo")
         label = next(r.label for r in rws if r.key == key)
-        if side:
-            S = side_lines(row_instruction(key), [(f"About: {label}", about)], side_w)
-            S += ["", *self.model_list(ui, p, side_w, max(len(L) - len(S) - 1, 12))]
-            L = merge_columns(L, S, main_w)
+        about = self.section(ui, "srvabout", f"ABOUT: {label.upper()}", "",
+                             self.about_lines(p, key, (side_w or w) - 4), side_w or w, 2)
+        if side_w:
+            lst = self.section(ui, "srvlist", "MODELS", "", self.model_list(ui, p, side_w - 4,
+                                                                             max(len(main) + len(card) - len(about) - 4, 12)),
+                               side_w, 2)
+            rows = side_by_side(main + card, about + lst, main_w, pad_left=False)
         else:
-            L += ["", *side_lines(row_instruction(key), [], inner), "", *self.model_list(ui, p, inner, 16),
-                  "", *side_lines("", [(f"About: {label}", about)], inner)]
-        state = (f"{GRN}running{R}" if run else f"{RED}stopped{R}") + (f" {DIM}· router mode{R}" if d.router is not None
-                                                                       else "")
-        rows = indent(draw_card("settings", "SERVER", state, L, w, 1))
-        ui.levels.setdefault("modelinfo", 1)
-        rows += indent(self.card.draw(p, key, cols - 1, ui.levels["modelinfo"], ui.full))
+            lst = self.section(ui, "srvlist", "MODELS", "", self.model_list(ui, p, w - 4, 16), w, 2)
+            rows = indent(main + about + card + lst)
+        ui.sections = list(SECTIONS)
         if ui.confirm:
             ch = [f"{r.label}: {self.running_plain(r.key, p, run, f)} → {self.choice_plain(r.key, p, run, f)}"
                   for r in changed]
             rows = indent(confirm_restart(bool(run), port, ch, min(w, 84))) + rows
         self.set_keys(ui, key)
+        reveal(ui, rows, "set_scroll", height)
         ui.set_scroll = max(0, min(ui.set_scroll, len(rows) - height))
+        ui.more = len(rows) > ui.set_scroll + height
         return rows[ui.set_scroll:ui.set_scroll + height]
+
+    def about_lines(self, p: Pending, key: str, w: int) -> List[CardLine]:
+        """The selected setting: what to do, what it is, its flag and config key; for the sliding window what
+        each choice needs."""
+        L: List[CardLine] = [*cwrap(f"{CYN}{row_instruction(key)}{R}", w), "", *cwrap(SET_HELP[key], w)]
+        if key in FULL_ONLY:
+            L += ["", *cwrap(f"{YEL}{ADV_WARN}{R}", w)]
+        if key == "swa":
+            nf, nw = self.svc.swa_needs(p)
+            if nf or nw:
+                L += ["", row("full cache", memory(nf)), row("window cache", memory(nw))]
+        flag_, _, ck = FLAGS.get(key, "").partition(" · ")
+        if flag_:
+            L += ["", row("flag", flag_), row("config key", ck)]
+        return L
 
     def running_plain(self, key: str, p: Pending, run: Pending, f: FitInfo) -> str:
         if key == "spec":
@@ -191,9 +227,9 @@ class ServerPanel:
             ui.keys = [("↑↓", "model"), ("Enter", "choose it"), ("m Esc", "back to the settings"), ("s f", "sort / show")]
         else:
             enter = "choose a model" if key == "model" else "type a value" if key in NUMERIC else ""
-            ui.keys = [("↑↓", "setting"), ("← →", "change"), *([("Enter", enter)] if enter else []),
-                       ("a", "apply"), ("r", "undo"), ("x", "recommended"), ("A", "Auto fit"), ("m", "model list"),
-                       ("s f", "sort / show models"), ("[ ]", "panels"), ("PgUp PgDn", "scroll")]
+            ui.keys = [("↑↓", "setting"), ("← →", "change"), ("a", "apply"), *([("Enter", enter)] if enter else []),
+                       ("r", "undo"), ("x", "recommended"), ("Tab", "section"), ("L", "level"),
+                       ("A", "Auto fit"), ("m", "model list"), ("[ ]", "panels"), ("PgUp PgDn", "scroll")]
         ui.keys_more = ["The Running now column shows a value only when it is different from your choice.",
                         "On the context row and the other number rows, type a number, then press Enter (96k = 96K "
                         "tokens).",
@@ -202,7 +238,7 @@ class ServerPanel:
 
     def intro(self, p: Pending, d: ServerData, run: Pending, f: FitInfo, changed: List[SettingRow], port: int,
               w: int) -> List[CardLine]:
-        """The state and the next action, in sentences."""
+        """The state in one line (an unreadable model list first)."""
         svc = self.svc
         L: List[CardLine] = []
         if svc.models.error:                            # a broken catalogue / models.json: say so here
@@ -210,22 +246,18 @@ class ServerPanel:
             L += cwrap(f"{DIM}Correct the file. ./carl.sh models shows the same error. CARL reads the list again "
                        f"every 10 s.{R}", w) + [""]
         if d.router is not None:
-            first = (f"The server runs in router mode on port {port}. Each model that it offers uses these "
-                     f"settings. Model chooses only the first model that loads.")
+            first = f"Router mode on port {port}: every model it offers uses these settings."
         elif run:
-            first = (f"The server runs {run.get('model')} on port {port} for {net_name(run.get('net', 'local'))}. "
-                     + ("Your settings match what runs." if not changed else
-                        f"You changed {plural(len(changed), 'setting')}: press a to apply "
-                        f"{'it' if len(changed) == 1 else 'them'} (the server restarts)."))
+            first = (f"{run.get('model')} runs on port {port}, {net_name(run.get('net', 'local'))}. "
+                     + ("Your settings match it." if not changed else
+                        f"{YEL}You changed {plural(len(changed), 'setting')}: a applies "
+                        f"{'it' if len(changed) == 1 else 'them'} (the server restarts).{R}"))
         else:
-            first = "The server is not running. Press a to start it with these settings."
-        L += cwrap(first, w)
-        if not changed:
-            L += cwrap("To change a setting: select it (↑↓), change it with ← →, then Apply (a).", w)
-        return L + [""]
+            first = "The server is not running. a starts it with these settings."
+        return L + cwrap(first, w) + [""]
 
     def table(self, ui: UIState, p: Pending, run: Pending, f: FitInfo, rws: List[SettingRow],
-              w: int) -> List[CardLine]:
+              w: int, flag_col: bool = False) -> List[CardLine]:
         """The settings: label, your choice, running now, recommended (with its source); full detail: the
         flag and config key of each (a column when there is room, else under the row)."""
         svc = self.svc
@@ -233,10 +265,9 @@ class ServerPanel:
         rec, src = svc.recommended(name)
         cw = max(min(34, (w - 2 - LABEL_W) * 34 // 100), 24)
         rw = max(min(18, (w - 2 - LABEL_W - cw) // 3), 12)
-        flag_col = ui.full and w >= 2 + LABEL_W + cw + rw + 28 + 30
         recw = w - 2 - LABEL_W - cw - rw - (30 if flag_col else 0)
         head = f"  {'Setting':<{LABEL_W}}{'Your choice':<{cw}}{'Running now':<{rw}}{'Recommended':<{recw}}"
-        L: List[CardLine] = [f"{DIM}{head}{'Flag · key' if flag_col else ''}{R}"]
+        L: List[CardLine] = [f"{DIM}{head}{'Flag' if flag_col else ''}{R}"]
         notes: List[str] = []
         for i, r in enumerate(rws):
             sel = i == ui.set_row
@@ -260,83 +291,84 @@ class ServerPanel:
                 spans.append((c0, c0 + cw, f"setrow:{i}"))
             text += fit(f"{col}{cell}{R}", cw - 1) + " " + fit(self.running_text(r.key, p, run, f), rw - 1) + " "
             rec_text = self.recommended_text(r.key, p, rec, src)
-            if ui.full and not flag_col:
-                L.append(Ln(text + fit(rec_text, recw), spans=spans))
-                L.append(f"    {DIM}{FLAGS.get(r.key, '')}{R}")
-            else:
-                L.append(Ln(text + fit(rec_text, recw - 1) + (f" {DIM}{FLAGS.get(r.key, '')}{R}" if flag_col else ""),
-                            spans=spans))
+            L.append(Ln(text + fit(rec_text, recw - 1) + (f" {DIM}{FLAGS.get(r.key, '').split(' · ')[0]}{R}"
+                                                         if flag_col else ""), spans=spans))
             note = svc.value_note(r.key, p)
             if note:
                 notes.append(note)
-        if not ui.full:
-            L.append(f"  {DIM}{'More settings':<{LABEL_W}}{R}" + fit(f"{DIM}{MORE_SETTINGS}: detail full (D){R}",
+        if not self.svc.full:
+            L.append(f"  {DIM}{'More settings':<{LABEL_W}}{R}" + fit(f"{DIM}Presence, sampling, batch size and "
+                                                                       f"checkpoints: the full level (L).{R}",
                                                                        w - 2 - LABEL_W))
         L += [x for n in notes for x in cwrap(f"{RED}⚠{R} {n}", w, "  ")]
         L.append("")
         if ui.restart:
-            L += cwrap(f"{YEL}The server restarts now. The line at the bottom shows each step.{R}", w)
+            L += cwrap(f"{YEL}The server is restarting now. The line at the bottom shows each step.{R}", w)
         else:
             go = "Apply and restart (a)" if run else "Start the server (a)"
             L += button_rows("", [(go, "setapply" if f.fits else "setnofit"), ("Undo my changes (r)", "setrevert"),
                                   ("Use the recommended settings (x)", "setdefaults")], w)
         return L
 
-    def memory_lines(self, ui: UIState, f: FitInfo, limit_src: str, w: int) -> List[CardLine]:
-        """Does it fit: a sentence, a bar; the sliding-window cache; a start that failed; full: the parts."""
-        L: List[CardLine] = ["", heading("Memory", w), *cwrap(fit_sentence(f), w)]
-        if f.known and f.downloaded and not f.error and f.limit:
+    def memory_lines(self, ui: UIState, p: Pending, f: FitInfo, limit_src: str) -> Tuple[List[CardLine], str]:
+        """Does it fit (a row and a bar), the sliding-window cache, a start that failed; full: the parts. And the
+        section's summary."""
+        full = ui.levels.get("srvmem", 1) == 2
+        L: List[CardLine] = []
+        ok = f.known and f.downloaded and not f.error
+        if not ok:
+            L += [fit_sentence(f)]
+            summary = f"{RED}✗{R}"
+        else:
             need, limit = gib_pair(f.need, f.limit)
-            bw = max(min(w - 24, 60), 10)
-            L.append(f"  {bar(f.need / f.limit, bw)}  {need.replace(' GiB', '')} of {limit}")
-        swa = swa_sentence(f)
-        if swa:
-            L += cwrap(swa, w)
-        if ui.full and f.known and f.downloaded and not f.error:
-            parts = (f"weights {memory(f.weights)} · drafter {memory(f.drafter) if f.drafter else '0'} · context memory "
-                     f"{memory(f.context)} · recurrent state {memory(f.state)} · buffers {memory(f.buffers)}")
-            L += cwrap(f"  {parts}", w, "  ")
-            L += cwrap(f"  The GPU memory limit comes from macOS{f' ({limit_src})' if limit_src else ''}. Auto fit also "
-                       f"keeps memory free for macOS and apps: the Auto fit panel tells how much.", w, "  ")
-        elif not ui.full:
-            L.append(f"{DIM}{GIB_NOTE}{R}")
+            L.append(row("fits", f"{GRN}✓ yes{R}" if f.fits else f"{RED}✗ no{R}"))
+            L.append(row("needs", f"{bar(f.need / f.limit if f.limit else 0, 30)}  {need.replace(' GiB', '')} of {limit}"))
+            if not f.fits:
+                L.append(row("at most", f"{tokens(f.largest)} per slot with {plural(f.slots, 'slot')}" if f.largest
+                             else "The weights alone do not fit."))
+            summary = (f"{GRN}✓{R} {need.replace(' GiB', '')} of {limit}" if f.fits else f"{RED}✗ {need} of {limit}{R}")
+        if f.full is not None:
+            L.append(row("sliding window", "Full cache: saved sessions can be restored." if f.full else
+                         f"{YEL}Window cache{R}: saved sessions cannot be restored."))
+        if full and ok:
+            L += ["", row("weights", f"{memory(f.weights):>9}"), row("drafter", f"{memory(f.drafter) if f.drafter else '0':>9}"),
+                  row("context memory", f"{memory(f.context):>9}"), row("recurrent state", f"{memory(f.state):>9}"),
+                  row("buffers", f"{memory(f.buffers):>9}"),
+                  row("GPU limit", f"{memory(f.limit):>9}" + (f"   {DIM}{limit_src}{R}" if limit_src and "Metal" not in
+                                                                limit_src else ""))]
         if ui.start_error:
             L += ["", f"{RED}{B}The last start failed. The launcher said:{R}"]
-            L += [x for e in ui.start_error[:8] for x in cwrap(f"{RED}{e}{R}", w, "  ")]
-        return L
+            L += [f"{RED}{e}{R}" for e in ui.start_error[:8]]
+        return L, summary
 
-    def auto_fit_lines(self, p: Pending, w: int) -> List[CardLine]:
-        """What Auto fit suggests for this Mac, in sentences, and where to see why."""
+    def auto_fit_lines(self, p: Pending) -> Tuple[List[CardLine], str]:
+        """What Auto fit suggests for this Mac, as rows; the summary is its pick."""
         svc = self.svc
-        L: List[CardLine] = ["", heading("Auto fit suggests", w)]
         af = svc.auto_fit(p)
         if af is None:
-            return L + cwrap(f"{YEL}Auto fit cannot work now: {svc.models.fit_error or 'no model list'}.{R}", w)
+            return [f"{YEL}Auto fit cannot work now: {svc.models.fit_error or 'no model list'}.{R}"], ""
         if not af.pick or not af.plan:
-            return L + cwrap(f"{RED}No model fits this Mac with this goal.{R} The Auto fit panel (A) tells why.", w)
+            return [f"{RED}No model fits this Mac with this goal.{R} The Auto fit panel (A) tells why."], ""
         name = af.pick.name
-        resolved = svc.resolved_model(p)
         m = svc.models.by_name(name)
-        if name == resolved:
-            text = f"{CYN}{name}{R} with {plan_words(af.plan.slots, af.plan.ctx)}: the model that you chose."
-        else:
-            text = f"{CYN}{name}{R} with {plan_words(af.plan.slots, af.plan.ctx)}."
+        mine = name == svc.resolved_model(p)
+        L: List[CardLine] = [Ln(row("suggests", f"{CYN}{name}{R} ★" + (f"   {DIM}your choice{R}" if mine else "")),
+                                act=f"sp:{SP_FIT}"),
+                             row("with", plan_words(af.plan.slots, af.plan.ctx))]
         if not af.pick.downloaded:
-            text += f" It is not downloaded ({file_size(m['bytes']) if m else 'a download'})."
-        L.append(Ln(cwrap(text, w)[0], act=f"sp:{SP_FIT}"))
-        L += [Ln(x, act=f"sp:{SP_FIT}") for x in cwrap(text, w)[1:]]
-        if not af.pick.downloaded and p.get("model") == "auto":
-            L += cwrap(f"Until then, auto starts {resolved}.", w)
-        L += cwrap("To see why" + (" and to download it" if not af.pick.downloaded else "") + ": the Auto fit panel (A).",
-                   w)
-        return L
+            L.append(row("download", f"{file_size(m['bytes']) if m else 'Its size is not known'}. Download it in the "
+                                     f"Auto fit panel (A)."))
+            if p.get("model") == "auto":
+                L.append(row("until then", f"Auto starts {svc.resolved_model(p)}."))
+        L.append(row("why", "See the Auto fit panel (A)."))
+        return L, name
 
     def rec_source(self, p: Pending) -> str:
         m = self.svc.models.by_name(self.svc.resolved_model(p))
         t = jdict(jdict(m.get("local")).get("tune")) if m else {}
         if t:
             return f"Auto-tune on this Mac ({t.get('date', '?')}, {t.get('machine', '?')}), else the catalogue."
-        return "the catalogue (Auto-tune did not measure this model on this Mac)."
+        return "The catalogue. Auto-tune did not measure this model on this Mac."
 
     def model_list(self, ui: UIState, p: Pending, w: int, height: int) -> List[CardLine]:
         """The model selector (w columns, height lines): click a model (or m, then ↑↓ Enter); the sort and
@@ -350,11 +382,10 @@ class ServerPanel:
         af = self.svc.auto_fit(p)
         pick = af.name if af else None
         so, fi = arrange_label(ui.msort, ui.mfilter)
-        L: List[CardLine] = [heading("Choose a model", w),
-                             f"{GRN}●{R} downloaded   {DIM}○{R} not downloaded",
+        L: List[CardLine] = [f"{GRN}●{R} downloaded   {DIM}○{R} not downloaded",
                              f"{CYN}★{R} Auto fit's choice   {RED}red{R} = does not fit",
-                             Ln(fit(f"sort: {CYN}{so}{R} (s)", w), act="msortpick"),
-                             Ln(fit(f"show: {CYN}{fi}{R} (f)", w), act="mfilterpick")]
+                             Ln(fit(f"Sort: {CYN}{so}{R} (s)", w), act="msortpick"),
+                             Ln(fit(f"Show: {CYN}{fi}{R} (f)", w), act="mfilterpick")]
         vis = max(height - len(L) - 1, 3)
         top = min(max(ui.srow - vis // 2, 0), max(len(items) - vis, 0))
         for i in range(top, min(top + vis, len(items))):
@@ -364,13 +395,13 @@ class ServerPanel:
             chosen = name == cur
             col = (B + CYN) if chosen else RED if name in ms and self.lines.too_big(ms[name]) else ""
             if name == "auto":
-                text = f"  {col}auto{R} {DIM}(now {self.svc.resolved_model(dict(p, model='auto'))}){R}"
+                text = f"  {col}auto{R} {DIM}(now: {self.svc.resolved_model(dict(p, model='auto'))}){R}"
             else:
                 text = f"{dot} {col}{name}{R}" + (f" {CYN}★{R}" if name == pick else "")
             if ui.slist and i == ui.srow:
                 text = f"\x1b[7m{fit(text, w - 2)}{R}"
             L.append(Ln(("› " if chosen else "  ") + text, act=f"smodel:{name}"))
         more = len(items) - (top + vis)
-        L.append(f"{DIM}" + (f"… {more} more (scroll: m, then ↑↓)" if more > 0 else "m: choose with the keys") + R)
+        L.append(f"{DIM}" + (f"… and {more} more. Press m, then ↑↓." if more > 0 else "Press m to choose with the keys.") + R)
         return L
 

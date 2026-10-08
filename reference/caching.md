@@ -169,7 +169,7 @@ The table gives the wait before the answer starts: with the cache, and without i
 
 ### The cache settings
 
-The `cache` section of `config.json` (the Caching panel of the dashboard: **Disk limit**, **Saved prompts**, **Saved sessions**, **When to save**, **Save after**, **Shared storage**, **Gemma models**). The clients on this Mac read it. A client on another computer reads it through the dashboard's API.
+The `cache` section of `config.json` (the Caching panel of the dashboard: **Disk limit**, **Saved prompts**, **Saved sessions**, **When to save**, **Save after**, **Shared storage**, **Gemma models**; the **Sliding window** row of the Server panel is the same `cache.swa`). The clients on this Mac read it. A client on another computer reads it through the dashboard's API.
 
 | Key | Default | Effect |
 |---|---|---|

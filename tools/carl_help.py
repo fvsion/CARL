@@ -109,7 +109,8 @@ def topics(cmd: str) -> Dict[str, List[Block]]:
         ("d", [("--single", "Single model: one model runs. You change it in the dashboard. This is the default."),
                ("--router", "Router mode: OpenCode and Pi can switch the model. The server loads one model at a "
                             "time. Each switch loads the model again (30 s to 2 min). The RAM cache is empty after "
-                            "a switch. OpenCode and Pi restore their sessions from the disk cache. Your setting "
+                            "a switch. When you switch back to a model, OpenCode and Pi restore its sessions from the "
+                            "disk cache. Your setting "
                             "llama.mode keeps the choice (Settings > Router).")]),
     ]
     return {

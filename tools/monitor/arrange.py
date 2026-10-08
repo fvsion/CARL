@@ -8,7 +8,6 @@ from __future__ import annotations
 
 from typing import Callable, List, Optional, Sequence, Tuple
 
-from carl_core.domain.tuning import weighted_score
 
 from .model import ModelInfo, jdict
 
@@ -35,17 +34,17 @@ def _is_moe(m: ModelInfo) -> bool:
 
 
 def speed_of(m: ModelInfo) -> Optional[Tuple[float, bool]]:
-    """(tok/s, measured on this Mac) of a model: Auto-tune's score for its chosen mode here,
-    else the catalogue's figure (another Mac); None when neither exists. The score is
-    Auto-tune's weighted mean of prose, code and re-emit speeds (what it chooses a mode by)."""
+    """(prose tok/s, measured on this Mac) of a model: Auto-tune's prose speed for its chosen mode here, else
+    the catalogue's (another Mac); None when neither exists. The lists show and sort by this one number (Phase
+    23.2: the weighted score did not match the prose / code / edit figures shown beside it)."""
     tune = jdict(jdict(m.get("local")).get("tune"))
     st = jdict(tune.get("settings"))
     best = jdict(jdict(jdict(tune.get("results")).get("speculation")).get(f"{st.get('spec')}:{st.get('spec_n')}"))
-    if best.get("score") is not None:
-        return float(best["score"]), True
+    if best.get("prose") is not None:
+        return float(best["prose"]), True
     sp = jdict(m.get("speed"))
     try:
-        return weighted_score({k: float(sp[k]) for k in ("prose", "code", "edit")}), False
+        return float(sp["prose"]), False
     except (KeyError, TypeError, ValueError):
         return None
 
