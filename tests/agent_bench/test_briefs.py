@@ -24,11 +24,12 @@ NODE = shutil.which("node")
 REPO = bf.REPO
 TOML = sp.BRIEF
 JSON_BRIEF = json.dumps({
-    "mode": "code", "tests": "new", "goal": "Add a readability module to textstats.",
-    "scope": {"in": [{"text": "textstats/readability.py"}], "out": [{"text": "the existing tests", "why": "they pass"}]},
-    "file": [{"path": "textstats/readability.py", "action": "create"}],
-    "requirement": [{"id": "R1", "text": "flesch_reading_ease"}],
-    "check": [{"id": "A1", "covers": ["R1"], "run": "python3 -m pytest -q", "expect": "all pass"}]}, indent=2)
+    "work_mode": "code", "work_type": "new_feature", "task_summary": "Add a readability module to textstats.",
+    "expected_outcome": "from textstats import flesch_reading_ease works.",
+    "known_file": [{"file_path": "textstats/readability.py", "file_action": "create"}],
+    "task_requirement": [{"requirement_id": "R1", "requirement_text": "flesch_reading_ease"}],
+    "acceptance_check": [{"check_id": "C1", "covers_requirements": ["R1"], "run_command": "python3 -m pytest -q",
+                          "expected_result": "all pass"}]}, indent=2)
 KV = "Mode: code\nGoal: Add a readability module.\nFiles: textstats/readability.py\nRequirements: flesch_reading_ease"
 REFUSAL = "[CARL] Brief refused: the coder did not start. Fix these points and send the whole brief again:\n- x"
 
@@ -61,16 +62,19 @@ class CoderTextsTest(unittest.TestCase):
 @unittest.skipUnless(NODE, "node is not installed")
 class CheckTest(unittest.TestCase):
     def test_formats_and_problems(self) -> None:
-        bad_toml = TOML.replace('goal = "Add a readability module to textstats."', "goal = oops")
-        no_check = TOML.split("[[check]]")[0]
+        bad_toml = TOML.replace('work_type = "new_feature"', "work_type = oops")
+        no_check = TOML.split("[[acceptance_check]]")[0]
+        rev1 = 'mode = "code"\ntests = "new"\ngoal = "g"\n[[file]]\npath = "a.py"\naction = "create"\n'
         out = bf.check_texts([TOML, "Here it is:\n```json\n" + JSON_BRIEF + "\n```", KV, "Please add it.", bad_toml,
-                              no_check, '{"mode": "code", "goal": oops}'])
-        self.assertEqual([o["format"] for o in out], ["toml", "json", "kv", "other", "toml", "toml", "json"])
-        self.assertEqual([o["valid"] for o in out], [True, True, False, False, False, False, False])
+                              no_check, '{"work_mode": "code", "task_summary": oops}', rev1])
+        self.assertEqual([o["format"] for o in out], ["toml", "json", "kv", "other", "toml", "toml", "json", "toml"])
+        self.assertEqual([o["valid"] for o in out], [True, True, False, False, False, False, False, False])
         self.assertEqual(out[0]["problems"], [])
-        self.assertRegex(out[4]["problems"][0], r"^line 3: this value has no quotes")
-        self.assertIn("The brief has no check", out[5]["problems"][0])
+        self.assertRegex(out[4]["problems"][0], r"^line 2: this value has no quotes")
+        self.assertIn("The brief has no check: add a [[acceptance_check]]", out[5]["problems"][0])
         self.assertRegex(out[6]["problems"][0], r"^line 1: this value has no quotes")
+        self.assertEqual(out[7]["problems"][0],                                # revision 1: the new key's name
+                         'The brief has the key "mode", which is not in the schema: use "work_mode".')
 
     def test_collect(self) -> None:
         tools = [call("read", {"filePath": "a.py"}),

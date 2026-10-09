@@ -151,25 +151,28 @@ test("carl-delegation: the gate is off unless the dashboard sets it; then it sto
   assert.equal(await call(two, "write", { filePath: "d.py" }), "");         // after the coder: no gate
 });
 
-const BRIEF = `mode = "code"
-tests = "existing"
-goal = "Write the header row of the CSV export."
+const BRIEF = `work_mode = "code"
+work_type = "follow_up"
+task_summary = "Write the header row of the CSV export."
+expected_outcome = "The CSV starts with the header month,orders,total."
+current_state = "report/csv_export.py writes the rows, with no header."
 
-[scope]
-out = [{ text = "the text table", why = "unchanged" }]
+[[known_file]]
+file_path = "report/csv_export.py"
+file_action = "change"
 
-[[file]]
-path = "report/csv_export.py"
-action = "change"
+[[known_file]]
+file_path = "report/model.py"
+file_action = "read"
 
-[[requirement]]
-id = "R1"
-text = "the first row is month,orders,total"
+[[task_requirement]]
+requirement_id = "R1"
+requirement_text = "the first row is month,orders,total"
 
-[[check]]
-id = "A1"
-covers = ["R1"]
-run = "python -m pytest tests/test_csv_export.py -q"
+[[acceptance_check]]
+check_id = "C1"
+covers_requirements = ["R1"]
+run_command = "python -m pytest tests/test_csv_export.py -q"
 `;
 
 /** A tool call through the plugin's tool.execute.before: "" when it runs, else the error it throws. */
@@ -188,15 +191,18 @@ test("carl-delegation: a coder task whose brief fails the check is refused befor
   assert.equal(await before(hooks, "task", { subagent_type: "coder", prompt: "Here it is:\n```toml\n" + BRIEF + "```" }), "");
   assert.match(await before(hooks, "task", { subagent_type: "coder", prompt: "Mode: code\nGoal: add the header" }),
                /^\[CARL\] Brief refused: the coder takes its task only as a TOML brief, .*send it again\.$/);
-  const gap = await before(hooks, "task", { subagent_type: "carl-coder", prompt: BRIEF.replace(/\[scope\]\nout = .*\n/, "") });
-  assert.match(gap, /^\[CARL\] Brief refused: the coder did not start\. Fix these points .*:\n- scope\.out is empty/);
+  const gap = await before(hooks, "task", { subagent_type: "carl-coder", prompt: BRIEF.replace(/current_state = .*\n/, "") });
+  assert.match(gap, /^\[CARL\] Brief refused: the coder did not start\. Fix these points .*:\n- current_state is empty: with work_type = "follow_up"/);
+  const tests = BRIEF.replace('work_type = "follow_up"', 'work_type = "follow_up"\nexisting_tests = ["tests/test_csv_export.py"]');
+  assert.match(await before(hooks, "task", { subagent_type: "coder", prompt: tests }),   // not in the project folder /p
+               /- existing_tests has "tests\/test_csv_export\.py", which is not in the project/);
   assert.equal(await before(hooks, "task", { subagent_type: "coder", prompt: "Go on.", task_id: "t1" }), "");  // continues
   assert.equal(await before(hooks, "task", { subagent_type: "explore", prompt: "Find the CLI." }), "");
   const off = await delegation.server({ client, directory: "/p" }, { brief: false });
   assert.equal(await before(off, "task", { subagent_type: "coder", prompt: "Mode: code" }), "");      // the check off
 });
 
-test("carl-delegation: the coder's own session keeps to its brief's files and mode; other sessions do not", async () => {
+test("carl-delegation: the coder's own session keeps to its work_mode and its read files; other sessions do not", async () => {
   const client = { session: { get: async ({ path }) => ({ data: { parentID: path.id === "child" ? "m" : undefined } }) } };
   const hooks = await delegation.server({ client, directory: "/p" }, { coder: "carl-coder" });
   const parts = [{ type: "text", text: BRIEF }];
@@ -204,45 +210,46 @@ test("carl-delegation: the coder's own session keeps to its brief's files and mo
   await hooks["chat.message"]({ sessionID: "other", agent: "explore" }, { message: {}, parts });
   assert.equal(await before(hooks, "edit", { filePath: "report/csv_export.py" }, "child"), "");
   assert.equal(await before(hooks, "edit", { filePath: "/p/report/csv_export.py" }, "child"), "");
-  assert.match(await before(hooks, "write", { filePath: "report/__init__.py" }, "child"),
-               /^\[CARL\] Blocked: report\/__init__\.py is not in your brief's files to create or change/);
+  assert.equal(await before(hooks, "write", { filePath: "report/__init__.py" }, "child"), "");    // a new module file
+  assert.match(await before(hooks, "edit", { filePath: "report/model.py" }, "child"),
+               /^\[CARL\] Blocked: report\/model\.py is in your brief to read only/);
   assert.match(await before(hooks, "edit", { filePath: "tests/test_csv_export.py" }, "child"),
-               /is a test file, and in mode code you do not change tests/);
+               /is a test file, and in work_mode code you do not change tests/);
   assert.equal(await before(hooks, "bash", { command: "python -m pytest -q" }, "child"), "");
   assert.equal(await before(hooks, "write", { filePath: "report/__init__.py" }, "other"), "");     // not a coder
   assert.equal(await before(hooks, "write", { filePath: "report/__init__.py" }, "m"), "");         // the main agent
   await hooks["chat.message"]({ sessionID: "child", agent: "carl-coder" }, { message: {}, parts: [{ type: "text", text: "Go on." }] });
-  assert.match(await before(hooks, "write", { filePath: "x.py" }, "child"), /not in your brief's files/);  // kept
-  const test = BRIEF.replace('mode = "code"', 'mode = "test"').replace("report/csv_export.py", "tests/test_csv_export.py");
+  assert.match(await before(hooks, "write", { filePath: "tests/x.py" }, "child"), /is a test file/);  // kept
+  const test = BRIEF.replace('work_mode = "code"', 'work_mode = "tests-only"').replace('file_path = "report/csv_export.py"', 'file_path = "tests/test_csv_export.py"');
   await hooks["chat.message"]({ sessionID: "t", agent: "" }, { message: { agent: "coder" }, parts: [{ type: "text", text: test }] });
   assert.equal(await before(hooks, "write", { filePath: "tests/test_csv_export.py" }, "t"), "");
-  assert.match(await before(hooks, "edit", { filePath: "report/csv_export.py" }, "t"), /is not a test file, and in mode test/);
+  assert.match(await before(hooks, "edit", { filePath: "report/csv_export.py" }, "t"), /is not a test file, and in work_mode tests-only/);
   await hooks.event({ event: { type: "session.deleted", properties: { info: { id: "t" } } } });
   assert.equal(await before(hooks, "edit", { filePath: "report/csv_export.py" }, "t"), "");
 });
 
 // ------------------------------------------------------------------ the chain (Phase 23.4.3, item 3)
 
-const CHAIN_BRIEF = (tests = "new") => `mode = "code"
-tests = "${tests}"
-goal = "Write the feature file."
+const CHAIN_BRIEF = (type = "new_feature") => `work_mode = "code"
+work_type = "${type}"
+${type === "new_feature" ? "" : 'existing_tests = ["tests/check.test.mjs"]\n'}task_summary = "Write the feature file."
+expected_outcome = "src/feature.txt is there."
+current_state = "src/ is empty."
+design_notes = "One file, no code."
 
-[scope]
-out = [{ text = "the README" }]
+[[known_file]]
+file_path = "src/feature.txt"
+file_action = "create"
 
-[[file]]
-path = "src/feature.txt"
-action = "create"
+[[task_requirement]]
+requirement_id = "R1"
+requirement_text = "src/feature.txt exists"
 
-[[requirement]]
-id = "R1"
-text = "src/feature.txt exists"
-
-[[check]]
-id = "A1"
-covers = ["R1"]
-run = "node --test tests/check.test.mjs"
-expect = "exit 0"
+[[acceptance_check]]
+check_id = "C1"
+covers_requirements = ["R1"]
+run_command = "node --test tests/check.test.mjs"
+expected_result = "exit 0"
 `;
 // the test file that the test session writes: red fails before the code (src/feature.txt), green passes
 const RED_TEST = 'import { existsSync } from "node:fs";\nimport { test } from "node:test";\nimport assert from "node:assert";\ntest("R1", () => assert.ok(existsSync("src/feature.txt")));\n';
@@ -276,7 +283,7 @@ function chainOpenCode({ tamper = false, version = "1.18.35" } = {}) {
           mkdirSync(join(dir, "src"), { recursive: true });
           writeFileSync(join(dir, "src", "feature.txt"), "ok\n");
           if (tamper) writeFileSync(join(dir, "tests", "check.test.mjs"), GREEN_TEST + "// made to pass\n");
-          answers.set(o.path.id, 'status = "done"\nmode = "code"\nsummary = "Wrote src/feature.txt."');
+          answers.set(o.path.id, 'task_status = "done"\noutcome_summary = "Wrote src/feature.txt."');
           await hooks.event({ event: { type: "session.idle", properties: { sessionID: o.path.id } } });
         }, 10);
         return { data: undefined };
@@ -293,7 +300,7 @@ function chainOpenCode({ tamper = false, version = "1.18.35" } = {}) {
 const testSession = (dir, red = true) => {
   mkdirSync(join(dir, "tests"), { recursive: true });
   writeFileSync(join(dir, "tests", "check.test.mjs"), red ? RED_TEST : GREEN_TEST);
-  return 'status = "done"\nmode = "test"\nsummary = "One test for R1."';
+  return 'outcome_summary = "One test for R1."\ntask_status = "done"';
 };
 
 test("carl-delegation, the chain in the foreground: the task becomes the test session; then the code session; one output", async () => {
@@ -302,7 +309,8 @@ test("carl-delegation, the chain in the foreground: the task becomes the test se
   oc.setHooks(hooks);
   const args = { subagent_type: "coder", description: "Feature", prompt: "```toml\n" + CHAIN_BRIEF() + "```", background: false };
   await hooks["tool.execute.before"]({ tool: "task", sessionID: "m", callID: "c1" }, { args });
-  assert.match(args.prompt, /^mode = "test"\ngoal = "Write the feature file\."/);         // the test session's brief
+  assert.match(args.prompt, /^work_mode = "tests-only"\nwork_type = "new_feature"\n\ntask_summary = "Write the feature file\."/);   // the test session's brief
+  assert.doesNotMatch(args.prompt, /design_notes|known_file/);
   assert.equal(args.description, "Feature: tests");
   const report = testSession(oc.dir);
   const output = { title: "Feature: tests", metadata: { sessionId: "ses_test", model: { providerID: "llamacpp", modelID: "m1" } },
@@ -315,18 +323,18 @@ test("carl-delegation, the chain in the foreground: the task becomes the test se
   assert.equal(prompt[1], "ses_code");
   assert.equal(prompt[2].agent, "coder");
   assert.deepEqual(prompt[2].model, { providerID: "llamacpp", modelID: "m1" });         // the test session's model
-  assert.match(prompt[2].parts[0].text, /^mode = "code"\ntests = "new"\n[\s\S]*\n\[test_session\]\nfiles = \["tests\/check\.test\.mjs"\]\nsummary = "One test for R1\."\n/);
+  assert.match(prompt[2].parts[0].text, /^work_mode = "code"\nwork_type = "new_feature"\n[\s\S]*\ndesign_notes = "One file, no code\."\n[\s\S]*\n\[test_session\]\ntest_files = \["tests\/check\.test\.mjs"\]\nsession_summary = "One test for R1\."\n/);
   const res = delegationMod.parseTaskXml(output.output);
   assert.equal(res.id, "ses_code");                                   // a task_id goes on with the code session
   assert.equal(res.state, "completed");
   assert.match(res.text, /^\[CARL\] Chain: the coder ran in two new sessions/);
   assert.match(res.text, /Red start: CARL ran `node --test tests\/check\.test\.mjs` before the code: it failed \(exit 1\)\./);
   assert.match(res.text, /Tests unchanged after the code session \(tests\/check\.test\.mjs\)\./);
-  assert.match(res.text, /## The test session's report \(mode test\)\n\nstatus = "done"\nmode = "test"/);
-  assert.match(res.text, /## The code session's report \(mode code\)\n\nstatus = "done"\nmode = "code"/);
-  // the code session's own gates come from its brief: no test file in mode code
+  assert.match(res.text, /## The test session's report \(work_mode tests-only\)\n\noutcome_summary = "One test for R1\."/);
+  assert.match(res.text, /## The code session's report \(work_mode code\)\n\ntask_status = "done"/);
+  // the code session's own gates come from its brief: no test file in work_mode code
   await hooks["chat.message"]({ sessionID: "ses_code", agent: "coder" }, { message: {}, parts: prompt[2].parts });
-  assert.match(await before(hooks, "write", { filePath: "tests/check.test.mjs" }, "ses_code"), /is a test file, and in mode code/);
+  assert.match(await before(hooks, "write", { filePath: "tests/check.test.mjs" }, "ses_code"), /is a test file, and in work_mode code/);
   assert.equal(await before(hooks, "write", { filePath: "src/feature.txt" }, "ses_code"), "");
 });
 
@@ -348,7 +356,7 @@ test("carl-delegation, the chain in the background: the test session's completio
   await hooks["chat.message"]({ sessionID: "m", agent: "build" }, { message: {}, parts: other });   // passes
   await assert.rejects(hooks["chat.message"]({ sessionID: "m", agent: "build" }, { message: {}, parts: [{ type: "text", synthetic: true, text: done }] }),
                        /^Error: \[CARL\] Held: the test session of "Feature" ended; CARL runs its code session now/);
-  assert.deepEqual(rec().map((r) => [r.stage, r.agent, r.chain.testOutput.slice(0, 15)]), [["held", "build", 'status = "done"']]);
+  assert.deepEqual(rec().map((r) => [r.stage, r.agent, r.chain.testOutput.slice(0, 15)]), [["held", "build", 'outcome_summary']]);
   const body = await oc.deliveredP;
   await new Promise((r) => setTimeout(r, 20));
   assert.equal(existsSync(join(CHAINS, "m.json")), false);            // delivered: the record is gone
@@ -362,7 +370,7 @@ test("carl-delegation, the chain in the background: the test session's completio
   await hooks["chat.message"]({ sessionID: "m", agent: "build" }, { message: {}, parts: body.parts });
 });
 
-test("carl-delegation, the chain: a failed test session's message says so in place; tests = existing and chain: false", async () => {
+test("carl-delegation, the chain: a failed test session's message says so in place; follow_up with existing_tests and chain: false", async () => {
   const oc = chainOpenCode();
   const hooks = await delegation.server({ client: oc.client, directory: oc.dir }, { coder: "coder" });
   oc.setHooks(hooks);
@@ -383,8 +391,8 @@ test("carl-delegation, the chain: a failed test session's message says so in pla
   assert.equal(existsSync(join(CHAINS, "m.json")), false);            // delivered in place: no record
   mkdirSync(join(oc.dir, "tests"), { recursive: true });
   writeFileSync(join(oc.dir, "tests", "check.test.mjs"), GREEN_TEST);
-  const existing = await bg("e", CHAIN_BRIEF("existing"));
-  assert.match(existing.prompt, /^mode = "code"\ntests = "existing"/);   // one session, the task as it was
+  const existing = await bg("e", CHAIN_BRIEF("follow_up"));
+  assert.match(existing.prompt, /^work_mode = "code"\nwork_type = "follow_up"/);   // one session, the task as it was
   writeFileSync(join(oc.dir, "tests", "check.test.mjs"), RED_TEST);
   const parts = [{ type: "text", synthetic: true, text: delegationMod.taskXml({ id: "ses_e", state: "completed", summary: "s", text: "Done." }) }];
   await hooks["chat.message"]({ sessionID: "m", agent: "build" }, { message: {}, parts });
@@ -463,7 +471,7 @@ test("carl-delegation, the hold is safe: a chain that OpenCode left undelivered 
   const dead = spawnSync(process.execPath, ["-e", ""]).pid;          // an OpenCode process that is gone
   const plan = chainMod.coderPlan(CHAIN_BRIEF());
   const chain = new chainMod.Chain(plan.brief, dir);
-  chain.testOutput = 'status = "done"\nmode = "test"\nsummary = "One test for R1."';
+  chain.testOutput = 'outcome_summary = "One test for R1."\ntask_status = "done"';
   chain.red = { red: true, why: "the test session's report has failing tests." };
   const snap = chain.snapshot();
   const rec = (test, stage, extra = {}) => ({ v: 1, parent: "p1", test, stage, description: `Task ${test}`, agent: "build",
@@ -472,7 +480,7 @@ test("carl-delegation, the hold is safe: a chain that OpenCode left undelivered 
                           { info: { role: "assistant", time: { created: 1, completed: 2 }, finish: "stop" }, parts: [{ type: "text", text }] }];
   const open = [{ info: { role: "user" }, parts: [{ type: "text", text: "the brief" }] },
                 { info: { role: "assistant", time: { created: 1 } }, parts: [{ type: "text", text: "half way" }] }];
-  const msgs = { ses_c1: done('status = "done"\nmode = "code"\nsummary = "Wrote it."'), ses_c2: open, ses_t3: open, ses_t4: done("tests") };
+  const msgs = { ses_c1: done('task_status = "done"\noutcome_summary = "Wrote it."'), ses_c2: open, ses_t3: open, ses_t4: done("tests") };
   const store = new delegationMod.ChainStore(CHAINS);
   store.write("p1", [rec("ses_t1", "code", { code: "ses_c1" }), rec("ses_t2", "code", { code: "ses_c2" }), rec("ses_t3", "test"),
                      rec("ses_t4", "test"), rec("ses_t5", "held"),
@@ -497,13 +505,13 @@ test("carl-delegation, the hold is safe: a chain that OpenCode left undelivered 
   }));
   assert.deepEqual(Object.keys(by).sort(), ["ses_c1", "ses_c2", "ses_t3", "ses_t4", "ses_t5"]);
   assert.equal(by.ses_c1.state, "completed");                         // the code session finished: the one result
-  assert.match(by.ses_c1.text, /^\[CARL\] Chain: the coder ran in two new sessions[\s\S]*## The code session's report \(mode code\)\n\nstatus = "done"/);
+  assert.match(by.ses_c1.text, /^\[CARL\] Chain: the coder ran in two new sessions[\s\S]*## The code session's report \(work_mode code\)\n\ntask_status = "done"/);
   assert.equal(by.ses_c1.summary, "Background task completed: Task ses_t1");
   assert.equal(by.ses_c2.state, "error");                             // not finished: what exists
   assert.match(by.ses_c2.text, /^\[CARL\] Chain: OpenCode stopped before the chain ended: the code session did not finish\./);
-  assert.match(by.ses_c2.text, /## The test session's report \(mode test\)\n\nstatus = "done"[\s\S]*unfinished\)\n\nhalf way/);
+  assert.match(by.ses_c2.text, /## The test session's report \(work_mode tests-only\)\n\noutcome_summary = "One test[\s\S]*unfinished\)\n\nhalf way/);
   assert.match(by.ses_t3.text, /the test session did not finish, and the code session did not run\.[\s\S]*\n\nhalf way$/);
-  assert.match(by.ses_t4.text, /: the code session did not run\.[\s\S]*report \(mode test\)\n\ntests$/);
+  assert.match(by.ses_t4.text, /: the code session did not run\.[\s\S]*report \(work_mode tests-only\)\n\ntests$/);
   assert.match(by.ses_t5.text, /: the code session did not run\./);
   assert.deepEqual(store.read("p1").map((r) => r.test), ["ses_t6", "ses_t7"]);   // the delivered ones are gone
   store.write("p1", []);

@@ -3,9 +3,11 @@
 All notable changes to CARL. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Dates are local dates on the development Mac (M3 Pro, 36 GB).
 
-## Unreleased
+## 1.13.0 - 2026-10-09
 
-Phases 23.4.3 and 23.4.4 (to be tagged after the brief-format measurement).
+Phases 23.4.3 and 23.4.4: the coder's brief as structured TOML, tests first in a separate session, thinking per
+role, the memory estimate and Auto fit's order, llama.cpp 0.6. The brief-format measurement continues on the M3 Pro;
+its results come in an addendum.
 
 ### Added (23.4.4)
 - **The Agents settings panel**: per model, Main thinking and Coder thinking (off, on, or low / medium / xhigh where
@@ -50,18 +52,24 @@ Phases 23.4.3 and 23.4.4 (to be tagged after the brief-format measurement).
 ### Added
 - **`/carl` warns when you turn the coder on with 1 slot**: the coder then takes the main session's slot. The setup
   passes the server's slot count to `carl-sync.py set`.
-- **The coder's brief is structured TOML** (`client/shared/carl-brief.js`): mode, tests (new, existing, none), goal,
-  scope in and out, the files with their action (create, change, read), requirements with ids, checks that cover
-  them, constraints with their source, real examples, and for a failed fix the error and what was tried. CARL checks
-  the brief before the coder starts and sends an incomplete one back with what is missing. The coder's report is a
-  TOML block by requirement and check id.
-- **The coder's gates**: it writes only the brief's create and change files; in mode test only test files, in mode
-  code no test file.
-- **Tests first, in a separate session**: for new code (`tests = "new"`), CARL runs a coder session in mode test, checks
-  that a new test fails before any code (a warning when none does; CARL runs a check itself only when it is a plain
-  test runner or ruff), freezes the tests, then runs a fresh coder session in mode code, and gives the main agent one
-  result. Pi: CARL's subagent extension. OpenCode: carl-delegation, in the foreground on any version; in the background
-  only on verified OpenCode versions, with a state file so an interrupted chain still delivers a result.
+- **The coder's brief is structured TOML** (`client/shared/carl-brief.js`, revision 4): `work_mode` (code |
+  tests-only), `work_type` (new_feature | follow_up | bug_fix), `existing_tests`, a distilled `task_summary`,
+  `expected_outcome`, `current_state`, `design_notes`, `exact_interfaces` (names, signatures and formats copied
+  exactly), `scope_limits`, `[[reference_doc]]`, `[[known_file]]` (not a complete list), `[[task_requirement]]` and
+  `[[acceptance_check]]` by id, `[[project_rule]]`, `[[input_example]]`, and for a fix that failed `[failed_attempt]` and
+  `[[tried_fix]]`. Keys have two or three words. CARL checks the brief before the coder starts and sends an incomplete
+  one back with what is missing, in the new key names (old keys get a hint). `carl-brief-check.mjs` checks one by hand.
+- **The coder's report is TOML too**: `outcome_summary`, `brief_deviations`, `task_status`, the requirements and checks
+  by id, the changed files, the test findings, the open issues.
+- **The coder's gates**: in tests-only work it writes test files only, in code work no test file; files marked read are
+  never written. The coder may add files that are not in the brief (a new module).
+- **Tests first, in a separate session**: for new features (`work_mode = "code"`, `work_type = "new_feature"`), CARL runs
+  a coder session in tests-only work mode (without the design notes and the file list: tests from the behaviour),
+  checks that a new test fails before any code (a warning when none does; CARL runs a check itself only when it is a
+  plain test runner or ruff), freezes the tests, then runs a fresh coder session in code work mode, and gives the main
+  agent one result. Follow-ups and fixes: no test session; their `existing_tests` are frozen. Pi: CARL's subagent
+  extension. OpenCode: carl-delegation, in the foreground on any version; in the background only on verified OpenCode
+  versions, with a state file so an interrupted chain still delivers a result.
 - **The main agent may read what the brief needs** (files, the test command, the project's rules) before it delegates
   a large task; it still writes nothing itself.
 - agent-bench: the full coder briefs in each result (format, valid, problems, refused, tokens), a "Coder briefs" report

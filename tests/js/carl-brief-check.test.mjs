@@ -3,7 +3,7 @@
 // sentences, the exit codes; --json for agent-bench. Run: node --test tests/js.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { copyFileSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -14,9 +14,13 @@ const DIR = mkdtempSync(join(tmpdir(), "carl-brief-check-"));
 for (const f of ["carl-brief.js", "carl-brief-check.mjs"]) copyFileSync(join(REPO, "client/shared", f), join(DIR, f));
 const CLI = join(DIR, "carl-brief-check.mjs");
 
-/** The example brief of CARL's delegation rule (client/agents/delegation.md): a valid brief. */
+/** The template of CARL's delegation rule (client/agents/delegation.md, revision 4), as written (its bug-fix tables
+ * commented out): a valid brief. */
 const rule = readFileSync(join(REPO, "client/agents/delegation.md"), "utf8");
-const VALID = rule.slice(rule.indexOf("```toml"), rule.indexOf("```", rule.indexOf("```toml") + 7) + 3);
+const TEMPLATE = rule.slice(rule.indexOf("```toml"), rule.indexOf("```", rule.indexOf("```toml") + 7) + 3);
+const VALID = TEMPLATE;
+/** The template with its bug-fix tables uncommented. */
+const UNCOMMENTED = TEMPLATE.replace(/^# For work_type = "bug_fix" only.*\n/m, "").replace(/^# /gm, "");
 
 const run = (args, input = "") => spawnSync(process.execPath, [CLI, ...args], { input, encoding: "utf8", cwd: DIR });
 
@@ -29,12 +33,21 @@ test("a valid brief: the format, the brief is valid, exit code 0 (a file, the st
 });
 
 test("problems: each one a sentence, exit code 1; no brief at all: one sentence", () => {
-  const noCheck = VALID.replace(/\[\[check\]\][\s\S]*?(?=\n```)/, "");
+  const noCheck = VALID.replace(/\[\[acceptance_check\]\][\s\S]*?(?=\[\[project_rule\]\])/, "");
   let r = run([], noCheck);
   assert.equal(r.status, 1);
   assert.match(r.stdout, /^Format: TOML\nThe brief has \d+ problems?:\n- /);
-  assert.match(r.stdout, /The brief has no check/);
-  r = run([], 'mode = "code"\ngoal = oops\n');
+  assert.match(r.stdout, /The brief has no check: add a \[\[acceptance_check\]\]/);
+  assert.equal(run([], UNCOMMENTED.replace('"new_feature"', '"bug_fix"')).status, 0);   // the bug-fix tables: bug_fix
+  r = run([], UNCOMMENTED);                                                      // ... not with new_feature
+  assert.deepEqual([r.status, r.stdout], [1, 'Format: TOML\nThe brief has 1 problem:\n- [failed_attempt] and [[tried_fix]] ' +
+    'are only for work_type = "bug_fix" (a fix that already failed): set work_type = "bug_fix", or remove them.\n']);
+  r = run([], 'mode = "code"\ngoal = "g"\n[[file]]\npath = "a.py"\naction = "create"\n');   // revision 1: the new keys
+  assert.equal(r.status, 1);
+  assert.match(r.stdout, /- The brief has the key "mode", which is not in the schema: use "work_mode"\.\n/);
+  assert.match(r.stdout, /- The brief has the key "goal", which is not in the schema: use "task_summary"\.\n/);
+  assert.match(r.stdout, /- The brief has the key "file", which is not in the schema: use "known_file"\.\n/);
+  r = run([], 'work_mode = "code"\ntask_summary = oops\n');
   assert.equal(r.status, 1);
   assert.match(r.stdout, /^Format: TOML\nThe brief has 1 problem:\n- line 2: this value has no quotes/);
   r = run([], "Goal: add it\nFiles: a.py\n");
@@ -50,9 +63,27 @@ test("a wrong command or an input that cannot be read: exit code 2; --help: 0", 
   assert.equal(run(["a", "b"]).status, 2);
   assert.equal(run(["--bad"]).status, 2);
   assert.equal(run(["--json"], "{}").status, 2);
+  assert.equal(run(["--root"]).status, 2);
+  assert.equal(run(["--root", "--json"]).status, 2);
   r = run(["--help"]);
   assert.equal(r.status, 0);
-  assert.match(r.stdout, /^Usage: node carl-brief-check\.mjs \[FILE\]/);
+  assert.match(r.stdout, /^Usage: node carl-brief-check\.mjs \[--root DIR\] \[FILE\]/);
+});
+
+test("--root DIR: each existing_tests path must be in the project DIR; without --root it is not checked", () => {
+  const proj = mkdtempSync(join(tmpdir(), "carl-brief-root-"));
+  writeFileSync(join(DIR, "brief.toml"), VALID);                               // existing_tests = ["tests/test_store.py"]
+  assert.equal(run(["brief.toml"]).status, 0);
+  let r = run(["--root", proj, "brief.toml"]);
+  assert.deepEqual([r.status, r.stdout], [1, 'Format: TOML\nThe brief has 1 problem:\n- existing_tests has "tests/test_store.py", ' +
+    "which is not in the project: give the path of a test file that exists, or remove it.\n"]);
+  mkdirSync(join(proj, "tests"));
+  writeFileSync(join(proj, "tests", "test_store.py"), "");
+  assert.equal(run(["--root", proj, "brief.toml"]).status, 0);
+  assert.equal(run(["brief.toml", "--root", proj]).status, 0);
+  r = run(["--root", join(proj, "nowhere"), "--json"], JSON.stringify([VALID]));
+  assert.equal(r.status, 0);
+  assert.equal(JSON.parse(r.stdout)[0].valid, false);
 });
 
 test("--json: a list of texts in, a list of { format, valid, problems } out (agent-bench)", () => {

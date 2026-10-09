@@ -152,36 +152,34 @@ def _oc_pi(n: int, oc: Mapping[str, object], pi: Mapping[str, object],
 
 
 CODER_DONE: Dict[str, object] = {"system_contains": "You are **coder**", "reply": {"text": "## Result\nDone."}}
-# The coder's task is a TOML brief that passes carl-delegation's check (Phase 23.4.3; client/shared/carl-brief.js).
-BRIEF = """mode = "code"
-tests = "new"
-goal = "Add a readability module to textstats."
+# The coder's task is a TOML brief (revision 4) that passes carl-delegation's check (Phase 23.4.3; client/shared/carl-brief.js).
+BRIEF = """work_mode = "code"
+work_type = "new_feature"
 
-[scope]
-in = [{ text = "textstats/readability.py and its exports" }]
-out = [{ text = "the existing tests", why = "they pass now" }]
+task_summary = "Add a readability module to textstats, so the user can score a text's reading ease."
+expected_outcome = "from textstats import flesch_reading_ease works, with syllable_count and sentence_count."
+current_state = "textstats has word_count in textstats/__init__.py; no readability yet."
+design_notes = "The counting goes in textstats/readability.py; __init__.py only exports it."
+exact_interfaces = ["flesch_reading_ease(text: str) -> float"]
+scope_limits = "Do not change the existing tests."
 
-[[file]]
-path = "textstats/readability.py"
-action = "create"
+[[known_file]]
+file_path = "textstats/readability.py"
+file_action = "create"
 
-[[file]]
-path = "textstats/__init__.py"
-action = "change"
+[[known_file]]
+file_path = "textstats/__init__.py"
+file_action = "change"
 
-[[file]]
-path = "tests/test_readability.py"
-action = "create"
+[[task_requirement]]
+requirement_id = "R1"
+requirement_text = "syllable_count, sentence_count and flesch_reading_ease, exported from textstats"
 
-[[requirement]]
-id = "R1"
-text = "syllable_count, sentence_count and flesch_reading_ease, exported from textstats"
-
-[[check]]
-id = "A1"
-covers = ["R1"]
-run = "python3 -m pytest -q tests/test_readability.py"
-expect = "all tests pass"
+[[acceptance_check]]
+check_id = "C1"
+covers_requirements = ["R1"]
+run_command = "python3 -m pytest -q tests/test_readability.py"
+expected_result = "all tests pass"
 """
 DELEGATE_OC: Dict[str, object] = {"tool": "task", "arguments": {"description": "Readability module", "prompt": BRIEF,
                                              "subagent_type": "coder", "background": True}}

@@ -709,47 +709,48 @@ The main agent keeps the questions, the explanations, the code searches and the 
 
 **`/code TASK`** gives a task straight to the coder. The main agent does not decide: it writes the brief and hands it on at once.
 
-**How the main agent writes the task.** The coder sees only the task. The main agent writes it as a brief in TOML, from your request and the project's files: `mode`, `tests`, `goal`, the scope (what is in, what to leave alone), each file with its action (create, change or read), the requirements with ids (R1, R2, ...), the checks that cover them, the project's rules, real examples, and for a fix that failed, the error and what was tried. A short example:
+**How the main agent writes the task.** The coder sees only the task. The main agent writes it as a brief in TOML, from your request and the project's files: `work_mode` (`code`, or `tests-only` for tests only), `work_type` (`new_feature`, `follow_up` or `bug_fix`), the tests that already cover the work, the request in a few sentences (`task_summary`), what the finished work looks like for you (`expected_outcome`), what exists now (`current_state`), how to build it (`design_notes`), the names, commands and formats of your request, copied exactly (`exact_interfaces`), limits in plain words (`scope_limits`), documents to read first, the files it knows of (the list does not have to be complete), the requirements with ids (R1, R2, ...), the checks that cover them, the project's rules, real input, and for a fix that failed, the error and what was tried. A short example:
 
 ```toml
-mode = "code"
-tests = "new"
-goal = "Add a --csv option to the report command."
+work_mode = "code"
+work_type = "new_feature"
 
-[scope]
-out = [{ text = "the text table", why = "keep it as it is" }]
+task_summary = "Notes are getting due dates, so the user can see what is late and what comes next."
+expected_outcome = "A note can have a due date. `notes list` shows it after the text."
+exact_interfaces = ["notes add TEXT --due 2026-11-01"]
 
-[[file]]
-path = "report/csv_export.py"
-action = "create"
+[[known_file]]
+file_path = "notes/model.py"
+file_action = "change"
 
-[[requirement]]
-id = "R1"
-text = "the first row is the header month,orders,total"
+[[task_requirement]]
+requirement_id = "R1"
+requirement_text = "A note has an optional due date (YYYY-MM-DD)."
 
-[[check]]
-id = "A1"
-covers = ["R1"]
-run = "python -m pytest tests/test_csv_export.py -q"
+[[acceptance_check]]
+check_id = "C1"
+covers_requirements = ["R1"]
+run_command = "python -m pytest tests/test_model.py"
+expected_result = "all tests pass"
 ```
 
-**CARL checks the brief.** Before the coder starts, CARL checks that the brief is complete. For example, each requirement must be in a check, and a code task must name its files and at least one thing to leave alone. If something is missing, the coder does not start: the main agent gets the list of what to fix, and it sends the brief again. You see this as a failed call to the coder with `[CARL] Brief refused`. To check a brief yourself (for example one that you wrote for `/code`), run the same check by hand: `node ~/.config/opencode/plugins/carl-delegation/carl-brief-check.mjs brief.toml` (Pi: `~/.pi/agent/extensions/carl-delegation/carl-brief-check.mjs`). It prints `The brief is valid.` or each problem ([details](reference/delegation.md#the-coders-two-modes-and-the-brief)).
+**CARL checks the brief.** Before the coder starts, CARL checks that the brief is complete. For example, each requirement must be in a check with a command, a code task must name at least one file to create or change, and a follow-up or a fix must say what exists now. A key of the older brief (such as `mode` or `goal`) is refused with the name of the new key. If something is missing, the coder does not start: the main agent gets the list of what to fix, and it sends the brief again. You see this as a failed call to the coder with `[CARL] Brief refused`. To check a brief yourself (for example one that you wrote for `/code`), run the same check by hand: `node ~/.config/opencode/plugins/carl-delegation/carl-brief-check.mjs brief.toml` (Pi: `~/.pi/agent/extensions/carl-delegation/carl-brief-check.mjs`). It prints `The brief is valid.` or each problem. With `--root PROJECT-FOLDER`, it also checks that the tests in `existing_tests` are there ([details](reference/delegation.md#the-coders-two-modes-and-the-brief)).
 
-**Tests first, in a separate session.** For new code with new tests (`mode = "code"` and `tests = "new"`), CARL runs the coder two times, each in a new session:
-1. **The test session** (mode test) writes the tests from the requirements. It does not see the code session, so its tests do not bend to the code.
+**Tests first, in a separate session.** For a new feature (`work_mode = "code"` and `work_type = "new_feature"`), CARL runs the coder two times, each in a new session:
+1. **The test session** (`tests-only`) writes the tests from the requirements. It does not see the code session, so its tests do not bend to the code. It also does not get `design_notes` or the file list: the tests come from the behaviour, not from the planned code.
 2. At least one new test must fail before there is code (a **red start**). The test session's report says so. CARL also runs a check itself, one time, when it is a plain test runner or ruff on the project's files (`pytest`, `python -m pytest`, `node --test`, `npm test`, `go test`, `cargo test`, `ruff check`, `ruff format --check`). It never runs another command.
-3. **The code session** (mode code) writes the code. It gets the brief, the test files and the test session's report. It cannot change the tests.
+3. **The code session** (`code`) writes the code. It gets the brief, the test files and the test session's report. It cannot change the tests.
 4. The main agent gets **one result**: both reports, and "Tests unchanged" or the test files that changed. A line `[CARL] Warning` says when no new test failed before the code, or when a test changed.
 5. The main agent runs the checks itself before it answers you.
 
-You see two coder sessions (in OpenCode: `…: tests` and `…: code`), but one result. In OpenCode, the two sessions run in the background only on the OpenCode versions that CARL checked (1.18.34 and 1.18.35). On other versions they run in the foreground: the main session waits for them, and a notice says so one time. Follow-ups, fixes and stuck tasks get one session, with no new tests. With `tests = "existing"`, the result says whether the coder changed the named tests. Details: [the chain](reference/delegation.md#the-chain-tests-first-in-a-separate-session).
+You see two coder sessions (in OpenCode: `…: tests` and `…: code`), but one result. In OpenCode, the two sessions run in the background only on the OpenCode versions that CARL checked (1.18.34 and 1.18.35). On other versions they run in the foreground: the main session waits for them, and a notice says so one time. Follow-ups and fixes (`follow_up`, `bug_fix`, also a stuck task) get one session, with no new tests. The tests in `existing_tests` are frozen for the coder: the result says whether it changed them. Details: [the chain](reference/delegation.md#the-chain-tests-first-in-a-separate-session).
 
 **How the coder works:**
-- It works in one of two modes in each task. **Mode code:** it writes the program code and runs the tests, but it does not change the tests. **Mode test:** it writes tests from the requirements (at least one for each requirement id) and does not change the program code.
-- It changes only the files that the brief gives to create or change, and it checks each check. CARL enforces this: it refuses the coder's write of another file, of a test file in mode code, and of a file that is not a test in mode test.
+- It works in one `work_mode` in each task. **code:** it writes the program code and runs the tests, but it does not change the tests. **tests-only:** it writes tests from the requirements (at least one for each requirement id) and does not change the program code.
+- It reads the summary, the expected outcome, the current state, the design notes, the documents and the exact interfaces first. The brief's file list is a start, not a limit: it can add a file that the design needs, for example a new module. It checks each check. CARL refuses the coder's write of a test file in `code`, of a file that is not a test in `tests-only`, and of a file that the brief gives to read only.
 - It starts with a new context, and works one step at a time. Before it fixes a failure, it reproduces the failure. It runs the tests or the build. It does not leave placeholders.
 - After three failed approaches, it stops and reports.
-- Its report starts with a TOML block: the status, each requirement and each check by its id, the changed files, the findings and the open issues. The main agent checks the report before it answers you.
+- Its report starts with a TOML block: what it built and how that meets the expected outcome (`outcome_summary`), where it departed from the design notes or the exact interfaces and why (`brief_deviations`), the status, each requirement and each check by its id, the changed files, the failing tests (tests-only) and the open issues. The main agent checks the report before it answers you.
 - Only the main agent gets the delegation rule and the reminder. The coder and the other subagents never get them.
 
 **Tested (2026-10-05 to 2026-10-07, OpenCode / Pi, the large and stuck tasks that went to the coder):**

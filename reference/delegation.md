@@ -9,11 +9,11 @@ This page tells how CARL makes the main agent give large and stuck coding tasks 
 | The delegation rule | Tells the main agent when to give a task to the coder, and how to write the task | `client/agents/delegation.md`. OpenCode: `~/.config/opencode/carl/delegation.md` (in `instructions`). Pi: the last block of `~/.pi/agent/APPEND_SYSTEM.md` | comes with the coder |
 | The rule for main agents only | Keeps the rule out of the prompt of every subagent | OpenCode: the `carl-delegation` plugin. Pi: the `subagent` tool | comes with the coder |
 | The reminder | One line at the end of each of your messages in the main session | `carl-delegation` (OpenCode plugin and Pi extension) | on; `NO_REMINDER=1` turns it off |
-| The coder's two modes | `mode = "code"` or `mode = "test"`, one in each brief | `client/agents/coder.md` | comes with the coder |
-| The brief | Each coder task is a brief in TOML: ids, scope, files by action, checks | `client/agents/delegation.md`, `client/agents/coder.md`, `client/shared/carl-brief.js` | comes with the coder |
+| The coder's two modes | `work_mode = "code"` or `work_mode = "tests-only"`, one in each brief | `client/agents/coder.md` | comes with the coder |
+| The brief | Each coder task is a brief in TOML (revision 4): the request distilled, the expected outcome, the current state, the design notes, the exact interfaces, requirements and checks by id, the known files | `client/agents/delegation.md`, `client/agents/coder.md`, `client/shared/carl-brief.js` | comes with the coder |
 | The brief check | Sends an incomplete brief back to the main agent before the coder starts | `carl-delegation` | on; `"brief": false` turns it off (for measurements) |
-| The coder's gates | Keep the coder to its brief's files and to its mode | `carl-delegation` | comes with the coder |
-| The chain | A brief with `tests = "new"`: a test session, then a code session, each with a new context; one result. OpenCode: in the foreground; in the background only on the verified versions | OpenCode: `carl-delegation`. Pi: the `subagent` tool. Both: `client/shared/carl-chain.js` | on; `"chain": false` turns it off (for measurements) |
+| The coder's gates | Keep the coder to its work_mode and away from the files to read only | `carl-delegation` | comes with the coder |
+| The chain | A brief with `work_mode = "code"` and `work_type = "new_feature"`: a test session, then a code session, each with a new context; one result. OpenCode: in the foreground; in the background only on the verified versions | OpenCode: `carl-delegation`. Pi: the `subagent` tool. Both: `client/shared/carl-chain.js` | on; `"chain": false` turns it off (for measurements) |
 | The coder's thinking | Each coder session (the test session and the code session too) thinks as **Coder thinking** says, for the model that the coder runs on | The dashboard: Settings > Server, per model. OpenCode: `coderThinking` of `carl-delegation`, set on each request of the coder by its `chat.params` hook. Pi: `"thinking"` in `~/.pi/agent/carl.json`, read by the `subagent` tool | same as main; off only with a full spec ([The coder's thinking](#the-coders-thinking)) |
 | `/code` | Gives your task straight to the coder | OpenCode: `~/.config/opencode/command/code.md`. Pi: `~/.pi/agent/prompts/code.md` | comes with the coder |
 | The new-file gate | Stops the main agent at its Nth new file in a turn | `carl-delegation` | off; the dashboard only: Connect > Setup, full level, `g` (advanced, not recommended) |
@@ -42,60 +42,71 @@ OpenCode gives its global `instructions` to every agent, the subagents too. A co
 
 ## The coder's two modes and the brief
 
-Each coder task is a brief in TOML (Phase 23.4.3). Its `mode` says what the coder may change. The two modes are exclusive in one brief:
+Each coder task is a brief in TOML (Phase 23.4.3; revision 4, approved by the user on 2026-10-09: `docs/phase-plans/phase23.4.3/brief-v4-draft.md`). Its `work_mode` says what the coder may change. The two modes are exclusive in one brief:
 
-- **`mode = "code"`:** the coder writes and changes the program code. It runs the tests, but it does not change them. A test that looks wrong goes into its report.
-- **`mode = "test"`:** the coder writes tests from the requirements, not from the current code. It writes at least one test for each requirement id, with the id in the test's name or docstring. It does not change the program code. A test that fails because the code is wrong is a finding in its report.
+- **`work_mode = "code"`:** the hand-off writes or changes program code. The coder runs the tests, but it does not change them. A test that looks wrong goes into its report.
+- **`work_mode = "tests-only"`:** the hand-off writes or changes tests only. The coder writes tests from the requirements, not from the current code: at least one test for each requirement id, with the id in the test's name or docstring. It does not change the program code. A test that fails because the code is wrong is a finding in its report.
 
-The main agent writes the brief from your request and the project's files. It invents nothing: examples are copied from a file or from your message. Thus, for a large request the rule lets it read first what the brief needs (the files to change, the test command, the project's rules), but it must not write or change a file itself; then it delegates. Before, the rule said "delegate first, do not explore", and the brief then had no real paths or commands. The schema (the full reference is `docs/phase-plans/phase23.4.3/full_plan.md`, item 2; `client/agents/delegation.md` has a complete example):
+The main agent writes the brief from your request and the project's files. It invents nothing: rules and examples are copied from a file or from your message, and the exact interfaces from your request. Thus, for a large request the rule lets it read first what the brief needs (the files to change, the test command, the project's rules), but it must not write or change a file itself; then it delegates. Before, the rule said "delegate first, do not explore", and the brief then had no real paths or commands. TOML is there to structure the data, not to remove the prose: the user (2026-10-09) wanted the intent carried to the coder (the distilled request, the expected outcome, the design and reference documents), not only hard requirements. The keys (two or three words each; `client/agents/delegation.md` has the whole template):
 
-| Key | What it holds |
-|---|---|
-| `mode` | `"code"` or `"test"` |
-| `tests` | `"new"`, `"existing"` or `"none"` (mode code) |
-| `goal` | one or two sentences |
-| `[scope]` `in`, `out` | what the task is about; what to leave alone (`{ text = "...", why = "..." }`). Mode code: at least one `out` entry |
-| `[[file]]` `path`, `action` | `"create"`, `"change"` or `"read"` (context only, never written) |
-| `[[requirement]]` `id`, `text` | one point each, with its own id (R1, R2, ...) |
-| `[[check]]` `id`, `covers`, `run`, `expect` | the acceptance: the requirement ids it covers, the command, the result |
-| `[[constraint]]` `text`, `source` | a project rule, copied, and the file it is from |
-| `[[example]]` `source`, `text` | real input, copied from a file or from your message (`source = "user"`) |
-| `[error]` `run`, `output`; `[[tried]]` `change`, `result` | only for a fix that failed |
+| Key | What it holds | Required |
+|---|---|---|
+| `work_mode` | `"code"` or `"tests-only"` | yes |
+| `work_type` | `"new_feature"` (new behaviour, in a new file or in existing code), `"follow_up"` (changes to the work the coder just did) or `"bug_fix"` (a fix, a stuck one too) | yes |
+| `existing_tests` | the test files that already cover this work (a list of paths) | no; each path must be in the project |
+| `task_summary` | the request distilled into a few sentences: what and why. Not a copy, and not a list | yes |
+| `expected_outcome` | what the finished work looks like from the user's side | yes |
+| `current_state` | what exists now that the coder builds on | for `follow_up` and `bug_fix` |
+| `design_notes` | where the logic goes, the patterns to follow, what to reuse | no |
+| `exact_interfaces` | every name, signature, command line, output format and message the request states, copied exactly (a list) | no (the template asks for it) |
+| `scope_limits` | limits in plain words, for example "no API changes; do not touch config.py" | no |
+| `[[reference_doc]]` `doc_path`, `doc_purpose` | architecture or reference documentation to read before starting (a path in the project, or a URL), and why | no |
+| `[[known_file]]` `file_path`, `file_action` | the files the main agent knows of: `"create"`, `"change"` or `"read"` (context only, never written). The list does not have to be complete | in `code`: at least one to create or change |
+| `[[task_requirement]]` `requirement_id`, `requirement_text` | one point of the request each, with its own id (R1, R2, ...) | at least one |
+| `[[acceptance_check]]` `check_id`, `covers_requirements`, `run_command`, `expected_result` | the requirement ids it covers, the command, the result. Every requirement is covered | every requirement in one; `run_command` in each |
+| `[[project_rule]]` `rule_text`, `rule_source` | a project rule that applies, copied, and the file it is from | no |
+| `[[input_example]]` `example_source`, `example_text` | real input, copied, never invented | no |
+| `[failed_attempt]` `run_command`, `error_output` | only for a `bug_fix` that already failed: the command that fails and its exact output | when `[[tried_fix]]` is there |
+| `[[tried_fix]]` `fix_change`, `fix_result` | only with `[failed_attempt]`: what was changed and what happened | no |
 
-**The rule for `tests`** (for the main agent, in this order): 1. a follow-up to the coder's work, a fix or a stuck task: `"existing"` when tests cover it (named in a check), else `"none"`; 2. new behaviour with no tests yet: `"new"`; 3. else `"existing"` when the project's tests cover the change, else `"none"`. With `mode = "code"` and `tests = "new"`, CARL runs the coder twice in separate sessions: first in mode test, then in mode code ([the chain](#the-chain-tests-first-in-a-separate-session)).
+The template in `client/agents/delegation.md` shows `[failed_attempt]` and `[[tried_fix]]` commented out, under one line that says they are for `work_type = "bug_fix"` only, so that a copy of the template as written (a `new_feature`) passes the check (the user, 2026-10-09: "A").
 
-**The brief check.** Before the coder starts, `carl-delegation` reads the brief and checks it. The brief can be in a `` ```toml `` fence, with text around it. An incomplete brief goes back to the main agent: the call fails with `[CARL] Brief refused` and a list of whole sentences, for example `Requirement R2 is in no check's covers: add it to a check, or add a check for it.` A task text with no TOML at all gets one sentence that asks for the brief. The checks:
+**What CARL does with it.** `work_mode = "code"` and `work_type = "new_feature"`: CARL's test session, then the code session ([the chain](#the-chain-tests-first-in-a-separate-session)). `work_mode = "code"` and `"follow_up"` or `"bug_fix"`: no test session; the `existing_tests` are frozen for the coder. `work_mode = "tests-only"`: one session that writes tests. When the test session runs is one function in `carl-brief.js` (`testsSetting`, "before" for now), where Phase 23.4.6's Tests setting (before code, after code, off) plugs in.
 
-- `mode` is code or test; mode code: `tests` is new, existing or none; `goal` is not empty.
-- At least one requirement, each with its own id and a text. Every requirement is in the `covers` of a check. Every check has an id and a `run`, and covers only ids that exist.
-- Mode code: at least one file to create or change, and at least one `scope.out` entry. Each file has a path and a valid action. Mode test: each file to create or change is a test file.
-- `[error]` has `run` and `output`; `[[tried]]` only with an `[error]`.
-- `tests = "existing"`: a check's `run` names the existing tests (a test file, or the folder `tests/` or `test/`).
-- No key that is not in the schema (`[[files]]`: "use file").
+**The brief check.** Before the coder starts, `carl-delegation` reads the brief and checks it. The brief can be in a `` ```toml `` fence, with text around it. An incomplete brief goes back to the main agent: the call fails with `[CARL] Brief refused` and a list of whole sentences that name the brief's keys, for example `Requirement R2 is in no check's covers_requirements: add it to a check, or add a check for it.` A task text with no TOML at all gets one sentence that asks for the brief. The checks:
 
-The reader is CARL's own (no package): strings in all four forms, lists, inline tables, `[table]`, `[[list of tables]]` and comments. It accepts what small models often write (an unknown escape such as `\d`, a `{ table }` over several lines). Errors give the line number. A task that continues an earlier one (OpenCode's `task_id`) is not checked. OpenCode: the check throws in `tool.execute.before`, as the new-file gate does. Pi: the `tool_call` event blocks the subagent call (also a coder item in `tasks` or `chain`).
+- `work_mode` is code or tests-only; `work_type` is new_feature, follow_up or bug_fix; `task_summary` and `expected_outcome` are not empty; `current_state` is not empty for follow_up and bug_fix.
+- Each `existing_tests` path is in the project folder (checked in the folder where the coder runs: OpenCode's project, Pi's `cwd`).
+- At least one requirement, each with its own `requirement_id` and a `requirement_text`. Every requirement is in the `covers_requirements` of a check. Every check has a `check_id` and a `run_command`, and covers only ids that exist.
+- `work_mode = "code"`: at least one known file to create or change (the list does not have to be complete). Each known file has a `file_path` and a valid `file_action`. `tests-only`: no known file needed, and each one to create or change is a test file.
+- `[failed_attempt]` and `[[tried_fix]]` only with `work_type = "bug_fix"`; `[failed_attempt]` has `run_command` and `error_output`; `[[tried_fix]]` only with a `[failed_attempt]`, each with `fix_change` and `fix_result`.
+- No key that is not in the schema, at the top or in a table (`known_file.path`). A key of the brief's first revision gets the new key's name: `mode` → `work_mode`, `tests` → `work_type` and `existing_tests`, `goal` → `task_summary`, `scope` → `scope_limits`, `file` → `known_file`, `requirement` → `task_requirement`, `check` → `acceptance_check`, `constraint` → `project_rule`, `example` → `input_example`, `error` → `failed_attempt`, `tried` → `tried_fix` (and plural forms such as `known_files` → `known_file`).
+
+The reader is CARL's own (no package): strings in all four forms, lists, inline tables, `[table]`, `[[list of tables]]` and comments. It accepts what small models often write (an unknown escape such as `\d`, a `{ table }` over several lines). Errors give the line number. It also reads the same keys as JSON (a `` ```json `` fence, or a JSON object with text around it; the sentences then name the keys the JSON way); agent-bench's `brief_json` variant is obsolete (the user chose TOML). A task that continues an earlier one (OpenCode's `task_id`) is not checked. OpenCode: the check throws in `tool.execute.before`, as the new-file gate does. Pi: the `tool_call` event blocks the subagent call (also a coder item in `tasks` or `chain`).
 
 **Checking a brief by hand** (Phase 23.4.4; user, 2026-10-09: "checking the template with a local script should be a part of the carl plugin set"). The check is also a command, `carl-brief-check.mjs`, installed next to `carl-brief.js` wherever the setup installs it: `~/.config/opencode/plugins/carl-delegation/`, `~/.pi/agent/extensions/carl-delegation/` and `~/.pi/agent/extensions/subagent/` (in the repository: `client/shared/carl-brief-check.mjs`). It needs node (CARL's client setup installs it in `~/.local/bin` when it is not there):
 
 ```
 node ~/.config/opencode/plugins/carl-delegation/carl-brief-check.mjs brief.toml
 node ~/.pi/agent/extensions/carl-delegation/carl-brief-check.mjs < brief.toml
+node ~/.pi/agent/extensions/carl-delegation/carl-brief-check.mjs --root ~/projects/notes brief.toml
 ```
 
 - The input is a file, or the standard input (no file, or `-`): a brief in TOML or JSON, or a task text with a brief in it (a `` ```toml `` fence with text around it is fine), as the main agent writes it.
 - It prints the format (`TOML`, `JSON`, or `none`), then `The brief is valid.` or each problem as a sentence, the same sentences that the main agent gets when CARL refuses a brief (a TOML error names its line).
+- `--root DIR`: the project folder. Each `existing_tests` path must be in it, as in the clients. Without `--root`, that rule is not checked (agent-bench checks saved briefs, with no project at hand).
 - Exit code: 0 the brief is valid; 1 it has problems, or the text has no brief; 2 the command is wrong or the file cannot be read. `--help` shows the usage.
 - `--json`: the standard input is a JSON list of task texts, the output a JSON list of `{format, valid, problems}`. agent-bench checks the briefs of its runs this way (`tools/agent-bench/agentbench/brief_check.mjs` runs the command's `--json` mode with node from `find_node()`): the harness, the clients and a user have one checker.
 
 **The coder's gates.** In the coder's own session, `carl-delegation` keeps the coder to its brief. A write is refused with one sentence (`[CARL] Blocked: ...`) when:
 
-- the file is not one of the brief's files to create or change (a "read" file gets its own sentence);
-- mode code: the file is a test file;
-- mode test: the file is not a test file. With no test file in the brief, mode test may write any test file.
+- the file is a known file with `file_action = "read"` (it is never written);
+- `work_mode = "code"`: the file is a test file;
+- `work_mode = "tests-only"`: the file is not a test file.
 
-A test file is a file under `tests/` or `test/`, or a file named `test_*.py`, `*_test.py`, `*.test.*` or `*.spec.*` (`isTestFile` in `carl-brief.js`). The gates see the file tools (write, edit, patch) and the plain shell writes (redirections, `tee`, `touch`, `cp`, `mv`, `sed -i`). Paths outside the project folder pass. How the plugin finds the coder's session: OpenCode, `chat.message` names the agent of each user message; the first message of a coder session is its brief. Pi: the subagent tool runs the coder as its own Pi process with `CARL_AGENT` set; its prompt (`Task: ` and the brief) gives the brief.
+Any other file passes: the known files are a start, not a limit. The gate on "only the listed files" went with revision 4 (the user, 2026-10-09): it would keep the coder from making a module file, and so break the ports and adapters directive of its engineering standards. A test file is a file under `tests/` or `test/`, or a file named `test_*.py`, `*_test.py`, `*.test.*` or `*.spec.*` (`isTestFile` in `carl-brief.js`). The gates see the file tools (write, edit, patch) and the plain shell writes (redirections, `tee`, `touch`, `cp`, `mv`, `sed -i`). Paths outside the project folder pass. How the plugin finds the coder's session: OpenCode, `chat.message` names the agent of each user message; the first message of a coder session is its brief. Pi: the subagent tool runs the coder as its own Pi process with `CARL_AGENT` set; its prompt (`Task: ` and the brief) gives the brief.
 
-**The coder's report** starts with a TOML block: `status` (done, partly or blocked), `summary`, one `[[requirement]]` for each id (`status`, `note`), one `[[check]]` for each id (`result`: pass, fail or not run; `summary`: the summary line of the run), `[[file]]` (the files changed), `[[finding]]` (mode test: the failing tests and why) and `[[open_issue]]`. A "Needs a browser check" section can follow the block. `parseReport` in `carl-brief.js` reads it.
+**The coder's report** starts with a TOML block, its keys of two or three words (the user: one-word keys confuse the model): `outcome_summary` (what it built and how that meets `expected_outcome`), `brief_deviations` (where it departed from `design_notes` or `exact_interfaces`, and why), `task_status` (done, partly or blocked), one `[[requirement_result]]` for each requirement id (`requirement_id`, `requirement_status`, `requirement_note`), one `[[check_result]]` for each check id (`check_id`, `run_result`: pass, fail or not run; `run_summary`: the summary line of the run), `[[changed_file]]` (`file_path`, `change_summary`), `[[test_finding]]` (tests-only: the failing tests, `test_name`, `requirement_id`, `failure_reason`) and `[[open_issue]]` (`issue_text`). A "Needs a browser check" section can follow the block. `parseReport` in `carl-brief.js` reads it (it needs `task_status`).
 
 CARL does not make or enforce a project's architecture or plans: the brief only carries the rules that the project already has.
 
@@ -103,39 +114,25 @@ CARL does not make or enforce a project's architecture or plans: the brief only 
 
 The user's decision (2026-10-09): the tests come from a session that did not see the code, so that they are not vacuous or bent to the code. One `coder` agent with its two modes; CARL chains two new sessions. There is no separate tester agent.
 
-**When.** The brief has `mode = "code"`, `tests = "new"`, no `[error]` and no `[[tried]]`, and the task does not continue an earlier one (OpenCode's `task_id`). Else the coder runs one session, as before. A brief with `mode = "test"` is the test session alone.
+**When.** The brief has `work_mode = "code"` and `work_type = "new_feature"`, no `[failed_attempt]` and no `[[tried_fix]]`, and the task does not continue an earlier one (OpenCode's `task_id`). Else the coder runs one session, as before. A brief with `work_mode = "tests-only"` is the test session alone.
 
 **The steps** (`client/shared/carl-chain.js`):
 
-1. **The test session.** A new coder session gets the brief in mode test: the goal, the scope, the requirements, the checks, the constraints and the examples; of the files, only the test files. It writes tests (at least one for each requirement id), runs them and reports.
+1. **The test session.** A new coder session gets the brief in `work_mode = "tests-only"`: `task_summary`, `expected_outcome`, `current_state`, `exact_interfaces`, the requirements, the checks, `scope_limits`, `[[reference_doc]]`, `[[project_rule]]` and `[[input_example]]`. It does not get `design_notes` or the known files (the user, 2026-10-09: the tests come from the behaviour, not from the implementation), nor `existing_tests`. It writes tests (at least one for each requirement id), runs them and reports.
 2. **The red start.** At least one new test must fail before any code. The test session's report decides (a failed check or a finding), unless CARL ran a check itself: then CARL's run decides. CARL runs a check's `run` only when it is a plain test runner or ruff on the project's files ([the allowlist](#the-checks-that-carl-runs-itself)), once, in the project folder, with a 120 s limit. It looks at the checks whose `run` names tests or a test file that the session wrote; when none does, at every check. Any other command is not run, and one line of the result says so: ``CARL did not run `sh tests/check.sh` itself (it runs only a plain test runner or ruff on the project's files).`` No red start: the code session still runs, and the result has a warning.
 3. **The freeze.** CARL hashes the project's test files (SHA-256). It looks at files under `tests/` or `test/` and files named `test_*.py`, `*_test.py`, `*.test.*` or `*.spec.*`; tool folders (`.git`, `node_modules`, `.venv`, ...) are left out. The files that changed during the test session (and the test files in its report) are its test files.
-4. **The code session.** A new coder session gets the original brief (mode code) and CARL's `[test_session]` table: `files` (the test session's test files), `summary`, `failing` (each failing test, its requirement id and why) and `notes` (its open issues). `client/agents/coder.md` tells the coder what the table means. Its gates refuse every test-file write.
+4. **The code session.** A new coder session gets the original brief (`work_mode = "code"`, with `design_notes` and the known files) and CARL's `[test_session]` table, with two- or three-word keys as the rest of the brief (the user, 2026-10-09): `test_files` (the test session's test files), `session_summary` (its outcome summary), `session_notes` (its open issues) and one `[[test_session.failing_test]]` for each failing test (`test_name`, `requirement_id`, `failure_reason`: the keys of the report's `[[test_finding]]`). `client/agents/coder.md` tells the coder what the table means. Its gates refuse every test-file write.
 5. **One result.** After the code session, CARL hashes the test files again. The main agent gets one result:
 
 ```
-[CARL] Chain: the coder ran in two new sessions: first the tests (mode test), then the code (mode code).
-Red start: CARL ran `python -m pytest tests/test_csv_export.py -q` before the code: it failed (exit 1).
-Tests unchanged after the code session (tests/test_csv_export.py).
+[CARL] Chain: the coder ran in two new sessions: first the tests (work_mode tests-only), then the code (work_mode code).
+Red start: CARL ran `python -m pytest tests/test_model.py -q` before the code: it failed (exit 1).
+Tests unchanged after the code session (tests/test_model.py).
 Run the checks yourself before you answer the user.
 
-## The coder's thinking
-
-The main session and the coder have a thinking setting each, for each model (Phase 23.4.4): **Main thinking** and **Coder thinking** in the dashboard (Settings > Server). The coder also has its own temperature (0.6, OpenCode).
-
-- **Default: same as main** (`main` in `config.json`; the user, 2026-10-09: "default should be the same thinking mode as your main session"). The coder thinks as the main session does with the model that it runs on. CARL sends no thinking value of its own for the coder.
-- **On:** a model with effort levels (the 27B builds) thinks at `medium` (the best of 9 coder runs on the 35B, 2026-10-02); the other models are on. The user (2026-10-09): coders do better with thinking on, because they solve problems.
-- **Off:** use it only with a full spec (spec-kit or a similar tool). A coder without thinking does well only when every requirement is written down. The dashboard shows this note when the coder thinks off: Coder thinking off, or same as main with Main thinking off.
-- **The model that the coder runs on decides.** Both clients apply the value of that model, request by request. In router mode, a coder on another model gets the value of that model. The coder runs on the main session's model (Coder model `same as main`): OpenCode's task tool gives a subagent with no model of its own the model (and the variant) of the main agent's message; Pi's `subagent` tool passes the session's model (`ctx.model`). Checked with OpenCode 1.18.35 and Pi 1.1.0 against agent-bench's fake server: a session on another model than the config's default gave the coder that model, and that model's Coder thinking ([details](client-configs.md#carls-coder-thinking-on-one-computer)).
-- **One computer can have its own value:** `/carl` > Coder subagent > Coder thinking, for the model of the session that `/carl` is opened in. `dashboard default` removes that computer's value ([the panel](plugins.md#carl-panel-the-carl-panel-opencode-and-pi)).
-- **Each coder session uses it:** in a chain, the test session and the code session both use Coder thinking.
-- **OpenCode:** the coder agent has no `reasoningEffort`. `carl-delegation` has the option `coderThinking`: `{"PROVIDER/MODEL": EFFORT}` (`none` for off, `high` for on, or the level), only for the models whose Coder thinking is not `main`. Its `chat.params` hook sets `output.options.reasoningEffort` on each request of the coder agent (`coder` or `carl-coder`) whose model has an entry. OpenCode sends it as `reasoning_effort`. The test session (the task tool) and the code session (started by `carl-delegation`) are both coder sessions. Other agents and models with no entry: the request stays as it is (the model's own `reasoningEffort`, Main thinking).
-- **Pi:** the `subagent` tool reads `"thinking": {"coder": {"PROVIDER/MODEL": LEVEL}}` in `~/.pi/agent/carl.json` and starts each coder session with `--thinking LEVEL` for the model of the coder. A model without an entry (`main`, or not one of CARL's): the coder uses the level of the session, as before. Other agents always use the level of the session.
-- The clients get a change at their next update (the Connect tab, `u`; other computers: `P`).
-
-## The test session's report (mode test)
+## The test session's report (work_mode tests-only)
 ...
-## The code session's report (mode code)
+## The code session's report (work_mode code)
 ...
 ```
 
@@ -159,7 +156,7 @@ Refused: any of ``; & | < > ` $ ( ) \ * ? [ ] { } ~ ! #`` or a line break (no pi
 
 What an exit means: 0 passes. pytest: 1 fails, and so does 2 with a collection error (the tests cannot import the code yet); another code (5: no test collected; 2 to 4: an error) counts as not run. ruff: 1 fails, 2 (its own error) counts as not run. The other runners: any other code fails (a build error before the code exists is a red start too). A missing runner (`No module named pytest`, `Missing script: test`, a program that is not there) counts as not run. A check that is not run: the report decides.
 
-**`tests = "existing"`.** One session. CARL hashes the test files that the checks name (a test file in a `run`, or the test files under a folder that a `run` names; none found: all the project's test files) before and after it. The result ends with `[CARL] Tests unchanged: ...` or `[CARL] Warning: the coder changed these test files: ...`.
+**`work_type = "follow_up"` or `"bug_fix"`** (with `work_mode = "code"`). One session, no test session. The `existing_tests` are frozen for the coder: CARL hashes them (a file as it is, a folder as the test files under it) before and after the session, and its gates refuse every test-file write. The result ends with `[CARL] Tests unchanged: ...` or `[CARL] Warning: the coder changed these test files: ...`. With no `existing_tests`, nothing is hashed.
 
 **Pi.** CARL's `subagent` tool runs the chain: two `pi` processes, one after the other, each with a new context. It works for a single task, a background task (one job, one message) and a chain step. A `tasks` call (parallel) with more than one task refuses a brief that starts the chain, with one sentence: the two sessions of each task would see the test files of the other tasks. One task alone runs it. The result's usage is the sum of the two sessions. `"delegation": {"chain": false}` in `~/.pi/agent/carl.json` turns the chain off.
 
@@ -200,11 +197,25 @@ Checked against the real OpenCode 1.18.35 with agent-bench's fake server (2026-1
 
 **Risks.** CARL runs a check's command itself (once, before the code session), outside the client's permission prompts, but only a plain test runner or ruff on the project's files (above): the project's tests run the project's code, as the coder's runs do. The OpenCode background hold depends on OpenCode 1.18's behaviour (the form of the `<task …>` message; a plugin error in `chat.message` stops the message without other effects): hence the version list. When OpenCode stops while a held chain runs, its result comes at the next start of OpenCode in that project.
 
+## The coder's thinking
+
+The main session and the coder have a thinking setting each, for each model (Phase 23.4.4): **Main thinking** and **Coder thinking** in the dashboard (Settings > Server). The coder also has its own temperature (0.6, OpenCode).
+
+- **Default: same as main** (`main` in `config.json`; the user, 2026-10-09: "default should be the same thinking mode as your main session"). The coder thinks as the main session does with the model that it runs on. CARL sends no thinking value of its own for the coder.
+- **On:** a model with effort levels (the 27B builds) thinks at `medium` (the best of 9 coder runs on the 35B, 2026-10-02); the other models are on. The user (2026-10-09): coders do better with thinking on, because they solve problems.
+- **Off:** use it only with a full spec (spec-kit or a similar tool). A coder without thinking does well only when every requirement is written down. The dashboard shows this note when the coder thinks off: Coder thinking off, or same as main with Main thinking off.
+- **The model that the coder runs on decides.** Both clients apply the value of that model, request by request. In router mode, a coder on another model gets the value of that model. The coder runs on the main session's model (Coder model `same as main`): OpenCode's task tool gives a subagent with no model of its own the model (and the variant) of the main agent's message; Pi's `subagent` tool passes the session's model (`ctx.model`). Checked with OpenCode 1.18.35 and Pi 1.1.0 against agent-bench's fake server: a session on another model than the config's default gave the coder that model, and that model's Coder thinking ([details](client-configs.md#carls-coder-thinking-on-one-computer)).
+- **One computer can have its own value:** `/carl` > Coder subagent > Coder thinking, for the model of the session that `/carl` is opened in. `dashboard default` removes that computer's value ([the panel](plugins.md#carl-panel-the-carl-panel-opencode-and-pi)).
+- **Each coder session uses it:** in a chain, the test session and the code session both use Coder thinking.
+- **OpenCode:** the coder agent has no `reasoningEffort`. `carl-delegation` has the option `coderThinking`: `{"PROVIDER/MODEL": EFFORT}` (`none` for off, `high` for on, or the level), only for the models whose Coder thinking is not `main`. Its `chat.params` hook sets `output.options.reasoningEffort` on each request of the coder agent (`coder` or `carl-coder`) whose model has an entry. OpenCode sends it as `reasoning_effort`. The test session (the task tool) and the code session (started by `carl-delegation`) are both coder sessions. Other agents and models with no entry: the request stays as it is (the model's own `reasoningEffort`, Main thinking).
+- **Pi:** the `subagent` tool reads `"thinking": {"coder": {"PROVIDER/MODEL": LEVEL}}` in `~/.pi/agent/carl.json` and starts each coder session with `--thinking LEVEL` for the model of the coder. A model without an entry (`main`, or not one of CARL's): the coder uses the level of the session, as before. Other agents always use the level of the session.
+- The clients get a change at their next update (the Connect tab, `u`; other computers: `P`).
+
 ## /code
 
 `/code TASK` gives the task straight to the coder. The main agent does not decide.
 
-- Both clients: the template tells the main agent to give the task to the coder now, as a TOML brief with `mode = "code"`. Before Phase 23.4.3, OpenCode ran the task on the coder directly (`agent: coder`, `subtask: true`). That text was no brief, so the brief check would refuse it.
+- Both clients: the template tells the main agent to give the task to the coder now, as a TOML brief with `work_mode = "code"`. Before Phase 23.4.3, OpenCode ran the task on the coder directly (`agent: coder`, `subtask: true`). That text was no brief, so the brief check would refuse it.
 - A `code.md` of your own stays: the setup changes only a file with `CARL:` in its description.
 
 ## The new-file gate (advanced)

@@ -161,7 +161,7 @@ def git_show(spec: str) -> str:
 
 class BriefVariantsTest(unittest.TestCase):
     """Phase 23.4.3's measurement of the brief's format: brief_kv (1.12.1's texts, the check, gates and chain off),
-    brief_json (the same structure as JSON), and the baseline (CARL's TOML) again after either."""
+    brief_json (revision 1's structure as JSON; obsolete), and the baseline (CARL's TOML) again after either."""
 
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
@@ -202,27 +202,19 @@ class BriefVariantsTest(unittest.TestCase):
             self.assertIn(line, src)
 
     @unittest.skipUnless(shutil.which("node"), "node is not installed")
-    def test_json_texts_hold_a_valid_brief_and_report(self) -> None:
+    def test_brief_json_is_obsolete(self) -> None:
+        """brief_json is obsolete (the user dropped JSON, 2026-10-09), kept as a record: its texts keep revision 1's
+        keys, which CARL's check refuses with the names of revision 4's keys; CARL's own template is revision 4."""
         from agentbench import briefs
+        self.assertTrue(variant.load("brief_json").description.startswith("OBSOLETE"))
         rule = varlib.text("brief_json_delegation.md")
         example = rule[rule.index("```json"):]
         toml_rule = read(os.path.join(varlib.REPO, "client", "agents", "delegation.md"))
-        out = briefs.check_texts([example, toml_rule[toml_rule.index("```toml"):]])
-        self.assertEqual([(o["format"], o["valid"]) for o in out], [("json", True), ("toml", True)])
-        script = ("import * as B from %s; const [a, b] = JSON.parse(process.argv[1]);"
-                  "process.stdout.write(JSON.stringify([B.parseBrief(a).brief, B.parseBrief(b).brief, "
-                  "B.parseReport(process.argv[2]), B.parseReport(process.argv[3])]));"
-                  % json.dumps(os.path.join(varlib.REPO, "client", "shared", "carl-brief.js")))
-        coder = varlib.text("brief_json_coder.md")
-        toml_coder = read(os.path.join(varlib.REPO, "client", "agents", "coder.md"))
-        p = subprocess.run(["node", "--input-type=module", "-e", script, "--",
-                            json.dumps([example, toml_rule[toml_rule.index("```toml"):]]),
-                            coder[coder.index("```json"):], toml_coder[toml_coder.index("```toml"):]],
-                           capture_output=True, text=True, timeout=60)
-        self.assertEqual(p.returncode, 0, p.stderr)
-        json_brief, toml_brief, json_report, toml_report = json.loads(p.stdout)
-        self.assertEqual(json_brief, toml_brief)                           # the example converted faithfully
-        self.assertEqual(json_report, toml_report)                         # the report's example too
+        template = toml_rule[toml_rule.index("```toml"):]
+        template = template[:template.index("```", 7) + 3]                 # as written: the bug-fix tables commented out
+        out = briefs.check_texts([example, template])
+        self.assertEqual([(o["format"], o["valid"]) for o in out], [("json", False), ("toml", True)])
+        self.assertIn('The brief has the key "mode", which is not in the schema: use "work_mode".', out[0]["problems"])
 
     def test_brief_kv(self) -> None:
         v = variant.load("brief_kv")

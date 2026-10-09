@@ -4,19 +4,25 @@
 // itself) and OpenCode's carl-delegation (the task tool runs the test session; the plugin starts the code session);
 // each carries a copy next to carl-brief.js, installed by client/configure.py.
 //
-// A coder task with mode = "code", tests = "new", no [error] / [[tried]] and not a continued task (testSessionDue):
-//   1. the test session: a fresh coder session in mode test (testSessionBrief). It writes the tests and reports.
+// Revision 4 of the brief (docs/phase-plans/phase23.4.3/brief-v4-draft.md, "What CARL does").
+// A coder task with work_mode = "code", work_type = "new_feature", no [failed_attempt] / [[tried_fix]] and not a
+// continued task (testSessionDue; Phase 23.4.6's Tests setting will plug in at testsSetting in carl-brief.js):
+//   1. the test session: a fresh coder session in work_mode tests-only (testSessionBrief: without design_notes and
+//      known_file, so the tests come from the behaviour, not the implementation). It writes the tests and reports.
 //   2. the red start: at least one new test fails before any code. The test session's report decides, unless CARL
 //      ran a check's `run` itself: only a plain test runner or ruff on the project's files (allowedCheck), once,
 //      with no shell, a time limit, in the project folder. Any other command is not run (one line in the result
 //      says so). No red start: the code session still runs, and the result warns.
 //   3. the freeze: the hashes of the project's test files after the test session.
-//   4. the code session: a fresh coder session with the original brief (mode code) and CARL's [test_session] table
-//      (the test files, the test session's report in short). Its gates refuse every test-file write.
+//   4. the code session: a fresh coder session with the original brief (work_mode code) and CARL's [test_session] table
+//      (test_files, and the test session's report in short: session_summary, session_notes and
+//      [[test_session.failing_test]]). Its gates refuse every test-file write.
 //   5. one result for the main agent (chainText): the red start or the warning, "tests unchanged" or the changed
 //      test files, the test session's report, the code session's report.
-// tests = "existing" (Watch): one session; the test files that the checks name are hashed before and after it.
-// Else: one session, as before. I/O: the project's test files (read and hashed) and the check commands (run).
+// work_mode code with work_type follow_up or bug_fix and existing_tests (Watch): no test session; one session, and
+// the existing_tests are frozen for the coder: hashed before and after it (its gates refuse test-file writes too).
+// work_mode tests-only: one session. Else: one session, as before. I/O: the project's test files (read and hashed)
+// and the check commands (run).
 
 import { spawn } from "node:child_process";
 import { readdirSync, statSync } from "node:fs";
@@ -47,8 +53,8 @@ const SKIP_DIRS = new Set([".git", ".hg", ".svn", "node_modules", ".venv", "venv
 
 /**
  * What CARL does with a coder task: "chain" (a test session, then a code session), "watch" (one session; the
- * test files that its checks name are hashed before and after), or "one" (one session, as before). A text that is
- * no complete brief is "one" (the brief check deals with it).
+ * brief's existing_tests are hashed before and after: work_mode code, work_type follow_up or bug_fix), or "one" (one
+ * session, as before). A text that is no complete brief is "one" (the brief check deals with it).
  * @param {string} taskText @param {boolean} [continued] the task continues an earlier one (OpenCode's task_id)
  * @returns {Plan}
  */
@@ -57,7 +63,8 @@ export function coderPlan(taskText, continued = false) {
   const format = f === "json" ? "json" : "toml";
   if (!brief || checkBrief(brief).length) return { kind: "one", brief: null, format };
   if (testSessionDue(brief, continued)) return { kind: "chain", brief, format };
-  if (!continued && brief.mode === "code" && brief.tests === "existing") return { kind: "watch", brief, format };
+  if (!continued && brief.workMode === "code" && (brief.workType === "follow_up" || brief.workType === "bug_fix") &&
+      brief.existingTests.length) return { kind: "watch", brief, format };
   return { kind: "one", brief, format };
 }
 
@@ -102,30 +109,26 @@ export function projectTestFiles(root, under = root) {
 }
 
 /**
- * The test files that a brief's checks name (tests = "existing"): a test file in a check's run, or the test files
- * under a folder that a run names (tests/, a path in tests/). None found: all the project's test files.
+ * The files of a brief's existing_tests in the project, to freeze: a file as it is, a folder as the test files
+ * under it. A path that is not there, or not in the project, gives none.
  * @param {Brief} b @param {string} root @returns {string[]}
  */
-export function namedTestFiles(b, root) {
+export function existingTestFiles(b, root) {
   const out = new Set();
-  for (const c of b.checks) {
-    if (!namesTests(c.run)) continue;
-    for (const w of c.run.split(/[\s"'=]+/)) {
-      const p = w.replace(/::.*$/, "").replace(/^\.\//, "").replace(/\/+$/, "");
-      if (!p || p.startsWith("-")) continue;
-      let st;
-      try {
-        st = statSync(resolve(root, p));
-      } catch {
-        continue;
-      }
-      const r = rel(root, p);
-      if (!r || r.startsWith("..")) continue;
-      if (st.isFile() && isTestFile(r)) out.add(r);
-      else if (st.isDirectory()) for (const f of projectTestFiles(root, r)) out.add(f);
+  for (const w of b.existingTests) {
+    const p = w.replace(/\/+$/, "");
+    let st;
+    try {
+      st = statSync(resolve(root, p));
+    } catch {
+      continue;
     }
+    const r = rel(root, p);
+    if (!r || r === ".." || r.startsWith("../") || isAbsolute(r)) continue;
+    if (st.isFile()) out.add(r);
+    else if (st.isDirectory()) for (const f of projectTestFiles(root, r)) out.add(f);
   }
-  return out.size ? [...out].sort() : projectTestFiles(root);
+  return [...out].sort();
 }
 
 // ------------------------------------------------------------------ the check commands
@@ -421,7 +424,7 @@ export class Chain {
     this.testOk = true;
   }
 
-  /** The test session's task (a brief in mode test). Notes the project's test files first. */
+  /** The test session's task (a brief in work_mode tests-only). Notes the project's test files first. */
   testTask() {
     this.before = hashFiles(projectTestFiles(this.cwd), this.cwd);
     return this.write(testSessionBrief(this.brief));
@@ -468,7 +471,7 @@ export class Chain {
       ...this.brief,
       testSession: {
         files: this.written,
-        summary: plain(report ? report.summary : cut(test.output, 1_500)),
+        summary: plain(report ? report.outcomeSummary : cut(test.output, 1_500)),
         failing: (report?.findings ?? []).map((f) => ({ test: plain(f.test), requirement: plain(f.requirement), why: plain(f.why) })),
         notes: (report?.openIssues ?? []).map(plain),
       },
@@ -486,7 +489,7 @@ export class Chain {
    */
   result(code) {
     const changed = this.changed();
-    const lines = [`${CHAIN_MARK}: the coder ran in two new sessions: first the tests (mode test), then the code (mode code).`];
+    const lines = [`${CHAIN_MARK}: the coder ran in two new sessions: first the tests (work_mode tests-only), then the code (work_mode code).`];
     if (!this.red.red) {
       lines.push(`${WARN_MARK}: no new test failed before the code (no red start): ${this.red.why} The tests may not test the new behaviour: read them before you trust a pass.`);
     } else lines.push(`Red start: ${this.red.why}`);
@@ -499,8 +502,8 @@ export class Chain {
     if (!code.ok) lines.push("The code session failed: its error is below.");
     lines.push("Run the checks yourself before you answer the user.");
     return [lines.join("\n"),
-            `## The test session's report (mode test)\n\n${cut(this.testOutput.trim() || "(no output)", REPORT_CAP)}`,
-            `## The code session's report (mode code)\n\n${cut(code.output.trim() || "(no output)", REPORT_CAP)}`].join("\n\n");
+            `## The test session's report (work_mode tests-only)\n\n${cut(this.testOutput.trim() || "(no output)", REPORT_CAP)}`,
+            `## The code session's report (work_mode code)\n\n${cut(code.output.trim() || "(no output)", REPORT_CAP)}`].join("\n\n");
   }
 
   /**
@@ -514,8 +517,8 @@ export class Chain {
       : stage === "held" ? "the code session did not run" : "the code session did not finish";
     const parts = [`${CHAIN_MARK}: OpenCode stopped before the chain ended: ${where}. The project's files may hold part of the work: look at them and give the task to the coder again if it is not done.`];
     if (stage !== "test" && this.red.why) parts[0] += `\n${this.red.red ? "Red start" : `${WARN_MARK}: no red start`}: ${this.red.why}`;
-    parts.push(`## The test session's report (mode test)\n\n${cut(this.testOutput.trim() || "(no report)", REPORT_CAP)}`);
-    if (stage === "code") parts.push(`## The code session's last answer (mode code, unfinished)\n\n${cut(code.trim() || "(none)", REPORT_CAP)}`);
+    parts.push(`## The test session's report (work_mode tests-only)\n\n${cut(this.testOutput.trim() || "(no report)", REPORT_CAP)}`);
+    if (stage === "code") parts.push(`## The code session's last answer (work_mode code, unfinished)\n\n${cut(code.trim() || "(none)", REPORT_CAP)}`);
     return parts.join("\n\n");
   }
 
@@ -525,8 +528,8 @@ export class Chain {
    */
   unheld(testText) {
     this.testOutput = testText;
-    return `${CHAIN_MARK}: the test session ran in the background, where CARL cannot hold its result on this OpenCode, so the code session did not run. Give the task to the coder again with tests = "existing" and the new tests in its checks.\n\n` +
-      `## The test session's report (mode test)\n\n${cut(testText.trim() || "(no report)", REPORT_CAP)}`;
+    return `${CHAIN_MARK}: the test session ran in the background, where CARL cannot hold its result on this OpenCode, so the code session did not run. Give the task to the coder again with work_type = "follow_up" and the new tests in existing_tests.\n\n` +
+      `## The test session's report (work_mode tests-only)\n\n${cut(testText.trim() || "(no report)", REPORT_CAP)}`;
   }
 
   /** The chain's state as plain data (OpenCode's state file of a held chain); Chain.from reads it back. */
@@ -552,16 +555,17 @@ export class Chain {
   /** The one result when the test session failed: the code session did not run. @returns {string} */
   stopped() {
     return `${CHAIN_MARK}: the test session failed, so the code session did not run. Its error is below.\n\n` +
-      `## The test session (mode test)\n\n${cut(this.testOutput.trim() || "(no output)", REPORT_CAP)}`;
+      `## The test session (work_mode tests-only)\n\n${cut(this.testOutput.trim() || "(no output)", REPORT_CAP)}`;
   }
 }
 
-/** tests = "existing": the named test files, hashed before the session and compared after it. */
+/** work_mode code with work_type follow_up or bug_fix: the brief's existing_tests, hashed before the session and
+ * compared after it. */
 export class Watch {
   /** @param {Brief} brief @param {string} cwd */
   constructor(brief, cwd) {
     this.cwd = cwd;
-    this.paths = namedTestFiles(brief, cwd);
+    this.paths = existingTestFiles(brief, cwd);
     this.before = hashFiles(this.paths, cwd);
   }
 

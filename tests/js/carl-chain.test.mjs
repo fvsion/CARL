@@ -14,49 +14,49 @@ const GREEN = 'import { test } from "node:test";\ntest("R1", () => {});\n';
 const TEST_FILE = "tests/check.test.mjs";
 const RUN = `node --test ${TEST_FILE}`;
 
-const BRIEF = (tests = "new", run = RUN) => `mode = "code"
-tests = "${tests}"
-goal = "Write the feature file."
+const BRIEF = (type = "new_feature", run = RUN, existing = "") => `work_mode = "code"
+work_type = "${type}"
+${existing ? `existing_tests = ${JSON.stringify(existing.split(" "))}\n` : ""}task_summary = "Write the feature file."
+expected_outcome = "src/feature.txt is there."
+current_state = "src/ is empty."
+design_notes = "One file, no code."
+scope_limits = "Leave the README alone."
 
-[scope]
-out = [{ text = "the README" }]
+[[known_file]]
+file_path = "src/feature.txt"
+file_action = "create"
 
-[[file]]
-path = "src/feature.txt"
-action = "create"
+[[task_requirement]]
+requirement_id = "R1"
+requirement_text = "src/feature.txt exists"
 
-[[requirement]]
-id = "R1"
-text = "src/feature.txt exists"
-
-[[check]]
-id = "A1"
-covers = ["R1"]
-run = "${run}"
-expect = "exit 0"
+[[acceptance_check]]
+check_id = "C1"
+covers_requirements = ["R1"]
+run_command = "${run}"
+expected_result = "exit 0"
 `;
 
 const REPORT_TEST = `\`\`\`toml
-status = "done"
-mode = "test"
-summary = "One test for R1; it fails: no feature yet."
+outcome_summary = "One test for R1; it fails: no feature yet."
+task_status = "done"
 
-[[check]]
-id = "A1"
-result = "fail"
-summary = "exit 1"
+[[check_result]]
+check_id = "C1"
+run_result = "fail"
+run_summary = "exit 1"
 
-[[file]]
-path = "tests/check.test.mjs"
-what = "new: the test of R1"
+[[changed_file]]
+file_path = "tests/check.test.mjs"
+change_summary = "new: the test of R1"
 
-[[finding]]
-test = "tests/check.test.mjs"
-requirement = "R1"
-why = "src/feature.txt is not there"
+[[test_finding]]
+test_name = "tests/check.test.mjs"
+requirement_id = "R1"
+failure_reason = "src/feature.txt is not there"
 
 [[open_issue]]
-text = "R1 says nothing about the content: I test that the file exists."
+issue_text = "R1 says nothing about the content: I test that the file exists."
 \`\`\``;
 
 const project = () => {
@@ -73,7 +73,7 @@ function fakeRun(dir, { testBody = RED, tamper = false, failTest = false, failCo
   const run = async (text, step) => {
     calls.push({ step, text });
     const { brief } = B.parseBrief(text);
-    if (brief?.mode === "test") {
+    if (brief?.workMode === "tests-only") {
       if (failTest) return { ok: false, output: "the model stopped: context size" };
       mkdirSync(join(dir, "tests"), { recursive: true });
       writeFileSync(join(dir, TEST_FILE), testBody);
@@ -81,19 +81,25 @@ function fakeRun(dir, { testBody = RED, tamper = false, failTest = false, failCo
     }
     writeFileSync(join(dir, "src", "feature.txt"), "ok\n");
     if (tamper) writeFileSync(join(dir, TEST_FILE), GREEN);
-    return failCode ? { ok: false, output: "the code session crashed" } : { ok: true, output: 'status = "done"\nmode = "code"\nsummary = "Wrote it."' };
+    return failCode ? { ok: false, output: "the code session crashed" } : { ok: true, output: 'task_status = "done"\noutcome_summary = "Wrote it."' };
   };
   return { run, calls };
 }
 
-test("coderPlan: the chain only for mode code, tests new, no error, not continued; a watch for tests existing", () => {
+test("coderPlan: the chain only for work_mode code, new_feature, not continued; a watch for follow_up and bug_fix with existing_tests", () => {
   assert.equal(C.coderPlan(BRIEF()).kind, "chain");
   assert.equal(C.coderPlan(BRIEF(), true).kind, "one");
-  assert.equal(C.coderPlan(BRIEF("existing")).kind, "watch");
-  assert.equal(C.coderPlan(BRIEF("none")).kind, "one");
-  assert.equal(C.coderPlan(BRIEF() + '\n[error]\nrun = "x"\noutput = "y"\n').kind, "one");
+  assert.equal(C.coderPlan(BRIEF("new_feature", RUN, TEST_FILE)).kind, "chain");  // existing tests too: still the chain
+  assert.equal(C.coderPlan(BRIEF("follow_up", RUN, TEST_FILE)).kind, "watch");
+  assert.equal(C.coderPlan(BRIEF("bug_fix", RUN, TEST_FILE)).kind, "watch");
+  assert.equal(C.coderPlan(BRIEF("bug_fix", RUN, TEST_FILE), true).kind, "one");
+  assert.equal(C.coderPlan(BRIEF("follow_up")).kind, "one");                  // no existing_tests: nothing to freeze
+  assert.equal(C.coderPlan(BRIEF("bug_fix") + '\n[failed_attempt]\nrun_command = "x"\nerror_output = "y"\n').kind, "one");
+  const testsOnly = BRIEF().replace('work_mode = "code"', 'work_mode = "tests-only"').replace(/\[\[known_file\]\][\s\S]*?(?=\[\[task_requirement)/, "");
+  assert.deepEqual(B.checkBrief(B.parseBrief(testsOnly).brief), []);
+  assert.equal(C.coderPlan(testsOnly).kind, "one");                           // tests-only: one session
   assert.equal(C.coderPlan("no brief at all").kind, "one");
-  assert.equal(C.coderPlan('mode = "code"').kind, "one");                     // incomplete: the brief check's case
+  assert.equal(C.coderPlan('work_mode = "code"').kind, "one");                // incomplete: the brief check's case
 });
 
 test("the chain: a red start, the frozen tests unchanged, one result with both reports", async () => {
@@ -109,10 +115,14 @@ test("the chain: a red start, the frozen tests unchanged, one result with both r
   assert.equal(out.ok, true);
   assert.deepEqual(calls.map((c) => c.step), ["test", "code"]);
   const testBrief = B.parseBrief(calls[0].text).brief;
-  assert.equal(testBrief.mode, "test");
+  assert.equal(testBrief.workMode, "tests-only");
   assert.deepEqual(B.checkBrief(testBrief), []);
+  assert.doesNotMatch(calls[0].text, /design_notes|known_file|One file, no code/);   // tests from the behaviour
+  assert.match(calls[0].text, /expected_outcome = "src\/feature\.txt is there\."/);
+  assert.match(calls[0].text, /scope_limits = "Leave the README alone\."/);
   const codeBrief = B.parseBrief(calls[1].text).brief;
-  assert.equal(codeBrief.mode, "code");
+  assert.equal(codeBrief.workMode, "code");
+  assert.equal(codeBrief.designNotes, "One file, no code.");                  // the code session: the whole brief
   assert.deepEqual(B.checkBrief(codeBrief), []);                               // the code session's gates take it
   assert.equal(B.testSessionDue(codeBrief), false);                            // never a chain in a chain
   assert.deepEqual(codeBrief.testSession.files, [TEST_FILE]);
@@ -124,8 +134,9 @@ test("the chain: a red start, the frozen tests unchanged, one result with both r
   assert.match(out.text, /Red start: CARL ran `node --test tests\/check\.test\.mjs` before the code: it failed \(exit 1\)\./);
   assert.match(out.text, /Tests unchanged after the code session \(tests\/check\.test\.mjs\)\./);
   assert.match(out.text, /Run the checks yourself before you answer the user\./);
-  assert.match(out.text, /## The test session's report \(mode test\)\n\n```toml\nstatus = "done"\nmode = "test"/);
-  assert.match(out.text, /## The code session's report \(mode code\)\n\nstatus = "done"\nmode = "code"/);
+  assert.match(out.text, /^\[CARL\] Chain: the coder ran in two new sessions: first the tests \(work_mode tests-only\), then the code \(work_mode code\)\./);
+  assert.match(out.text, /## The test session's report \(work_mode tests-only\)\n\n```toml\noutcome_summary = "One test/);
+  assert.match(out.text, /## The code session's report \(work_mode code\)\n\ntask_status = "done"/);
   assert.doesNotMatch(out.text, /Warning/);
 });
 
@@ -164,7 +175,7 @@ test("a check that is not a plain test runner or ruff: CARL does not run it, the
   const dir = project();
   const { run } = fakeRun(dir);
   const ran = [];
-  const out = await C.runCoderTask(BRIEF("new", "sh tests/check.test.mjs"), dir, run, { runCheck: async (cmd) => (ran.push(cmd), { code: 1, timedOut: false, output: "" }) });
+  const out = await C.runCoderTask(BRIEF("new_feature", "sh tests/check.test.mjs"), dir, run, { runCheck: async (cmd) => (ran.push(cmd), { code: 1, timedOut: false, output: "" }) });
   assert.deepEqual(ran, []);                                                   // never started
   assert.match(out.text, /\nRed start: the test session's report has failing tests\.\nCARL did not run `sh tests\/check\.test\.mjs` itself \(it runs only a plain test runner or ruff on the project's files\)\.\n/);
 });
@@ -264,7 +275,7 @@ test("the chain stops when the test session fails; a failed code session still g
 });
 
 test("not due: one session as before; with chain: false too", async () => {
-  for (const [text, o] of [[BRIEF("none"), {}], [BRIEF(), { chain: false }], ["Task: fix the typo", {}]]) {
+  for (const [text, o] of [[BRIEF("follow_up"), {}], [BRIEF(), { chain: false }], ["Task: fix the typo", {}]]) {
     const dir = project();
     const { run, calls } = fakeRun(dir);
     const out = await C.runCoderTask(text, dir, run, o);
@@ -275,30 +286,32 @@ test("not due: one session as before; with chain: false too", async () => {
   }
 });
 
-test("tests = existing: the named test files are hashed before and after; a change is in the result", async () => {
+test("follow_up and bug_fix: no test session; the existing_tests are hashed before and after; a change is in the result", async () => {
   const dir = project();
   mkdirSync(join(dir, "tests"));
   writeFileSync(join(dir, TEST_FILE), RED);
   writeFileSync(join(dir, "tests", "other_test.py"), "");
-  const same = await C.runCoderTask(BRIEF("existing"), dir, fakeRun(dir).run);
+  const run = fakeRun(dir);
+  const same = await C.runCoderTask(BRIEF("follow_up", RUN, TEST_FILE), dir, run.run);
   assert.equal(same.kind, "watch");
+  assert.deepEqual(run.calls.map((c) => c.step), ["one"]);
   assert.match(same.text, /\[CARL\] Tests unchanged: tests\/check\.test\.mjs\.$/);
-  const changed = await C.runCoderTask(BRIEF("existing"), dir, fakeRun(dir, { tamper: true }).run);
+  const changed = await C.runCoderTask(BRIEF("bug_fix", RUN, TEST_FILE), dir, fakeRun(dir, { tamper: true }).run);
   assert.match(changed.text, /\[CARL\] Warning: the coder changed these test files: tests\/check\.test\.mjs\./);
   assert.equal(readFileSync(join(dir, TEST_FILE), "utf8"), GREEN);
 });
 
-test("the test files: tool folders are not walked; a check's folder gives the files under it", () => {
+test("the test files: tool folders are not walked; an existing_tests folder gives the test files under it", () => {
   const dir = project();
   mkdirSync(join(dir, "tests", "unit"), { recursive: true });
   writeFileSync(join(dir, "tests", "unit", "a.py"), "");
   writeFileSync(join(dir, "src", "b_test.py"), "");
   writeFileSync(join(dir, "src", "main.py"), "");
   assert.deepEqual(C.projectTestFiles(dir), ["src/b_test.py", "tests/unit/a.py"]);
-  const b = B.parseBrief(BRIEF("existing", "python -m pytest tests/unit -q")).brief;
-  assert.deepEqual(C.namedTestFiles(b, dir), ["tests/unit/a.py"]);
-  const none = B.parseBrief(BRIEF("existing", "pytest tests/gone.py")).brief;
-  assert.deepEqual(C.namedTestFiles(none, dir), ["src/b_test.py", "tests/unit/a.py"]);   // none found: all of them
+  const b = B.parseBrief(BRIEF("bug_fix", RUN, "tests/unit/ src/b_test.py")).brief;
+  assert.deepEqual(C.existingTestFiles(b, dir), ["src/b_test.py", "tests/unit/a.py"]);
+  const none = B.parseBrief(BRIEF("bug_fix", RUN, "tests/gone.py ../elsewhere.py")).brief;
+  assert.deepEqual(C.existingTestFiles(none, dir), []);                         // not there: nothing to freeze
 });
 
 test("[test_session] reads back the same; ``` in a report never reaches the brief (it would end a fence)", () => {
@@ -306,6 +319,18 @@ test("[test_session] reads back the same; ``` in a report never reaches the brie
   const withTs = { ...b, testSession: { files: ["tests/a.py"], summary: "Two tests.\nBoth fail.", notes: ['say "x"'],
                                         failing: [{ test: "tests/a.py::t", requirement: "R1", why: "no module" }] } };
   assert.deepEqual(B.parseBrief(B.writeBrief(withTs)).brief, withTs);
+  assert.deepEqual(B.checkBrief(withTs), []);
+  // two- or three-word keys, as the rest of the brief (user, 2026-10-09: "give test_session two-word keys too")
+  assert.ok(B.writeBrief(withTs).endsWith('[test_session]\ntest_files = ["tests/a.py"]\nsession_summary = """\nTwo tests.\nBoth fail."""\n' +
+    'session_notes = ["say \\"x\\""]\n\n[[test_session.failing_test]]\ntest_name = "tests/a.py::t"\nrequirement_id = "R1"\n' +
+    'failure_reason = "no module"\n'), B.writeBrief(withTs));
+  const json = JSON.parse(B.writeBriefJson(withTs)).test_session;
+  assert.deepEqual(json, { test_files: ["tests/a.py"], session_summary: "Two tests.\nBoth fail.", session_notes: ['say "x"'],
+                           failing_test: [{ test_name: "tests/a.py::t", requirement_id: "R1", failure_reason: "no module" }] });
+  assert.deepEqual(B.parseBrief(B.writeBriefJson(withTs)).brief, withTs);
+  // the keys before the rename are not CARL's any more
+  assert.deepEqual(B.checkBrief(B.parseBrief(B.writeBrief(b) + '\n[test_session]\nfiles = ["tests/a.py"]\n').brief), [
+    'The brief has the key "test_session.files", which is not in the schema: remove it, or put its content in a key of the schema.']);
   const fenced = "```toml\n" + B.writeBrief(withTs) + "```\nThe brief.";
   assert.deepEqual(B.parseBrief(fenced).brief, withTs);
 });
@@ -326,7 +351,7 @@ test("the chain with a JSON brief: the sessions' briefs are JSON too, with the s
     assert.doesNotThrow(() => JSON.parse(c.text));
   }
   const codeBrief = B.parseBrief(calls[1].text).brief;
-  assert.equal(codeBrief.mode, "code");
+  assert.equal(codeBrief.workMode, "code");
   assert.deepEqual(codeBrief.testSession.files, [TEST_FILE]);
   assert.deepEqual(B.checkBrief(codeBrief, "json"), []);
 });

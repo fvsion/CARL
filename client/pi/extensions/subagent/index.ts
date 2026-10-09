@@ -16,10 +16,10 @@
 // - a message renderer shows that result as "Coder finished (42 s)" and its
 //   text, collapsed (result.js); the model still reads the <subagent> text;
 // - the coder's task is a TOML brief (Phase 23.4.3): the guidelines say so;
-// - the chain (Phase 23.4.3): a coder brief with mode code and tests = "new" runs as two fresh coder processes,
-//   the test session and then the code session, with one result (runAgentTask, carl-chain.js); single, background
-//   and chain steps alike. Parallel tasks with more than one task refuse such a brief (the two sessions of each
-//   item would see the other items' test files).
+// - the chain (Phase 23.4.3): a coder brief with work_mode code and work_type new_feature runs as two fresh coder
+//   processes, the test session and then the code session, with one result (runAgentTask, carl-chain.js); single,
+//   background and chain steps alike. Parallel tasks with more than one task refuse such a brief (the two sessions
+//   of each item would see the other items' test files).
 // - the coder's thinking (Phase 23.4.4): CARL's coder starts with the thinking level that carl.json "thinking" names
 //   for the model it runs on (the dashboard's Coder thinking). A model without an entry (Coder thinking "same as
 //   main", the default): the session's own level, as before.
@@ -525,10 +525,10 @@ function textMessage(text: string, like: SingleResult): Message {
 }
 
 /**
- * CARL: one task of an agent, as runSingleAgent. For CARL's coder, the brief decides (carl-chain.js): with mode code
- * and tests = "new", two fresh coder processes one after the other (the test session, then the code session) and one
- * result; with tests = "existing", one process and the named tests hashed before and after; else one process as
- * before. The result's usage is the sum of the sessions; its final message is the one result.
+ * CARL: one task of an agent, as runSingleAgent. For CARL's coder, the brief decides (carl-chain.js): with work_mode
+ * code and work_type new_feature, two fresh coder processes one after the other (the test session, then the code
+ * session) and one result; with work_type follow_up or bug_fix, one process and the brief's existing_tests hashed
+ * before and after; else one process as before. The result's usage is the sum of the sessions; its final message is the one result.
  */
 async function runAgentTask(
 	defaultCwd: string,
@@ -647,7 +647,7 @@ function delegationPrompt(agents: AgentConfig[], background: boolean): { promptS
 		promptGuidelines: coder
 			? [
 					`Large request (3+ files, ~150+ lines, a new module/package/tool/CLI, implementation plus tests, a multi-step feature or refactor): do not write or change any file yourself. Read only what the brief needs (the files to change, the test command, the project's rules), then call the subagent tool with agent "${coder}" and a TOML brief as its task (the format is in your instructions).`,
-					`Stuck: if a fix for the same code has already failed twice (your attempts, or ones the user says failed), delegate to agent "${coder}" with a brief that has the exact error ([error]) and what was tried ([[tried]]), instead of a third attempt.`,
+					`Stuck: if a fix for the same code has already failed twice (your attempts, or ones the user says failed), delegate to agent "${coder}" with a brief that has the exact error ([failed_attempt]) and what was tried ([[tried_fix]]), instead of a third attempt.`,
 					"Questions, explanations, reading or searching code, and small or single-file edits: do them yourself, no subagent.",
 					...(background ? [backgroundGuideline(coder)] : []),
 				]
@@ -679,7 +679,7 @@ interface BackgroundJob {
 const CODERS = new Set(["coder", "carl-coder"]); // CARL's coder ("carl-coder" next to a user's own "coder")
 
 const PARALLEL_CHAIN =
-	'A coder brief with mode = "code" and tests = "new" runs as two sessions, one after the other (the tests, then the code), so it cannot run next to other parallel tasks: send it alone (agent and task), and the other tasks in a separate call.';
+	'A coder brief with work_mode = "code" and work_type = "new_feature" runs as two sessions, one after the other (the tests, then the code), so it cannot run next to other parallel tasks: send it alone (agent and task), and the other tasks in a separate call.';
 
 const CHAIN_STARTED =
 	"CARL runs the coder in two sessions, one after the other: first the tests, then the code. You get one result for both.";

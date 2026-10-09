@@ -39,25 +39,28 @@ function fakePi() {
   };
 }
 
-const BRIEF = `mode = "code"
-tests = "none"
-goal = "Write the header row of the CSV export."
+const BRIEF = `work_mode = "code"
+work_type = "follow_up"
+task_summary = "Write the header row of the CSV export."
+expected_outcome = "The CSV starts with the header month,orders,total."
+current_state = "report/csv_export.py writes the rows, with no header."
 
-[scope]
-out = [{ text = "the text table" }]
+[[known_file]]
+file_path = "report/csv_export.py"
+file_action = "change"
 
-[[file]]
-path = "report/csv_export.py"
-action = "change"
+[[known_file]]
+file_path = "report/model.py"
+file_action = "read"
 
-[[requirement]]
-id = "R1"
-text = "the first row is month,orders,total"
+[[task_requirement]]
+requirement_id = "R1"
+requirement_text = "the first row is month,orders,total"
 
-[[check]]
-id = "A1"
-covers = ["R1"]
-run = "python -m report --csv /tmp/r.csv data/orders.csv"
+[[acceptance_check]]
+check_id = "C1"
+covers_requirements = ["R1"]
+run_command = "python -m report --csv /tmp/r.csv data/orders.csv"
 `;
 
 test("Pi, the main session: a coder task with a gap is blocked with what to fix; a complete brief runs", async (t) => {
@@ -70,8 +73,10 @@ test("Pi, the main session: a coder task with a gap is blocked with what to fix;
   const r = await call({ agent: "coder", task: "Mode: code\nGoal: add the header" });
   assert.equal(r.block, true);
   assert.match(r.reason, /^\[CARL\] Brief refused: the coder takes its task only as a TOML brief/);
-  const gap = await call({ chain: [{ agent: "coder", task: BRIEF.replace('id = "A1"\n', "") }] });
-  assert.match(gap.reason, /^\[CARL\] Brief refused: the coder did not start\.[\s\S]*Check number 1 has no id/);
+  const gap = await call({ chain: [{ agent: "coder", task: BRIEF.replace('check_id = "C1"\n', "") }] });
+  assert.match(gap.reason, /^\[CARL\] Brief refused: the coder did not start\.[\s\S]*Check number 1 has no check_id/);
+  const tests = BRIEF.replace('work_type = "follow_up"', 'work_type = "follow_up"\nexisting_tests = ["tests/test_gone.py"]');
+  assert.match((await call({ agent: "coder", task: tests })).reason, /existing_tests has "tests\/test_gone\.py", which is not in the project/);
   assert.equal(await call({ agent: "browser", task: "open the page" }), undefined);
   assert.equal(await fire("tool_call", { toolName: "write", input: { path: "notes.md" } }), undefined);
   writeFileSync(join(agentDir, "carl.json"), JSON.stringify({ delegation: { reminder: true, brief: false } }));
@@ -81,7 +86,7 @@ test("Pi, the main session: a coder task with a gap is blocked with what to fix;
   writeFileSync(join(agentDir, "carl.json"), "{}");
 });
 
-test("Pi, the coder's process: its prompt gives the brief; writes outside it or against its mode are blocked", async (t) => {
+test("Pi, the coder's process: its prompt gives the brief; writes against its work_mode or of a read file are blocked", async (t) => {
   if (!ext) return t.skip(`needs type stripping: ${why}`);
   process.env.CARL_AGENT = "coder";
   try {
@@ -92,9 +97,10 @@ test("Pi, the coder's process: its prompt gives the brief; writes outside it or 
     assert.equal(await write("write", { path: "x.py" }), undefined);          // no brief yet: nothing to keep to
     await fire("before_agent_start", { prompt: `Task: ${BRIEF}` });
     assert.equal(await write("edit", { path: "report/csv_export.py" }), undefined);
-    const out = await write("write", { path: "report/new.py" });
+    assert.equal(await write("write", { path: "report/new.py" }), undefined);   // a new module file: the list is a start
+    const out = await write("edit", { path: "report/model.py" });
     assert.equal(out.block, true);
-    assert.match(out.reason, /^\[CARL\] Blocked: report\/new\.py is not in your brief's files to create or change/);
+    assert.match(out.reason, /^\[CARL\] Blocked: report\/model\.py is in your brief to read only/);
     assert.match((await write("bash", { command: "cat > tests/test_x.py <<'EOF'\nx\nEOF" })).reason, /is a test file/);
     assert.equal(await write("bash", { command: "python -m pytest -q" }), undefined);
     assert.equal(await fire("tool_call", { toolName: "subagent", input: { agent: "coder", task: "x" } }), undefined);

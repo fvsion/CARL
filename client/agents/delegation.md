@@ -12,10 +12,14 @@ Delegate to `coder` instead of doing the work yourself when either is true:
 1. **Stuck.** A fix for the same piece of code has already failed twice: two of your own attempts in this conversation, or the user tells you earlier attempts failed. Do not make a third attempt yourself; delegate.
 2. **Large.** The request needs 3 or more files, or roughly 150+ lines of new or changed code. Clear signs: it asks for a new module, package, tool or CLI; it lists several files or components to create; it asks for an implementation plus tests; or it is a multi-step feature or refactor. Decide this **before you write anything**: if the request is large, read only what the brief needs, then delegate it to `coder`. Do not start writing it yourself.
 
-**The coder's two modes.** The brief's `mode` says what the coder may change, so you do not have to split the work yourself:
-- `mode = "code"`: it writes and changes the program code and runs the tests; it never edits tests. Use it for new code, for a fix (give it the error) and for code to existing tests.
-- `mode = "test"`: it writes tests from your requirements and never touches the program code; failing tests come back as findings. Use it when you want only tests.
-- Code plus new tests: one brief with `mode = "code"` and `tests = "new"`. CARL then runs the coder twice, in separate sessions: first in mode test (it writes the tests), then in mode code. You get one result for both: the test session's report, the code session's report, and "Tests unchanged" or the test files that changed. A line that starts with `[CARL] Warning` tells you that no new test failed before the code, or that a test changed: read those tests before you trust a pass.
+**The coder's work_mode.** The brief's `work_mode` says what the coder may change, so you do not have to split the work yourself:
+- `work_mode = "code"`: it writes and changes the program code and runs the tests; it never edits tests. Use it for new code, for a fix (give it the error) and for code to existing tests.
+- `work_mode = "tests-only"`: it writes or changes tests only, from your requirements, and never touches the program code; failing tests come back as findings. Use it when you want only tests.
+
+**What CARL does with the brief.**
+- `work_mode = "code"` and `work_type = "new_feature"`: CARL runs the coder twice, in separate sessions: first in tests-only (it writes the tests), then in code. You get one result for both: the test session's report, the code session's report, and "Tests unchanged" or the test files that changed. A line that starts with `[CARL] Warning` tells you that no new test failed before the code, or that a test changed: read those tests before you trust a pass.
+- `work_mode = "code"` and `work_type = "follow_up"` or `"bug_fix"`: no test session; the `existing_tests` are frozen for the coder.
+- `work_mode = "tests-only"`: one session that writes tests.
 
 Writing or fixing code goes to `coder`, never to a general-purpose or explore subagent: those don't have its working method and standards.
 
@@ -46,88 +50,97 @@ Everything else you do yourself: questions, explanations, reading or searching c
 When you delegate, the task text (OpenCode: `prompt`; Pi: `task`) is a brief in TOML, in this schema. The coder sees nothing else. This example is made up; take each value from the user's request and the project's own files:
 
 ```toml
-mode = "code"
-tests = "new"
+work_mode = "code"                 # code | tests-only
+work_type = "new_feature"          # new_feature | follow_up | bug_fix
+existing_tests = ["tests/test_store.py"]   # optional: test files that already cover this work
 
-goal = "Add a --csv option to the report command. It writes the monthly report as CSV instead of the text table."
-
-[scope]
-in = [
-  { text = "the report command's new --csv option and the CSV writer" },
-]
-out = [
-  { text = "the text table output", why = "the user wants it as it is" },
-  { text = "data/orders.csv", why = "real input: read it, never change it" },
-]
-
-[[file]]
-path = "report/csv_export.py"
-action = "create"
-
-[[file]]
-path = "report/cli.py"
-action = "change"
-
-[[file]]
-path = "tests/test_csv_export.py"
-action = "create"
-
-[[file]]
-path = "report/model.py"
-action = "read"
-
-[[requirement]]
-id = "R1"
-text = "report --csv FILE writes the report to FILE as CSV, one row for each month"
-
-[[requirement]]
-id = "R2"
-text = "the first row is the header month,orders,total"
-
-[[requirement]]
-id = "R3"
-text = "a total has two decimals and a dot, for example 1234.50"
-
-[[check]]
-id = "A1"
-covers = ["R1", "R2", "R3"]
-run = "python -m pytest tests/test_csv_export.py -q"
-expect = "all tests pass"
-
-[[check]]
-id = "A2"
-covers = ["R1"]
-run = "python -m report --csv /tmp/report.csv data/orders.csv && head -3 /tmp/report.csv"
-expect = "the header and the first two months"
-
-[[constraint]]
-text = "Standard library only: use the csv module, not pandas."
-source = "AGENTS.md"
-
-[[example]]
-source = "data/orders.csv"
-text = """
-order_id,date,amount
-1001,2026-01-04,19.90
-1002,2026-01-17,42.00
+task_summary = """
+The request, distilled: what the user wants and why, in a few sentences. Not a copy of the request, and not a list.
+Notes are getting due dates, so the user can see what is late and what comes next.
 """
+
+expected_outcome = """
+What it looks like when the work is done, from the user's side.
+A note can have a due date. `notes list` shows it after the text, `notes list --overdue` shows only the late open
+notes, and `notes due` lists the open notes with a date, soonest first. Notes files from before still load.
+"""
+
+current_state = """
+What exists now that the coder needs to know: the parts it builds on, what works, what is missing.
+notes/model.py has the Note dataclass (id, text, done); notes/store.py loads and saves notes.json; notes/cli.py
+uses argparse with the subcommands add, list and done.
+"""
+
+design_notes = """
+Optional. How the code should be built: where the logic goes, the patterns to follow, what to reuse.
+The date is parsed and checked in the model; the store only reads and writes the field; the CLI only formats.
+"""
+
+exact_interfaces = [               # names, signatures, formats and messages, copied exactly from the request
+  "notes add TEXT --due 2026-11-01",
+  "notes list shows the date after the text as (due 2026-11-01)",
+  "a bad date is rejected with exit code 2",
+]
+
+scope_limits = """
+Optional. Limits in plain words, for example: no API changes; do not touch config.py.
+"""
+
+[[reference_doc]]                  # optional: architecture or reference documentation to read first
+doc_path = "docs/architecture.md"  # a path in the project, or a URL
+doc_purpose = "the ports and adapters layout: where domain logic and I/O go"
+
+[[known_file]]                     # the files you know of; the list does not have to be complete
+file_path = "notes/model.py"
+file_action = "change"             # create | change | read (read: for context, never written)
+
+[[task_requirement]]
+requirement_id = "R1"
+requirement_text = "A note has an optional due date (YYYY-MM-DD)."
+
+[[acceptance_check]]
+check_id = "C1"
+covers_requirements = ["R1"]
+run_command = "python -m pytest tests/test_model.py"
+expected_result = "all tests pass"
+
+[[project_rule]]                   # optional: a project rule that applies
+rule_text = "Functions have type hints."
+rule_source = "AGENTS.md"
+
+[[input_example]]                  # optional: real input, copied, never invented
+example_source = "notes.json"
+example_text = """
+[{"id": 1, "text": "buy milk", "done": false}]
+"""
+
+# For work_type = "bug_fix" only (a fix that already failed):
+# [failed_attempt]                   # only for a bug_fix that already failed
+# run_command = "the command that fails"
+# error_output = """the exact output"""
+
+# [[tried_fix]]                      # only with failed_attempt
+# fix_change = "what was changed"
+# fix_result = "what happened"
 ```
 
 The fields:
-- `mode`: "code" or "test" (above).
-- `tests`: "new", "existing" or "none" (the rule below). Mode code only.
-- `goal`: one or two sentences.
-- `scope.in`: what the task is about, in the user's words. `scope.out`: what the coder must leave alone, with `why` when there is a reason. Give at least one `scope.out` entry.
-- `[[file]]`: one for each file, with its `action`: "create" (a new file), "change" (a file that exists) or "read" (context only, never written). The coder writes only the "create" and "change" files.
-- `[[requirement]]`: one point each, with its own `id` (R1, R2, ...).
-- `[[check]]`: how to check it is done: `covers` (the requirement ids), `run` (the command), `expect` (the result). Put every requirement in the `covers` of a check.
-- `[[constraint]]`: a project rule that applies, copied, with `source` (the file it is from).
-- `[[example]]`: real input, copied from a file (`source` = its path) or from the user's message (`source = "user"`).
-- `[error]` and `[[tried]]`: only for a fix that failed. `[error]`: `run` (the command that fails) and `output` (its exact output). `[[tried]]`: `change` (what was changed) and `result` (what happened).
-
-**The rule for `tests`.** Ask these questions in this order:
-1. Is it a follow-up to the coder's earlier work, a fix, or a stuck task? Then `tests = "existing"` when tests cover it (name them in a check's `run`), else `tests = "none"`.
-2. Is it new behaviour with no tests yet (a new module, CLI or feature)? Then `tests = "new"`.
-3. Else: `tests = "existing"` when the project's tests cover the change, else `tests = "none"`.
+- **work_mode**: `code` when this hand-off writes or changes program code; `tests-only` when it writes or changes
+  tests only.
+- **task_summary**: the request distilled into a few sentences: what and why. Not a copy, and not a list.
+- **expected_outcome**: what the finished work looks like from the user's side.
+- **current_state**: what exists now that the coder builds on.
+- **design_notes** (optional): where the logic goes, the patterns to follow, what to reuse.
+- **reference_doc** (optional): architecture or reference documentation to read before starting, and why.
+- **work_type**: `new_feature` for new behaviour (in a new file or in existing code); `follow_up` for changes to the
+  work the coder just did; `bug_fix` for a fix, a stuck one too.
+- **existing_tests** (optional): the test files that already cover this work.
+- **exact_interfaces**: every name, signature, command line, output format and message the request states, copied
+  exactly.
+- **task_requirement**: one point of the request each. **acceptance_check**: every requirement covered; each check has
+  its command.
+- **known_file**: the files you know of; the list does not have to be complete.
+- **scope_limits**, **project_rule**, **input_example**: optional; copied, never invented.
+- **failed_attempt** and **tried_fix**: only for a bug fix that already failed.
 
 Invent nothing: take every path, command and rule from the user's request and the project's own files. Examples are copied, never invented: copy lines from an actual file or the user's message. CARL checks the brief before the coder starts. A brief with a gap comes back to you with `[CARL] Brief refused` and the points to fix: fix them and send the whole brief again. When the coder's result comes back (one result, also when CARL ran two sessions), run its checks yourself (the tests or the build it names) before you answer the user.

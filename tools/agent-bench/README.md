@@ -220,9 +220,9 @@ def apply(home: str) -> List[str]:
 
 | Variant | The texts | CARL's brief check, gates, chain |
 |---|---|---|
-| `baseline` | CARL's: the TOML brief and the TOML report (`client/agents/`) | on |
+| `baseline` | CARL's: the TOML brief and the TOML report (`client/agents/`; revision 4 of the brief since 2026-10-09, `docs/phase-plans/phase23.4.3/brief-v4-draft.md`) | on |
 | `brief_kv` | 1.12.1's `Mode: / Goal: / Files: ...` task: `variants/texts/brief_kv_delegation.md` and `brief_kv_coder.md` are `git show v1.12.1:client/agents/...` (the `carl:` markers cut as for CARL's rule); 1.12.1's coder lines in Pi's subagent tool guidelines | off: OpenCode `carl-delegation` options `brief: false`, `chain: false`; Pi `carl.json` `delegation.brief` and `delegation.chain` false |
-| `brief_json` | `variants/texts/brief_json_*.md`: CARL's rule and coder with the brief and the report as JSON with the same keys and structure (only the format parts converted; the examples read back to the same brief and report); Pi's guidelines name a JSON brief | on: `carl-brief.js` reads JSON too (a ```json fence, or a JSON object with prose around it), and its sentences name the keys the JSON way; the chain writes the sessions' briefs as JSON; a refusal of a task with no brief names JSON (`carl-delegation` option `briefFormat: "json"`, Pi `delegation.brief_format`) |
+| `brief_json` | **Obsolete** (the user dropped JSON on 2026-10-09; kept as a record): its texts have revision 1's keys, which CARL's check now refuses with the names of revision 4's keys. `variants/texts/brief_json_*.md`: CARL's rule and coder with the brief and the report as JSON with the same keys and structure (only the format parts converted; the examples read back to the same brief and report); Pi's guidelines name a JSON brief | on: `carl-brief.js` reads JSON too (a ```json fence, or a JSON object with prose around it), and its sentences name the keys the JSON way; the chain writes the sessions' briefs as JSON; a refusal of a task with no brief names JSON (`carl-delegation` option `briefFormat: "json"`, Pi `delegation.brief_format`) |
 
 `brief_kv` and `brief_json` need CARL's coder and `carl-delegation` in both clients (`./setup --coder on`); they stop with an error otherwise.
 

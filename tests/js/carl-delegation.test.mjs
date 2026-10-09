@@ -93,37 +93,35 @@ test("the gate comes from the dashboard: config.json on the server Mac, the API 
 
 // ------------------------------------------------------------------ Phase 23.4.3: the brief check and the gates
 
-const BRIEF = `mode = "code"
-tests = "new"
-goal = "Add a --csv option to the report command."
+const BRIEF = `work_mode = "code"
+work_type = "new_feature"
+task_summary = "A --csv option for the report command."
+expected_outcome = "report --csv FILE writes the report as CSV."
 
-[scope]
-out = [{ text = "the text table" }]
+[[known_file]]
+file_path = "report/csv_export.py"
+file_action = "create"
 
-[[file]]
-path = "report/csv_export.py"
-action = "create"
+[[known_file]]
+file_path = "report/cli.py"
+file_action = "change"
 
-[[file]]
-path = "report/cli.py"
-action = "change"
+[[known_file]]
+file_path = "tests/test_csv_export.py"
+file_action = "create"
 
-[[file]]
-path = "tests/test_csv_export.py"
-action = "create"
+[[known_file]]
+file_path = "report/model.py"
+file_action = "read"
 
-[[file]]
-path = "report/model.py"
-action = "read"
+[[task_requirement]]
+requirement_id = "R1"
+requirement_text = "report --csv FILE writes CSV"
 
-[[requirement]]
-id = "R1"
-text = "report --csv FILE writes CSV"
-
-[[check]]
-id = "A1"
-covers = ["R1"]
-run = "python -m pytest tests/test_csv_export.py -q"
+[[acceptance_check]]
+check_id = "C1"
+covers_requirements = ["R1"]
+run_command = "python -m pytest tests/test_csv_export.py -q"
 `;
 const { parseBrief } = await import("../../client/shared/carl-brief.js");
 const brief = (t = BRIEF) => parseBrief(t).brief;
@@ -145,13 +143,29 @@ test("the brief check: a complete brief passes; a gap or no TOML is refused with
   assert.equal(D.briefCheck("task", { subagent_type: "coder", prompt: "Mode: code\nGoal: x", task_id: "t1" }), "");
   assert.match(D.briefCheck("task", { subagent_type: "coder", prompt: "Mode: code\nGoal: x" }),
                /^\[CARL\] Brief refused: the coder takes its task only as a TOML brief/);
-  const gap = BRIEF.replace('covers = ["R1"]', "covers = []");
+  const gap = BRIEF.replace('covers_requirements = ["R1"]', "covers_requirements = []");
   assert.match(D.briefCheck("subagent", { agent: "coder", task: gap }),
-               /^\[CARL\] Brief refused: the coder did not start\.[\s\S]*- Requirement R1 is in no check's covers/);
+               /^\[CARL\] Brief refused: the coder did not start\.[\s\S]*- Requirement R1 is in no check's covers_requirements/);
   assert.match(D.briefCheck("subagent", { tasks: [{ agent: "coder", task: BRIEF }, { agent: "coder", task: gap }] }),
                /^\[CARL\] Brief refused: coder task 2: the coder did not start/);
   assert.equal(D.briefCheck("subagent", { agent: "browser", task: "look at the page" }), "");
   assert.equal(D.briefCheck("write", { filePath: "a.py" }), "");
+  assert.match(D.briefCheck("task", { subagent_type: "coder", prompt: 'mode = "code"\ngoal = "x"' }),
+               /- The brief has the key "mode", which is not in the schema: use "work_mode"\./);
+});
+
+test("the brief check: existing_tests in the project folder, a Pi task's own cwd in it", () => {
+  const withTests = BRIEF.replace('work_type = "new_feature"', 'work_type = "new_feature"\nexisting_tests = ["tests/test_store.py"]');
+  const exists = (p) => p === "/p/tests/test_store.py" || p === "/p/sub/tests/test_store.py";
+  assert.equal(D.briefCheck("task", { subagent_type: "coder", prompt: withTests }, { root: "/p", exists }), "");
+  assert.match(D.briefCheck("task", { subagent_type: "coder", prompt: withTests }, { root: "/q", exists }),
+               /- existing_tests has "tests\/test_store\.py", which is not in the project/);
+  assert.equal(D.briefCheck("task", { subagent_type: "coder", prompt: withTests }), "");      // no folder: not checked
+  assert.equal(D.briefCheck("subagent", { agent: "coder", task: withTests, cwd: "sub" }, { root: "/p", exists }), "");
+  assert.match(D.briefCheck("subagent", { tasks: [{ agent: "coder", task: withTests, cwd: "/elsewhere" }] }, { root: "/p", exists }),
+               /not in the project/);
+  assert.deepEqual(D.coderTaskItems("subagent", { cwd: "a", tasks: [{ agent: "coder", task: "T" }, { agent: "coder", task: "U", cwd: "b" }] }),
+                   [{ text: "T", cwd: "a" }, { text: "U", cwd: "b" }]);
 });
 
 test("the files a call writes: file tools, patches, shell writes (no mkdir); here-documents are data", () => {
@@ -165,35 +179,37 @@ test("the files a call writes: file tools, patches, shell writes (no mkdir); her
   assert.deepEqual(D.writtenFiles("read", { filePath: "a.py" }), []);
 });
 
-test("the coder's gates: mode code writes the brief's files, no test file, nothing else in the project", () => {
+test("the coder's gates: work_mode code writes no test file and no read file; any other file, a new module too", () => {
   const g = new D.CoderGate(brief(), "/p");
   assert.equal(g.before("write", { filePath: "report/csv_export.py" }), "");
   assert.equal(g.before("edit", { filePath: "/p/report/cli.py" }), "");                  // an absolute path
   assert.equal(g.before("bash", { command: "python -m pytest -q > /tmp/out.txt" }), "");   // outside the project
   assert.equal(g.before("read", { filePath: "anything.py" }), "");
+  // the known_file list is a start, not a limit: a module file that the design needs passes (user, 2026-10-09)
+  assert.equal(g.before("bash", { command: "touch report/__init__.py" }), "");
+  assert.equal(g.before("write", { filePath: "report/adapters/csv_port.py" }), "");
   assert.equal(g.before("write", { filePath: "tests/test_csv_export.py" }),
-               "[CARL] Blocked: tests/test_csv_export.py is a test file, and in mode code you do not change tests; " +
-               "if a test looks wrong, write why under open issues in your report.");
+               "[CARL] Blocked: tests/test_csv_export.py is a test file, and in work_mode code you do not change tests; " +
+               "if a test looks wrong, write why as an [[open_issue]] in your report.");
+  assert.match(g.before("write", { filePath: "tests/conftest.py" }), /is a test file/);    // listed or not
   assert.equal(g.before("edit", { filePath: "report/model.py" }),
-               "[CARL] Blocked: report/model.py is in your brief to read only; write the change it needs under open " +
-               "issues in your report.");
-  assert.equal(g.before("bash", { command: "touch report/__init__.py" }),
-               "[CARL] Blocked: report/__init__.py is not in your brief's files to create or change; keep to those " +
-               "files, and write what report/__init__.py needs under open issues in your report.");
-  for (const why of [g.path("tests/conftest.py"), g.path("report/__init__.py")]) {
+               "[CARL] Blocked: report/model.py is in your brief to read only (file_action read); write the change it " +
+               "needs as an [[open_issue]] in your report.");
+  for (const why of [g.path("tests/conftest.py"), g.path("report/model.py")]) {
     assert.equal(why.split(". ").length, 1, why);                                         // one sentence
   }
 });
 
-test("the coder's gates: mode test writes test files only; with none in the brief, any test file", () => {
-  const listed = new D.CoderGate(brief(BRIEF.replace('mode = "code"', 'mode = "test"')), "/p");
-  assert.equal(listed.before("write", { filePath: "tests/test_csv_export.py" }), "");
-  assert.match(listed.before("write", { filePath: "tests/test_other.py" }), /is not in your brief's files/);
-  assert.equal(listed.before("edit", { filePath: "report/cli.py" }),
-               "[CARL] Blocked: report/cli.py is not a test file, and in mode test you write tests only; a test that " +
-               "fails because the code is wrong is a finding in your report.");
-  const free = new D.CoderGate(brief('mode = "test"\ngoal = "g"\n[[requirement]]\nid = "R1"\ntext = "t"\n'), "/p");
-  assert.equal(free.before("write", { filePath: "tests/test_any.py" }), "");
-  assert.equal(free.before("write", { filePath: "src/x.spec.ts" }), "");
-  assert.match(free.before("write", { filePath: "src/x.ts" }), /is not a test file/);
+test("the coder's gates: work_mode tests-only writes test files only (any test file); never a read file", () => {
+  const t = new D.CoderGate(brief(BRIEF.replace('work_mode = "code"', 'work_mode = "tests-only"')), "/p");
+  assert.equal(t.mode, "tests-only");
+  assert.equal(t.before("write", { filePath: "tests/test_csv_export.py" }), "");
+  assert.equal(t.before("write", { filePath: "tests/test_other.py" }), "");               // not listed: passes
+  assert.equal(t.before("write", { filePath: "src/x.spec.ts" }), "");
+  assert.equal(t.before("edit", { filePath: "report/cli.py" }),
+               "[CARL] Blocked: report/cli.py is not a test file, and in work_mode tests-only you write tests only; a " +
+               "test that fails because the code is wrong is a [[test_finding]] in your report.");
+  const readTest = new D.CoderGate(brief(BRIEF.replace('work_mode = "code"', 'work_mode = "tests-only"')
+    .replace('file_path = "tests/test_csv_export.py"\nfile_action = "create"', 'file_path = "tests/test_csv_export.py"\nfile_action = "read"')), "/p");
+  assert.match(readTest.before("write", { filePath: "tests/test_csv_export.py" }), /is in your brief to read only/);
 });

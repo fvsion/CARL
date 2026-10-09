@@ -339,8 +339,8 @@ PI_GUIDELINES: Dict[str, Tuple[str, str]] = {
     "toml": (_LARGE + "do not write or change any file yourself. Read only what the brief needs (the files to change, "
              "the test command, the project's rules), then call the subagent tool with agent \"${coder}\" and a TOML "
              "brief as its task (the format is in your instructions).",
-             _STUCK + "a brief that has the exact error ([error]) and what was tried ([[tried]]), instead of a third "
-             "attempt."),
+             _STUCK + "a brief that has the exact error ([failed_attempt]) and what was tried ([[tried_fix]]), instead "
+             "of a third attempt."),
     "json": (_LARGE + "do not write or change any file yourself. Read only what the brief needs (the files to change, "
              "the test command, the project's rules), then call the subagent tool with agent \"${coder}\" and a JSON "
              "brief as its task (the format is in your instructions).",

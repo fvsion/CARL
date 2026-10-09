@@ -11,12 +11,15 @@
 //     new file of a turn is stopped with GATE_MARK and the reason, so it hands the work to the coder; edits of
 //     existing files pass. Phase 23.4 (1.12.0): the gate is a setting of the dashboard only (config.json
 //     delegation.gate, Connect > Setup); GateSetting reads it, so a change needs no setup run.
-// Phase 23.4.3: the coder's brief is TOML (carl-brief.js, installed next to this file):
+// Phase 23.4.3: the coder's brief is TOML (carl-brief.js, installed next to this file; revision 4):
 //   - the brief check: a call that hands a task to the coder with a brief that fails checkBrief (or no TOML brief
 //     at all) is refused before the coder starts (briefCheck), so the main agent fixes it and sends it again; a
-//     task that continues an earlier one (OpenCode's task_id) is not checked;
-//   - the gates in the coder's own session (CoderGate): it writes only the brief's files to create or change; in
-//     mode code no test file, in mode test only test files.
+//     task that continues an earlier one (OpenCode's task_id) is not checked; the existing_tests paths are checked
+//     in the project folder (the call's cwd, Pi);
+//   - the gates in the coder's own session (CoderGate): in work_mode code no test file, in work_mode tests-only only
+//     test files, and never a known_file with file_action read. Any other file may be written: the known_file list
+//     is a start, not a limit (the user, 2026-10-09: a gate on the listed files would keep the coder from making a
+//     module file, against the ports and adapters directive).
 
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -227,50 +230,64 @@ export function writtenFiles(tool, args) {
 }
 
 /**
- * The coder tasks in a call (their texts): OpenCode's task tool for the coder (not one that continues an earlier
+ * The coder tasks in a call, with the folder each one runs in (cwd: "" for the session's own; Pi's subagent tool
+ * takes a cwd for the call and for each item): OpenCode's task tool for the coder (not one that continues an earlier
  * task: task_id), Pi's subagent tool for the coder (single, or each coder item of tasks and chain; a chain's
  * {previous} stands for the output of the step before).
- * @param {string} tool @param {Record<string, unknown>} args @returns {string[]}
+ * @param {string} tool @param {Record<string, unknown>} args @returns {{ text: string, cwd: string }[]}
  */
-export function coderTasks(tool, args) {
-  if (tool === "task") return CODERS.has(String(args.subagent_type ?? "")) && !args.task_id ? [String(args.prompt ?? "")] : [];
+export function coderTaskItems(tool, args) {
+  if (tool === "task") {
+    return CODERS.has(String(args.subagent_type ?? "")) && !args.task_id ? [{ text: String(args.prompt ?? ""), cwd: "" }] : [];
+  }
   if (tool !== "subagent") return [];
-  const out = CODERS.has(String(args.agent ?? "")) ? [String(args.task ?? "")] : [];
+  const top = typeof args.cwd === "string" ? args.cwd : "";
+  const out = CODERS.has(String(args.agent ?? "")) ? [{ text: String(args.task ?? ""), cwd: top }] : [];
   for (const t of [...(Array.isArray(args.tasks) ? args.tasks : []), ...(Array.isArray(args.chain) ? args.chain : [])]) {
     const item = /** @type {Record<string, unknown>} */ (t ?? {});
-    if (CODERS.has(String(item.agent ?? ""))) out.push(String(item.task ?? "").replace(/\{previous\}/g, "the output of the step before"));
+    if (CODERS.has(String(item.agent ?? ""))) {
+      out.push({ text: String(item.task ?? "").replace(/\{previous\}/g, "the output of the step before"),
+                 cwd: typeof item.cwd === "string" ? item.cwd : top });
+    }
   }
   return out;
 }
 
+/** The coder tasks in a call (their texts): coderTaskItems' texts. @param {string} tool
+ * @param {Record<string, unknown>} args @returns {string[]} */
+export function coderTasks(tool, args) {
+  return coderTaskItems(tool, args).map((t) => t.text);
+}
+
 /**
  * The brief check before a call starts the coder: the refusal (BRIEF_MARK and what to fix), or "" to let it run.
- * o.format: the brief's format in the main agent's instructions (briefRefusal).
- * @param {string} tool @param {Record<string, unknown>} args @param {{ format?: "toml" | "json" }} [o]
+ * o.format: the brief's format in the main agent's instructions (briefRefusal); o.root: the project folder (the
+ * session's), where the existing_tests paths must be (a task's own cwd is taken in it).
+ * @param {string} tool @param {Record<string, unknown>} args
+ * @param {{ format?: "toml" | "json", root?: string, exists?: (p: string) => boolean }} [o]
  */
 export function briefCheck(tool, args, o = {}) {
-  const tasks = coderTasks(tool, args);
-  for (const [n, text] of tasks.entries()) {
-    const why = briefRefusal(text, o);
+  const tasks = coderTaskItems(tool, args);
+  for (const [n, t] of tasks.entries()) {
+    const root = o.root === undefined ? undefined : t.cwd ? resolve(o.root, t.cwd) : o.root;
+    const why = briefRefusal(t.text, { ...o, root });
     if (why) return tasks.length > 1 ? why.replace(": ", `: coder task ${n + 1}: `) : why;
   }
   return "";
 }
 
 /**
- * The gates in the coder's own session, from its brief: it writes only the files whose action is create or change;
- * in mode code no test file, in mode test only test files (isTestFile). In mode test with no test file in the
- * brief, any test file may be written. Paths outside the project folder are not the brief's: they pass.
+ * The gates in the coder's own session, from its brief: in work_mode code no test file, in work_mode tests-only only
+ * test files (isTestFile); a known_file with file_action read is never written. Any other file passes: the
+ * known_file list does not have to be complete (a new module file, for example). Paths outside the project folder
+ * are not the brief's: they pass.
  */
 export class CoderGate {
   /** @param {import("./carl-brief.js").Brief} brief @param {string} cwd the project folder */
   constructor(brief, cwd) {
     this.cwd = cwd;
-    this.mode = brief.mode === "test" ? "test" : "code";
-    const f = filesByAction(brief);
-    this.write = new Set([...f.create, ...f.change].map((p) => this.rel(p)));
-    this.read = new Set(f.read.map((p) => this.rel(p)));
-    this.anyTest = this.mode === "test" && ![...this.write].some((p) => isTestFile(p));
+    this.mode = brief.workMode === "tests-only" ? "tests-only" : "code";
+    this.read = new Set(filesByAction(brief).read.map((p) => this.rel(p)));
   }
 
   /** A path relative to the project folder, with "/". @param {string} p */
@@ -292,16 +309,15 @@ export class CoderGate {
   path(p) {
     const r = this.rel(p);
     if (!r || r === ".." || r.startsWith("../") || isAbsolute(r)) return "";
+    if (this.read.has(r)) return `${GATE_MARK}: ${r} is in your brief to read only (file_action read); write the change it needs as an [[open_issue]] in your report.`;
     const test = isTestFile(r);
     if (this.mode === "code" && test) {
-      return `${GATE_MARK}: ${r} is a test file, and in mode code you do not change tests; if a test looks wrong, write why under open issues in your report.`;
+      return `${GATE_MARK}: ${r} is a test file, and in work_mode code you do not change tests; if a test looks wrong, write why as an [[open_issue]] in your report.`;
     }
-    if (this.mode === "test" && !test) {
-      return `${GATE_MARK}: ${r} is not a test file, and in mode test you write tests only; a test that fails because the code is wrong is a finding in your report.`;
+    if (this.mode === "tests-only" && !test) {
+      return `${GATE_MARK}: ${r} is not a test file, and in work_mode tests-only you write tests only; a test that fails because the code is wrong is a [[test_finding]] in your report.`;
     }
-    if (this.write.has(r) || (this.anyTest && test)) return "";
-    if (this.read.has(r)) return `${GATE_MARK}: ${r} is in your brief to read only; write the change it needs under open issues in your report.`;
-    return `${GATE_MARK}: ${r} is not in your brief's files to create or change; keep to those files, and write what ${r} needs under open issues in your report.`;
+    return "";
   }
 }
 

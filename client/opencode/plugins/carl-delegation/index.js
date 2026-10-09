@@ -13,17 +13,19 @@
 // Phase 23.4.3 (carl-brief.js, next to carl-delegation.js):
 //   - the brief check (option "brief", on unless false): a task call for the coder whose TOML brief fails the check
 //     is refused before the coder starts (thrown in tool.execute.before, as the gate does); a call with task_id
-//     (it continues an earlier task) is not checked; a JSON brief of the same structure is read and checked too
-//     (option "briefFormat": "json" names JSON in the refusal of a task that has no brief: agent-bench's brief_json);
+//     (it continues an earlier task) is not checked; the existing_tests paths are checked in the project folder; a
+//     JSON brief of the same keys is read and checked too (option "briefFormat": "json" names JSON in the refusal of
+//     a task that has no brief: agent-bench's brief_json, now obsolete);
 //   - the coder's gates: chat.message names the agent of each user message; the first message of a coder session
 //     is its brief, kept for that session (a later one replaces it only when it is a complete brief too); the
-//     coder's writes outside the brief's files, or against its mode, are refused in tool.execute.before;
-//   - the chain (option "chain", on unless false; carl-chain.js): a task call for the coder whose brief has mode code
-//     and tests = "new" becomes the test session (tool.execute.before rewrites its prompt to the test brief). When
+//     coder's writes against its work_mode, or of a known_file to read only, are refused in tool.execute.before;
+//   - the chain (option "chain", on unless false; carl-chain.js): a task call for the coder whose brief has work_mode
+//     code and work_type new_feature becomes the test session (tool.execute.before rewrites its prompt to the test
+//     brief, work_mode tests-only, without design_notes and known_file). When
 //     the test session ends, the plugin starts the code session itself through the SDK (a child session of the main
 //     session, agent coder, the brief and CARL's [test_session]) and waits for it (its session.idle event, or its
-//     messages: the last assistant message completed). With tests = "existing": the named test files are hashed
-//     before and after, and the result says what changed.
+//     messages: the last assistant message completed). With work_type follow_up or bug_fix: the brief's
+//     existing_tests are hashed before and after, and the result says what changed.
 //     THE BASE (any OpenCode version; only the documented hooks and the SDK): the task runs in the foreground (the
 //     plugin sets background: false on the rewritten task), and tool.execute.after replaces the task's output with
 //     the one result.
@@ -610,7 +612,7 @@ export default {
         const tool = String(input?.tool ?? "");
         const args = /** @type {Record<string, unknown>} */ (output?.args ?? {});
         if (briefs) {
-          const why = briefCheck(tool, args, { format: briefFormat });   // a coder task with an incomplete brief
+          const why = briefCheck(tool, args, { format: briefFormat, root: cwd });   // a coder task with an incomplete brief
           if (why) throw new Error(why);
         }
         const mine = input?.sessionID ? gates.get(input.sessionID) : undefined;

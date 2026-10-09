@@ -7,11 +7,12 @@
  * Phase 23.4.3:
  *   - the brief check (carl.json "delegation".brief, on unless false): a subagent call that gives the coder a task
  *     (single, or a coder item of tasks or chain) whose TOML brief fails the check is blocked before the coder
- *     starts, with what to fix (a JSON brief of the same structure is read too; "delegation".brief_format "json"
- *     names JSON in the refusal of a task that has no brief: agent-bench's brief_json);
+ *     starts, with what to fix (the existing_tests paths are checked in the project folder, the call's cwd; a JSON
+ *     brief of the same keys is read too; "delegation".brief_format "json" names JSON in the refusal of a task that
+ *     has no brief: agent-bench's brief_json, now obsolete);
  *   - the coder's gates: CARL's subagent tool runs a subagent as its own Pi process with CARL_AGENT set to the
  *     agent's name. In the coder's process, its prompt ("Task: " and the brief) gives the brief, and tool_call
- *     blocks writes outside the brief's files or against its mode.
+ *     blocks writes against its work_mode, or of a known_file to read only.
  * Only these: in a subagent's process there is no reminder and no new-file gate (the subagent tool also keeps
  * APPEND_SYSTEM.md, with the delegation rule, from subagents).
  */
@@ -75,7 +76,7 @@ export default function carlDelegation(pi: ExtensionAPI) {
 		const tool = String(event.toolName);
 		const input = (event.input ?? {}) as Record<string, unknown>;
 		if (set.brief) {
-			const why = briefCheck(tool, input, { format: set.briefFormat }); // a coder task with an incomplete brief
+			const why = briefCheck(tool, input, { format: set.briefFormat, root: String(ctx.cwd ?? process.cwd()) }); // a coder task with an incomplete brief
 			if (why) return { block: true, reason: why };
 		}
 		const gate = await gateSetting.get(); // the dashboard's setting (Connect > Setup)

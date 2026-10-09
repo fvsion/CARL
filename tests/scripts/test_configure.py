@@ -662,7 +662,7 @@ class ConfigureTests(unittest.TestCase):
         with open(self.path(oc), encoding="utf-8") as f:
             text = f.read()
         self.assertIn('subagent_type "coder"', text)                       # through the main agent: a TOML brief
-        self.assertIn('the TOML brief from your instructions, with `mode = "code"`', text)
+        self.assertIn('the TOML brief from your instructions, with `work_mode = "code"`', text)
         self.assertNotIn("subtask: true", text)
         with open(self.path(pi), encoding="utf-8") as f:
             self.assertIn('agent "coder"', f.read())
