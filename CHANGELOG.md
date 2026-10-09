@@ -3,6 +3,14 @@
 All notable changes to CARL. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Dates are local dates on the development Mac (M3 Pro, 36 GB).
 
+## Unreleased
+
+### Fixed
+- **A brief whose lists of tables are written as `key = [ { ... }, ... ]`** with JSON-style `"key": value` was refused
+  as broken TOML, and the refusal ("a key needs = and a value") did not say how to fix it: the Gemma 4 E4B sent such a
+  brief 6 times. Inside `{ }` the reader now takes `"key": value` as well as `key = value` (the meaning is the same as
+  `[[key]]` blocks), and a refusal for broken TOML shows the `[[table]]` form of a list.
+
 ## 1.13.1 - 2026-10-09
 
 ### Fixed

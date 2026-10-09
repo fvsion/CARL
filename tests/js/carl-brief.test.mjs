@@ -376,7 +376,7 @@ test("briefRefusal: one sentence for a text that is no TOML; the reader's error;
                "[CARL] Brief refused: the coder takes its task only as a TOML brief, so write the task in the brief's " +
                "format from your instructions and send it again.");
   assert.match(B.briefRefusal('work_mode = "code"\ntask_summary = add it'),
-               /^\[CARL\] Brief refused: the brief is not valid TOML \(line 2: .*\)\. Fix it and send the whole brief again\.$/);
+               /^\[CARL\] Brief refused: the brief is not valid TOML \(line 2: .*\)\. Fix it and send the whole brief again\. Each item of a list is its own block/);
   const r = B.briefRefusal(FULL.replace('covers_requirements = ["R1", "R2"]', 'covers_requirements = ["R1"]'));
   assert.equal(r, "[CARL] Brief refused: the coder did not start. Fix these points and send the whole brief again:\n" +
                   "- Requirement R2 is in no check's covers_requirements: add it to a check, or add a check for it.");
@@ -646,4 +646,34 @@ test("parseReport: the same report as JSON, in a fence or plain", () => {
   assert.deepEqual(B.parseReport("```json\n" + text + "\n```\n\n## Needs a browser check\nNone."), REPORT_WANT);
   assert.deepEqual(B.parseReport("My report:\n" + text + "\nThat is all."), REPORT_WANT);
   assert.equal(B.parseReport('```json\n{"task_status": "done",\n```'), null);
+});
+
+test("1.13.2: a list of tables written as key = [ { ... } ] reads like [[key]] blocks, also with JSON-style \"key\": value", () => {
+  const t = `work_mode = "code"
+work_type = "new_feature"
+task_summary = """Add a."""
+expected_outcome = """a works."""
+task_requirement = [
+  {
+    "requirement_id": "R1",
+    "requirement_text": "Implement a."
+  },
+  {"requirement_id": "R2", "requirement_text": "Document a."}
+]
+acceptance_check = [ { check_id = "C1", covers_requirements = ["R1", "R2"], run_command = "python -m pytest" } ]
+
+[[known_file]]
+file_path = "a.py"
+file_action = "create"
+`;
+  const p = B.parseBrief(t);
+  assert.equal(p.error, "");
+  assert.deepEqual(p.brief.requirements.map((r) => r.id), ["R1", "R2"]);
+  assert.deepEqual(B.checkBrief(p.brief), []);
+});
+
+test("1.13.2: a refusal for broken TOML shows the [[table]] form of a list", () => {
+  const said = B.briefRefusal('work_mode = "code"\ntask_requirement = [ { requirement_id "R1" } ]\n');
+  assert.match(said, /not valid TOML/);
+  assert.match(said, /Each item of a list is its own block, for example:\n\[\[task_requirement\]\]\nrequirement_id = "R1"/);
 });

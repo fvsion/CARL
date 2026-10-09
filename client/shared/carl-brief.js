@@ -235,7 +235,9 @@ export function parseToml(text, o = {}) {
       }
       const kat = i;
       const path = keyPath();
-      if (s[i] !== "=") fail("a key needs = and a value");
+      // lenient (1.13.2): a JSON-style "key": value inside { } as well as key = value; small models write a list of
+      // tables as task_requirement = [ { "requirement_id": "R1", ... } ] (measured: the Gemma 4 E4B, 2026-10-09)
+      if (s[i] !== "=" && s[i] !== ":") fail("a key needs = and a value");
       i++;
       ws();
       put(out, path, value(), kat);
@@ -923,7 +925,11 @@ export function briefRefusal(taskText, o = {}) {
     return `${BRIEF_MARK}: the coder takes its task only as a ${o.format === "json" ? "JSON" : "TOML"} brief, so write the task in the brief's format from your instructions and send it again.`;
   }
   const name = format === "json" ? "JSON" : "TOML";
-  if (!brief) return `${BRIEF_MARK}: the brief is not valid ${name} (${error}). Fix it and send the whole brief again.`;
+  if (!brief) {
+    const form = format === "json" ? "" : " Each item of a list is its own block, for example:\n[[task_requirement]]\n" +
+      'requirement_id = "R1"\nrequirement_text = "..."\n\n[[task_requirement]]\nrequirement_id = "R2"\nrequirement_text = "..."';
+    return `${BRIEF_MARK}: the brief is not valid ${name} (${error}). Fix it and send the whole brief again.${form}`;
+  }
   const problems = checkBrief(brief, format, { root: o.root, exists: o.exists });
   if (!problems.length) return "";
   return `${BRIEF_MARK}: the coder did not start. Fix these points and send the whole brief again:\n` +
