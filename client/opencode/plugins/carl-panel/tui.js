@@ -8,6 +8,10 @@
 // of the session /carl is opened in; a choice with one value opens nothing; Sync service opens a view of its state.
 // The lists are signals, so a change keeps the cursor where it is.
 //
+// Phase 23.4.5: Coder model's values are "same as main" and the models this OpenCode can use, asked from OpenCode
+// itself: the TUI's state.provider (the connected providers and their models; carl-panel.js openCodeModels reads only
+// their ids, base URLs, costs and variants, never a key).
+//
 // Esc goes back one list (user, 2026-10-09: "I would like to be able to go back too"); Esc on the top list closes
 // /carl. OpenCode's dialog stack (1.18) holds one dialog: replace() closes the one shown (its onClose runs) and shows
 // the new one; Esc runs the shown dialog's onClose, then empties the stack. So a list that /carl opened from another
@@ -15,7 +19,7 @@
 // Esc (read from the renderer's key input: ctrl+c and a click outside close /carl, as they close OpenCode's own
 // dialogs) and nothing else was opened since.
 import { createSignal } from "solid-js";
-import { act, panel, rowsAt, shownState, viewText } from "./carl-panel.js";
+import { act, openCodeModels, panel, rowsAt, shownState, viewText } from "./carl-panel.js";
 
 /** @typedef {import("@opencode-ai/plugin/tui").TuiPluginApi} TuiPluginApi */
 /** @typedef {import("@opencode-ai/plugin/tui").TuiPluginModule} TuiPluginModule */
@@ -165,7 +169,8 @@ function controlPanel(api) {
     }), at.length ? () => open(at.slice(0, -1)) : undefined);
   };
   return () => {
-    session = { model: sessionModel(api) };  // the session /carl is opened in: its model, for Coder thinking
+    // the session /carl is opened in: its model, for Coder thinking; OpenCode's models, for Coder model
+    session = { model: sessionModel(api), external: openCodeModels(api.state?.provider) };
     open();
   };
 }

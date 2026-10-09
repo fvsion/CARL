@@ -49,6 +49,11 @@
 // sessions of the chain too) whose model has an entry; OpenCode sends it as reasoning_effort (checked with OpenCode
 // 1.18.34 against agent-bench's fake server, 2026-10-09). A model without an entry ("same as main", the default):
 // the request stays as it is, so the model entry's own reasoningEffort (the main session's thinking) applies.
+// Phase 23.4.5 (the coder on an external model): option "coderModel": "<provider>/<model>" (the coder agent's
+// "model", written by CARL's client setup; the agent has no temperature then) and "coderVariant": the variant /carl
+// chose for it. chat.params merges that variant of the model (input.model.variants, OpenCode's own) into the options
+// of the coder's requests to that model. Without coderVariant ("model default"), the request stays as it is: CARL's
+// coderThinking table is for CARL's models only, and nothing else of CARL's is sent to the external model.
 
 import { execFile } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
@@ -148,6 +153,33 @@ export function coderEffort(table, agent, coder, model) {
   if (!agent || (agent !== coder && !isCoderName(agent)) || typeof table !== "object" || table === null) return undefined;
   const v = /** @type {Record<string, unknown>} */ (table)[`${String(model?.providerID ?? "")}/${String(model?.id ?? "")}`];
   return typeof v === "string" && v ? v : undefined;
+}
+
+/**
+ * The options of the variant /carl chose for the coder's external model (Phase 23.4.5), or undefined: not the coder,
+ * not that model, no variant chosen ("model default"), or a variant the model does not have.
+ * @param {unknown} ref the option coderModel @param {unknown} variant the option coderVariant @param {string} agent
+ * @param {string} coder CARL's coder name @param {{ providerID?: unknown, id?: unknown, variants?: unknown } | undefined} model
+ * @returns {Record<string, unknown> | undefined}
+ */
+export function coderVariant(ref, variant, agent, coder, model) {
+  if (!agent || (agent !== coder && !isCoderName(agent)) || typeof ref !== "string" || typeof variant !== "string" || !variant) {
+    return undefined;
+  }
+  if (`${String(model?.providerID ?? "")}/${String(model?.id ?? "")}` !== ref) return undefined;
+  const v = /** @type {Record<string, unknown>} */ (model?.variants ?? {})[variant];
+  return v !== null && typeof v === "object" && !Array.isArray(v) ? /** @type {Record<string, unknown>} */ (v) : undefined;
+}
+
+/** b merged into a (objects deeply, the rest replaced), in place. @param {Record<string, any>} a @param {Record<string, any>} b */
+function mergeInto(a, b) {
+  for (const [k, v] of Object.entries(b)) {
+    if (v !== null && typeof v === "object" && !Array.isArray(v) && a[k] !== null && typeof a[k] === "object" && !Array.isArray(a[k])) {
+      mergeInto(a[k], v);
+    } else {
+      a[k] = v;
+    }
+  }
 }
 
 /** A process still runs (the OpenCode that holds a chain). @param {unknown} pid */
@@ -536,10 +568,14 @@ export default {
     return {
       // the coder's thinking for the model it runs on (Phase 23.4.4): only for the coder, only with an entry
       "chat.params": async (input, output) => {
-        const effort = coderEffort(opts.coderThinking, String(input?.agent ?? ""), coder, /** @type {any} */ (input)?.model);
-        if (effort && output && typeof output.options === "object" && output.options !== null) {
-          output.options.reasoningEffort = effort;
-        }
+        if (!output || typeof output.options !== "object" || output.options === null) return;
+        const agent = String(input?.agent ?? "");
+        const model = /** @type {any} */ (input)?.model;
+        const effort = coderEffort(opts.coderThinking, agent, coder, model);
+        if (effort) output.options.reasoningEffort = effort;
+        // an external coder model (Phase 23.4.5): only the variant /carl chose for it, nothing else
+        const variant = coderVariant(opts.coderModel, opts.coderVariant, agent, coder, model);
+        if (variant) mergeInto(output.options, structuredClone(variant));
       },
       event: async ({ event }) => {
         const props = /** @type {any} */ (event)?.properties;

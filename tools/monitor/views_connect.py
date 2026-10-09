@@ -491,6 +491,8 @@ def how_clients(v: View, tw: int) -> List[CardLine]:
             heading("Who is in the list", tw),
             "The list shows OpenCode and Pi on this Mac, and each computer whose setup added the sync. Such a "
             "computer gets the config that you send.",
+            "Coder model shows the model of each computer's coder: same as main (the model of this server), or an "
+            "external model that /carl chose on that computer. The work of an external coder goes to its provider.",
             heading("Add a computer", tw),
             f"In Setup, make the client package (z, or {CYN}./carl.sh package{R}). Copy the zip to the computer, "
             f"unzip it and run {CYN}./setup{R} there. The package has the address and the key of the server.", tw=tw)
@@ -506,7 +508,7 @@ def table(head: Sequence[str], rows: Sequence[Sequence[str]], gap: int = 2) -> T
     return widths, [f"{DIM}{line(head)}{R}", *[line(r) for r in rows]]
 
 
-HEAD = ["Computer", "Last seen", "User", "Syncs", "Config", "OS", "Address"]
+HEAD = ["Computer", "Last seen", "User", "Syncs", "Config", "Coder model", "OS", "Address"]
 BLOCK_LABELS = HEAD[2:]                 # the label rows of a computer's block (its name and state are its first line)
 Cells = List[List[str]]
 CONFIG_NOTES = {                        # what a config state means, under the table when a computer has it
@@ -516,17 +518,25 @@ CONFIG_NOTES = {                        # what a config state means, under the t
                "OpenCode or Pi and choose Apply the new config now."}
 
 
+def coder_text(model: str) -> str:
+    """The coder's model of a computer (Phase 23.4.5): same as main (on this server), the external PROVIDER/MODEL,
+    or – when the computer did not say (an older client package, or not set up)."""
+    return "same as main" if model == "main" else model or NA
+
+
 def client_cells(v: View, here: List[Tuple[str, str]], stale: Sequence[Drift], version: str,
                  is_full: bool) -> Tuple[List[str], Cells, List[str]]:
     """The table's header and cells, one list per computer (this Mac first): name, ● connected / ○ last seen, user,
-    how it syncs, its config, OS, address (full: the version it has); and the config states that need a note."""
+    how it syncs, its config, the coder's model, OS, address (full: the version it has); and the config states that
+    need a note."""
     now = time.time()
     states: List[str] = []
     mac = (f"{GRN}up to date{R}" if here and not stale else f"{YEL}out of date{R}" if here
            else f"{DIM}not set up{R}")
     if here and stale:
         states.append("out of date")
-    cells: Cells = [[f"{B}This Mac{R}", NA, NA, NA, mac, "macOS", NA] + ([NA] if is_full else [])]
+    cells: Cells = [[f"{B}This Mac{R}", NA, NA, NA, mac, coder_text(v.coder_here if here else ""), "macOS", NA]
+                    + ([NA] if is_full else [])]
     for c in v.clients:
         seen = f"{GRN}● connected{R}" if c.connected > 0 else f"{DIM}○ {ago(c.last_seen, now)}{R}"
         if not version:
@@ -537,7 +547,8 @@ def client_cells(v: View, here: List[Tuple[str, str]], stale: Sequence[Drift], v
             states.append("at next sync" if c.auto_apply else "on hold")
             conf = f"{YEL}{states[-1]}{R}"
         cells.append([f"{B}{c.host or c.id}{R}", seen, c.user or NA, "always" if c.mode == "service" else "at start",
-                      conf, c.os or NA, c.address or NA] + ([c.applied or "none"] if is_full else []))
+                      conf, coder_text(c.coder_model), c.os or NA, c.address or NA]
+                     + ([c.applied or "none"] if is_full else []))
     return HEAD + (["Version"] if is_full else []), cells, [k for k in CONFIG_NOTES if k in states]
 
 
@@ -549,12 +560,12 @@ def table_width(v: View, here: List[Tuple[str, str]], stale: Sequence[Drift], is
 
 def blocks(head: Sequence[str], cells: Cells) -> List[CardLine]:
     """Each computer as a small block (when the table does not fit): its name in bold and its state, then a label
-    row per column (this Mac: its config only), a blank line between computers."""
+    row per column (this Mac: its config and its coder's model only), a blank line between computers."""
     out: List[CardLine] = []
     for i, cs in enumerate(cells):
         out += [""] if i else []
         out.append(cs[0] + (f"  {cs[1]}" if i else ""))
-        rows = [(h, x) for h, x in zip(head[2:], cs[2:]) if i or h == "Config"]
+        rows = [(h, x) for h, x in zip(head[2:], cs[2:]) if i or h in ("Config", "Coder model")]
         out += [row(f"  {h}", x) for h, x in rows]
     return out
 

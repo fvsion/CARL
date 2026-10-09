@@ -38,6 +38,13 @@ Rules
   overrides the dashboard's value on this computer, per model. Both state files (carl.json) keep "models":
   each model's thinking kind, main and coder values as written and the dashboard's coder value (what
   /carl's "dashboard default" gives), for the /carl panel.
+- The coder on an external model (Phase 23.4.5; --coder-model PROVIDER/MODEL: CODER_MODEL, /carl's Coder model):
+  OpenCode's coder agent gets "model" and no "temperature" (no CARL sampling for a model that is not CARL's);
+  carl-delegation gets "coderModel" and, with --coder-model-thinking, "coderVariant" (its chat.params hook applies that
+  variant of the model to the coder's requests). Pi: carl.json "coder_model" (the subagent extension starts the coder
+  with --model) and, with a thinking level, "thinking": {"coder": {"PROVIDER/MODEL": LEVEL}}. Both state files keep
+  "coder_model" ("main" when the coder runs on the main session's model). The provider's keys stay the client's:
+  CARL writes only the model's name.
 - The brief check as a command (client/shared/carl-brief-check.mjs, Phase 23.4.4): installed next to
   carl-brief.js wherever that goes (OpenCode carl-delegation, Pi carl-delegation and subagent).
 - The models (Phase 23.4.4 item 13): in single-model mode only the model the server runs (--running,
@@ -207,6 +214,8 @@ class Options:
     oc_real: str = ""         # OpenCode's folder with its symlinks resolved (the Installer sets it)
     profile: bool = True      # append the pointer to ~/.zshrc / ~/.bashrc (NO_PROFILE=1: print it instead)
     clients: str = "both"     # both | opencode | pi: the configs to write (the other client's stay as they are)
+    coder_model: str = ""     # an external model for the coder: PROVIDER/MODEL of the client ("": the main session's)
+    coder_model_thinking: str = ""   # its variant (OpenCode) or thinking level (Pi); "": the model's own default
 
     @property
     def oc_dir(self) -> str:
@@ -251,6 +260,27 @@ def ctx_arg(v: str) -> int:
     return n
 
 
+CODER_MODEL_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._:/@+-]*")   # carl-sync.py's
+LEVEL_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,39}")
+
+
+def coder_model_arg(v: str) -> str:
+    """--coder-model: PROVIDER/MODEL, or "" / main (the coder on the main session's model)."""
+    if v in ("", "main"):
+        return ""
+    if not CODER_MODEL_RE.fullmatch(v) or len(v) > 200:
+        raise argparse.ArgumentTypeError(f"not PROVIDER/MODEL: {v!r}")
+    return v
+
+
+def level_arg(v: str) -> str:
+    if v in ("", "default"):
+        return ""
+    if not LEVEL_RE.fullmatch(v):
+        raise argparse.ArgumentTypeError(f"not a thinking level: {v!r}")
+    return v
+
+
 def switch_arg(v: str) -> bool:
     if v not in ("0", "1"):
         raise argparse.ArgumentTypeError(f"takes 0 or 1, got {v!r}")
@@ -280,6 +310,10 @@ def parse_args(argv: list[str]) -> Options:
     ap.add_argument("--clients", choices=CLIENTS, default="both")
     ap.add_argument("--reminder", type=switch_arg, default=True)
     ap.add_argument("--coder-thinking", default="", help="/carl's Coder thinking on this computer: MODEL:VALUE,...")
+    ap.add_argument("--coder-model", type=coder_model_arg, default="",
+                    help="/carl's Coder model: an external PROVIDER/MODEL of the client for the coder (main: none)")
+    ap.add_argument("--coder-model-thinking", type=level_arg, default="",
+                    help="the thinking of that model: a variant (OpenCode) or a thinking level (Pi)")
     a = ap.parse_args(argv)
     try:
         models = carl_models.only_running(carl_models.load_list(a.models), a.running)  # single-model mode (23.4.4)
@@ -291,7 +325,8 @@ def parse_args(argv: list[str]) -> Options:
                    running=a.running, coder=a.coder, sidebar=a.sidebar, switcher=a.switcher,
                    model_check=a.model_check, web_search=a.web_search, lsp=a.lsp, background=a.background,
                    browser=a.browser, browser_headed=a.browser_headed, profile=a.profile,
-                   cache=a.cache, clients=a.clients, reminder=a.reminder)
+                   cache=a.cache, clients=a.clients, reminder=a.reminder, coder_model=a.coder_model,
+                   coder_model_thinking=a.coder_model_thinking if a.coder_model else "")
 
 
 # ================================================================== merge rules (no I/O)
@@ -691,9 +726,11 @@ def merge_oc_browser(cfg: JsonObj, st: JsonObj, agent: JsonObj, server: JsonObj 
 
 
 def merge_oc_coder(cfg: JsonObj, st: JsonObj, agent: JsonObj, name: str, text: AgentText | None,
-                   rule_path: str, rep: Report) -> None:
+                   rule_path: str, rep: Report, model: str = "") -> None:
     """The coder agent and its delegation rule in the instructions (text None: the rule out). The agent has no
-    reasoningEffort: carl-delegation sets the coder's thinking per request, for the model it runs on."""
+    reasoningEffort: carl-delegation sets the coder's thinking per request, for the model it runs on. model: an
+    external model of OpenCode for the coder (Phase 23.4.5): the agent's "model", and no temperature (CARL's sampling
+    is for CARL's models)."""
     if text is None:
         drop_from(cfg, "instructions", (rule_path,))
         st.pop("coder_agent", None)
@@ -702,11 +739,12 @@ def merge_oc_coder(cfg: JsonObj, st: JsonObj, agent: JsonObj, name: str, text: A
         "description": text.desc,
         "mode": "subagent",
         "prompt": "{file:" + text.prompt_path + "}",
-        # temperature 0.6 (Qwen's coding value; with thinking at medium the best of 9 coder
-        # runs on the 35B, 2026-10-02: all functions typed, more tests, 26% faster than 1.0);
-        # the 27B uses the same value without its own test. The thinking: no value here
-        # (Phase 23.4.4): carl-delegation's chat.params hook sets it per model (coderThinking).
-        "temperature": 0.6,
+        **({"model": model} if model else {
+            # temperature 0.6 (Qwen's coding value; with thinking at medium the best of 9 coder
+            # runs on the 35B, 2026-10-02: all functions typed, more tests, 26% faster than 1.0);
+            # the 27B uses the same value without its own test. The thinking: no value here
+            # (Phase 23.4.4): carl-delegation's chat.params hook sets it per model (coderThinking).
+            "temperature": 0.6}),
         "permission": {"task": "deny"},
         "steps": 80,
         "color": "secondary",
@@ -1201,7 +1239,8 @@ class Installer:
 
         self._oc_tui()
 
-        st.update({"providers": ids, "base_url": o.base_url, "updated": self.stamp, "models": models_state(o.models)})
+        st.update({"providers": ids, "base_url": o.base_url, "updated": self.stamp, "models": models_state(o.models),
+                   "coder_model": o.coder_model or "main"})
         self.cf.save(path, cfg)
         self.save_state(oc, "OpenCode", st)
         return ids
@@ -1273,13 +1312,17 @@ class Installer:
             if old is not None and old != t:
                 rep.add("updated", f"OpenCode {what} ({self.short(p)})")
             self.fs.write(p, t)
-        merge_oc_coder(cfg, st, agent, name, AgentText(desc, prompt_path), rule_path, rep)
+        ext = self.o.coder_model
+        merge_oc_coder(cfg, st, agent, name, AgentText(desc, prompt_path), rule_path, rep, ext)
         # the coder's thinking per model (23.4.4): set on the coder's requests by the plugin's chat.params hook (none
-        # when every model's coder thinks as the main session)
+        # when every model's coder thinks as the main session); an external coder model (23.4.5): its variant
         thinking = carl_models.coder_efforts(self.o.models, provider_id)
         self._oc_server_plugin(cfg, DELEGATION, True, provider_id, "the hand-off to the coder",
                                {"reminder": self.o.reminder, "cacheApi": self.o.cache_api, "coder": name,
-                                **({"coderThinking": thinking} if thinking else {})})
+                                **({"coderThinking": thinking} if thinking else {}),
+                                **({"coderModel": ext} if ext else {}),
+                                **({"coderVariant": self.o.coder_model_thinking} if ext and self.o.coder_model_thinking
+                                   else {})})
         # (the new-file gate is a setting of the dashboard: carl-delegation reads it through cacheApi, Phase 23.4)
         self._code_command(os.path.join(oc, "command", "code.md"), "opencode/commands/code.md", name, "OpenCode")
 
@@ -1445,6 +1488,8 @@ class Installer:
         if coder_on:
             st["delegation"] = {"reminder": o.reminder}            # the gate: the dashboard's setting (23.4)
             coder_thinking = pi_coder_thinking(new_id, o.models)   # the coder's thinking per model (23.4.4)
+            if o.coder_model and o.coder_model_thinking:            # an external coder model's level (23.4.5)
+                coder_thinking["coder"][o.coder_model] = o.coder_model_thinking
             if coder_thinking["coder"]:
                 st["thinking"] = coder_thinking
             else:                                               # "main" everywhere: the session's level
@@ -1457,7 +1502,9 @@ class Installer:
         else:
             st.pop("cache_api", None)
 
-        st.update({"providers": ids, "base_url": o.base_url, "updated": self.stamp, "models": models_state(o.models)})
+        # the coder's model (23.4.5): an external one the subagent extension passes as --model, else "main"
+        st.update({"providers": ids, "base_url": o.base_url, "updated": self.stamp, "models": models_state(o.models),
+                   "coder_model": o.coder_model or "main"})
         self.save_state(pi, "Pi", st)
         return ids
 

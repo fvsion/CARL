@@ -7,11 +7,15 @@
  * place (Esc goes back), and Coder thinking its values for the model of this session (ctx.model); a choice with one
  * value opens nothing; Sync service opens a view of its state.
  * Without the sync service, a session start checks the server once for a new config.
+ * Phase 23.4.5: Coder model's values are "same as main" and the models this Pi can use, asked from Pi itself: the
+ * model registry's available models (ctx.modelRegistry.getAvailable()) with the thinking levels pi-ai knows for each
+ * (getSupportedThinkingLevels); carl-panel.js piModels reads only their ids, base URLs and costs, never a key.
  */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { getSelectListTheme, getSettingsListTheme } from "@earendil-works/pi-coding-agent";
 import { Container, Key, matchesKey, type SettingItem, SelectList, SettingsList, Spacer, Text } from "@earendil-works/pi-tui";
-import { act, appliedSinceStart, checkOnce, panel, restartNotice, rowsAt, shownState, viewText } from "./carl-panel.js";
+import { getSupportedThinkingLevels } from "@earendil-works/pi-ai";
+import { act, appliedSinceStart, checkOnce, panel, piModels, restartNotice, rowsAt, shownState, viewText } from "./carl-panel.js";
 import type { Action, Row, Session } from "./carl-panel.js";
 
 /** The most rows the list shows before it scrolls. */
@@ -38,8 +42,18 @@ export default function carlPanel(pi: ExtensionAPI) {
 				ctx.ui.notify("/carl needs Pi's interactive mode.", "error");
 				return;
 			}
-			// the model of this session: Coder thinking is for the model the coder runs on ("same as main")
-			const session: Session = { model: ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined };
+			// the model of this session: Coder thinking is for the model the coder runs on ("same as main"); Pi's
+			// models, for Coder model
+			let available: unknown[] = [];
+			try {
+				available = ctx.modelRegistry.getAvailable();
+			} catch {
+				available = [];
+			}
+			const session: Session = {
+				model: ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined,
+				external: piModels(available, (m) => getSupportedThinkingLevels(m)),
+			};
 			await ctx.ui.custom<void>((tui, theme, _kb, done) => {
 				const busy = new Map<string, string>(); // row id -> its state while an action runs
 				let running = false;

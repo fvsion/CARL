@@ -16,8 +16,15 @@
 // only, per model (CODER_THINKING=MODEL:VALUE in client-install.env, through `carl-sync.py set`; the setup merges it;
 // "dashboard default" removes the model's entry). The row is for the model the coder runs on: Coder model "same as
 // main" is the model of the session /carl is opened in (the front end passes it: Session); without one (no session
-// yet, a model that is not CARL's) the config's default model. Coder model has one value now ("same as main"; Phase
-// 23.4.5 adds other models): a choice with one value opens nothing.
+// yet, a model that is not CARL's) the config's default model.
+//
+// Phase 23.4.5: Coder model offers "same as main" and the external models this computer's client can use (the front
+// end asks the client and passes them: Session.external; CARL's own providers are left out, Phase 29 adds CARL's
+// other models). Choosing one runs `carl-sync.py set CODER_MODEL=PROVIDER/MODEL` ("main": back to the session's
+// model); the setup writes it into the client (OpenCode: the coder agent's "model"; Pi: carl.json "coder_model").
+// With an external model, Coder thinking is that model's: "model default" plus the levels the client knows for it
+// (CODER_MODEL_THINKING); the dashboard's per-model table does not apply. The provider's keys are the client's own:
+// nothing here reads them.
 import { spawn } from "node:child_process";
 import * as fs from "node:fs";
 import { homedir } from "node:os";
@@ -218,9 +225,14 @@ export function when(stamp, now = new Date()) {
  * @property {[string, string][]} [view] a view row's label rows
  * @property {string} [viewTitle] the view's title
  * @typedef {{ title: string, rows: Row[] }} Panel
- * @typedef {{ model?: string }} Session
+ * @typedef {{ model?: string, external?: ExternalModel[] }} Session
  *   the session /carl is opened in: its model as "provider/model" (OpenCode: the newest message of the session;
- *   Pi: ctx.model); none on OpenCode's home screen or before the first message
+ *   Pi: ctx.model); none on OpenCode's home screen or before the first message. external: the models this
+ *   computer's client can use (openCodeModels, piModels), for Coder model
+ * @typedef {{ ref: string, host: string, cost: "free" | "paid" | "", levels: string[] }} ExternalModel
+ *   ref: "provider/model"; host: where its requests go (the host of the base URL, else the provider's name); cost:
+ *   "free" when the client's model info says that the model costs 0, "paid" when more, "" when not known; levels:
+ *   the thinking levels the client knows for it (OpenCode: the model's variants; Pi: its thinking levels)
  *   title: "CARL", or "CARL" and the restart note
  * @typedef {{ message: string, ok: boolean, warn?: boolean }} Said
  *   what the toast or the notice says; ok false: an error; warn: a warning (the change is done)
@@ -334,6 +346,93 @@ function pluginOptions(plugins, name) {
   return undefined;
 }
 
+// ------------------------------------------------------------------ the external models (Phase 23.4.5)
+
+/** A coder model as CODER_MODEL takes it: "provider/model" (the model may have / : @ + in it: openrouter's ids). */
+export const CODER_MODEL_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*\/[A-Za-z0-9][A-Za-z0-9._:\/@+-]*$/;
+/** A thinking level or variant name as CODER_MODEL_THINKING takes it. */
+export const LEVEL_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,39}$/;
+
+/** A model ref that CODER_MODEL can hold. @param {unknown} v */
+function isRef(v) {
+  return typeof v === "string" && v.length <= 200 && CODER_MODEL_RE.test(v);
+}
+
+/** The host of a URL ("openrouter.ai"), or "". @param {unknown} url */
+export function hostOf(url) {
+  try {
+    return typeof url === "string" && url ? new URL(url).hostname : "";
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * "free" when the client's cost info says the model costs 0 (input, output and the cache prices it has), "paid" when
+ * one is more, "" when there is no cost info.
+ * @param {unknown} cost @returns {"free" | "paid" | ""}
+ */
+export function costOf(cost) {
+  const c = obj(cost);
+  const cache = obj(c.cache);
+  const prices = [c.input, c.output, c.cacheRead, c.cacheWrite, cache.read, cache.write].filter((x) => typeof x === "number");
+  if (typeof c.input !== "number" || typeof c.output !== "number") return "";
+  return prices.every((x) => x === 0) ? "free" : "paid";
+}
+
+/**
+ * OpenCode's models this computer can use (the TUI's state.provider: the connected providers, each with its models):
+ * one entry per model. The host: the provider's baseURL, else the model's API URL, else the provider's name. Only
+ * these fields are read (never the provider's key or options.apiKey).
+ * @param {unknown} providers @returns {ExternalModel[]}
+ */
+export function openCodeModels(providers) {
+  /** @type {ExternalModel[]} */
+  const out = [];
+  for (const p of Array.isArray(providers) ? providers : []) {
+    const prov = obj(p);
+    const id = typeof prov.id === "string" ? prov.id : "";
+    const base = obj(prov.options).baseURL;
+    for (const [key, m] of Object.entries(obj(prov.models))) {
+      const model = obj(m);
+      const ref = `${id}/${typeof model.id === "string" ? model.id : key}`;
+      if (!isRef(ref)) continue;
+      const host = hostOf(base) || hostOf(obj(model.api).url) || String(prov.name ?? id);
+      out.push({ ref, host, cost: costOf(model.cost), levels: Object.keys(obj(model.variants)).filter((v) => LEVEL_RE.test(v)) });
+    }
+  }
+  return out;
+}
+
+/**
+ * Pi's models this computer can use (ctx.modelRegistry.getAvailable(): the models with set-up auth): one entry per
+ * model. levels: the thinking levels Pi knows for it (pi-ai's getSupportedThinkingLevels). Only these fields are
+ * read (never a key).
+ * @param {unknown} models @param {(m: any) => unknown} levels @returns {ExternalModel[]}
+ */
+export function piModels(models, levels) {
+  /** @type {ExternalModel[]} */
+  const out = [];
+  for (const m of Array.isArray(models) ? models : []) {
+    const model = obj(m);
+    const ref = `${String(model.provider ?? "")}/${String(model.id ?? "")}`;
+    if (!isRef(ref)) continue;
+    let ls = [];
+    try {
+      const l = levels(m);
+      ls = Array.isArray(l) ? l.filter((x) => typeof x === "string" && LEVEL_RE.test(x)) : [];
+    } catch { /* no levels */ }
+    out.push({ ref, host: hostOf(model.baseUrl) || String(model.provider), cost: costOf(model.cost), levels: ls });
+  }
+  return out;
+}
+
+/** An external model's note in Coder model's values: "openrouter.ai, paid"; the host alone when the cost is not known.
+ * @param {ExternalModel} x */
+function modelNote(x) {
+  return x.cost ? `${x.host}, ${x.cost}` : x.host;
+}
+
 /** Coder thinking's values for a model of this kind, in the dashboard's order (its Agents panel), after "default"
  * (dashboard default: no value of this computer). @param {string} kind */
 export function thinkingValues(kind) {
@@ -343,6 +442,11 @@ export function thinkingValues(kind) {
 /** A thinking value in words ("main": same as main; "default": dashboard default). @param {string} v */
 export function thinkingWord(v) {
   return v === "main" ? "same as main" : v === "default" ? "dashboard default" : v;
+}
+
+/** An external model's thinking value in words ("default": model default, the model's own). @param {string} v */
+export function modelThinkingWord(v) {
+  return v === "default" ? "model default" : v;
 }
 
 const THINKING = new Set(["main", "on", "off", "low", "medium", "xhigh"]);
@@ -469,14 +573,60 @@ function coderThinking(models, providers, session, fallback) {
 }
 
 /**
- * The Coder model row: "same as main" (the coder runs on the main session's model). One value now: Enter opens
- * nothing; Phase 23.4.5 adds the other models of the client's config as values (and Coder thinking then follows the
- * model chosen here).
+ * Coder thinking for an external coder model (Phase 23.4.5): "model default" (no value of CARL's: the client's own
+ * for that model) and the levels the client knows for it; CODER_MODEL_THINKING=VALUE ("default" removes it). The
+ * dashboard's per-model table does not apply. Off says to use a full spec, as for CARL's models.
+ * @param {string} ref @param {string[]} levels @param {string} cur this computer's value ("default": none)
  * @returns {Row}
  */
-function coderModelRow() {
-  return { id: "coder-model", label: "Coder model", state: thinkingWord("main"), value: "main", kind: "choice",
-           values: ["main"], titles: { main: thinkingWord("main") }, actions: {} };
+function externalThinkingRow(ref, levels, cur) {
+  const values = ["default", ...levels.filter((l) => l !== "default")];
+  if (cur !== "default" && !values.includes(cur)) values.push(cur);    // a value the client does not list (now)
+  const name = `the coder's thinking with ${ref}`;
+  /** @type {Record<string, Action>} */
+  const actions = {};
+  for (const v of values.filter((x) => x !== cur)) {
+    actions[v] = { id: `set:CODER_MODEL_THINKING=${v}`, args: ["set", `CODER_MODEL_THINKING=${v}`],
+                   busy: v === "off" ? "turning off…" : `switching to ${modelThinkingWord(v)}…`, row: "thinking", want: v,
+                   name, did: `CARL set ${name} to ${modelThinkingWord(v)} on this computer.${v === "off" ? ` ${FULL_SPEC}` : ""}`,
+                   live: ["pi"] };
+  }
+  return { id: "thinking", label: "Coder thinking", state: modelThinkingWord(cur), value: cur, kind: "choice", values,
+           titles: { default: modelThinkingWord("default") }, notes: {}, actions, choiceTitle: `Coder thinking with ${ref}` };
+}
+
+/**
+ * The Coder model row (Phase 23.4.5): "same as main" (the coder runs on the main session's model; note "CARL: <the
+ * model>"), then the external models this computer's client can use, each with a note "<host>, free" or "<host>,
+ * paid". CODER_MODEL=PROVIDER/MODEL, or main (with CODER=1: the coder stays on, as /carl's Coder switch does). The
+ * toast says where the coder's work goes and that a paid model costs money. A current model that the client does not
+ * list (chosen in the other client, or a provider that went away) stays in the list with a note.
+ * @param {string} cur "main" or "provider/model" @param {string} carl CARL's model the coder runs on with "main"
+ * @param {ExternalModel[]} external @param {Client} client
+ * @returns {Row}
+ */
+function coderModelRow(cur, carl, external, client) {
+  const values = ["main", ...external.map((x) => x.ref)];
+  /** @type {Record<string, string>} */
+  const notes = carl ? { main: `CARL: ${carl}` } : {};
+  for (const x of external) notes[x.ref] = modelNote(x);
+  if (cur !== "main" && !values.includes(cur)) {
+    values.splice(1, 0, cur);
+    notes[cur] = `${appName(client)} does not list this model.`;
+  }
+  const name = "the coder's model";
+  /** @type {Record<string, Action>} */
+  const actions = {};
+  for (const v of values.filter((x) => x !== cur)) {
+    const x = external.find((e) => e.ref === v);
+    const where = x ? ` The coder's work goes to ${x.host}${x.cost === "paid" ? ", and the model costs money" : ""}.` : "";
+    actions[v] = { id: `set:CODER_MODEL=${v}`, args: ["set", `CODER_MODEL=${v}`, ...(v === "main" ? ["CODER=1"] : [])],
+                   busy: `switching to ${v === "main" ? thinkingWord("main") : v}…`, row: "coder-model", want: v, name,
+                   did: `CARL set ${name} to ${v === "main" ? thinkingWord("main") : v} on this computer.${where}`,
+                   live: ["pi"] };
+  }
+  return { id: "coder-model", label: "Coder model", state: cur === "main" ? thinkingWord("main") : cur, value: cur,
+           kind: "choice", values, titles: { main: thinkingWord("main") }, notes, actions };
 }
 
 /**
@@ -489,6 +639,8 @@ function parts(client, session) {
   const envOn = (/** @type {string} */ key) => env[key] !== "1";
   const oc = text(join(CARL, "opencode.env"));
   let coderOn, bg, reminder, browser, search, models, providers, fallback;
+  let coderRef = "main";                     // Coder model: "main" or the external model the setup wrote
+  let refThinking = "default";               // its thinking on this computer ("default": model default)
   /** @type {Row[]} */
   let panels = [];
   /** @type {Row[]} */
@@ -510,6 +662,11 @@ function parts(client, session) {
     models = stateModels(st.models, over);
     providers = providerIds(st);
     fallback = typeof cfg.model === "string" ? cfg.model : "";
+    // the coder agent's model (configure.py writes it for an external coder) and its variant (carl-delegation)
+    const ref = obj(agents[typeof st.coder_agent === "string" ? st.coder_agent : "coder"]).model;
+    if (isRef(ref)) coderRef = String(ref);
+    const variant = deleg?.coderVariant;
+    if (coderRef !== "main" && typeof variant === "string" && LEVEL_RE.test(variant)) refThinking = variant;
     lsp = [switchRow("lsp", "LSP", "LSP", "NO_LSP", cfg.lsp === true && /OPENCODE_EXPERIMENTAL_LSP_TOOL=1/.test(oc))];
     panels = [switchRow("sidebar", "Subagents side panel", "the subagents side panel", "NO_SIDEBAR", tui.includes("subagents-sidebar")),
               switchRow("switcher", "Session switcher", "the session switcher", "NO_SWITCHER", tui.includes("session-switcher"))];
@@ -524,6 +681,9 @@ function parts(client, session) {
     reminder = coderOn ? obj(st.delegation).reminder !== false : envOn("NO_REMINDER");
     models = stateModels(st.models, over);
     providers = providerIds(st);
+    if (isRef(st.coder_model)) coderRef = String(st.coder_model);    // the subagent extension passes it as --model
+    const level = obj(obj(st.thinking).coder)[coderRef];
+    if (coderRef !== "main" && typeof level === "string" && LEVEL_RE.test(level)) refThinking = level;
     const sett = obj(json(join(PI, "settings.json")));
     fallback = typeof sett.defaultProvider === "string" && typeof sett.defaultModel === "string"
       ? `${sett.defaultProvider}/${sett.defaultModel}` : "";
@@ -533,11 +693,16 @@ function parts(client, session) {
   }
   // the coder's rows: a sub-list (user, 2026-10-09); without the coder only its switch (user, 2026-10-08: the
   // others do nothing then, and they disappear)
+  // the external models of this client (Phase 23.4.5): CARL's own providers are not offered (Phase 29)
+  const external = (session.external ?? []).filter((x) => !providers.includes(x.ref.slice(0, x.ref.indexOf("/"))));
+  const carl = coderModel(models, providers, session, fallback);
+  const thinking = coderRef === "main" ? coderThinking(models, providers, session, fallback)
+    : [externalThinkingRow(coderRef, external.find((x) => x.ref === coderRef)?.levels ?? [], refThinking)];
   const coder = [
     switchRow("coder", "Coder", "the coder subagent", "NO_CODER", coderOn),
     ...(coderOn ? [switchRow("background", "Background coder", "the background coder", "NO_BACKGROUND_SUBAGENTS", bg),
                    switchRow("reminder", "Delegation reminder", "the delegation reminder", "NO_REMINDER", reminder),
-                   ...coderThinking(models, providers, session, fallback), coderModelRow()] : []),
+                   ...thinking, coderModelRow(coderRef, carl?.m.id ?? "", external, client)] : []),
   ];
   return [
     { id: "subagent", label: "Coder subagent", state: coderOn ? "on" : "off", kind: "list", listTitle: "Coder subagent",
@@ -656,7 +821,8 @@ export function outcome(action, code, client, result = {}, session = {}) {
 /**
  * After `carl-sync.py set`. The coder turned on while the server runs 1 slot (the slot count the setup reads for
  * its coder rule; not known: no warning) is a warning (user, 2026-10-09: it turns the coder on, and says that this
- * system has only one slot).
+ * system has only one slot); also Coder model set back to same as main with 1 slot. Not with an external coder model
+ * (Phase 23.4.5: it uses no slot of the server).
  * @param {Action} action @param {number} code @param {Client} client @param {JsonObject} result
  * @param {Session} session @returns {Said}
  */
@@ -678,7 +844,10 @@ function switchOutcome(action, code, client, result, session) {
     : `CARL set ${name} to ${action.want}.`);
   const apps = /** @type {Client[]} */ ((Array.isArray(result.restart) ? result.restart : [client])
     .filter((c) => c === "opencode" || c === "pi"));
-  const oneSlot = action.row === "coder" && action.want === "on" && result.slots === 1;
+  // the coder on CARL's server (Coder model same as main): an external coder uses no slot (Phase 23.4.5)
+  const local = allRows(panel(client, session).rows).find((r) => r.id === "coder-model")?.value === "main";
+  const oneSlot = ((action.row === "coder" && action.want === "on") || (action.row === "coder-model" && action.want === "main"))
+    && local && result.slots === 1;
   const said = oneSlot ? `${did} This server runs 1 slot: the coder takes the main session's slot while it works.` : did;
   // no client to restart (the change reaches them at once): no restart sentence
   const message = Array.isArray(result.restart) && !apps.length ? said

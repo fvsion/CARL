@@ -51,6 +51,21 @@ The dashboard has two thinking settings for each model (Settings > Agents): **Ma
 
 [Thinking](thinking.md#thinking-by-client) gives what each variant sends.
 
+#### An external coder model (Phase 23.4.5)
+
+`/carl`'s Coder model (`CODER_MODEL=PROVIDER/MODEL` in `~/.config/carl/client-install.env`; `main` or no line: the main session's model) is a setup switch like the others. `install.sh` passes it to `configure.py` (`--coder-model`, and `--coder-model-thinking` for `CODER_MODEL_THINKING`):
+
+| | OpenCode | Pi |
+|---|---|---|
+| The coder's model | the coder agent's `"model": "PROVIDER/MODEL"` in `opencode.json` | `"coder_model": "PROVIDER/MODEL"` in `~/.pi/agent/carl.json`; the `subagent` tool passes `--model` |
+| CARL's sampling | the coder agent has no `"temperature"` (with `main`: 0.6) | none (Pi's coder never had one) |
+| Its thinking | `carl-delegation`'s options `coderModel` and, with a value, `coderVariant` (a variant of that model) | `"thinking": {"coder": {"PROVIDER/MODEL": LEVEL}}` in `carl.json` (only with a value) |
+| The state file | `"coder_model"` (`main` when none) | `"coder_model"` (`main` when none) |
+
+- The setup writes only the model's name. The provider and its key are the client's own: CARL adds no provider for it and reads no key.
+- The setup's coder rule: with `CODER_MODEL` set, `auto` turns the coder on also with a 1-slot server ("The coder runs on PROVIDER/MODEL, not on the server."). `NO_CODER=1` still turns it off.
+- One switch for the computer: both clients get the same `PROVIDER/MODEL`. A client that does not know that model fails the coder's task with its error.
+
 #### /carl's Coder thinking on one computer
 
 `/carl` > **Coder subagent** > **Coder thinking** overrides the dashboard's Coder thinking on one computer, for one model (user, 2026-10-09: "/carl overrides the dashboards default for that computer only"; stored per model).

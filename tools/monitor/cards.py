@@ -77,6 +77,7 @@ class View:
     drafter_size: int = 0               # the MTP drafter file the server loaded (-md), bytes
     model_quant: str = ""               # the catalogue's quantization of the loaded model
     here: str = ""                      # OpenCode and Pi on this Mac: "set up", "update needed", "not set up"
+    coder_here: str = ""                # the coder's model on this Mac: "main", PROVIDER/MODEL, "" (not set up; 23.4.5)
     next_start: List[CardLine] = field(default_factory=list)    # the SERVER card when no server runs (app.py)
     reuse_from: str = ""                # where the busy request's reused tokens came from (Phase 23.5; mocked now)
     selected: str = ""                  # the selected section (Tab): its title is drawn reversed

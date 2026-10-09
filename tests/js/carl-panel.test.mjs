@@ -13,9 +13,9 @@ const REPO = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const HOME = mkdtempSync(join(tmpdir(), "carl-panel-"));
 process.env.HOME = HOME;                     // read when the module loads
 delete process.env.PI_CODING_AGENT_DIR;
-const { act, allRows, coderModel, duration, openCodeSearch, outcome, packageVersions, panel, piSearch, restartNotice,
-        rowsAt, shownState, stateModels, switches, thinkingOverrides, thinkingValues, thinkingWord, viewText,
-        when } = await import("../../client/shared/carl-panel.js");
+const { act, allRows, coderModel, costOf, duration, hostOf, openCodeModels, openCodeSearch, outcome, packageVersions,
+        panel, piModels, piSearch, restartNotice, rowsAt, shownState, stateModels, switches, thinkingOverrides,
+        thinkingValues, thinkingWord, viewText, when } = await import("../../client/shared/carl-panel.js");
 const CARL = join(HOME, ".config", "carl");
 const PI = join(HOME, ".pi", "agent");
 mkdirSync(CARL, { recursive: true });
@@ -249,11 +249,12 @@ test("coderModel: the session's CARL model, else the default, else the first", (
   assert.equal(coderModel([], ["llamacpp"], {}, ""), undefined);
 });
 
-test("Coder model: same as main, its only value now (Phase 23.4.5 adds more)", () => {
+test("Coder model: same as main alone when the client has no other model (it opens nothing)", () => {
   stage(true);
   const r = get("opencode", "coder-model");
   assert.deepEqual([r.kind, r.state, r.value, r.values], ["choice", "same as main", "main", ["main"]]);
   assert.deepEqual(r.actions, {});
+  assert.equal(shownState(r), "same as main");
 });
 
 test("Coder subagent: its state shows a › (it opens a list); only that row", () => {
@@ -819,6 +820,8 @@ function fakePi(dir) {
     writeFileSync(join(d, "index.js"), code);
   };
   pkg("pi-coding-agent", "export const getSelectListTheme = () => ({});\nexport const getSettingsListTheme = () => ({});\n");
+  // pi-ai's getSupportedThinkingLevels: off only for a model that does not reason, else the levels it maps
+  pkg("pi-ai", "export const getSupportedThinkingLevels = (m) => (m.reasoning ? [\"off\", \"minimal\", \"low\", \"medium\", \"high\"] : [\"off\"]);\n");
   pkg("pi-tui", String.raw`export const Key = { escape: "\x1b" };
 export const matchesKey = (data, key) => data === key;
 export class Text { constructor(t) { this.text = t; } setText(t) { this.text = t; } render() { return [this.text]; } }
@@ -918,4 +921,255 @@ test("Pi: Pi's settings list; Coder subagent opens its list in place (Esc back);
   key("\x1b");
   await ended;
   assert.ok(closed);
+});
+
+// ------------------------------------------------------------------ Phase 23.4.5: the coder on another endpoint
+
+/** OpenCode's state.provider as the TUI has it (made-up providers; each with a key that CARL must never read). */
+const OC_PROVIDERS = [
+  { id: "llamacpp", name: "CARL", key: "carl-key", options: { baseURL: "http://192.168.42.1:8080/v1", apiKey: "carl-key" },
+    models: { [Q]: { id: Q, api: { url: "" }, cost: { input: 0, output: 0, cache: { read: 0, write: 0 } }, variants: {} } } },
+  { id: "zen", name: "OpenCode Zen", key: "sk-zen-secret", options: { apiKey: "sk-zen-secret" },
+    models: { "free-coder-1": { id: "free-coder-1", api: { url: "https://opencode.ai/zen/v1" },
+                                cost: { input: 0, output: 0, cache: { read: 0, write: 0 } } } } },
+  { id: "openrouter", name: "OpenRouter", key: "sk-or-secret", options: { apiKey: "sk-or-secret" },
+    models: { "example-coder-32b": { id: "example-coder-32b", api: { url: "https://openrouter.ai/api/v1" },
+                                     cost: { input: 0.2, output: 0.6, cache: { read: 0, write: 0 } },
+                                     variants: { low: { reasoningEffort: "low" }, high: { reasoningEffort: "high" } } } } },
+  { id: "myprovider", name: "My provider", options: { baseURL: "https://api.example.com/v1", apiKey: "sk-mine" },
+    models: { "big-model": { id: "big-model", api: { url: "" }, cost: { input: 1, output: 2 } } } },
+];
+/** Pi's modelRegistry.getAvailable() (made-up models; CARL's provider among them). */
+const PI_MODELS = [
+  { provider: "llamacpp", id: Q, baseUrl: "http://192.168.42.1:8080/v1", reasoning: true,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } },
+  { provider: "opencode", id: "free-coder-1", baseUrl: "https://opencode.ai/zen/v1", reasoning: false,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } },
+  { provider: "openrouter", id: "example-coder-32b", baseUrl: "https://openrouter.ai/api/v1", reasoning: true,
+    cost: { input: 0.2, output: 0.6, cacheRead: 0, cacheWrite: 0 } },
+  { provider: "custom", id: "no-price", baseUrl: "http://10.0.0.5:9000/v1", reasoning: false },
+];
+const OR = "openrouter/example-coder-32b";
+const piLevels = (m) => (m.reasoning ? ["off", "minimal", "low", "medium", "high"] : ["off"]);
+const OC_SESSION = { external: openCodeModels(OC_PROVIDERS) };
+const PI_SESSION = { external: piModels(PI_MODELS, piLevels) };
+/** OpenCode's configs after the setup wrote an external coder model (the agent's model, carl-delegation's options). */
+const ocWith = (model = "", variant = "") => JSON.stringify({
+  plugin: ["file:/x/carl-cache", ["file:/x/carl-model-check", {}],
+           ["file:/x/carl-delegation", { reminder: true, ...(model ? { coderModel: model } : {}), ...(variant ? { coderVariant: variant } : {}) }]],
+  agent: { coder: model ? { model } : {} }, mcp: { "carl-browser": {} }, lsp: true });
+/** Pi's carl.json after the setup wrote one (coder_model; its level in "thinking"). */
+const piWith = (model = "main", level = "") => JSON.stringify({
+  background_subagents: true, delegation: { reminder: true }, models: ONE, coder_model: model,
+  ...(level ? { thinking: { coder: { [model]: level } } } : {}) });
+
+test("the external models: OpenCode's providers and Pi's registry, each with its host and its cost; never a key", () => {
+  assert.deepEqual(openCodeModels(OC_PROVIDERS), [
+    { ref: `llamacpp/${Q}`, host: "192.168.42.1", cost: "free", levels: [] },
+    { ref: "zen/free-coder-1", host: "opencode.ai", cost: "free", levels: [] },
+    { ref: OR, host: "openrouter.ai", cost: "paid", levels: ["low", "high"] },
+    { ref: "myprovider/big-model", host: "api.example.com", cost: "paid", levels: [] }]);
+  assert.deepEqual(piModels(PI_MODELS, piLevels).slice(1), [
+    { ref: "opencode/free-coder-1", host: "opencode.ai", cost: "free", levels: ["off"] },
+    { ref: OR, host: "openrouter.ai", cost: "paid", levels: ["off", "minimal", "low", "medium", "high"] },
+    { ref: "custom/no-price", host: "10.0.0.5", cost: "", levels: ["off"] }]);              // no cost info: the host only
+  // a provider with no URL (the SDK's own): its name; ids with / and : (openrouter's) are kept whole
+  assert.deepEqual(openCodeModels([{ id: "anthropic", name: "Anthropic", models: { "m-1": { id: "m-1", api: {}, cost: { input: 3, output: 15 } } } },
+                                   { id: "openrouter", models: { "qwen/qwen3-coder:free": { id: "qwen/qwen3-coder:free", api: { url: "https://openrouter.ai/api/v1" }, cost: { input: 0, output: 0 } } } }]),
+                   [{ ref: "anthropic/m-1", host: "Anthropic", cost: "paid", levels: [] },
+                    { ref: "openrouter/qwen/qwen3-coder:free", host: "openrouter.ai", cost: "free", levels: [] }]);
+  assert.deepEqual([costOf(undefined), costOf({ input: 0 }), costOf({ input: 0, output: 0, cache: { read: 0.1 } })], ["", "", "paid"]);
+  assert.deepEqual([hostOf("not a url"), hostOf(3), hostOf("https://x.example:8443/v1")], ["", "", "x.example"]);
+  assert.deepEqual(openCodeModels(undefined), []);
+  assert.deepEqual(piModels([{ provider: "a b", id: "x" }, null], piLevels), []);              // not PROVIDER/MODEL
+  // the keys: never read (a provider whose key fields throw when read), never in the result
+  const watched = OC_PROVIDERS.map((p) => new Proxy({ ...p, options: new Proxy(p.options, { get(t, k) {
+    if (k === "apiKey") throw new Error("CARL read options.apiKey");
+    return t[k];
+  } }) }, { get(t, k) {
+    if (k === "key") throw new Error("CARL read the provider's key");
+    return t[k];
+  } }));
+  const got = openCodeModels(watched);
+  assert.equal(got.length, 4);
+  assert.doesNotMatch(JSON.stringify(got), /secret|sk-mine|carl-key/);
+  const piWatched = PI_MODELS.map((m) => new Proxy(m, { get(t, k) {
+    if (k === "apiKey" || k === "headers") throw new Error(`CARL read the model's ${String(k)}`);
+    return t[k];
+  } }));
+  assert.equal(piModels(piWatched, piLevels).length, 4);
+});
+
+test("Coder model: same as main, then this client's models with where they go; CARL's own are left out (Phase 23.4.5)", () => {
+  stage(true);
+  for (const [client, session, first] of [["opencode", OC_SESSION, "zen/free-coder-1"], ["pi", PI_SESSION, "opencode/free-coder-1"]]) {
+    const r = getIn(client, "coder-model", session);
+    assert.deepEqual([r.kind, r.state, r.value], ["choice", "same as main", "main"]);
+    assert.equal(shownState(r), "same as main ›");                                       // it opens its values now
+    assert.equal(r.values[0], "main");
+    assert.equal(r.values[1], first);
+    assert.ok(!r.values.some((v) => v.startsWith("llamacpp/")), r.values.join());           // CARL's models: Phase 29
+    assert.equal(r.notes.main, `CARL: ${Q}`);
+    assert.equal(r.notes[OR], "openrouter.ai, paid");
+    assert.deepEqual(r.titles, { main: "same as main" });
+    const a = r.actions[OR];
+    assert.deepEqual(a.args, ["set", `CODER_MODEL=${OR}`]);
+    assert.deepEqual([a.busy, a.row, a.want, a.live], [`switching to ${OR}…`, "coder-model", OR, ["pi"]]);
+    assert.equal(a.did, `CARL set the coder's model to ${OR} on this computer. The coder's work goes to openrouter.ai, `
+      + "and the model costs money.");
+    assert.equal(r.actions[first].did, `CARL set the coder's model to ${first} on this computer. The coder's work goes `
+      + "to opencode.ai.");                                                                 // free: no cost sentence
+  }
+  assert.deepEqual(getIn("opencode", "coder-model", OC_SESSION).notes, { main: `CARL: ${Q}`, "zen/free-coder-1": "opencode.ai, free",
+    [OR]: "openrouter.ai, paid", "myprovider/big-model": "api.example.com, paid" });
+  assert.equal(getIn("pi", "coder-model", PI_SESSION).notes["custom/no-price"], "10.0.0.5");
+  // CARL's provider under its other id ("carl", next to a user's own "llamacpp"): left out; the user's "llamacpp" stays
+  writeFileSync(join(OC, "carl.json"), JSON.stringify({ providers: { llamacpp: "carl" }, models: ONE }));
+  const mine = { external: openCodeModels([{ ...OC_PROVIDERS[0], id: "carl" }, OC_PROVIDERS[0]]) };
+  assert.deepEqual(getIn("opencode", "coder-model", mine).values, ["main", `llamacpp/${Q}`]);
+});
+
+test("Coder model: a choice runs carl-sync.py set CODER_MODEL; the toast says where the work goes, as the mock-up", async () => {
+  // Pi reads carl.json each time it starts the coder: no restart, and its title does not count it
+  stage(true);
+  const before = panel("pi", PI_SESSION).title;
+  fake({ files: { [join(PI, "carl.json")]: piWith("opencode/free-coder-1") }, out: { ok: true, restart: [] } });
+  const pi = await act(getIn("pi", "coder-model", PI_SESSION).actions["opencode/free-coder-1"], "pi", PI_SESSION);
+  assert.deepEqual(pi, { ok: true, message: "CARL set the coder's model to opencode/free-coder-1 on this computer. "
+    + "The coder's work goes to opencode.ai." });
+  assert.equal(panel("pi", PI_SESSION).title, before);
+  assert.equal(getIn("pi", "coder-model", PI_SESSION).state, "opencode/free-coder-1");
+  stage(true);
+  fake({ files: { [join(OC, "opencode.json")]: ocWith(OR), [join(CARL, "client-install.env")]: `CLIENTS=both\nCODER_MODEL=${OR}\n` },
+         out: { ok: true, restart: ["opencode"], slots: 1 } });
+  const said = await act(getIn("opencode", "coder-model", OC_SESSION).actions[OR], "opencode", OC_SESSION);
+  assert.deepEqual(calls(), [`set CODER_MODEL=${OR}`]);
+  assert.deepEqual(said, { ok: true, message: `CARL set the coder's model to ${OR} on this computer. The coder's work goes `
+    + "to openrouter.ai, and the model costs money. Restart OpenCode to use it." });     // 1 slot: no warning (no slot used)
+  const sub = rowsAt(panel("opencode", OC_SESSION).rows, ["subagent"]);
+  assert.deepEqual(sub.map((r) => [r.label, shownState(r)]), [["Coder", "on"], ["Background coder", "on"],
+    ["Delegation reminder", "on"], ["Coder thinking", "model default ›"], ["Coder model", `${OR} ›`]]);
+  assert.match(panel("opencode", OC_SESSION).title, /^Restart OpenCode to use \d+ changes?\.$/);   // (1 in the TUI test)
+  // back to same as main: the coder stays on (CODER=1); with 1 slot, the warning of the coder on the server
+  fake({ files: { [join(OC, "opencode.json")]: ocWith() }, out: { ok: true, restart: ["opencode"], slots: 1 } });
+  const back = await act(getIn("opencode", "coder-model", OC_SESSION).actions.main, "opencode", OC_SESSION);
+  assert.deepEqual(calls(), ["set CODER_MODEL=main CODER=1"]);
+  assert.deepEqual(back, { ok: true, warn: true, message: "CARL set the coder's model to same as main on this computer. "
+    + "This server runs 1 slot: the coder takes the main session's slot while it works. Restart OpenCode to use it." });
+  // the setup did not write it: the row says so
+  stage(true);
+  fake({ out: { ok: true, restart: ["opencode"] } });
+  const not = await act(getIn("opencode", "coder-model", OC_SESSION).actions[OR], "opencode", OC_SESSION);
+  assert.equal(not.ok, false);
+  assert.match(not.message, /the coder's model is still same as main\./);
+});
+
+test("an external coder uses no slot: turning the coder on gives no 1-slot warning (Phase 23.4.5)", async () => {
+  stage(false);
+  writeFileSync(join(PI, "carl.json"), piWith(OR));                 // the coder's model is external already
+  fake({ files: { [join(PI, "agents", "coder.md")]: "x" }, out: { ok: true, restart: ["pi"], slots: 1 } });
+  const said = await act(get("pi", "coder").actions.on, "pi", PI_SESSION);
+  assert.deepEqual(said, { ok: true, message: "CARL turned the coder subagent on. Restart Pi to use it." });
+});
+
+test("Coder thinking with an external model: model default, then the levels the client knows for it", async () => {
+  stage(true);
+  writeFileSync(join(OC, "opencode.json"), ocWith(OR));
+  writeFileSync(join(CARL, "client-install.env"), `CLIENTS=both\nCODER_MODEL=${OR}\nCODER_THINKING=${Q}:off\n`);
+  let r = getIn("opencode", "thinking", OC_SESSION);
+  assert.deepEqual([r.state, r.value, r.values, r.choiceTitle], ["model default", "default", ["default", "low", "high"],
+                                                                 `Coder thinking with ${OR}`]);   // CARL's table: not used
+  assert.deepEqual([r.titles, r.notes], [{ default: "model default" }, {}]);
+  const high = r.actions.high;
+  assert.deepEqual(high.args, ["set", "CODER_MODEL_THINKING=high"]);
+  assert.deepEqual([high.busy, high.row, high.want, high.live], ["switching to high…", "thinking", "high", ["pi"]]);
+  assert.equal(high.did, `CARL set the coder's thinking with ${OR} to high on this computer.`);
+  // the variant the setup wrote (carl-delegation's coderVariant)
+  writeFileSync(join(OC, "opencode.json"), ocWith(OR, "high"));
+  r = getIn("opencode", "thinking", OC_SESSION);
+  assert.deepEqual([r.state, Object.keys(r.actions)], ["high", ["default", "low"]]);
+  assert.deepEqual(r.actions.default.args, ["set", "CODER_MODEL_THINKING=default"]);
+  assert.equal(r.actions.default.did, `CARL set the coder's thinking with ${OR} to model default on this computer.`);
+  // Pi: its thinking levels; off says to use a full spec
+  writeFileSync(join(PI, "carl.json"), piWith(OR, "low"));
+  r = getIn("pi", "thinking", PI_SESSION);
+  assert.deepEqual([r.state, r.values], ["low", ["default", "off", "minimal", "low", "medium", "high"]]);
+  assert.equal(r.actions.off.did, `CARL set the coder's thinking with ${OR} to off on this computer. ${FULL}`);
+  // a model the client does not know (now): model default only, and nothing opens
+  r = getIn("pi", "thinking", {});
+  assert.deepEqual([r.values, shownState(r)], [["default", "low"], "low ›"]);
+  writeFileSync(join(PI, "carl.json"), piWith(OR));
+  assert.equal(shownState(getIn("pi", "thinking", {})), "model default");
+});
+
+test("Coder model: the current model stays in the list when this client does not list it, with a note", () => {
+  stage(true);
+  writeFileSync(join(PI, "carl.json"), piWith("zen/free-coder-1"));      // chosen in OpenCode: Pi calls it opencode/...
+  const r = getIn("pi", "coder-model", PI_SESSION);
+  assert.deepEqual(r.values.slice(0, 2), ["main", "zen/free-coder-1"]);
+  assert.equal(r.notes["zen/free-coder-1"], "Pi does not list this model.");
+  assert.equal(r.state, "zen/free-coder-1");
+  assert.deepEqual(Object.keys(r.actions).includes("zen/free-coder-1"), false);
+});
+
+test("OpenCode: Coder model's values come from OpenCode's providers (● same as main, the notes in grey)", async () => {
+  stage(true);
+  fake({ files: { [join(OC, "opencode.json")]: ocWith(OR) }, out: { ok: true, restart: ["opencode"] } });
+  const plugin = (await import(copyPanel("client/opencode/plugins/carl-panel", "tui.js"))).default;
+  const { api, dialogs, toasts, commands } = fakeOpenCode();
+  api.state.provider = OC_PROVIDERS;
+  await plugin.tui(api);
+  commands[0].onSelect();
+  dialogs.at(-1).props.onSelect({ value: "subagent" });
+  const sub = dialogs.at(-1).props;
+  assert.deepEqual(sub.options.at(-1), { title: "Coder model", value: "coder-model", footer: "same as main ›" });
+  sub.onSelect({ value: "coder-model" });
+  const values = dialogs.at(-1).props;
+  assert.equal(values.title, "Coder model");
+  assert.equal(values.current, "main");
+  assert.deepEqual(values.options.map((o) => [o.title, o.description]), [["same as main", `CARL: ${Q}`],
+    ["zen/free-coder-1", "opencode.ai, free"], [OR, "openrouter.ai, paid"], ["myprovider/big-model", "api.example.com, paid"]]);
+  values.onSelect({ value: OR });
+  await until(() => toasts.length);
+  assert.deepEqual(calls(), [`set CODER_MODEL=${OR}`]);
+  assert.deepEqual(toasts, [{ message: `CARL set the coder's model to ${OR} on this computer. The coder's work goes to `
+    + "openrouter.ai, and the model costs money. Restart OpenCode to use it.", variant: "success" }]);
+  const back = dialogs.at(-1).props;
+  assert.equal(back.title, "Coder subagent   Restart OpenCode to use 1 change.");
+  assert.deepEqual(back.options.slice(-2).map((o) => o.footer), ["model default ›", `${OR} ›`]);
+});
+
+test("Pi: Coder model's values come from Pi's model registry; a choice says where the work goes", async () => {
+  stage(true);
+  fake({ files: { [join(PI, "carl.json")]: piWith(OR) }, out: { ok: true, restart: [] } });
+  const url = copyPanel("client/pi/extensions/carl-panel", "index.ts");
+  fakePi(dirname(fileURLToPath(url)));
+  const ext = (await import(url)).default;
+  const commands = {};
+  ext({ on: () => {}, registerCommand: (name, c) => { commands[name] = c; } });
+  const notes = [];
+  let comp;
+  const ctx = { mode: "tui", model: { provider: "llamacpp", id: Q }, modelRegistry: { getAvailable: () => PI_MODELS },
+    ui: { notify: (m, k) => notes.push([m, k]), custom: (factory) => new Promise((done) => {
+      comp = factory({ requestRender: () => {} }, { fg: (_c, t) => t, bold: (t) => t }, {}, () => done());
+    }) } };
+  const ended = commands.carl.handler("", ctx);
+  const screen = () => comp.render(80);
+  const key = (...ks) => ks.forEach((k) => comp.handleInput(k));
+  const DOWN = "\x1b[B";
+  key("\r");
+  assert.equal(screen().at(-1), "  Coder model  same as main ›");
+  key(DOWN, DOWN, DOWN, DOWN, "\r");
+  assert.equal(screen()[0], "Coder model");
+  assert.deepEqual(screen().slice(2), [`→ same as main  CARL: ${Q}`, "  opencode/free-coder-1  opencode.ai, free",
+                                       `  ${OR}  openrouter.ai, paid`, "  custom/no-price  10.0.0.5"]);
+  key(DOWN, DOWN, "\r");
+  await until(() => notes.length);
+  assert.deepEqual(calls(), [`set CODER_MODEL=${OR}`]);
+  assert.deepEqual(notes, [[`CARL set the coder's model to ${OR} on this computer. The coder's work goes to openrouter.ai, `
+    + "and the model costs money.", "info"]]);
+  await until(() => screen().some((l) => l.includes(`Coder model  ${OR}`)));
+  assert.ok(screen().includes("  Coder thinking  model default ›"), screen().join("\n"));
+  key("\x1b", "\x1b");
+  await ended;
 });

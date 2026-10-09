@@ -127,6 +127,30 @@ class RegistryTest(unittest.TestCase):
             again = Registry(path).list()                            # kept across dashboard restarts
             self.assertEqual([(x.host, x.address, x.connected) for x in again], [("vm-1", "192.168.42.128", 0)])
 
+    def test_the_coder_model_a_client_reports(self) -> None:
+        """Phase 23.4.5: X-Carl-Client's coder_model ("main" or the client's PROVIDER/MODEL) is kept, also across
+        dashboard restarts; a value that is not one is left out; a change is saved at once."""
+        from monitor.cacheapi import Registry, parse_client
+        head = '{"id": "0123456789ab", "host": "vm", "applied": "v1", "mode": "service", "coder_model": %s}'
+        c = parse_client(head % '"openrouter/qwen/qwen3-coder:free"')
+        assert c is not None
+        self.assertEqual(c.coder_model, "openrouter/qwen/qwen3-coder:free")
+        for bad in ('"a b/c"', '"x"', '"a/\\u0007"', "3", '"%s"' % ("a/" + "x" * 200)):
+            got = parse_client(head % bad)
+            assert got is not None
+            self.assertEqual(got.coder_model, "", bad)
+        old = parse_client('{"id": "0123456789ab", "host": "vm"}')                  # an older client package
+        assert old is not None
+        self.assertEqual(old.coder_model, "")
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "clients.json")
+            reg = Registry(path)
+            reg.seen(c, "192.168.42.128")
+            main = parse_client(head % '"main"')
+            assert main is not None
+            reg.seen(main, "192.168.42.128")                         # changed: saved at once
+            self.assertEqual([x.coder_model for x in Registry(path).list()], ["main"])
+
     def test_a_client_that_leaves_is_seen_at_once_and_keeps_what_it_reported(self) -> None:
         """The event stream ends: the client counts as gone within ~2 s, and the config it applied while
         connected stays (not the value from when the stream started)."""

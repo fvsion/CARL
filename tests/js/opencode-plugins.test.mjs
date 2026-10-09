@@ -3,7 +3,7 @@
 // Run: node --test tests/js (tests/scripts/test_js.py runs it with the other suites).
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -260,7 +260,7 @@ const GREEN_TEST = 'import { test } from "node:test";\ntest("R1", () => {});\n';
  * prompt to a new session is the code session: it writes src/feature.txt (and with tamper, the test too), then
  * OpenCode's session.idle event comes. A prompt to the main session ("m") is the one result.
  */
-function chainOpenCode({ tamper = false, version = "1.18.35" } = {}) {
+function chainOpenCode({ tamper = false, version = "1.18.35", fail = "" } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "carl-oc-chain-"));
   const calls = [];
   const logs = [];
@@ -288,9 +288,12 @@ function chainOpenCode({ tamper = false, version = "1.18.35" } = {}) {
         }, 10);
         return { data: undefined };
       },
+      // fail: the code session's provider failed (Phase 23.4.5): OpenCode's assistant message with its error
       messages: async ({ path }) => ({ data: [
         { info: { role: "user" }, parts: [{ type: "text", text: "the brief" }] },
-        { info: { role: "assistant" }, parts: [{ type: "text", text: answers.get(path.id) ?? "" }] }] }),
+        fail && path.id === "ses_code"
+          ? { info: { role: "assistant", error: { name: "APIError", data: { message: fail } } }, parts: [] }
+          : { info: { role: "assistant" }, parts: [{ type: "text", text: answers.get(path.id) ?? "" }] }] }),
     },
   };
   return { dir, calls, logs, client, deliveredP, setHooks: (h) => (hooks = h) };
@@ -623,4 +626,138 @@ test("carl-cache: an idle session's turn ends without an error", async () => {
   await hooks.event({ event: { type: "session.idle", properties: { sessionID: "s1" } } });
   await hooks.event({ event: { type: "session.status", properties: { sessionID: "s1", status: { type: "idle" } } } });
   await hooks.event({ event: { type: "message.updated", properties: {} } });
+});
+
+// ------------------------------------------------------------------ Phase 23.4.5: the coder on another endpoint
+
+const OR_MODEL = { providerID: "openrouter", id: "example-coder-32b",
+                   variants: { low: { reasoningEffort: "low" }, high: { reasoningEffort: "high", reasoning: { effort: "high" } } } };
+
+test("carl-delegation, an external coder model: chat.params sends only the variant /carl chose; no CARL thinking or sampling", async () => {
+  const opts = { coder: "coder", coderThinking: { "llamacpp/qwen3.8-27b": "none" }, coderModel: "openrouter/example-coder-32b" };
+  const params = async (hooks, agent, model) => {
+    // OpenCode's output for a coder agent with no temperature (configure.py leaves it out for an external model)
+    const output = { temperature: undefined, topP: undefined, topK: undefined, options: { usage: { include: true } } };
+    await hooks["chat.params"]({ sessionID: "s", agent, model, provider: {}, message: {} }, output);
+    return output;
+  };
+  // model default (no coderVariant): the request stays as it is
+  let hooks = await delegation.server({}, opts);
+  assert.deepEqual(await params(hooks, "coder", OR_MODEL), { temperature: undefined, topP: undefined, topK: undefined,
+                                                             options: { usage: { include: true } } });
+  // a variant: that variant of the model, merged into the options (nothing else changes)
+  hooks = await delegation.server({}, { ...opts, coderVariant: "high" });
+  const out = await params(hooks, "coder", OR_MODEL);
+  assert.deepEqual(out.options, { usage: { include: true }, reasoningEffort: "high", reasoning: { effort: "high" } });
+  assert.equal(out.temperature, undefined);
+  OR_MODEL.variants.high.reasoning.effort = "high";                                 // the model's own entry: not changed
+  const again = await params(hooks, "coder", OR_MODEL);
+  again.options.reasoning.effort = "x";
+  assert.equal(OR_MODEL.variants.high.reasoning.effort, "high");
+  // not the coder, another model, a variant the model does not have: as it is
+  assert.deepEqual((await params(hooks, "build", OR_MODEL)).options, { usage: { include: true } });
+  assert.deepEqual((await params(hooks, "coder", { ...OR_MODEL, id: "other" })).options, { usage: { include: true } });
+  hooks = await delegation.server({}, { ...opts, coderVariant: "max" });
+  assert.deepEqual((await params(hooks, "coder", OR_MODEL)).options, { usage: { include: true } });
+  // CARL's table still applies to CARL's models (same as main again in the same OpenCode)
+  assert.equal((await params(hooks, "coder", { providerID: "llamacpp", id: "qwen3.8-27b" })).options.reasoningEffort, "none");
+  assert.equal(delegationMod.coderVariant("a/b", "high", "coder", "coder", { providerID: "a", id: "b", variants: { high: 1 } }), undefined);
+});
+
+test("carl-model-check: a request to the coder's external model is not checked (no request to CARL's server, no warning)", async () => {
+  const { default: check } = await import("../../client/opencode/plugins/carl-model-check/index.js");
+  const said = [];
+  const asked = [];
+  const keep = globalThis.fetch;
+  globalThis.fetch = async (u) => (asked.push(String(u)), new Response(JSON.stringify({ data: [{ id: "other-model" }] })));
+  try {
+    const hooks = await check.server({ client: { app: { log: async (o) => said.push(o) }, tui: { showToast: async (o) => said.push(o) } } },
+                                     { provider: "llamacpp" });
+    await hooks["chat.params"]({ agent: "coder", model: { providerID: "openrouter", id: "example-coder-32b" },
+                                 provider: { options: { baseURL: "https://openrouter.ai/api/v1", apiKey: "sk-or-secret" } } }, {});
+    assert.deepEqual([asked, said], [[], []]);
+    // CARL's own provider is still checked (the same plugin, a CARL model the server does not run)
+    await hooks["chat.params"]({ agent: "build", model: { providerID: "llamacpp", id: "m" },
+                                 provider: { options: { baseURL: "http://10.0.0.1:8080/v1" } } }, {});
+    assert.deepEqual(asked, ["http://10.0.0.1:8080/v1/models"]);
+    assert.ok(said.length > 0);
+  } finally {
+    globalThis.fetch = keep;
+  }
+});
+
+test("carl-cache: a request to another provider (the coder's external model) is not marked, saved, restored or claimed", async () => {
+  const before = existsSync(join(HOME, ".config", "carl")) ? readdirSync(join(HOME, ".config", "carl")).sort() : [];
+  srv.seen.length = 0;
+  assert.equal(await mark("ses_coder", "openrouter", "coder"), undefined);            // no mark
+  const body = JSON.stringify({ model: "example-coder-32b", stream: true, temperature: undefined,
+                                messages: [{ role: "system", content: "You are coder." }, { role: "user", content: "the brief" }] });
+  const res = await fetch("https://openrouter.ai/api/v1/chat/completions",
+                          { method: "POST", headers: { Authorization: "Bearer sk-or-secret" }, body });
+  await res.text();                                                                    // the reply ended the turn
+  await hooks.event({ event: { type: "session.idle", properties: { sessionID: "ses_coder" } } });
+  // one request, to the provider, as OpenCode sent it: no slot, no CARL call before or after it
+  assert.deepEqual(srv.seen.map((x) => [x.path, x.body, x.headers.get("authorization"), x.headers.get("x-carl-cache")]),
+                   [["/api/v1/chat/completions", body, "Bearer sk-or-secret", null]]);
+  const after = existsSync(join(HOME, ".config", "carl")) ? readdirSync(join(HOME, ".config", "carl")).sort() : [];
+  assert.deepEqual(after, before);                                                    // no claim, turn or record file
+});
+
+test("carl-delegation, the chain with an external coder model: both sessions on the coder agent's model", async () => {
+  // OpenCode's task tool starts the test session on the coder agent's model (agent.model, read in OpenCode 1.18.35)
+  // and says so in its metadata; the plugin starts the code session with that model and the coder agent
+  const oc = chainOpenCode();
+  const hooks = await delegation.server({ client: oc.client, directory: oc.dir }, { coder: "coder", coderModel: "openrouter/example-coder-32b" });
+  oc.setHooks(hooks);
+  const args = { subagent_type: "coder", description: "Feature", prompt: CHAIN_BRIEF(), background: false };
+  await hooks["tool.execute.before"]({ tool: "task", sessionID: "m", callID: "e1" }, { args });
+  assert.match(args.prompt, /^work_mode = "tests-only"/);                             // the brief and the check as before
+  const output = { metadata: { sessionId: "ses_test", model: { providerID: "openrouter", modelID: "example-coder-32b" } },
+                   output: delegationMod.taskXml({ id: "ses_test", state: "completed", text: testSession(oc.dir) }) };
+  await hooks["tool.execute.after"]({ tool: "task", sessionID: "m", callID: "e1", args }, output);
+  const prompt = oc.calls.find((c) => c[0] === "promptAsync");
+  assert.deepEqual([prompt[1], prompt[2].agent, prompt[2].model], ["ses_code", "coder", { providerID: "openrouter", modelID: "example-coder-32b" }]);
+  const res = delegationMod.parseTaskXml(output.output);
+  assert.equal(res.state, "completed");
+  assert.match(res.text, /Red start: CARL ran `node --test tests\/check\.test\.mjs` before the code: it failed \(exit 1\)\./);
+  // without the model in the metadata (an older OpenCode): no model in the prompt, so OpenCode takes the agent's own
+  const oc2 = chainOpenCode();
+  const hooks2 = await delegation.server({ client: oc2.client, directory: oc2.dir }, { coder: "coder" });
+  oc2.setHooks(hooks2);
+  const args2 = { subagent_type: "coder", description: "Feature", prompt: CHAIN_BRIEF(), background: false };
+  await hooks2["tool.execute.before"]({ tool: "task", sessionID: "m", callID: "e2" }, { args: args2 });
+  await hooks2["tool.execute.after"]({ tool: "task", sessionID: "m", callID: "e2", args: args2 }, {
+    metadata: { sessionId: "ses_test" }, output: delegationMod.taskXml({ id: "ses_test", state: "completed", text: testSession(oc2.dir) }) });
+  const p2 = oc2.calls.find((c) => c[0] === "promptAsync");
+  assert.deepEqual([p2[2].agent, "model" in p2[2]], ["coder", false]);
+});
+
+test("carl-delegation, a provider failure: the coder's task fails with the provider's error; no other session, no other model", async () => {
+  const why = "401 Unauthorized: the key has expired (openrouter.ai)";
+  // the code session's provider fails
+  const oc = chainOpenCode({ fail: why });
+  const hooks = await delegation.server({ client: oc.client, directory: oc.dir }, { coder: "coder", coderModel: "openrouter/example-coder-32b" });
+  oc.setHooks(hooks);
+  const args = { subagent_type: "coder", description: "Feature", prompt: CHAIN_BRIEF(), background: false };
+  await hooks["tool.execute.before"]({ tool: "task", sessionID: "m", callID: "f1" }, { args });
+  const output = { metadata: { sessionId: "ses_test", model: { providerID: "openrouter", modelID: "example-coder-32b" } },
+                   output: delegationMod.taskXml({ id: "ses_test", state: "completed", text: testSession(oc.dir) }) };
+  await hooks["tool.execute.after"]({ tool: "task", sessionID: "m", callID: "f1", args }, output);
+  const res = delegationMod.parseTaskXml(output.output);
+  assert.equal(res.state, "error");
+  assert.ok(res.text.includes(why), res.text);
+  assert.deepEqual(oc.calls.map((c) => c[0]), ["create", "promptAsync"]);             // one code session, one prompt
+  assert.deepEqual(oc.calls[1][2].model, { providerID: "openrouter", modelID: "example-coder-32b" });
+  // the test session's provider fails (OpenCode's task tool gives the error): the chain stops with it
+  const oc2 = chainOpenCode();
+  const hooks2 = await delegation.server({ client: oc2.client, directory: oc2.dir }, { coder: "coder" });
+  oc2.setHooks(hooks2);
+  const args2 = { subagent_type: "coder", description: "Feature", prompt: CHAIN_BRIEF(), background: false };
+  await hooks2["tool.execute.before"]({ tool: "task", sessionID: "m", callID: "f2" }, { args: args2 });
+  const out2 = { metadata: { sessionId: "ses_test" }, output: delegationMod.taskXml({ id: "ses_test", state: "error", text: why }) };
+  await hooks2["tool.execute.after"]({ tool: "task", sessionID: "m", callID: "f2", args: args2 }, out2);
+  const res2 = delegationMod.parseTaskXml(out2.output);
+  assert.equal(res2.state, "error");
+  assert.ok(res2.text.includes(why), res2.text);
+  assert.deepEqual(oc2.calls, []);                                                    // no code session
 });

@@ -4,6 +4,7 @@
 // with small stand-ins for Pi's packages, and a fake `pi` program: a node script that acts as the coder (it writes
 // files and prints Pi's JSON events). No model. Run: node --test tests/js.
 // Also (Phase 23.4.4): the coder's thinking level from carl.json "thinking" (the fake logs --thinking).
+// Also (Phase 23.4.5): the coder on an external model, carl.json "coder_model" (the fake logs --model).
 import assert from "node:assert/strict";
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -78,8 +79,17 @@ const mode = /^work_mode = "tests-only"/m.test(task) ? "test" : /^work_mode = "c
 const how = process.env.FAKE_PI || "red";
 const at = process.argv.indexOf("--thinking");
 const thinking = at > 0 ? process.argv[at + 1] : null;
-appendFileSync(process.env.FAKE_PI_LOG, JSON.stringify({ agent: process.env.CARL_AGENT, mode, task, thinking }) + "\\n");
+const mat = process.argv.indexOf("--model");
+const model = mat > 0 ? process.argv[mat + 1] : null;
+appendFileSync(process.env.FAKE_PI_LOG, JSON.stringify({ agent: process.env.CARL_AGENT, mode, task, thinking, model }) + "\\n");
 let text = "Done.";
+// providerfail: the model's provider fails (Phase 23.4.5): Pi prints the assistant message with its error, exit 1
+if (how === "providerfail") {
+  const err = { role: "assistant", content: [], stopReason: "error", errorMessage: "401 Unauthorized: the key has expired (openrouter.ai)",
+                usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: { total: 0 }, totalTokens: 0 } };
+  process.stdout.write(JSON.stringify({ type: "message_end", message: err }) + "\\n");
+  process.exit(1);
+}
 if (mode === "test") {
   if (how === "failtest") { process.stderr.write("the server closed the connection"); process.exit(1); }
   mkdirSync("tests", { recursive: true });
@@ -227,5 +237,51 @@ test("Pi: the coder thinks as carl.json says for the session's model, in both se
     assert.deepEqual(unlisted.log().map((r) => r.thinking), ["medium"]);                // no entry: the session's
   } finally {
     rmSync(st);
+  }
+});
+
+test("Pi: an external coder model (carl.json coder_model): both chain sessions on it; its thinking only when set", async () => {
+  const st = join(agentDir, "carl.json");
+  const ext = "openrouter/example-coder-32b";
+  const session = { model: { provider: "llamacpp", id: "qwen3.8-27b" }, thinkingLevel: "low" };
+  try {
+    // model default: no --thinking (the session's level and CARL's table are not used for it)
+    writeFileSync(st, JSON.stringify({ coder_model: ext, thinking: { coder: { "llamacpp/qwen3.8-27b": "off" } } }));
+    const coder = await call({ agent: "coder", task: BRIEF(), background: false }, "red", () => {}, session);
+    assert.deepEqual(coder.log().map((r) => [r.mode, r.model, r.thinking]), [["test", ext, null], ["code", ext, null]]);
+    assert.ok(!coder.out.isError);
+    assert.match(coder.text, /^\[CARL\] Chain: the coder ran in two new sessions/);    // the brief, the check, the chain as before
+    // a level /carl set for that model
+    writeFileSync(st, JSON.stringify({ coder_model: ext, thinking: { coder: { [ext]: "max" } } }));
+    const max = await call({ agent: "coder", task: BRIEF("follow_up"), background: false }, "red", () => {}, session);
+    assert.deepEqual(max.log().map((r) => [r.model, r.thinking]), [[ext, "max"]]);
+    // other agents: the session's model and level, as before; "main": the session's model
+    const scout = await call({ agent: "scout", task: "Look.", background: false }, "red", () => {}, session);
+    assert.deepEqual(scout.log().map((r) => [r.model, r.thinking]), [["llamacpp/qwen3.8-27b", "low"]]);
+    writeFileSync(st, JSON.stringify({ coder_model: "main" }));
+    const main = await call({ agent: "coder", task: BRIEF("follow_up"), background: false }, "red", () => {}, session);
+    assert.deepEqual(main.log().map((r) => [r.model, r.thinking]), [["llamacpp/qwen3.8-27b", "low"]]);
+  } finally {
+    rmSync(st, { force: true });
+  }
+});
+
+test("Pi: a provider failure fails the coder's task with the provider's error; no other model, no second run", async () => {
+  const st = join(agentDir, "carl.json");
+  const ext = "openrouter/example-coder-32b";
+  writeFileSync(st, JSON.stringify({ coder_model: ext }));
+  try {
+    const session = { model: { provider: "llamacpp", id: "qwen3.8-27b" }, thinkingLevel: "low" };
+    const one = await call({ agent: "coder", task: BRIEF("follow_up"), background: false }, "providerfail", () => {}, session);
+    assert.equal(one.out.isError, true);
+    assert.match(one.text, /401 Unauthorized: the key has expired \(openrouter\.ai\)/);
+    assert.deepEqual(one.log().map((r) => r.model), [ext]);
+    const chain = await call({ agent: "coder", task: BRIEF(), background: false }, "providerfail", () => {}, session);
+    assert.equal(chain.out.isError, true);
+    assert.match(chain.text, /\[CARL\] Chain: the test session failed, so the code session did not run\./);
+    assert.match(chain.text, /401 Unauthorized: the key has expired/);
+    assert.deepEqual(chain.log().map((r) => [r.mode, r.model]), [["test", ext]]);
+  } finally {
+    rmSync(st, { force: true });
   }
 });

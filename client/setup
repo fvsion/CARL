@@ -67,7 +67,7 @@ The setup asks one time which clients and which options you want. Press Enter to
 Options:
   -y, --yes\tTake the defaults. Ask no questions. Without a terminal, the setup does this too.
   --clients WHICH\tboth (the default), opencode or pi. "./setup pi" is the same as "--clients pi".
-  --coder auto|on|off\tThe coder subagent: the main agent gives large tasks to it. auto (the default): on when the server runs 2 or more slots.
+  --coder auto|on|off\tThe coder subagent: the main agent gives large tasks to it. auto (the default): on when the server runs 2 or more slots, or when the coder runs on an external model (/carl > Coder subagent > Coder model).
   --browser on|off\tThe browser tools: an agent opens and checks web pages. The default is on.
   --web-search WHICH\texa (the default), parallel or off. The search queries leave this computer: they go to Exa or Parallel.
   --lsp on|off\tLSP in OpenCode: OpenCode downloads and runs language servers for your code. The default is on.
@@ -282,7 +282,7 @@ if (( DO_CONFIG )); then
   export NO_BROWSER NO_LSP
   # the switches that setup does not ask for: from the environment, else as in the last setup
   for k in BROWSER_HEADED NO_SIDEBAR NO_SWITCHER NO_MODEL_CHECK NO_BACKGROUND_SUBAGENTS NO_CACHE LLAMA_CTX \
-           NO_REMINDER CODER_THINKING; do
+           NO_REMINDER CODER_THINKING CODER_MODEL CODER_MODEL_THINKING; do
     if [[ -z "${!k:-}" ]]; then v="$(last "$k")"; [[ -z "$v" ]] || export "$k=$v"; fi
   done
   out="$(mktemp)"; trap 'rm -f "$out"' EXIT

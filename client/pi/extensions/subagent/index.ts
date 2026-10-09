@@ -23,6 +23,11 @@
 // - the coder's thinking (Phase 23.4.4): CARL's coder starts with the thinking level that carl.json "thinking" names
 //   for the model it runs on (the dashboard's Coder thinking). A model without an entry (Coder thinking "same as
 //   main", the default): the session's own level, as before.
+// - the coder on an external model (Phase 23.4.5): carl.json "coder_model" ("provider/model", /carl's Coder model)
+//   is the model CARL's coder starts on (--model), in every coder session (the chain's two too). Its thinking: the
+//   level carl.json "thinking" names for that model, else no --thinking at all (Pi's own default for the model: "model
+//   default"); the session's level and CARL's per-model table do not apply to it. A failure of that provider fails the
+//   task with its error: there is no other model to fall back to.
 /**
  * Subagent Tool - Delegate tasks to specialized agents
  *
@@ -338,12 +343,17 @@ async function runSingleAgent(
 	}
 
 	const args: string[] = ["--mode", "json", "-p", "--no-session"];
-	const inheritsDispatchConfig = !agent.model;
-	const model = agent.model ?? dispatchDefaults.model;
+	// CARL: CARL's coder on an external model (/carl's Coder model, carl.json "coder_model")
+	const external = CODERS.has(agent.name) ? externalCoderModel() : undefined;
+	const inheritsDispatchConfig = !agent.model && !external;
+	const model = external ?? agent.model ?? dispatchDefaults.model;
 	if (model) args.push("--model", model);
-	// CARL: CARL's coder thinks as its own setting says (coderThinking), not as the session does
-	const thinkingLevel = (CODERS.has(agent.name) && coderThinking(model)) || dispatchDefaults.thinkingLevel;
-	if (inheritsDispatchConfig && thinkingLevel) {
+	// CARL: CARL's coder thinks as its own setting says (coderThinking), not as the session does; on an external model
+	// only a level set for it, else the model's own default (no --thinking)
+	const thinkingLevel = external
+		? coderThinking(external)
+		: (CODERS.has(agent.name) && coderThinking(model)) || dispatchDefaults.thinkingLevel;
+	if ((inheritsDispatchConfig || external) && thinkingLevel) {
 		args.push("--thinking", thinkingLevel);
 	}
 	if (agent.tools && agent.tools.length > 0) args.push("--tools", agent.tools.join(","));
@@ -499,7 +509,20 @@ function chainOn(): boolean {
 // into carl.json as "thinking": {"coder": {"provider/model": level}}. Every coder session gets it, the chain's test
 // session too. A model without an entry (Coder thinking "same as main", not CARL's, or an older install): the
 // session's level, as before.
-const THINKING_LEVELS = new Set(["off", "minimal", "low", "medium", "high", "xhigh"]);
+const THINKING_LEVELS = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
+
+// CARL: the coder's external model (Phase 23.4.5): carl.json "coder_model" when it is "provider/model" (the installer
+// writes "main" when the coder runs on the session's model). Read at each start of the coder, as the thinking.
+const CODER_MODEL_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*\/[A-Za-z0-9][A-Za-z0-9._:/@+-]*$/;
+function externalCoderModel(): string | undefined {
+	try {
+		const st: unknown = JSON.parse(fs.readFileSync(path.join(getAgentDir(), "carl.json"), "utf-8"));
+		const m = typeof st === "object" && st !== null ? (st as Record<string, unknown>).coder_model : undefined;
+		return typeof m === "string" && m.length <= 200 && CODER_MODEL_RE.test(m) ? m : undefined;
+	} catch {
+		return undefined;
+	}
+}
 function coderThinking(model: string | undefined): ThinkingLevel | undefined {
 	if (!model) return undefined;
 	try {

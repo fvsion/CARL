@@ -310,7 +310,7 @@ Use this procedure for clients that are not on the server Mac and not in the VMw
 - **Experts only: a larger GPU memory limit.** CAUTION: keep at least 6 GiB for macOS, or the Mac can stop. `sudo sysctl iogpu.wired_limit_mb=18432` gives the GPU more memory until the next restart. Then the stock Q4 `qwen3.8-27b` can run with ~52K and MTP. The abliterated Q4 gets only ~20K: use its Q3.
 - **Watch the memory on the Live tab of the dashboard.** The **Pressure** row of the THIS MAC card shows the macOS memory pressure. If it says `warning` or `critical`, use a smaller `--ctx`.
 - **The launcher refuses a model and a context that do not fit.** It shows what they need and the GPU memory limit. It also shows the largest context that fits, and Auto fit's choice. `FIT_CHECK=0` is the expert override.
-- With 1 slot, the setup does not install the coder subagent ([The coder subagent](#the-coder-subagent-opencode-and-pi)).
+- With 1 slot, the setup does not install the coder subagent, unless the coder runs on an external model ([The coder subagent](#the-coder-subagent-opencode-and-pi)).
 - NOTE: These estimates did not get a test on a 24 GB Mac.
 
 ---
@@ -793,6 +793,17 @@ Delegation depends on the judgment of the model. Thus, it occurs "usually", not 
 
 **Same model.** The coder uses the loaded model. Thus, the gain is a new, focused context and more reasoning (its own thinking setting: Coder thinking, same as the main session by default), not a stronger model. With 2 slots, the main session keeps its cache while the coder works.
 
+**Another model (an external coder).** You can let the coder run on a model of another provider that OpenCode or Pi can use, free or paid: `/carl` > **Coder subagent** > **Coder model** ([The /carl panel](#carls-plugins-and-extensions)). Then:
+
+- The coder uses no slot of the CARL server. The setup turns the coder on also when the server runs 1 slot, and `/carl` shows no 1-slot warning.
+- **The data boundary.** The brief, the files that the coder reads and the results of its tools go to that provider, not to your server. `/carl` tells you where (`The coder's work goes to openrouter.ai.`). A paid model costs money. CARL does not show the cost.
+- The provider's key is the key of OpenCode or Pi (their own login or config). CARL does not read, copy or log it.
+- The brief, its check, the gates and the chain work as before. Both sessions of the chain (the tests, then the code) run on that model.
+- CARL sends no sampling values of its own to that model (no temperature 0.6). Coder thinking is the model's own: `model default`, or a level that the client knows for that model.
+- If the provider fails (no network, no quota, a key that is not valid), the coder's task fails with the provider's error. The main agent sees the error. CARL does not use one of its own models instead.
+- The disk cache and the model check do not touch the requests to that provider. The dashboard's Live tab shows only the main session. Connect > Clients shows the coder's model of each computer.
+- Auto fit does not change: it always reserves a slot for a coder on the server, because a computer can go back to `same as main` at any time.
+
 **To ask for the coder directly:**
 - **OpenCode:** type `@coder` and your task in the prompt, for example `@coder add tests for parse_config`. The subagents are in the `@` list, and Tab completes the name. The task goes directly to the coder: the main agent does not decide. If you already have an agent of your own with the name `coder`, CARL's coder is `@carl-coder`. "Use the coder agent to …" also works.
 - **Pi:** there is no command. The coder is the `subagent` tool. Ask for it in the message: "use the coder subagent to …".
@@ -804,8 +815,8 @@ Delegation depends on the judgment of the model. Thus, it occurs "usually", not 
 | Item | Place |
 |---|---|
 | Source | `client/agents/coder.md` (the frontmatter description tells when to use it; the body holds its instructions) and `client/agents/delegation.md` (the rule for the main agent). To change the coder, edit these files and run the setup again. |
-| OpenCode | `agent.coder` in `opencode.json` (mode subagent, temperature 0.6, thinking from Coder thinking through `carl-delegation` (default: same as main), no nested subagents, at most 80 steps), and `instructions`. Its prompt is in `~/.config/opencode/carl/coder.md`. |
-| Pi | `~/.pi/agent/agents/coder.md`, the `subagent` extension (it starts the coder with the thinking level of Coder thinking, from `~/.pi/agent/carl.json`), and a marked block in `~/.pi/agent/APPEND_SYSTEM.md` |
+| OpenCode | `agent.coder` in `opencode.json` (mode subagent, temperature 0.6, thinking from Coder thinking through `carl-delegation` (default: same as main), no nested subagents, at most 80 steps), and `instructions`. Its prompt is in `~/.config/opencode/carl/coder.md`. With an external coder model, the agent has `model` and no temperature. |
+| Pi | `~/.pi/agent/agents/coder.md`, the `subagent` extension (it starts the coder with the thinking level of Coder thinking, from `~/.pi/agent/carl.json`; with an external coder model, with `--model` from `coder_model` in the same file), and a marked block in `~/.pi/agent/APPEND_SYSTEM.md` |
 
 The setup never replaces your own `coder` agent, Pi `agents/coder.md` or `extensions/subagent`. CARL's agent then gets the name `carl-coder`. If you also have your own `carl-coder`, the setup skips it and shows a note.
 
@@ -852,18 +863,18 @@ Check for a new config
   Coder                               on
   Background coder                    on
   Delegation reminder                 on
-  Coder thinking       dashboard default
-  Coder model               same as main
+  Coder thinking     dashboard default ›
+  Coder model             same as main ›
   ```
 
   - **Coder** turns the coder on or off.
   - **Coder thinking** is for the model that the coder runs on: with Coder model `same as main`, the model of the session that you open `/carl` in (in router mode, the model that you chose for that session). Without a session (OpenCode's home screen, before the first message), or when the session's model is not a CARL model, it is the default model of your config. The title of its values names the model (`Coder thinking with qwen3.8-27b`). The values: `dashboard default` (with the dashboard's value in grey, for example `same as main (low)`), `same as main` (with the main session's thinking in grey, for example `the main session's thinking (low)`; without a session: `the default model's thinking (low)`), then `off` and `on`, or `off`, `low`, `medium` and `xhigh` for a model with effort levels. ● marks the current value (OpenCode). A value other than `dashboard default` changes the dashboard's Coder thinking ([Settings > Agents](#agents-panel)) **on this computer only**, for that model. `dashboard default` removes this computer's value: the dashboard's value applies again. When the coder will not think (`off`, or a value that gives off), the message tells you to use the coder only with a full spec (spec-kit or a similar tool). OpenCode must restart to use the change; Pi uses it the next time that it starts the coder.
-  - **Coder model** is `same as main`: the coder runs on the model of the main session. It has no other value now, so Enter does nothing.
+  - **Coder model** opens its values. `same as main` (the default; in grey the CARL model, for example `CARL: qwen3.6-35b-a3b`): the coder runs on the model of the main session, on the CARL server. Then come the models of other providers that this OpenCode or Pi can use (OpenCode: its connected providers; Pi: the models that it has a key for), each with a note in grey: where its requests go and whether it is free or paid (`openrouter.ai, paid`; only the host when the client knows no price). CARL's own models are not in the list. When you select a model, the message says where the coder's work goes and that a paid model costs money, for example `CARL set the coder's model to openrouter/example-coder-32b on this computer. The coder's work goes to openrouter.ai, and the model costs money. Restart OpenCode to use it.` Coder thinking then shows `model default`, and its values are the levels that the client knows for that model (OpenCode: the model's variants; Pi: its thinking levels). The choice is for this computer: OpenCode and Pi on it both use it, and the setup and the sync keep it (`CODER_MODEL` in `~/.config/carl/client-install.env`). If the other client does not know that model, its coder fails with that error, and its `/carl` shows the model with the note `Pi does not list this model.` (or OpenCode). `same as main` turns the coder back to the CARL server (and keeps the coder on). OpenCode must restart to use the change; Pi uses it the next time that it starts the coder. Read [Another model](#the-coder-subagent-opencode-and-pi) before you select one: the coder's work then leaves your computers.
   - **Esc** goes back one list (from the values to the Coder subagent list, then to the first list); on the first list it closes `/carl`. In OpenCode, ctrl+c and a click outside the panel close `/carl` from any list, as they close OpenCode's own dialogs.
 - **Sync service** opens the state of the config sync: the sync service, the last contact, the last config, the version of the client package, the CARL version of the server and the addresses.
 - **Check for a new config** asks the dashboard now. **Apply the waiting config** shows only when a config waits.
 - Without the coder, the coder's list has only the **Coder** row: the other rows have no effect.
-- When you turn on the **Coder** and the server runs 1 slot, CARL turns the coder on and shows a warning: the coder uses the slot of the main session while it works.
+- When you turn on the **Coder** and the server runs 1 slot, CARL turns the coder on and shows a warning: the coder uses the slot of the main session while it works. With an external coder model, there is no warning: that coder uses no slot.
 - The sync rows show only when the server runs on another computer.
 
 | Row | In | Setup switch |
@@ -872,7 +883,7 @@ Check for a new config
 | Coder subagent > Background coder | OpenCode, Pi (with the coder) | `NO_BACKGROUND_SUBAGENTS` |
 | Coder subagent > Delegation reminder | OpenCode, Pi (with the coder) | `NO_REMINDER` |
 | Coder subagent > Coder thinking | OpenCode, Pi (with the coder) | `CODER_THINKING` (`MODEL:VALUE`, one entry for each model, separated by commas) |
-| Coder subagent > Coder model | OpenCode, Pi (with the coder) | — (same as main) |
+| Coder subagent > Coder model | OpenCode, Pi (with the coder) | `CODER_MODEL` (`PROVIDER/MODEL`, or `main`) and `CODER_MODEL_THINKING` (the thinking of that model) |
 | Browser | OpenCode, Pi | `NO_BROWSER` |
 | Web search | OpenCode, Pi | `WEB_SEARCH` (exa, parallel or off) |
 | LSP | OpenCode | `NO_LSP` |

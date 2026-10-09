@@ -37,6 +37,14 @@ Usage: carl-sync.py COMMAND
                       low, medium or xhigh; default removes the model's
                       value (the dashboard's applies again). The other
                       models keep theirs.
+                    CODER_MODEL: PROVIDER/MODEL, an external model of
+                      the client for the coder (it then uses no slot of
+                      the server), or main (the main session's model,
+                      the default).
+                    CODER_MODEL_THINKING: the thinking level (Pi) or
+                      variant (OpenCode) of that external model; default
+                      removes it (the model's own default). A new
+                      CODER_MODEL removes it too.
                   It shows the result as JSON: what changed, which client
                   (OpenCode, Pi) must restart, and the server's slots (as the
                   installer read them; null when the server does not answer).
@@ -81,19 +89,25 @@ INSTALL_ENV = os.path.join(CONF, "client-install.env")
 # the install switches a sync applies again (install.sh records them)
 SWITCHES = ("CLIENTS", "CODER", "NO_CODER", "WEB_SEARCH", "NO_LSP", "LSP", "NO_BROWSER", "BROWSER_HEADED",
             "NO_SIDEBAR", "NO_SWITCHER", "NO_MODEL_CHECK", "NO_BACKGROUND_SUBAGENTS", "NO_CACHE", "LLAMA_CTX",
-            "NO_REMINDER", "CODER_THINKING")
+            "NO_REMINDER", "CODER_THINKING", "CODER_MODEL", "CODER_MODEL_THINKING")
 # the switches that "set" (the /carl panel) changes, and their values: 1 = off, "on" = the line goes (the default)
 OFF_SWITCHES = ("NO_CODER", "NO_BACKGROUND_SUBAGENTS", "NO_REMINDER", "NO_BROWSER", "NO_LSP", "NO_SIDEBAR",
                 "NO_SWITCHER", "NO_CACHE", "NO_MODEL_CHECK")
 SETTABLE = {**{k: ("1", "on") for k in OFF_SWITCHES}, "WEB_SEARCH": ("exa", "parallel", "off"),
             "CODER": ("1", "auto"),    # /carl turns the coder on with CODER=1: also on a server with 1 slot
-            "CODER_THINKING": ()}      # MODEL:VALUE (THINKING_VALUES), per model: a map in one line
+            "CODER_THINKING": (),      # MODEL:VALUE (THINKING_VALUES), per model: a map in one line
+            "CODER_MODEL": (),         # PROVIDER/MODEL (CODER_MODEL_RE) or main (Phase 23.4.5)
+            "CODER_MODEL_THINKING": ()}    # a level or variant name (LEVEL_RE) or default
 THINKING_VALUES = ("main", "on", "off", "low", "medium", "xhigh")
 THINKING_DEFAULT = "default"    # "set": the model's entry goes (the dashboard's Coder thinking applies again)
 MODEL_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")   # a model name (client/carl_models.py)
+# an external coder model (Phase 23.4.5): the client's PROVIDER/MODEL (openrouter's ids have / and :); its thinking
+CODER_MODEL_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._:/@+-]*")
+CODER_MODEL_MAIN = "main"       # the coder on the main session's model (the default: no line)
+LEVEL_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,39}")
 OPENCODE_ONLY = ("NO_LSP", "NO_SIDEBAR", "NO_SWITCHER", "NO_MODEL_CHECK")    # Pi has no such part
-# Pi reads the coder's thinking (carl.json) each time it starts the coder: no restart
-PI_LIVE = (*OPENCODE_ONLY, "CODER_THINKING")
+# Pi reads the coder's thinking and model (carl.json) each time it starts the coder: no restart
+PI_LIVE = (*OPENCODE_ONLY, "CODER_THINKING", "CODER_MODEL", "CODER_MODEL_THINKING")
 OPENCODE_ENV = ("WEB_SEARCH", "NO_LSP", "NO_BACKGROUND_SUBAGENTS")   # opencode.env: read when the shell starts
 READ_TIMEOUT = 75            # the dashboard sends a comment every 25 s: silence this long = reconnect
 BACKOFF = (5, 10, 30, 60)
@@ -178,7 +192,15 @@ def who() -> str:
         st = update(id=uuid.uuid4().hex[:12])
     return json.dumps({"id": st["id"], "host": socket.gethostname()[:60], "user": getpass.getuser()[:40],
                        "os": f"{platform.system()} {platform.machine()}"[:40], "applied": st.get("applied") or "",
-                       "auto_apply": st.get("auto_apply", True), "mode": MODE}, separators=(",", ":"))
+                       "auto_apply": st.get("auto_apply", True), "mode": MODE, "coder_model": coder_model()},
+                      separators=(",", ":"))
+
+
+def coder_model() -> str:
+    """The coder's model on this computer (Phase 23.4.5; the dashboard's Clients list): "main" (the main session's
+    model, on CARL's server) or the external PROVIDER/MODEL of client-install.env's CODER_MODEL."""
+    v = install_env().get("CODER_MODEL", "")
+    return v if CODER_MODEL_RE.fullmatch(v) and len(v) <= 200 else CODER_MODEL_MAIN
 
 
 def request(url: str, key: str, etag: str = "") -> urllib.request.Request:
@@ -264,6 +286,16 @@ def parse_set(args: List[str]) -> Dict[str, str]:
                                  f"{THINKING_DEFAULT}), not '{v}'.")
             out[k] = thinking_text({**thinking_map(out.get(k, ""), keep_default=True), model: value}, keep_default=True)
             continue
+        if k == "CODER_MODEL":
+            if v != CODER_MODEL_MAIN and not (CODER_MODEL_RE.fullmatch(v) and len(v) <= 200):
+                raise ValueError(f"CODER_MODEL takes PROVIDER/MODEL or {CODER_MODEL_MAIN}, not '{v}'.")
+            out[k] = v
+            continue
+        if k == "CODER_MODEL_THINKING":
+            if not LEVEL_RE.fullmatch(v):
+                raise ValueError(f"CODER_MODEL_THINKING takes a thinking level or {THINKING_DEFAULT}, not '{v}'.")
+            out[k] = v
+            continue
         if v not in SETTABLE[k]:
             raise ValueError(f"{k} takes {' or '.join(SETTABLE[k])}, not '{v}'.")
         out[k] = v
@@ -288,10 +320,14 @@ def thinking_text(m: Dict[str, str], keep_default: bool = False) -> str:
     return ",".join(f"{k}:{m[k]}" for k in sorted(m) if keep_default or m[k] != THINKING_DEFAULT)
 
 
+DEFAULTS = {"WEB_SEARCH": "exa", "CODER_THINKING": "", "CODER_MODEL": CODER_MODEL_MAIN,
+            "CODER_MODEL_THINKING": THINKING_DEFAULT}
+
+
 def shown(key: str, env: Dict[str, str]) -> str:
     """A switch as "set" takes it: its value, or the setup's default when the file has no line for it (CODER_THINKING:
-    "", the dashboard's values)."""
-    return env.get(key) or ("exa" if key == "WEB_SEARCH" else "" if key == "CODER_THINKING" else "on")
+    "", the dashboard's values; CODER_MODEL: main; CODER_MODEL_THINKING: default)."""
+    return env.get(key) or DEFAULTS.get(key, "on")
 
 
 def write_install_env(want: Dict[str, str]) -> None:
@@ -324,6 +360,12 @@ def set_switches(want: Dict[str, str]) -> Json:
             merged = thinking_text({**thinking_map(before.get("CODER_THINKING", "")),
                                     **thinking_map(want["CODER_THINKING"], keep_default=True)})
             want = {**want, "CODER_THINKING": merged}     # "": no model left, the line goes
+        # the defaults have no line (main, default); a new coder model starts at its own thinking (model default)
+        want = {k: ("" if (k, v) in (("CODER_MODEL", CODER_MODEL_MAIN), ("CODER_MODEL_THINKING", THINKING_DEFAULT))
+                    else v) for k, v in want.items()}
+        if "CODER_MODEL" in want and "CODER_MODEL_THINKING" not in want \
+                and shown("CODER_MODEL", before) != shown("CODER_MODEL", {"CODER_MODEL": want["CODER_MODEL"]}):
+            want["CODER_MODEL_THINKING"] = ""
         write_install_env(want)
         after = install_env()
         changed = {k: {"from": shown(k, before), "to": shown(k, after)} for k in want
@@ -335,7 +377,8 @@ def set_switches(want: Dict[str, str]) -> Json:
                 env.pop(k, None)                     # a switch from the environment must not undo the change
         clients = after.get("CLIENTS", "both")
         apps = [c for c in ("opencode", "pi") if clients in ("both", c)]
-        restart = [c for c in apps if c == "opencode" or any(k not in PI_LIVE for k in want)]
+        moved = [k for k in want if k in changed] or list(want)    # the keys whose value changed (else all)
+        restart = [c for c in apps if c == "opencode" or any(k not in PI_LIVE for k in moved)]
         result: Json = {"set": want, "changed": changed, "ok": True, "error": None, "restart": restart,
                         "new_terminal": "opencode" in restart and any(k in OPENCODE_ENV for k in want), "slots": None}
         # the slot count the installer reads for its coder rule (/props total_slots): /carl warns when it turns the
@@ -398,6 +441,15 @@ def once(apply_waiting: bool = False) -> Json:
         return done
 
 
+def report(api: str, key: str) -> None:
+    """Tell the dashboard this client's state (who(): its config, the coder's model) with a check of the config it
+    has (a 304 as a rule); a new config is not applied here (the dashboard sends its event for that)."""
+    try:
+        fetch_config(api, key, str(state().get("applied") or ""))
+    except NET_ERRORS:
+        pass
+
+
 def events(api: str, key: str) -> Iterator[str]:
     """The event names the dashboard sends (a blank name for its keep-alive comments)."""
     with urllib.request.urlopen(request(api + "/carl/client/events", key), timeout=READ_TIMEOUT) as r:
@@ -422,11 +474,15 @@ def watch() -> None:
     while True:
         try:
             api, key = server()
+            told = who()                             # what the stream's request told the dashboard
             for name in events(api, key):
                 update(alive=time.time(), connected=True)
                 fails = 0
                 if name == "config":
                     once()
+                elif who() != told:                  # a /carl change (the coder's model): tell the dashboard
+                    report(api, key)
+                told = who()
             update(connected=False)                  # the dashboard closed the stream (it stopped)
         except NET_ERRORS as e:
             update(connected=False, error=describe(e))

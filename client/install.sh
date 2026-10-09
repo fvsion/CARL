@@ -101,10 +101,12 @@ Switches (environment variables, for example NO_CACHE=1 ./install.sh):
   NO_MODEL_CHECK=1\tDo not install the model check of OpenCode.
   NO_SWITCHER=1\tDo not install the session switcher of OpenCode.
   NO_SIDEBAR=1\tDo not install the subagents sidebar of OpenCode.
-  CODER=1, NO_CODER=1\tAlways install the coder subagent, or never. Without them, the script installs the coder when the server runs 2 or more slots.
+  CODER=1, NO_CODER=1\tAlways install the coder subagent, or never. Without them, the script installs the coder when the server runs 2 or more slots, or when the coder runs on an external model (CODER_MODEL).
   NO_BACKGROUND_SUBAGENTS=1\tThe main session waits for the coder.
   NO_REMINDER=1\tNo reminder about the coder at the end of each message of the main session (it is on by default: it is what moves large and stuck tasks to the coder).
   CODER_THINKING=MODEL:VALUE,...\tThe coder's thinking on this computer, per model, over the dashboard's Coder thinking. VALUE: main (same as main), on, off, low, medium or xhigh. /carl sets it.
+  CODER_MODEL=PROVIDER/MODEL\tThe coder runs on this model of OpenCode or Pi, not on the CARL server. The coder's work goes to that provider. main (the default): the model of the main session. /carl sets it.
+  CODER_MODEL_THINKING=LEVEL\tThe thinking of that external model: a variant (OpenCode) or a thinking level (Pi). Without it: the model's own default. /carl sets it.
   NO_BROWSER=1\tDo not install the browser tools.
   BROWSER_HEADED=1\tShow the browser on the screen.
   WEB_SEARCH=PROVIDER\texa (the default), parallel or off.
@@ -285,10 +287,14 @@ say "Context for the clients: $(ktok "$ctx") tokens per slot$ctx_src"
 # the coder and its delegation rule are installed only when the running server
 # has 2+ slots (/props total_slots). CODER=1 forces it on, NO_CODER=1 off. If
 # the server isn't reachable, a previous choice is kept (default: on).
+# Phase 23.4.5: a coder on an external model (CODER_MODEL=PROVIDER/MODEL) uses no
+# slot of the server, so it is on also with 1 slot.
 slots=$(api_get "http://$HOST:$LLAMA_PORT/props" 2>/dev/null \
         | python3 -c 'import json,sys; print(int(json.load(sys.stdin).get("total_slots", 1)))' 2>/dev/null || true)
+[[ "${CODER_MODEL:-}" == main ]] && CODER_MODEL=""
 if [[ "${NO_CODER:-0}" == 1 ]]; then CODER=0; coder_src="NO_CODER=1 turns it off."
 elif [[ "${CODER:-}" == 1 ]]; then CODER=1; coder_src="CODER=1 turns it on."
+elif [[ -n "${CODER_MODEL:-}" ]]; then CODER=1; coder_src="The coder runs on $CODER_MODEL, not on the server."
 elif [[ -n "$slots" ]]; then
   if (( slots >= 2 )); then CODER=1; coder_src="The server runs $slots slots."
   else CODER=0; coder_src="The server runs 1 slot. A subagent would take the slot of the main session."; fi
@@ -395,6 +401,7 @@ python3 "$HERE/configure.py" --bundle "$HERE" --home "$HOME" --host "$HOST" --cl
   --background "$([[ "${NO_BACKGROUND_SUBAGENTS:-0}" == 1 ]] && echo 0 || echo 1)" \
   --reminder "$([[ "${NO_REMINDER:-0}" == 1 ]] && echo 0 || echo 1)" \
   --coder-thinking "${CODER_THINKING:-}" \
+  --coder-model "${CODER_MODEL:-}" --coder-model-thinking "${CODER_MODEL_THINKING:-}" \
   --profile "$([[ "${NO_PROFILE:-0}" == 1 ]] && echo 0 || echo 1)" \
   --cache "$([[ "${NO_CACHE:-0}" == 1 || "${NO_PREFIX_CACHE:-0}" == 1 ]] && echo 0 || echo 1)" \
   --browser "$([[ "${NO_BROWSER:-0}" == 1 ]] && echo 0 || echo 1)" --browser-headed "$([[ "${BROWSER_HEADED:-0}" == 1 ]] && echo 1 || echo 0)"
@@ -456,7 +463,8 @@ UNIT
 if [[ "${CARL_SYNC:-0}" != 1 ]]; then
   ( umask 077; mkdir -p "$HOME/.config/carl"
     for k in CLIENTS CODER NO_CODER WEB_SEARCH NO_LSP LSP NO_BROWSER BROWSER_HEADED NO_SIDEBAR NO_SWITCHER \
-             NO_MODEL_CHECK NO_BACKGROUND_SUBAGENTS NO_CACHE LLAMA_CTX NO_REMINDER CODER_THINKING; do
+             NO_MODEL_CHECK NO_BACKGROUND_SUBAGENTS NO_CACHE LLAMA_CTX NO_REMINDER CODER_THINKING CODER_MODEL \
+             CODER_MODEL_THINKING; do
       [[ -n "${!k:-}" ]] && printf '%s=%s\n' "$k" "${!k}"
     done > "$HOME/.config/carl/client-install.env" ) || true
   if [[ "$MODE" == local || ! -s "$HERE/remote.json" || "${NO_SYNC_SERVICE:-0}" == 1 ]]; then

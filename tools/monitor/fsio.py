@@ -79,6 +79,18 @@ def client_state(folder: str) -> object:
     return None
 
 
+def coder_model_here(base: str, home: str) -> str:
+    """The coder's model of OpenCode and Pi on THIS Mac (Phase 23.4.5; the Clients list): "main" (the main session's
+    model, on this server) or the external PROVIDER/MODEL that the setup wrote ("coder_model" in the state file of the
+    first client set up for base); "" when none is set up for base."""
+    for folder in (".config/opencode", ".pi/agent"):
+        st = client_state(os.path.join(home, folder))
+        if isinstance(st, dict) and st.get("base_url") == f"{base}/v1":
+            m = st.get("coder_model")
+            return m if isinstance(m, str) and m and len(m) <= 200 and m.isprintable() and " " not in m else "main"
+    return ""
+
+
 CLIENT_CONFIGS = {"OpenCode": (".config/opencode", "opencode.json"), "Pi": (".pi/agent", "models.json")}
 
 

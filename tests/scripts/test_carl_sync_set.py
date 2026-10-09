@@ -179,6 +179,50 @@ class SetTest(unittest.TestCase):
         self.assertNotIn("CODER_THINKING", self.installer_env())
         self.assertEqual(json.loads(p.stdout)["changed"], {"CODER_THINKING": {"from": "b:xhigh", "to": ""}})
 
+    def test_coder_model_an_external_model_or_main(self) -> None:
+        """/carl's Coder model (Phase 23.4.5): CODER_MODEL=PROVIDER/MODEL (ids with / and :, as openrouter's) is kept in
+        client-install.env and given to the installer; main (the default) takes the line out. Pi reads it each time it
+        starts the coder: only OpenCode restarts."""
+        ext = "openrouter/qwen/qwen3-coder:free"
+        p = self.run_set(f"CODER_MODEL={ext}")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn(f"CODER_MODEL={ext}", self.env_lines())
+        r = json.loads(p.stdout)
+        self.assertEqual(r["changed"], {"CODER_MODEL": {"from": "main", "to": ext}})
+        self.assertEqual(r["restart"], ["opencode"])
+        self.assertEqual(self.installer_env()["CODER_MODEL"], ext)
+        # back to main, with CODER=1 (/carl keeps the coder on): Pi restarts only for what changed
+        r = json.loads(self.run_set("CODER_MODEL=main", "CODER=1").stdout)
+        self.assertFalse(any(ln.startswith("CODER_MODEL") for ln in self.env_lines()), self.env_lines())
+        self.assertNotIn("CODER_MODEL", self.installer_env())
+        self.assertEqual(r["changed"]["CODER_MODEL"], {"from": ext, "to": "main"})
+        self.assertEqual(r["restart"], ["opencode", "pi"])                   # CODER changed too (on -> 1)
+        r = json.loads(self.run_set("CODER_MODEL=zen/free-coder-1", "CODER=1").stdout)
+        self.assertEqual(r["restart"], ["opencode"])                         # CODER was 1 already
+        for bad in ("CODER_MODEL=", "CODER_MODEL=nomodel", "CODER_MODEL=a b/c", "CODER_MODEL=a/b,c",
+                    "CODER_MODEL=/x", "CODER_MODEL=a/\"x\"", "CODER_MODEL_THINKING=a b", "CODER_MODEL_THINKING="):
+            p = self.run_set(bad)
+            self.assertEqual(p.returncode, 2, bad)
+        self.assertIn("CODER_MODEL takes PROVIDER/MODEL or main", self.run_set("CODER_MODEL=x").stderr)
+        self.assertIn("CODER_MODEL=zen/free-coder-1", self.env_lines())
+
+    def test_coder_model_thinking_goes_with_a_new_model(self) -> None:
+        """CODER_MODEL_THINKING: the variant (OpenCode) or level (Pi) of the external model; default takes it out; a
+        new CODER_MODEL takes it out too (the new model starts at its own default: model default)."""
+        self.run_set("CODER_MODEL=openrouter/a")
+        r = json.loads(self.run_set("CODER_MODEL_THINKING=high").stdout)
+        self.assertIn("CODER_MODEL_THINKING=high", self.env_lines())
+        self.assertEqual((r["changed"], r["restart"]), ({"CODER_MODEL_THINKING": {"from": "default", "to": "high"}},
+                                                        ["opencode"]))
+        self.run_set("CODER_MODEL=openrouter/a")                             # the same model: it stays
+        self.assertIn("CODER_MODEL_THINKING=high", self.env_lines())
+        r = json.loads(self.run_set("CODER_MODEL=openrouter/b").stdout)
+        self.assertFalse(any(ln.startswith("CODER_MODEL_THINKING") for ln in self.env_lines()), self.env_lines())
+        self.assertEqual(r["changed"]["CODER_MODEL_THINKING"], {"from": "high", "to": "default"})
+        self.run_set("CODER_MODEL_THINKING=max")
+        self.run_set("CODER_MODEL_THINKING=default")
+        self.assertFalse(any(ln.startswith("CODER_MODEL_THINKING") for ln in self.env_lines()), self.env_lines())
+
     def test_a_failed_installer_is_reported(self) -> None:
         open(os.path.join(self.home, "fail"), "w").close()
         p = self.run_set("NO_REMINDER=1")

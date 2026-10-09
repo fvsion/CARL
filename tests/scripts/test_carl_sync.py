@@ -21,6 +21,8 @@ class FakeApi:
     def __init__(self) -> None:
         self.doc = {"version": "v1", "published": "now", "models": {"schema": 1, "models": [{"id": "m"}]}}
         self.carl_version = "1.7.0"
+        self.keepalive = 0.0                 # > 0: the event stream sends a keep-alive comment this often (for 6 s)
+        self.who: list = []                  # every request's X-Carl-Client (the client's report)
         api = self
 
         class H(BaseHTTPRequestHandler):
@@ -31,6 +33,18 @@ class FakeApi:
                 if self.headers.get("Authorization") != "Bearer k":
                     self.send_response(401)
                     self.end_headers()
+                    return
+                api.who.append((self.path, json.loads(self.headers.get("X-Carl-Client") or "{}")))
+                if self.path == "/carl/client/events" and api.keepalive:
+                    self.send_response(200)
+                    self.end_headers()
+                    try:
+                        for _ in range(int(6 / api.keepalive)):
+                            self.wfile.write(b": keep-alive\n\n")
+                            self.wfile.flush()
+                            time.sleep(api.keepalive)
+                    except OSError:                  # the service was stopped
+                        pass
                     return
                 if self.path == "/carl/client/events":
                     self.send_response(200)
@@ -125,6 +139,41 @@ class SyncTest(unittest.TestCase):
             p.wait()
         self.assertIn("run", self.installs())
         self.assertTrue(self.sync("status")["service"])
+
+    def test_the_client_reports_its_coder_model(self) -> None:
+        """Phase 23.4.5: each request's X-Carl-Client says the coder's model (main, or CODER_MODEL); the service tells
+        the dashboard a change that /carl made while its stream is open (a config check with the new report)."""
+        self.sync("once")
+        self.assertEqual(self.api.who[-1][1]["coder_model"], "main")
+        with open(os.path.join(self.home, ".config", "carl", "client-install.env"), "a") as f:
+            f.write("CODER_MODEL=openrouter/example-coder-32b\n")
+        self.sync("once")
+        self.assertEqual(self.api.who[-1][1]["coder_model"], "openrouter/example-coder-32b")
+        # the service, its stream open: the change reaches the dashboard at the next keep-alive
+        self.api.keepalive = 0.2
+        env_file = os.path.join(self.home, ".config", "carl", "client-install.env")
+        with open(env_file, "w") as f:
+            f.write("WEB_SEARCH=off\n")
+        p = subprocess.Popen([sys.executable, os.path.join(self.bundle, "carl-sync.py"), "watch"],
+                             env={**os.environ, "HOME": self.home}, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        try:
+            for _ in range(50):
+                if any(path == "/carl/client/events" for path, _ in self.api.who[2:]):
+                    break
+                time.sleep(0.1)
+            n = len(self.api.who)
+            with open(env_file, "a") as f:
+                f.write("CODER_MODEL=zen/free-coder-1\n")
+            for _ in range(50):
+                if any(w.get("coder_model") == "zen/free-coder-1" for _, w in self.api.who[n:]):
+                    break
+                time.sleep(0.1)
+        finally:
+            p.kill()
+            p.wait()
+        new = [(path, w["coder_model"], w["mode"]) for path, w in self.api.who[n:]]
+        self.assertIn(("/carl/client/config", "zen/free-coder-1", "service"), new)
+        self.assertEqual(self.installs().count("run"), 1)              # a report applies nothing
 
     def test_a_wrong_key_says_what_to_do(self) -> None:
         with open(os.path.join(self.bundle, "api-key"), "w") as f:

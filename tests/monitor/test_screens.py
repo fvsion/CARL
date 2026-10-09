@@ -154,6 +154,42 @@ class ScreensTest(unittest.TestCase):
     def test_every_screen_in_full_detail(self) -> None:
         self.check("full")
 
+    def test_the_clients_list_shows_each_computers_coder_model(self) -> None:
+        """Phase 23.4.5: Connect > Clients has a Coder model column (blocks when the table does not fit): this Mac's
+        from its own client state, each computer's as its sync reported it; same as main, the external model, or –.
+        Every size, both levels: each line fits, one reading per row, no " · "."""
+        import json
+        home = self.app.opts.home
+        os.makedirs(os.path.join(home, ".config", "opencode"))
+        with open(os.path.join(home, ".config", "opencode", "carl.json"), "w") as f:
+            json.dump({"base_url": f"{self.app.endpoint.base}/v1", "providers": {"llamacpp": "llamacpp"},
+                       "coder_model": "openrouter/example-coder-32b"}, f)
+        with open(self.app._clients_file, "w") as f:
+            json.dump({"0123456789ab": {"host": "m3pro", "user": "brennon", "os": "Darwin arm64", "applied": "v1",
+                                        "mode": "service", "coder_model": "zen/free-coder-1", "address": "192.168.1.20",
+                                        "last_seen": 1.0},
+                       "ba9876543210": {"host": "vm-1", "applied": "v1", "mode": "check", "coder_model": "main",
+                                        "address": "192.168.42.128", "last_seen": 2.0},
+                       "aaaaaaaaaaaa": {"host": "old-vm", "applied": "v0", "mode": "check", "last_seen": 3.0}}, f)
+        self.ui.tab, self.ui.connect_sp = 1, 1
+        for detail in ("simple", "full"):
+            self.set_detail(detail)
+            for cols, rows in SIZES:
+                lines = self.frame(self.server(), cols, rows)
+                text = " ".join(" ".join(x.strip(" │") for x in lines).split())
+                with self.subTest(cols=cols, detail=detail):
+                    self.assertFalse([x for x in lines if vlen(x) > cols])
+                    self.assertFalse([x for x in lines[2:] if " · " in x])
+                    for want in ("openrouter/example-coder-32b", "zen/free-coder-1", "same as main", "Coder model"):
+                        self.assertIn(want, text)
+                    if any("Computer" in x and "Coder model" in x for x in lines):    # the table: one row each
+                        row = next(x for x in lines if "m3pro" in x)
+                        self.assertIn("zen/free-coder-1", row)
+                        self.assertIn("openrouter/example-coder-32b", next(x for x in lines if "This Mac" in x))
+                    else:                                                       # blocks: a label row each
+                        self.assertTrue(any(re.search(r"Coder model +zen/free-coder-1", x) for x in lines))
+                        self.assertTrue(any(re.search(r"Coder model +openrouter/example-coder-32b", x) for x in lines))
+
     def test_the_header_says_the_state(self) -> None:
         self.assertIn("○ STOPPED", self.frame(ServerData(), 140)[0])
         self.assertIn("● IDLE", self.frame(self.server(), 140)[0])

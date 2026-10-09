@@ -262,6 +262,44 @@ class ConfigureTests(unittest.TestCase):
         self.assertEqual(self.run_configure("--coder", "1", "--coder-thinking", "qwen3.6-35b-a3b:low").returncode, 0)
         self.assertEqual(self.delegation_options()["coderThinking"], {"llamacpp/qwen3.6-35b-a3b": "high"})
 
+    def test_an_external_coder_model(self) -> None:
+        """Phase 23.4.5, /carl's Coder model (CODER_MODEL through --coder-model): OpenCode's coder agent gets the model
+        and no temperature (no CARL sampling), carl-delegation coderModel (and coderVariant with a thinking value); Pi's
+        carl.json coder_model (the subagent extension's --model) and its level in "thinking"; both state files say
+        it. Only the model's name is written: no provider, no key. main takes it all out again."""
+        ext = "openrouter/qwen/qwen3-coder:free"
+        p = self.run_configure("--coder", "1", "--coder-model", ext)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        oc = self.read_json(".config/opencode/opencode.json")
+        self.assertEqual(oc["agent"]["coder"]["model"], ext)
+        self.assertNotIn("temperature", oc["agent"]["coder"])
+        self.assertEqual(oc["agent"]["coder"]["steps"], 80)                    # the step limit stays
+        self.assertEqual(self.delegation_options()["coderModel"], ext)
+        self.assertNotIn("coderVariant", self.delegation_options())            # model default
+        self.assertEqual(set(oc["provider"]), {"llamacpp"})                    # no provider of CARL's for it
+        self.assertEqual(self.read_json(".config/opencode/carl.json")["coder_model"], ext)
+        pi = self.read_json(".pi/agent/carl.json")
+        self.assertEqual(pi["coder_model"], ext)
+        self.assertNotIn(ext, pi.get("thinking", {}).get("coder", {}))
+        self.assertEqual(set(self.read_json(".pi/agent/models.json")["providers"]), {"llamacpp"})
+        # a thinking value for it: OpenCode's variant, Pi's level
+        p = self.run_configure("--coder", "1", "--coder-model", ext, "--coder-model-thinking", "high")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(self.delegation_options()["coderVariant"], "high")
+        self.assertEqual(self.read_json(".pi/agent/carl.json")["thinking"]["coder"][ext], "high")
+        # main (or none): CARL's coder on the main session's model again, with its temperature
+        p = self.run_configure("--coder", "1", "--coder-model", "main", "--coder-model-thinking", "high")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        coder = self.read_json(".config/opencode/opencode.json")["agent"]["coder"]
+        self.assertEqual((coder.get("model"), coder["temperature"]), (None, 0.6))
+        self.assertFalse({"coderModel", "coderVariant"} & set(self.delegation_options()))
+        self.assertEqual(self.read_json(".config/opencode/carl.json")["coder_model"], "main")
+        self.assertEqual(self.read_json(".pi/agent/carl.json")["coder_model"], "main")
+        self.assertNotIn("thinking", self.read_json(".pi/agent/carl.json"))
+        for bad in ("nomodel", "a b/c", "a/b,c", "/x"):
+            self.assertEqual(self.run_configure("--coder-model", bad).returncode, 2, bad)
+        self.assertEqual(self.run_configure("--coder-model", ext, "--coder-model-thinking", "a b").returncode, 2)
+
     def test_a_pi_thinking_level_the_user_changed_stays(self) -> None:
         self.models = {"schema": 1, "default": "qwen3.8-27b", "models": [
             MODELS["models"][0], dict(MODELS["models"][1], thinking_main="medium")]}
@@ -1191,6 +1229,53 @@ class InstallScriptTests(unittest.TestCase):
         with open(os.path.join(self.home, rel), "w", encoding="utf-8") as f:
             f.write(text)
 
+    def install_on(self, slots: int, **switches: str) -> subprocess.CompletedProcess[str]:
+        """install.sh against a fake server that runs `slots` slots (/props), with these switches."""
+        import http.server
+        import threading
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self) -> None:                      # noqa: N802
+                body = {"/props": {"default_generation_settings": {"n_ctx": 65536}, "total_slots": slots,
+                                   "model_alias": "m"}, "/v1/models": {"data": [{"id": "m"}]}}.get(self.path)
+                self.send_response(200 if body else 404)
+                self.end_headers()
+                self.wfile.write(json.dumps(body or {}).encode())
+
+            def log_message(self, *a: object) -> None:
+                pass
+        httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        threading.Thread(target=httpd.serve_forever, daemon=True).start()
+        try:
+            env = {k: v for k, v in os.environ.items()
+                   if k not in ("CARL_API_KEY", "LLAMA_CTX", "CODER", "NO_CODER", "CODER_MODEL")}
+            return subprocess.run(["bash", os.path.join(self.bundle, "install.sh"), "--host", "127.0.0.1",
+                                   "--port", str(httpd.server_address[1])], capture_output=True, text=True,
+                                  stdin=subprocess.DEVNULL, timeout=120,
+                                  env={**env, "HOME": self.home, "NO_SYNC_SERVICE": "1", "COLUMNS": "300", **switches})
+        finally:
+            httpd.shutdown()
+            httpd.server_close()
+
+    def test_an_external_coder_is_on_with_one_slot(self) -> None:
+        """Phase 23.4.5: the setup's auto rule counts an external coder (CODER_MODEL) as using no slot: on with 1
+        slot. Without it (or with main), 1 slot keeps the coder off; the choice is kept for the next setup and sync."""
+        self.write(".config/carl/api-key", "k")
+        p = self.install_on(1)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("Coder subagent: off. The server runs 1 slot.", p.stdout)
+        p = self.install_on(1, CODER_MODEL="main")
+        self.assertIn("Coder subagent: off. The server runs 1 slot.", p.stdout)
+        p = self.install_on(1, CODER_MODEL="openrouter/example-coder-32b")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("Coder subagent: on. The coder runs on openrouter/example-coder-32b, not on the server.", p.stdout)
+        with open(os.path.join(self.home, ".config/opencode/opencode.json"), encoding="utf-8") as f:
+            self.assertEqual(json.load(f)["agent"]["coder"]["model"], "openrouter/example-coder-32b")
+        with open(os.path.join(self.home, ".config/carl/client-install.env"), encoding="utf-8") as f:
+            self.assertIn("CODER_MODEL=openrouter/example-coder-32b", f.read().splitlines())
+        p = self.install_on(1, CODER_MODEL="openrouter/example-coder-32b", NO_CODER="1")    # off is off
+        self.assertIn("Coder subagent: off. NO_CODER=1 turns it off.", p.stdout)
+
     def test_old_key_folder_is_moved_and_used(self) -> None:
         self.write(".config/llm-deploy/api-key", "vmsecret")
         p = self.install()
@@ -1266,7 +1351,7 @@ class HelpPageTests(unittest.TestCase):
         for name in ("--local", "--vm", "--host", "--port", "--key-file", "--key", "NO_CACHE=1", "NO_MODEL_CHECK=1",
                      "NO_SWITCHER=1", "NO_SIDEBAR=1", "NO_CODER=1", "CODER=1", "NO_BACKGROUND_SUBAGENTS=1",
                      "NO_BROWSER=1", "BROWSER_HEADED=1", "WEB_SEARCH=", "NO_LSP=1", "LLAMA_CTX=", "NO_PROFILE=1",
-                     "NO_SYNC_SERVICE=1", "CARL_API_KEY"):
+                     "NO_SYNC_SERVICE=1", "CARL_API_KEY", "CODER_MODEL=", "CODER_MODEL_THINKING="):
             self.assertIn(name, text)
 
     def test_install_clients_refuses_an_unknown_argument(self) -> None:

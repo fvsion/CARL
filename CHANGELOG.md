@@ -3,7 +3,19 @@
 All notable changes to CARL. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Dates are local dates on the development Mac (M3 Pro, 36 GB).
 
-## Unreleased
+## 1.14.0 - 2026-10-09
+
+Phase 23.4.5: the coder on another endpoint; a brief-reader fix.
+
+### Added
+- **The coder can run on an external model** (/carl, Coder subagent, Coder model): "same as main" (CARL's model) or a
+  model this computer's OpenCode or Pi can use, free or paid, listed from the client itself with where the work goes
+  ("openrouter.ai, paid"). Kept per computer (`CODER_MODEL`; its thinking `CODER_MODEL_THINKING`, "model default" by
+  default). With an external coder: the coder is on also with 1 slot and there is no 1-slot warning; CARL's coder
+  temperature and thinking table are not sent; a provider failure fails the task with its error (no fallback).
+  CARL's brief, its check, the gates and the tests-first chain work the same (both sessions on that model). carl-cache
+  and the model check leave the external requests alone. Auto fit still assumes a local coder.
+- **The dashboard's Clients sub-tab** shows each computer's coder model (the sync reports it).
 
 ### Fixed
 - **A brief whose lists of tables are written as `key = [ { ... }, ... ]`** with JSON-style `"key": value` was refused

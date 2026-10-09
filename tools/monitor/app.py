@@ -135,6 +135,7 @@ class App:
                     clients=tuple((self._api.registry if self._api else Registry(self._clients_file)).list()),
                     detail=ui.detail, drafter_size=fsio.file_size(md) if md else 0,
                     model_quant=str(m.get("quant") or "") if m else "", here=self.here_text(),
+                    coder_here=self.coder_here(),
                     gate=self.jobs.cache_conf().gate, llama=self.llama_check(d.pid))
 
     def llama_check(self, pid: Optional[int]) -> VersionCheck:
@@ -151,6 +152,13 @@ class App:
         except Exception:           # a model list that can't be read: say nothing
             return ""
         return ("need an update (tab 2, u)" if stale else "set up (tab 2)") if here else "not set up here (tab 2)"
+
+    def coder_here(self) -> str:
+        """The coder's model of OpenCode and Pi on this Mac, for the Clients list (Phase 23.4.5)."""
+        try:
+            return fsio.coder_model_here(self.endpoint.base, self.opts.home)
+        except Exception:           # a state file that can't be read: say nothing
+            return ""
 
     def next_start(self, d: ServerData) -> List[CardLine]:
         """The SERVER card when no server runs, one reading per row: what a start uses, whether it fits, how to

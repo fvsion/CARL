@@ -15,10 +15,11 @@ This page tells how CARL makes the main agent give large and stuck coding tasks 
 | The coder's gates | Keep the coder to its work_mode and away from the files to read only | `carl-delegation` | comes with the coder |
 | The chain | A brief with `work_mode = "code"` and `work_type = "new_feature"`: a test session, then a code session, each with a new context; one result. OpenCode: in the foreground; in the background only on the verified versions | OpenCode: `carl-delegation`. Pi: the `subagent` tool. Both: `client/shared/carl-chain.js` | on; `"chain": false` turns it off (for measurements) |
 | The coder's thinking | Each coder session (the test session and the code session too) thinks as **Coder thinking** says, for the model that the coder runs on | The dashboard: Settings > Server, per model. OpenCode: `coderThinking` of `carl-delegation`, set on each request of the coder by its `chat.params` hook. Pi: `"thinking"` in `~/.pi/agent/carl.json`, read by the `subagent` tool | same as main; off only with a full spec ([The coder's thinking](#the-coders-thinking)) |
+| The coder's model | The model that each coder session runs on: the main session's (the default), or an external model of the client ([An external coder model](#an-external-coder-model)) | `/carl` > Coder subagent > Coder model (`CODER_MODEL`). OpenCode: the coder agent's `model`. Pi: `"coder_model"` in `~/.pi/agent/carl.json`, read by the `subagent` tool | same as main |
 | `/code` | Gives your task straight to the coder | OpenCode: `~/.config/opencode/command/code.md`. Pi: `~/.pi/agent/prompts/code.md` | comes with the coder |
 | The new-file gate | Stops the main agent at its Nth new file in a turn | `carl-delegation` | off; the dashboard only: Connect > Setup, full level, `g` (advanced, not recommended) |
 
-All parts come with the coder (`--coder on`, or `auto` with 2 or more slots). With the coder off, the setup removes them all.
+All parts come with the coder (`--coder on`, or `auto` with 2 or more slots or an external coder model). With the coder off, the setup removes them all.
 
 ## The delegation rule, for main agents only
 
@@ -199,7 +200,7 @@ Checked against the real OpenCode 1.18.35 with agent-bench's fake server (2026-1
 
 ## The coder's thinking
 
-The main session and the coder have a thinking setting each, for each model (Phase 23.4.4): **Main thinking** and **Coder thinking** in the dashboard (Settings > Server). The coder also has its own temperature (0.6, OpenCode).
+The main session and the coder have a thinking setting each, for each model (Phase 23.4.4): **Main thinking** and **Coder thinking** in the dashboard (Settings > Server). The coder also has its own temperature (0.6, OpenCode; not with an external coder model).
 
 - **Default: same as main** (`main` in `config.json`; the user, 2026-10-09: "default should be the same thinking mode as your main session"). The coder thinks as the main session does with the model that it runs on. CARL sends no thinking value of its own for the coder.
 - **On:** a model with effort levels (the 27B builds) thinks at `medium` (the best of 9 coder runs on the 35B, 2026-10-02); the other models are on. The user (2026-10-09): coders do better with thinking on, because they solve problems.
@@ -210,6 +211,30 @@ The main session and the coder have a thinking setting each, for each model (Pha
 - **OpenCode:** the coder agent has no `reasoningEffort`. `carl-delegation` has the option `coderThinking`: `{"PROVIDER/MODEL": EFFORT}` (`none` for off, `high` for on, or the level), only for the models whose Coder thinking is not `main`. Its `chat.params` hook sets `output.options.reasoningEffort` on each request of the coder agent (`coder` or `carl-coder`) whose model has an entry. OpenCode sends it as `reasoning_effort`. The test session (the task tool) and the code session (started by `carl-delegation`) are both coder sessions. Other agents and models with no entry: the request stays as it is (the model's own `reasoningEffort`, Main thinking).
 - **Pi:** the `subagent` tool reads `"thinking": {"coder": {"PROVIDER/MODEL": LEVEL}}` in `~/.pi/agent/carl.json` and starts each coder session with `--thinking LEVEL` for the model of the coder. A model without an entry (`main`, or not one of CARL's): the coder uses the level of the session, as before. Other agents always use the level of the session.
 - The clients get a change at their next update (the Connect tab, `u`; other computers: `P`).
+- **An external coder model** (Phase 23.4.5): the dashboard's per-model table does not apply. Coder thinking is `model default` (CARL sends no thinking value: the client's own default for that model), or a level that `/carl` sets for it: OpenCode, a variant of that model (`coderVariant`; `chat.params` merges that variant's options); Pi, one of its thinking levels (`--thinking LEVEL`). Without a level, Pi starts the coder with no `--thinking`.
+
+## An external coder model
+
+`/carl` > Coder subagent > **Coder model** can put the coder on a model of another provider that OpenCode or Pi can use, free or paid (Phase 23.4.5; user, 2026-10-09: "model selection could also allow you to choose an external free or paid model to do the code"). The choice is for one computer (`CODER_MODEL=PROVIDER/MODEL` in `~/.config/carl/client-install.env`; the setup and the sync keep it).
+
+| | Same as main (the default) | An external model |
+|---|---|---|
+| Where the coder's requests go | CARL's server | The provider of that model (OpenCode or Pi sends them, with its own key) |
+| The server's slots | The coder uses a slot | No slot. The setup's coder rule turns the coder on also with 1 slot (`auto`), and `/carl` gives no 1-slot warning |
+| Auto fit | Reserves a slot for the coder (2 slots first) | The same: Auto fit always counts a local coder (user, 2026-10-09: the server does not know which computers use an external coder, and a computer can go back to the local model at any time) |
+| The brief, the check, the gates, the chain | As described above | The same. Both chain sessions run on the external model: OpenCode's task tool starts the test session on the coder agent's `model`, and `carl-delegation` starts the code session with the model of the test session (the task's metadata), or, when that is not known, with no model, so OpenCode takes the agent's own |
+| Sampling | The coder's temperature 0.6 (OpenCode) and the server's sampling | None of CARL's: the coder agent has no `temperature`; `chat.params` sets no sampling value |
+| Thinking | Coder thinking of that model (the dashboard; `/carl` per computer) | `model default`, or a level for that model ([The coder's thinking](#the-coders-thinking)) |
+| The step limit | 80 (OpenCode `steps`) | 80 |
+| The disk cache, the model check | On the coder's requests | Not on the coder's requests: they act only on CARL's provider ([the plugins](plugins.md#carl-cache-the-disk-cache)) |
+| The dashboard | The Live tab shows the coder's requests | The Live tab shows only the main session. Connect > Clients shows each computer's coder model |
+
+- **The data boundary.** The brief, the files that the coder reads and the results of its tools go to the provider. `/carl` says where ("The coder's work goes to openrouter.ai.") and that a paid model costs money. CARL shows no cost.
+- **The provider's key** is the client's own (OpenCode's auth or config, Pi's). CARL never reads, copies or logs it: the setup writes only the model's name, `/carl` reads only the model list's names, base URLs and prices, and the disk cache reads the key only of CARL's provider.
+- **When the provider fails** (no network, no quota, a key that expired), the coder's task fails with the provider's error, and the main agent sees it. There is no fallback to a CARL model (user, 2026-10-09: "The task fails when the provider fails with an error"). In OpenCode, the task tool's error, or the code session's error in the chain's result; in Pi, the coder process's error. Nothing in CARL starts the task again on another model (tests: `tests/js/opencode-plugins.test.mjs`, `tests/js/pi-chain.test.mjs`).
+- **The context limit** of the external model applies to the brief and the coder's work, as the client knows it.
+- No benchmark runs of external coders in agent-bench (user, 2026-10-09: "this is the end user deciding not something carl is responsible for").
+- Checked with the real OpenCode 1.18.35 and Pi 1.1.0 (2026-10-09): a temp HOME made by `configure.py` with `--coder-model`, agent-bench's fake server as CARL's server, and a second fake server as the external provider. The main session's requests went to CARL's server; every request of the coder (the test session and the code session of the chain) went to the external server, without `temperature`, `id_slot` or a CARL thinking value; the chain gave its one result; the disk cache logged nothing for the coder's sessions.
 
 ## /code
 
