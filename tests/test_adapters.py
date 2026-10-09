@@ -73,6 +73,46 @@ class BatchedBenchTest(unittest.TestCase):
         self.assertEqual(parse_batched(text), {1: (25.49, 480.59), 8: (45.03, 288.43)})
         self.assertEqual(parse_batched("no table"), {})
 
+    def test_the_bench_runs_with_fit_off(self) -> None:
+        """llama.cpp 0.6 fits by default: Auto-tune's llama-batched-bench passes --fit off, as every CARL start."""
+        from unittest import mock
+        from carl_core.adapters import llama_server as ls
+        seen = []
+
+        def run(argv, **kw):                        # type: ignore[no-untyped-def]
+            seen.append(argv)
+            return mock.Mock(stdout="")
+        ctl = ls.LlamaServerControl("/nope/serve-llama.sh", "/m/a.gguf", 8093, "k", "/tmp/x.log", lambda: set())
+        with mock.patch.object(ls.subprocess, "run", run):
+            ctl.parallel([1, 2], 512, 96, "q4_0")
+        argv = seen[0]
+        self.assertEqual(argv[0], "llama-batched-bench")
+        self.assertEqual(argv[argv.index("--fit") + 1], "off")
+        self.assertNotIn("-lv", argv)
+
+
+class TuneServerStartTest(unittest.TestCase):
+    def test_the_tune_server_starts_through_the_launcher_on_its_port(self) -> None:
+        """Auto-tune's server is CARL's launcher (it passes --port and --fit off; tests/scripts/test_cli_text.py)
+        with PORT set to the tune's port, local only, without the user's settings; no -lv: Auto-tune reads no
+        buffer sizes from the log."""
+        from carl_core.adapters import llama_server as ls
+        with tempfile.TemporaryDirectory() as d:
+            rec = os.path.join(d, "rec")
+            launcher = os.path.join(d, "serve-llama.sh")
+            with open(launcher, "w", encoding="utf-8") as f:
+                f.write(f'#!/usr/bin/env bash\nprintf "%s\\n" "PORT=$PORT" "SETTINGS_FILE=$SETTINGS_FILE" "$@" > {rec!r}\n'
+                        'echo "error: a fake launcher"; exit 1\n')
+            os.chmod(launcher, 0o755)
+            ctl = ls.LlamaServerControl(launcher, "/m/a.gguf", 8093, "k", os.path.join(d, "logs", "tune.log"),
+                                        lambda: set())
+            with self.assertRaises(ConfigError):
+                ctl.start("ngram-mod", 2, 32768)
+            with open(rec, encoding="utf-8") as f:
+                got = f.read().splitlines()
+        self.assertEqual(got[:2], ["PORT=8093", "SETTINGS_FILE=none"])
+        self.assertEqual(got[2:], ["--model", "/m/a.gguf", "--local", "--ctx", "32768", "--kv", "q4"])
+
 
 if __name__ == "__main__":
     unittest.main()

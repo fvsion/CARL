@@ -11,11 +11,11 @@ Only ranked stock models are candidates: abliterated models are picked by hand. 
 model takes part only when the user's card opts it in (auto_fit: a rank, an arch, stock):
 its rank is the user's word, not measured, so it never joins by default.
 
-Within the goal's family the passes are, in order (the first pass any candidate meets wins,
-the best rank within it):
-  1. two 96K windows (main session + a coder subagent)
-  2. one 96K window
-  3. one window, the largest that fits, at least 32K
+Within the goal's family the passes are, in order, on every Mac (user, 2026-10-09: "every Mac with
+48K floor"; the first pass any candidate meets wins, the best rank within it):
+  2 x 96K, 2 x 64K, 2 x 48K (the main session + a coder subagent), then 1 x 96K, 1 x 64K, 1 x 48K
+Nothing below 48K. In each pass a model with MTP that fits only without it drops MTP (n-gram stays)
+before Auto fit drops a slot or the window, and says so.
 The memory allowed is the smaller of the GPU limit and RAM minus the reserve for macOS and
 apps (more with the VM up), so a pick leaves the Mac usable. Pure: shapes, sizes and the
 limits come in as values.
@@ -25,9 +25,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Dict, List, Literal, Optional, Sequence, Tuple
 
-from .fit import max_ctx, need_bytes, window_label
-from .gguf import GIB, OVERHEAD, ModelShape, ctx_train
-from .models import CTX_FLOOR, draft_bytes
+from .fit import NO_SPEC, UBATCH, Spec, mtp_spec, need_bytes, window_label
+from .gguf import GIB, ModelShape, ctx_train
+from .models import draft_bytes
 from .types import ModelInfo
 
 Goal = Literal["everyday", "hard-code"]
@@ -43,7 +43,7 @@ SCOPE_TEXT: Dict[Scope, str] = {"catalogue": "all catalogue models", "downloaded
 ARCH_TEXT: Dict[str, str] = {"moe": "MoE", "dense": "dense"}
 FAMILY_TEXT: Dict[Goal, str] = {"everyday": "fast (MoE or small dense)", "hard-code": "dense"}
 KV_TEXT: Dict[str, str] = {"q4_0": "q4", "q8_0": "q8"}
-MIN_WINDOW = 32768                  # below this a window is not worth starting
+MIN_WINDOW = 49152                  # the floor: below 48K a window is not worth starting (user, 2026-10-09)
 
 
 def as_goal(v: object) -> Goal:
@@ -69,7 +69,8 @@ def setup_text(slots: int, ctx: Optional[int], kv: Optional[str] = None) -> str:
 
 @dataclass(frozen=True)
 class Candidate:
-    """A model as auto fit sees it. shape None: its GGUF header could not be read."""
+    """A model as auto fit sees it. shape None: its GGUF header could not be read. weights: the model
+    file; spec: its speculation (an MTP drafter's weights are in it)."""
     name: str
     arch: str
     rank: Optional[int]
@@ -80,6 +81,7 @@ class Candidate:
     kv: str = "q4_0"
     opted_in: bool = True           # a custom model: its card's auto_fit (catalogue models: always)
     fast: bool = False              # a small dense build the everyday goal takes with the MoE builds
+    spec: Spec = NO_SPEC            # the catalogue's speculation (MTP only with a head or a drafter)
 
     def kind(self) -> str:
         """MoE, small dense or dense: what the result calls the build."""
@@ -93,15 +95,20 @@ class Candidate:
 
 
 def candidate(m: ModelInfo, shape: Optional[ModelShape]) -> Candidate:
-    """A model record (catalogue or custom) and its header shape as a candidate (its weights
-    include its MTP drafter's, when it has one)."""
+    """A model record (catalogue or custom) and its header shape as a candidate: its speculation from
+    the catalogue (tune.spec, tune.spec_n), MTP with its head or its drafter (the drafter's weights count
+    only while MTP runs)."""
     rank = m.get("rank")
-    kv = (m.get("tune") or {}).get("kv", "q4_0")
+    tune = m.get("tune") or {}
+    kv = tune.get("kv", "q4_0")
+    n = tune.get("spec_n", 1)
+    spec = mtp_spec(str(tune.get("spec") or "none"), n if isinstance(n, int) else 1, shape, draft_bytes(m))
     return Candidate(name=m.get("name", ""), arch=str(m.get("arch") or "").lower(),
                      rank=rank if isinstance(rank, int) and not isinstance(rank, bool) else None,
                      abliterated=bool(m.get("abliterated")), downloaded=m.get("status") == "downloaded",
-                     weights=int(m.get("bytes", 0)) + draft_bytes(m), shape=shape, kv=kv if isinstance(kv, str) else "q4_0",
-                     opted_in=not m.get("custom") or m.get("auto_fit") is True, fast=m.get("fast") is True)
+                     weights=int(m.get("bytes", 0)), shape=shape, kv=kv if isinstance(kv, str) else "q4_0",
+                     opted_in=not m.get("custom") or m.get("auto_fit") is True, fast=m.get("fast") is True,
+                     spec=spec)
 
 
 @dataclass(frozen=True)
@@ -147,11 +154,14 @@ class Budget:
 
 @dataclass(frozen=True)
 class Plan:
-    """How a model runs: slots of ctx tokens each at a KV cache type, and the memory it needs."""
+    """How a model runs: slots of ctx tokens each at a KV cache type, its speculation, and the memory
+    it needs. dropped: the model's MTP does not fit with these slots and window, so n-gram only."""
     ctx: int
     slots: int
     kv: str
     need: float
+    spec: Spec = NO_SPEC
+    dropped: bool = False
 
     def label(self) -> str:
         """The plan in short: 2 × 96K tokens, q4."""
@@ -161,48 +171,90 @@ class Plan:
         """The plan in words: 2 slots × 96K tokens (q4)."""
         return setup_text(self.slots, self.ctx, self.kv)
 
+    def spec_note(self) -> str:
+        """Why the speculation is n-gram only, one sentence without the last full stop ("" when MTP fits)."""
+        if not self.dropped:
+            return ""
+        return f"MTP does not fit with {setup_text(self.slots, self.ctx)} on this Mac, so the speculation is n-gram only"
+
 
 @dataclass(frozen=True)
 class Tier:
-    """One pass: slots × ctx per slot; ctx None = the largest window that fits (>= MIN_WINDOW)."""
+    """One pass: slots × ctx tokens per slot."""
     slots: int
-    ctx: Optional[int]
+    ctx: int
 
     def label(self) -> str:
-        return setup_text(self.slots, self.ctx) if self.ctx else setup_text(1, MIN_WINDOW)
+        """2 slots × 64K tokens."""
+        return setup_text(self.slots, self.ctx)
+
+    def words(self) -> str:
+        """two slots of 64K tokens."""
+        return f"{'two slots' if self.slots == 2 else 'one slot' if self.slots == 1 else f'{self.slots} slots'} of " \
+               f"{window_label(self.ctx)} tokens"
 
 
-TIERS: Tuple[Tier, ...] = (Tier(2, CTX_FLOOR), Tier(1, CTX_FLOOR), Tier(1, None))
+# Auto fit's order on every Mac (user, 2026-10-09): two slots first, the window from 96K down to the 48K floor.
+TIERS: Tuple[Tier, ...] = tuple(Tier(n, k * 1024) for n in (2, 1) for k in (96, 64, 48))
 
 
-def plan_for(c: Candidate, tier: Tier, allowed: float, swa_full: bool = True) -> Optional[Plan]:
-    """The plan of a candidate in one pass, None when it doesn't fit (or its shape is unknown)."""
-    if c.shape is None:
+def setups(c: Candidate) -> Tuple[Tuple[Spec, bool], ...]:
+    """The speculation a candidate tries in each pass: its own, then without MTP (n-gram stays)."""
+    return ((c.spec, False), (c.spec.without_mtp(), True)) if c.spec.mtp else ((c.spec, False),)
+
+
+def plan_for(c: Candidate, tier: Tier, allowed: float, swa_full: bool = True, ub: int = UBATCH) -> Optional[Plan]:
+    """The plan of a candidate in one pass, None when it doesn't fit (or its shape is unknown). MTP
+    goes before the pass does: a model that fits only without it runs n-gram (Plan.dropped)."""
+    if c.shape is None or tier.ctx > ctx_train(c.shape):
         return None
-    if tier.ctx is None:
-        ctx = min(max_ctx(c.shape, c.weights, allowed, tier.slots, c.kv, swa_full), CTX_FLOOR)
-        if ctx < MIN_WINDOW:
-            return None
-    else:
-        ctx = tier.ctx
-        if ctx > ctx_train(c.shape):
-            return None
-    need = need_bytes(c.shape, c.weights, ctx, tier.slots, c.kv, swa_full)
-    return Plan(ctx, tier.slots, c.kv, need) if need <= allowed else None
+    for spec, dropped in setups(c):
+        need = need_bytes(c.shape, c.weights, tier.ctx, tier.slots, c.kv, swa_full, spec, ub)
+        if need <= allowed:
+            return Plan(tier.ctx, tier.slots, c.kv, need, spec, dropped)
+    return None
+
+
+def model_plan(c: Candidate, allowed: float, swa_full: bool = True, cap: Optional[int] = None,
+               slots: Optional[int] = None, ub: int = UBATCH) -> Tuple[int, Optional[Plan]]:
+    """Auto fit's order for one model (a start whose window is not the user's): (the pass, its plan), or
+    (the last pass, None) when no pass fits. cap: the model's own window (no pass above it); slots: a
+    number the user set (only its passes)."""
+    for t, tier in enumerate(TIERS):
+        if (cap is not None and tier.ctx > cap) or (slots is not None and tier.slots != slots):
+            continue
+        plan = plan_for(c, tier, allowed, swa_full, ub)
+        if plan:
+            return t, plan
+    return len(TIERS) - 1, None
+
+
+def order_note(name: str, tier: int, plan: Plan, cap: int) -> str:
+    """The start line for a start that Auto fit's order changed (a smaller window, or n-gram for MTP), one
+    whole sentence; "" when it changed nothing."""
+    parts = []
+    if plan.ctx < cap:
+        prev = TIERS[tier - 1] if tier else None
+        why = f": {prev.label()} {'does' if prev.slots == 1 else 'do'} not fit this Mac" if prev else ""
+        parts.append(f"{name} starts with {plan.describe()}, the first setup in Auto fit's order that fits{why}.")
+    note = plan.spec_note()
+    if note:
+        parts.append(f"{note}.")
+    return " ".join(parts)
 
 
 def why_not(c: Candidate, tier: Tier, allowed: float, swa_full: bool = True) -> str:
-    """Why a candidate fails a pass, with the numbers."""
+    """Why a candidate fails a pass, with the numbers (the memory without MTP: the least it needs)."""
     if c.shape is None:
         return "has an unknown size: CARL cannot read its GGUF header (possibly no network)"
-    alone = c.weights + c.shape["rs_bytes"] + OVERHEAD
+    spec = c.spec.without_mtp()
+    alone = need_bytes(c.shape, c.weights, 0, 1, c.kv, swa_full, spec)
     if alone > allowed:
         return f"does not fit: the weights and buffers alone need {gib(alone)}, and a model can use {gib(allowed)}"
-    if tier.ctx is None:
-        mx = max_ctx(c.shape, c.weights, allowed, 1, c.kv, swa_full)
-        return (f"does not fit: the largest context that fits is {window_label(mx)} tokens, "
+    if ctx_train(c.shape) < MIN_WINDOW:
+        return (f"does not fit: its trained context is {window_label(ctx_train(c.shape))} tokens, "
                 f"less than {window_label(MIN_WINDOW)}")
-    need = need_bytes(c.shape, c.weights, tier.ctx, tier.slots, c.kv, swa_full)
+    need = need_bytes(c.shape, c.weights, tier.ctx, tier.slots, c.kv, swa_full, spec)
     return f"does not fit: {tier.label()} need {gib(need)}, and a model can use {gib(allowed)}"
 
 
@@ -222,7 +274,7 @@ class Rejection:
 class AutoFit:
     """Auto fit's answer: the pick (None when nothing fits), how it runs, and why every
     better-ranked candidate was passed over. fallback: no model of the goal's family fits,
-    the pick is of the other family. tier: the pass the pick met (0-2)."""
+    the pick is of the other family. tier: the pass the pick met (an index of TIERS)."""
     goal: Goal
     scope: Scope
     budget: Budget
@@ -242,16 +294,36 @@ class AutoFit:
             return (f"No stock model with a quality rank fits this Mac ({SCOPE_TEXT[self.scope]}). "
                     f"A model can use {self.budget.describe()}")
         arch = self.pick.kind()
-        holds = (f"two slots of {window_label(CTX_FLOOR)} tokens (the main session and a subagent)" if self.tier == 0
-                 else f"one slot of {window_label(CTX_FLOOR)} tokens (two slots do not fit)" if self.tier == 1 else
-                 f"one slot of {window_label(self.plan.ctx)} tokens, the largest context that fits "
-                 f"(no model fits {window_label(CTX_FLOOR)})")
         here = "downloaded " if self.scope == "downloaded" else ""
         lead = (f"No {here}{FAMILY_TEXT[self.goal]} model fits, so this is the best {arch} model that fits. It holds "
                 if self.fallback else
                 f"Of the stock {arch} models that hold ")
         tail = "" if self.fallback else ", this model has the best quality rank"
-        return f"{lead}{holds}{tail}. It needs {gib(self.plan.need)}, and a model can use {self.budget.describe()}"
+        note = self.plan.spec_note()
+        return (f"{lead}{self.holds()}{tail}. It needs {gib(self.plan.need)}, and a model can use "
+                f"{self.budget.describe()}" + (f". {note}" if note else ""))
+
+    def holds(self) -> str:
+        """The setup of the pick and why Auto fit took it, as a phrase: two slots of 64K tokens (the main
+        session and a subagent; two slots of 96K tokens do not fit)."""
+        t = TIERS[self.tier]
+        if self.tier == 0:
+            return f"{t.words()} (the main session and a subagent)"
+        prev = TIERS[self.tier - 1]
+        both = "the main session and a subagent; " if t.slots == 2 else ""
+        return f"{t.words()} ({both}{prev.words()} {'does' if prev.slots == 1 else 'do'} not fit)"
+
+    def order_text(self) -> str:
+        """Which setup Auto fit chose and why, in whole sentences without the last full stop (the
+        Server panel, ./carl.sh fit)."""
+        if not self.pick or not self.plan:
+            return ""
+        t = TIERS[self.tier]
+        prev = TIERS[self.tier - 1] if self.tier else None
+        text = f"Auto fit takes the first setup in its order that fits: {t.label()}" + (
+            f", because {prev.label()} {'does' if prev.slots == 1 else 'do'} not fit" if prev else "")
+        note = self.plan.spec_note()
+        return text + (f". {note}" if note else "")
 
     def summary(self) -> str:
         """The pick in one line: its name and plan (the goal and the candidates are shown elsewhere)."""

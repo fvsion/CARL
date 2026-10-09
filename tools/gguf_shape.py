@@ -18,10 +18,10 @@ sys.dont_write_bytecode = True                    # keep the shared folder free 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from carl_core.adapters.gguf_reader import local_meta  # noqa: E402
-from carl_core.domain.gguf import GIB, KV_BPE, OVERHEAD, kv_bytes_per_token, model_shape  # noqa: E402
+from carl_core.domain.gguf import GIB, KV_BPE, kv_bytes_per_token, model_shape  # noqa: E402
 from carl_core.wiring import GPU  # noqa: E402
 
-__all__ = ["GIB", "KV_BPE", "OVERHEAD", "gpu_limit", "kv_bytes_per_token", "local_meta", "model_shape"]
+__all__ = ["GIB", "KV_BPE", "gpu_limit", "kv_bytes_per_token", "local_meta", "model_shape"]
 
 
 def gpu_limit() -> Tuple[int, str]:

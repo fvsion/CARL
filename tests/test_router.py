@@ -10,7 +10,7 @@ from support import GIB, MDIR, FakeShapes, World, catalog, entry, shape, with_wi
 from carl_core.domain.clientlist import client_entry, client_list
 from carl_core.domain.router import Common, Preset, plan_model, preset_ini
 from carl_core.domain.settings import LLAMA_KEYS
-from carl_core.domain.types import JsonValue, ModelInfo, Settings
+from carl_core.domain.types import JsonObject, JsonValue, ModelInfo, Settings
 
 COMMON = Common(batch=2048, ubatch=512, ckpt=8, ckpt_step=4096, cache_ram=None)
 VALS: Settings = {"ctx": 98304, "slots": "auto", "kv": "q4_0", "spec": "draft-mtp,ngram-mod", "spec_n": 1, "temp": 1.0,
@@ -64,6 +64,9 @@ class PlanTest(unittest.TestCase):
         text = preset_ini(Preset([two, one], [("big", "needs 40.0 GiB")], start="one"), COMMON)
         self.assertIn("version = 1\n\n[*]\njinja = true\n", text)
         self.assertIn('chat-template-kwargs = {"preserve_thinking":true}', text)
+        shared = text.split("[*]\n", 1)[1].split("\n\n", 1)[0]               # every model the router starts
+        self.assertIn("fit = off\n", shared + "\n")                          # llama.cpp 0.6 fits by default
+        self.assertNotIn("verbosity", text)                                   # no -lv 4: no buffer sizes read
         sec_two = text.split("[two]")[1].split("[one]")[0]
         sec_one = text.split("[one]")[1]
         for line in ("model = /two.gguf", "ctx-size = 196608", "parallel = 2", "kv-unified = true",
@@ -122,9 +125,10 @@ class ClientListTest(unittest.TestCase):
         doc = client_list(ms, lambda m: 65536, default="b")
         self.assertEqual(doc["default"], None)                               # not installed: no default
         self.assertEqual(doc["models"], [{"id": "a", "label": "A · Q4", "ctx": 65536, "thinking": "effort",
-                                          "off_sampling": "qwen"},                 # a Qwen family: Qwen's off sampling
+                                          "off_sampling": "qwen",                  # a Qwen family: Qwen's off sampling
+                                          "thinking_main": "low", "thinking_coder": "main"},
                                          {"id": "c", "label": "C[2J", "ctx": 65536, "thinking": "on-off",
-                                          "off_sampling": "same"}])
+                                          "off_sampling": "same", "thinking_main": "on", "thinking_coder": "main"}])
         self.assertEqual(client_entry({"name": "x"}, 4096)["label"], "x")
 
     def test_app_client_models(self) -> None:
@@ -134,7 +138,55 @@ class ClientListTest(unittest.TestCase):
         doc = w.carl.client_models(w.carl.load_config())
         self.assertEqual(doc["default"], "small")
         self.assertEqual(doc["models"], [{"id": "small", "label": "small", "ctx": 131072, "thinking": "on-off",
-                                          "off_sampling": "same"}])
+                                          "off_sampling": "same", "thinking_main": "on", "thinking_coder": "main"}])
+
+    def test_the_thinking_of_each_role_comes_from_the_models_settings(self) -> None:
+        """Phase 23.4.4: config.json models.NAME.thinking_main / thinking_coder reach the client list, as the model
+        takes them (a level on an on / off model is on; on for an effort model is the role's default level)."""
+        sh = shape()
+        sh["effort_levels"] = True
+        w = World(catalog(BIG, SMALL), files={f"{MDIR}/Small-IQ3.gguf": 10 * GIB, f"{MDIR}/mine.gguf": GIB},
+                  shapes=FakeShapes(local={f"{MDIR}/Small-IQ3.gguf": shape(), f"{MDIR}/mine.gguf": sh}),
+                  config={"schema": 1, "models": {"small": {"thinking_main": "off", "thinking_coder": "xhigh"},
+                                                  "mine": {"thinking_main": "xhigh", "thinking_coder": "on"}}})
+        doc = w.carl.client_models(w.carl.load_config(), router=True)            # every installed model
+        got = {m["id"]: (m["thinking_main"], m["thinking_coder"]) for m in cast(List[Dict[str, JsonValue]], doc["models"])}
+        self.assertEqual(got, {"small": ("off", "on"), "mine": ("xhigh", "medium")})
+
+    def test_single_model_mode_lists_only_the_model_the_server_runs(self) -> None:
+        """Phase 23.4.4 item 13: single-model mode, only the running model (by its name or its alias), else the model
+        a start loads; router mode (config.json or the server's): every installed model."""
+        files = {f"{MDIR}/Small-IQ3.gguf": 10 * GIB, f"{MDIR}/mine.gguf": GIB}
+        shapes = FakeShapes(local={f"{MDIR}/Small-IQ3.gguf": shape(), f"{MDIR}/mine.gguf": shape()})
+        w = World(catalog(BIG, SMALL), files=files, shapes=shapes,
+                  config={"schema": 1, "models": {"mine": {"alias": "my-alias"}}})
+        cfg = w.carl.load_config()
+
+        def ids(doc: JsonObject) -> List[object]:
+            return [m["id"] for m in cast(List[Dict[str, JsonValue]], doc["models"])]
+        self.assertEqual((ids(w.carl.client_models(cfg)), w.carl.client_models(cfg)["default"]), (["small"], "small"))
+        self.assertEqual((ids(w.carl.client_models(cfg, "mine")), w.carl.client_models(cfg, "mine")["default"]),
+                         (["mine"], "mine"))
+        self.assertEqual(ids(w.carl.client_models(cfg, "my-alias")), ["mine"])          # the server's alias
+        self.assertEqual(ids(w.carl.client_models(cfg, "not-here")), ["small"])         # unknown: the start's model
+        self.assertEqual(sorted(map(str, ids(w.carl.client_models(cfg, "mine", router=True)))), ["mine", "small"])
+        r = World(catalog(BIG, SMALL), files=files, shapes=shapes, config={"schema": 1, "llama": {"mode": "router"}})
+        self.assertEqual(sorted(map(str, ids(r.carl.client_models(r.carl.load_config())))), ["mine", "small"])
+
+    def test_the_client_side_defaults_are_the_domains(self) -> None:
+        """client/carl_models.py (stdlib only, on other computers) keeps its own copy of the rules."""
+        import os
+        import sys
+        sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "client"))
+        import carl_models
+        from carl_core.domain import thinking
+        self.assertEqual(carl_models.ROLE_DEFAULTS, thinking.DEFAULTS)
+        self.assertEqual((carl_models.ROLE_VALUES, carl_models.ROLE_LEVELS, carl_models.ON_LEVEL, carl_models.MAIN),
+                         (thinking.VALUES_OF, thinking.LEVELS, thinking.ON_LEVEL, thinking.MAIN))
+        for kind in ("effort", "on-off"):
+            for role in thinking.ROLES:
+                for v in (*thinking.CODER_VALUES, "bad"):
+                    self.assertEqual(carl_models.role_value(kind, role, v), thinking.normalize(kind, role, v))
 
 
 if __name__ == "__main__":

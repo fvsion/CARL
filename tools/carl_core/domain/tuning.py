@@ -25,7 +25,7 @@ from dataclasses import dataclass
 from typing import Dict, List, Literal, Mapping, Optional, Sequence, Tuple
 
 from .errors import ConfigError
-from .fit import max_ctx, need_bytes
+from .fit import Spec, max_ctx, need_bytes
 from .gguf import ModelShape
 from .models import CTX_FLOOR
 from .ports import Progress, TuneServer
@@ -340,7 +340,8 @@ class AutoTuner:
                 self.progress.note("Parallel requests: not measured (llama-batched-bench did not run).")
 
         ctx = choose_ctx(plan.base_ctx, zones, m1)
-        slots = "2" if need_bytes(shape, weights, ctx, 2, TUNE_KV) <= limit else "1"
+        # the speculation that won counts (MTP: its draft context; a drafter's weights are in `weights` already)
+        slots = "2" if need_bytes(shape, weights, ctx, 2, TUNE_KV, spec=Spec(spec, n)) <= limit else "1"
         self._next("result")
         self.progress.note(f"Context memory type {KV_WORDS.get(TUNE_KV, TUNE_KV)}. Speculation {spec_words(spec, n)}. "
                            f"Context {ctx // 1024}K tokens per slot. Slots: {slots}.")

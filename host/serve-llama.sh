@@ -229,6 +229,10 @@ make_template() {
   fi
 }
 
+# The installed llama.cpp against the version CARL is tested with (tools/carl_core/domain/llamacpp.py): one start
+# line when it is older ("" otherwise; a check that cannot run says nothing).
+LLAMA_NOTE="$(python3 "$HERE/../tools/carl.py" llama-version 2>/dev/null)" || LLAMA_NOTE=""
+
 log_args=()
 if [[ "$LOG_FILE" != "none" ]]; then
   mkdir -p "$(dirname "$LOG_FILE")"
@@ -251,6 +255,7 @@ if [[ "$LLAMA_MODE" == router ]]; then
   grep -q '^model ' <<< "$presets" || { echo "error: router mode cannot start: no downloaded model fits this Mac. ./carl.sh fit shows what fits." >&2; exit 1; }
   first="$(sed -n 's/^start //p' <<< "$presets")"
   echo "CARL starts the server in router mode at http://$HOST:$PORT. $NET_NOTE"
+  [[ -z "$LLAMA_NOTE" ]] || echo "$LLAMA_NOTE"
   echo "OpenCode and Pi can switch the model. The server loads one model at a time. A switch takes 30 s to 2 min."
   echo "After a switch, the new model has none of the sessions in memory. A saved session belongs to the model it"
   echo "ran on: OpenCode and Pi restore it from the disk cache when you switch back to that model (with saved sessions"
@@ -278,15 +283,21 @@ fi
 # clamped to 1-8 GiB. Parked states measured 2.1-2.3 GiB at 40-60K tokens (35B).
 fit_args=()
 [[ -n "${RESERVE_GB:-}" ]] && fit_args=(--reserve-gb "$RESERVE_GB")
-# The MTP drafter's weights count with the model's (it shares the model's KV cache).
-[[ ${#draft_args[@]} -gt 0 ]] && fit_args+=(--draft "$DRAFT")
+# The speculation and -ub count (MTP's draft context, the compute buffers); a drafter's weights with MTP.
+spec_fit=(--spec "$SPEC" --spec-n "$SPEC_N" --ub "$UB"); SPEC_NOTE=""
+[[ ${#draft_args[@]} -gt 0 ]] && spec_fit+=(--draft "$DRAFT")
 # A model with sliding-window layers (Gemma): SWA is full (every layer at full length: the prompt
 # states OpenCode and Pi save can be restored) or window (less memory, no restores); cache.swa =
 # auto picks full when it fits with these slots.
 SWA=-
 if plan=$(python3 "$HERE/../tools/llama-fit.py" --plan "$MODEL" --ctx "$CTX" --kv "$KV_K" \
-            --want-slots "$SLOTS" --swa "${SWA_MODE:-auto}" ${fit_args[@]+"${fit_args[@]}"} 2>/dev/null) \
-   && [[ "$plan" =~ ^([1-9])\ ([0-9]+)\ (full|window|-)$ ]]; then
+            --want-slots "$SLOTS" --swa "${SWA_MODE:-auto}" ${fit_args[@]+"${fit_args[@]}"} "${spec_fit[@]}" \
+            2>/dev/null) && [[ "$plan" =~ ^([1-9])\ ([0-9]+)\ (full|window|-)\ ([a-z,-]+)$ ]]; then
+  plan_spec="${BASH_REMATCH[4]}"
+  if [[ "$plan_spec" != "$SPEC" ]]; then     # Auto fit's order: MTP goes (n-gram stays) before a slot
+    SPEC="$plan_spec"; draft_args=(); spec_fit=(--spec "$SPEC" --spec-n "$SPEC_N" --ub "$UB")
+    SPEC_NOTE="from Auto fit: MTP does not fit with these slots and this context on this Mac"
+  fi
   if [[ "$SLOTS" == auto ]]; then
     SLOTS_NOTE="auto: $([[ "${BASH_REMATCH[1]}" == 1 ]] && echo "two slots do not fit" || echo "two slots fit")"
   fi
@@ -304,7 +315,8 @@ fi
 if [[ "${FIT_CHECK:-1}" != 0 ]]; then
   fit_rc=0
   python3 "$HERE/../tools/llama-fit.py" --check "$MODEL" --ctx "$CTX" --slots "$SLOTS" --kv "$KV_K" \
-    --swa "$([[ "$SWA" == window ]] && echo window || echo full)" ${fit_args[@]+"${fit_args[@]}"} || fit_rc=$?
+    --swa "$([[ "$SWA" == window ]] && echo window || echo full)" ${fit_args[@]+"${fit_args[@]}"} "${spec_fit[@]}" \
+    || fit_rc=$?
   if (( fit_rc == 3 )); then
     exit 1
   elif (( fit_rc != 0 )); then
@@ -339,7 +351,7 @@ src_word() {
   case "$1" in
     flag) echo "from your option" ;; env) echo "from the environment" ;; config) echo "from your settings" ;;
     auto-tune) echo "from Auto-tune" ;; catalogue) echo "from the catalogue" ;; header) echo "from the model file" ;;
-    auto-fit) echo "from Auto fit: the largest context that fits" ;; *) echo "CARL's default" ;;
+    auto-fit) echo "from Auto fit: the first setup in its order that fits" ;; *) echo "CARL's default" ;;
   esac
 }
 # source KEY FLAG_VALUE ENV_NAME: where one setting comes from, in words
@@ -360,6 +372,7 @@ spec_text() {
 slots_src="$(source_of slots "$SLOTS_FLAG" SLOTS)"
 [[ -n "${SLOTS_NOTE:-}" ]] && slots_src="$SLOTS_NOTE"
 echo "CARL starts the server: ${MODEL_NAME:-$ALIAS} ($(basename "$MODEL"))."
+[[ -z "$LLAMA_NOTE" ]] || echo "$LLAMA_NOTE"
 echo "Address: http://$HOST:$PORT. $NET_NOTE"
 echo "Slots: $SLOTS ($slots_src). Context: $(tokens_k "$CTX") tokens per slot ($(source_of ctx "$CTX_FLAG" CTX))."
 if [[ "$KV_K" == "$KV_V" ]]; then
@@ -372,7 +385,7 @@ if [[ "$SPEC" == none ]]; then
 else
   guesses="$SPEC_N guess$([[ "$SPEC_N" == 1 ]] || echo es)"
   drafter=""; [[ ${#draft_args[@]} -gt 0 ]] && drafter=" The MTP drafter is $(basename "$DRAFT")."
-  echo "Speculation: $(spec_text "$SPEC"), $guesses ($(source_of spec "" SPEC)).$drafter"
+  echo "Speculation: $(spec_text "$SPEC"), $guesses (${SPEC_NOTE:-$(source_of spec "" SPEC)}).$drafter"
 fi
 if [[ "$SWA" == full ]]; then
   echo "Sliding window: full cache. CARL can restore saved sessions and prompts (cache.swa = ${SWA_MODE:-auto})."

@@ -64,7 +64,7 @@ A decision is right when it is `delegated` for a large or stuck request. For a s
 | `fakeserver.py` | A fake OpenAI-compatible server with scripted replies, for the tests. It needs no model. Its `/tokenize` counts words. |
 | `agentbench/events.py` | The JSON event streams of the clients, and the decision. No I/O. |
 | `agentbench/clients.py` | The commands of OpenCode and Pi, a decision run and a full run. |
-| `agentbench/briefs.py`, `brief_check.mjs` | The coder briefs of a run: their text, CARL's check of them (node with the repo's `client/shared/carl-brief.js`: one checker), the refusals, the tokens (section 6). |
+| `agentbench/briefs.py`, `brief_check.mjs` | The coder briefs of a run: their text, CARL's check of them (node with the repo's `client/shared/carl-brief-check.mjs`, the command that ships with CARL's client plugins: one checker), the refusals, the tokens (section 6). |
 | `agentbench/server.py` | CARL's server for one model: the launcher `./carl.sh`, `/health`, stop. |
 | `agentbench/home.py` | The harness HOME: the client package and `./setup`. |
 | `agentbench/library.py`, `models.py` | The model copies: fetch and drop, and their rules. |
@@ -83,7 +83,7 @@ The tests are in `tests/agent_bench/`.
 
 ## 4. Prepare the clients
 
-`prepare` makes the harness HOME. It starts CARL's server for one model, makes the client package (`./carl.sh package --anyway`), unzips it in the harness HOME and runs its `./setup --yes --coder on` (with `NO_SYNC_SERVICE=1` and `NO_PROFILE=1`). Then it installs the client versions of the baseline (OpenCode 1.18.34, Pi 1.0.2) and stops the server.
+`prepare` makes the harness HOME. It starts CARL's server for one model, makes the client package (`./carl.sh package --anyway`), unzips it in the harness HOME and runs its `./setup --yes --coder auto` (with `NO_SYNC_SERVICE=1` and `NO_PROFILE=1`). Then it installs the client versions of the baseline (OpenCode 1.18.34, Pi 1.0.2) and stops the server.
 
 ```bash
 python3 tools/agent-bench/bench.py prepare --home ~/carl-phase23/bench-home --model qwen3.6-35b-a3b
@@ -91,9 +91,11 @@ python3 tools/agent-bench/bench.py prepare --home ~/carl-phase23/bench-home --mo
 
 - The model must be on the local disk (see section 5).
 - `--latest` keeps the newest client versions. `--opencode-version` and `--pi-version` set other versions.
+- `--coder auto|on|off` sets the coder subagent (`./setup --coder`). `auto` (the default) is the setup's own rule: the coder is on when the server runs 2 or more slots, else off (with 1 slot, a subagent takes the slot of the main session). `on` and `off` force it. Before Phase 23.4.4, the harness always gave `--coder on`.
+- The HOME marker (`.agent-bench.json`) keeps the choice (`coder`) and what the setup did (`coder_state`: `on` or `off`, from its `Coder subagent:` line).
 - The setup installs Node 22 into the harness HOME when the computer has no Node 22.19 or newer. It needs the network for npm.
 
-Before each model batch, `run` makes a new client package and runs `./setup --no-install` again. The client configs then have the model of the batch, the port and the context of the server that runs.
+Before each model batch, `run` makes a new client package and runs `./setup --no-install --coder CODER` again (`run --coder`, default `auto`). The client configs then have the model of the batch, the port and the context of the server that runs. With `auto`, the coder follows the slots of that server. With `--no-server` there is no new setup: the HOME keeps the coder of its last setup.
 
 ## 5. Models: fetch and drop
 
@@ -127,7 +129,7 @@ python3 tools/agent-bench/bench.py report ~/carl-phase23/baseline.jsonl --md --o
 **For each model**, `run` does these steps:
 
 1. With `--fetch`: copy the model in from the library.
-2. Start the server: `HOME=… MONITOR=0 CARL_CONF_DIR=… CARL_CLIENT_DIR=… API_KEY_FILE=… MODELS_DIR=… PORT=8097 LOG_FILE=… ./carl.sh --model NAME --local --slots 2`. The settings folder is empty, so the server uses the catalogue's settings. The coder needs the second slot. Wait for `/health` 200.
+2. Start the server: `HOME=… MONITOR=0 CARL_CONF_DIR=… CARL_CLIENT_DIR=… API_KEY_FILE=… MODELS_DIR=… PORT=8097 LOG_FILE=… ./carl.sh --model NAME --local --slots 2`. The settings folder is empty, so the server uses the catalogue's settings. The coder needs the second slot: with `--slots 1`, `--coder auto` turns the coder off. Wait for `/health` 200.
 3. Write the client configs again (section 4), then apply the variant.
 4. For each run: make a fresh copy of the fixture (a new folder, `git init`, one commit), start the client in it, read its events, record the result.
 5. Stop the server. With `--drop`: remove the local copy.
@@ -151,7 +153,7 @@ The client runs until the practical decision is known (section 1), then the harn
 
 The project copies of full runs stay in the work folder (`HOME-work/runs`, or `--work`). `--keep-runs` also keeps the copies of decision runs.
 
-**The result line** has: `time`, `mode`, `measure` (`practical-v2`; `practical-v1` for the first baseline), `model`, `client`, `client_version`, `thinking`, `thinking_level`, `variant`, `category`, `prompt`, `run`, `expected`, and:
+**The result line** has: `time`, `mode`, `measure` (`practical-v2`; `practical-v1` for the first baseline), `model`, `client`, `client_version`, `thinking`, `thinking_level`, `variant`, `category`, `prompt`, `run`, `expected`, `coder` and `coder_state` (the HOME's coder at the run, from its marker: the `--coder` choice and what the setup did; empty for a HOME of an older harness, which had the coder on), and:
 
 - the practical decision: `decision`, `correct`, `decision_tool` and `decision_args` (the decisive tool call), `looks`, `decision_seconds` (from the first model step), `undecided_reason`;
 - the strict decision: `decision_strict`, `correct_strict`, `tool` and `args` (the first tool call), `step_tools` (all tools of the first tool step), `tool_seconds` (from the first model step to the first tool call), `first_event` (the event of the first tool call, cut);
@@ -162,7 +164,7 @@ Values in `args` and `decision_args` are cut to 400 characters (as before, for t
 - `briefs`: one item for each coder task of the run, in order (decision and full runs; OpenCode: each `task` call with `subagent_type` coder or carl-coder; Pi: each `subagent` call with `agent` coder, and each coder item of its `tasks` and `chain` lists):
   - `text`: the task text, full (OpenCode `prompt`, Pi `task`);
   - `format`: `toml` or `json` (a brief that CARL's reader finds), `kv` (two or more `Key:` lines: 1.12.1's form), or `other`;
-  - `valid`: a TOML or JSON brief that reads and passes CARL's check; `problems`: the check's sentences, or the reader's error with its line. The check is CARL's own: `agentbench/brief_check.mjs` runs `client/shared/carl-brief.js` with node (without node: format `unknown`, valid `null`);
+  - `valid`: a TOML or JSON brief that reads and passes CARL's check; `problems`: the check's sentences, or the reader's error with its line. The check is CARL's own: `agentbench/brief_check.mjs` runs `client/shared/carl-brief-check.mjs --json` (which uses `carl-brief.js`) with node, found on PATH, else in `~/.local/bin` of the user or of the harness HOME (without node: format `unknown`, valid `null`);
   - `refused`: the call's result starts with CARL's refusal mark `[CARL] Brief refused` (after OpenCode's `Error: `), so the coder did not start;
   - `tool`, `item` (`prompt`, `task`, `tasks[N]`, `chain[N]`), and `continues: true` for an OpenCode task with `task_id` (CARL does not check it).
 - `brief_tokens`: one count for each brief, from the model server's `POST /tokenize` (the server of the batch, with the harness's API key). `null` when no server is known (`--no-server`): `bench.py tokens` fills them in afterwards.

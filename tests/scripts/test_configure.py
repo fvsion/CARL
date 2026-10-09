@@ -154,13 +154,24 @@ class ConfigureTests(unittest.TestCase):
             self.assertEqual(stat.S_IMODE(os.stat(self.path(rel)).st_mode), 0o600, rel)
 
     def test_one_entry_per_installed_model_with_its_thinking(self) -> None:
+        # single-model mode (Phase 23.4.4 item 13): only the model the server runs, with the server's window
         p = self.run_configure("--running", "qwen3.8-27b", ctx="65536")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        oc_all = self.read_json(".config/opencode/opencode.json")
+        self.assertEqual((list(oc_all["provider"]["llamacpp"]["models"]), oc_all["model"]),
+                         (["qwen3.8-27b"], "llamacpp/qwen3.8-27b"))
+        dense = oc_all["provider"]["llamacpp"]["models"]["qwen3.8-27b"]
+        self.assertEqual(dense["name"], "Qwen3.8 27B · Q4 — llama.cpp, 64K")             # the running server's window
+        self.assertEqual(dense["limit"], {"context": 65536, "output": 32000})
+        self.assertEqual([m["id"] for m in self.read_json(".pi/agent/models.json")["providers"]["llamacpp"]["models"]],
+                         ["qwen3.8-27b"])
+        # router mode (install.sh passes no running model): every model of the list, each with its own window
+        p = self.run_configure(ctx="65536")
         self.assertEqual(p.returncode, 0, p.stderr)
         oc = self.read_json(".config/opencode/opencode.json")["provider"]["llamacpp"]["models"]
         moe, dense = oc["qwen3.6-35b-a3b"], oc["qwen3.8-27b"]
         self.assertEqual(moe["name"], "Qwen3.6 35B-A3B · Q4 — llama.cpp, 96K")
-        self.assertEqual(dense["name"], "Qwen3.8 27B · Q4 — llama.cpp, 64K")             # the running server's window
-        self.assertEqual(dense["limit"], {"context": 65536, "output": 32000})
+        self.assertEqual(dense["name"], "Qwen3.8 27B · Q4 — llama.cpp, 128K")
         self.assertEqual((moe["options"], dense["options"]), ({"reasoningEffort": "high", "parallel_tool_calls": True},
                                                               {"reasoningEffort": "low", "parallel_tool_calls": True}))
         self.assertEqual({k for k, v in moe["variants"].items() if "disabled" not in v}, {"none", "high"})
@@ -168,7 +179,118 @@ class ConfigureTests(unittest.TestCase):
         pi = self.read_json(".pi/agent/models.json")["providers"]["llamacpp"]["models"]
         self.assertEqual([m["id"] for m in pi], ["qwen3.6-35b-a3b", "qwen3.8-27b"])
         self.assertEqual(pi[0]["thinkingLevelMap"], {"minimal": None, "low": None, "medium": None, "xhigh": None})
-        self.assertEqual(pi[1]["contextWindow"], 65536)
+        self.assertEqual(pi[1]["contextWindow"], 131072)
+
+    def delegation_options(self) -> Any:
+        """carl-delegation's options in opencode.json."""
+        deleg = "file:" + self.path(".config/opencode/plugins/carl-delegation")
+        return next(x[1] for x in self.read_json(".config/opencode/opencode.json")["plugin"]
+                    if isinstance(x, list) and x[0] == deleg)
+
+    def test_thinking_per_role_by_default(self) -> None:
+        """Phase 23.4.4, a list without the role settings (an older server): main high / low (the model option); the
+        coder as the main session ("main"): no reasoningEffort in the coder agent, no coderThinking for
+        carl-delegation; Pi: no per-model level (defaultThinkingLevel low decides), no coder map (the session's
+        level)."""
+        p = self.run_configure("--coder", "1")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        oc = self.read_json(".config/opencode/opencode.json")
+        self.assertNotIn("options", oc["agent"]["coder"])
+        self.assertEqual(oc["agent"]["coder"]["temperature"], 0.6)
+        self.assertNotIn("coderThinking", self.delegation_options())
+        sett = self.read_json(".pi/agent/settings.json")
+        self.assertEqual(sett["defaultThinkingLevel"], "low")
+        self.assertNotIn("modelThinkingLevels", sett)
+        self.assertNotIn("thinking", self.read_json(".pi/agent/carl.json"))
+
+    def test_thinking_per_role_from_the_dashboard(self) -> None:
+        """Main thinking: each model entry's option and Pi's modelThinkingLevels (only when not the default); Coder
+        thinking: per model, carl-delegation's coderThinking (its chat.params hook) and Pi's map in carl.json; "main"
+        has no entry. Off is "none" / "off"."""
+        self.models = {"schema": 1, "default": "qwen3.8-27b", "models": [
+            dict(MODELS["models"][0], thinking_main="on", thinking_coder="off"),
+            dict(MODELS["models"][1], thinking_main="off", thinking_coder="xhigh"),
+            {"id": "gemma-4-e4b", "label": "Gemma 4 E4B", "ctx": 98304, "thinking": "on-off", "off_sampling": "same",
+             "thinking_main": "off", "thinking_coder": "main"}]}
+        p = self.run_configure("--coder", "1")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        oc = self.read_json(".config/opencode/opencode.json")
+        models = oc["provider"]["llamacpp"]["models"]
+        self.assertEqual(models["qwen3.8-27b"]["options"], {"reasoningEffort": "none", "parallel_tool_calls": True})
+        self.assertEqual(models["qwen3.6-35b-a3b"]["options"]["reasoningEffort"], "high")
+        self.assertNotIn("options", oc["agent"]["coder"])                   # no fixed value: per request, per model
+        self.assertEqual(self.delegation_options()["coderThinking"],
+                         {"llamacpp/qwen3.6-35b-a3b": "none", "llamacpp/qwen3.8-27b": "xhigh"})
+        self.assertEqual(self.read_json(".pi/agent/settings.json")["modelThinkingLevels"],
+                         {"llamacpp/qwen3.8-27b": "off", "llamacpp/gemma-4-e4b": "off"})
+        self.assertEqual(self.read_json(".pi/agent/carl.json")["thinking"],
+                         {"coder": {"llamacpp/qwen3.6-35b-a3b": "off", "llamacpp/qwen3.8-27b": "xhigh"}})
+        self.assertIn("Pi thinking per model (settings.json modelThinkingLevels): llamacpp/gemma-4-e4b off, "
+                      "llamacpp/qwen3.8-27b off", p.stdout)
+        # single-model mode: only the running model's entry
+        self.assertEqual(self.run_configure("--coder", "1", "--running", "qwen3.6-35b-a3b").returncode, 0)
+        self.assertEqual(self.delegation_options()["coderThinking"], {"llamacpp/qwen3.6-35b-a3b": "none"})
+        self.assertEqual(self.read_json(".pi/agent/carl.json")["thinking"], {"coder": {"llamacpp/qwen3.6-35b-a3b": "off"}})
+        # the coder as the main session on the running model: no entry anywhere
+        self.assertEqual(self.run_configure("--coder", "1", "--running", "gemma-4-e4b").returncode, 0)
+        self.assertNotIn("coderThinking", self.delegation_options())
+        self.assertNotIn("thinking", self.read_json(".pi/agent/carl.json"))
+
+    def test_carl_coder_thinking_overrides_the_dashboard_on_this_computer(self) -> None:
+        """/carl's Coder thinking (CODER_THINKING=MODEL:VALUE,... through --coder-thinking) is merged over the dashboard's
+        value of each model it names; the other models keep the dashboard's; a broken entry is left out. Both state
+        files keep each model's values for the /carl panel."""
+        self.models = {"schema": 1, "default": "qwen3.8-27b", "models": [
+            dict(MODELS["models"][0], thinking_coder="off"), dict(MODELS["models"][1], thinking_main="medium")]}
+        p = self.run_configure("--coder", "1", "--coder-thinking",
+                               "qwen3.6-35b-a3b:main,qwen3.8-27b:xhigh,nope,bad id:off,other:high")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(self.delegation_options()["coderThinking"], {"llamacpp/qwen3.8-27b": "xhigh"})
+        pi_state = self.read_json(".pi/agent/carl.json")
+        self.assertEqual(pi_state["thinking"], {"coder": {"llamacpp/qwen3.8-27b": "xhigh"}})
+        # "dashboard": the dashboard's coder value, which /carl's "dashboard default" gives
+        want = {"qwen3.6-35b-a3b": {"thinking": "on-off", "main": "on", "coder": "main", "dashboard": "off"},
+                "qwen3.8-27b": {"thinking": "effort", "main": "medium", "coder": "xhigh", "dashboard": "main"}}
+        self.assertEqual(pi_state["models"], want)
+        self.assertEqual(self.read_json(".config/opencode/carl.json")["models"], want)
+        # without the override: the dashboard's values again
+        self.assertEqual(self.run_configure("--coder", "1").returncode, 0)
+        self.assertEqual(self.delegation_options()["coderThinking"], {"llamacpp/qwen3.6-35b-a3b": "none"})
+        self.assertEqual(self.read_json(".pi/agent/carl.json")["models"]["qwen3.6-35b-a3b"],
+                         {"thinking": "on-off", "main": "on", "coder": "off", "dashboard": "off"})
+        # an effort level on an on / off model is "on" there (as the dashboard's)
+        self.assertEqual(self.run_configure("--coder", "1", "--coder-thinking", "qwen3.6-35b-a3b:low").returncode, 0)
+        self.assertEqual(self.delegation_options()["coderThinking"], {"llamacpp/qwen3.6-35b-a3b": "high"})
+
+    def test_a_pi_thinking_level_the_user_changed_stays(self) -> None:
+        self.models = {"schema": 1, "default": "qwen3.8-27b", "models": [
+            MODELS["models"][0], dict(MODELS["models"][1], thinking_main="medium")]}
+        self.assertEqual(self.run_configure().returncode, 0)
+        sett = self.read_json(".pi/agent/settings.json")
+        self.assertEqual(sett["modelThinkingLevels"], {"llamacpp/qwen3.8-27b": "medium"})
+        sett["modelThinkingLevels"] = {"llamacpp/qwen3.8-27b": "medium", "other/model": "high"}   # Pi's /settings
+        self.write_json(".pi/agent/settings.json", sett)
+        self.models = MODELS                                                 # back to the default: ours goes
+        self.assertEqual(self.run_configure().returncode, 0)
+        self.assertEqual(self.read_json(".pi/agent/settings.json")["modelThinkingLevels"], {"other/model": "high"})
+        self.models = {"schema": 1, "default": "qwen3.8-27b", "models": [
+            MODELS["models"][0], dict(MODELS["models"][1], thinking_main="off")]}
+        sett = self.read_json(".pi/agent/settings.json")
+        sett["modelThinkingLevels"]["llamacpp/qwen3.8-27b"] = "xhigh"         # the user's own level for it
+        self.write_json(".pi/agent/settings.json", sett)
+        p = self.run_configure()
+        self.assertIn("kept      Pi thinking of llamacpp/qwen3.8-27b (yours: xhigh)", p.stdout)
+        self.assertEqual(self.read_json(".pi/agent/settings.json")["modelThinkingLevels"],
+                         {"llamacpp/qwen3.8-27b": "xhigh", "other/model": "high"})
+
+    def test_a_thinking_value_that_is_not_known_stops_the_run(self) -> None:
+        self.models = {"schema": 1, "default": None, "models": [dict(MODELS["models"][1], thinking_coder="high")]}
+        p = self.run_configure()
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn("thinking_coder must be one of main, on, off, low, medium, xhigh", p.stderr)
+        self.models = {"schema": 1, "default": None, "models": [dict(MODELS["models"][1], thinking_main="main")]}
+        p = self.run_configure()
+        self.assertIn("thinking_main must be one of on, off, low, medium, xhigh", p.stderr)
 
     def test_the_none_variant_sends_qwen_sampling_only_to_qwen(self) -> None:
         """Qwen has its own non-thinking sampling; Gemma 4 (off_sampling same) only turns thinking off."""
@@ -516,10 +638,12 @@ class ConfigureTests(unittest.TestCase):
         for d in (".config/opencode/plugins/carl-delegation", ".pi/agent/extensions/carl-delegation"):
             self.assertTrue(os.path.isfile(self.path(d + "/carl-delegation.js")), d)
             self.assertTrue(os.path.isfile(self.path(d + "/carl-brief.js")), d)     # the TOML brief (Phase 23.4.3)
+            # the brief check as a command, next to it (Phase 23.4.4: a user's check by hand, agent-bench's)
+            self.assertTrue(os.path.isfile(self.path(d + "/carl-brief-check.mjs")), d)
         self.assertTrue(os.path.isfile(self.path(".pi/agent/extensions/carl-delegation/index.ts")))
         # the chain (a test session, then a code session): OpenCode's carl-delegation and Pi's subagent tool run it
         for d in (".config/opencode/plugins/carl-delegation", ".pi/agent/extensions/subagent"):
-            for f in ("carl-brief.js", "carl-chain.js"):
+            for f in ("carl-brief.js", "carl-brief-check.mjs", "carl-chain.js"):
                 self.assertTrue(os.path.isfile(self.path(d + "/" + f)), d + "/" + f)
         self.assertEqual(self.run_configure("--coder", "1", "--reminder", "0").returncode, 0)
         entry = [p for p in self.read_json(".config/opencode/opencode.json")["plugin"] if "carl-delegation" in p[0]][0]
@@ -978,7 +1102,7 @@ class InstallerOnFakeFilesTests(unittest.TestCase):
         self.fs = MemoryFiles()
         for root, _, names in os.walk(CLIENT):
             for n in names:
-                if n.endswith((".js", ".ts", ".json", ".md")) and n not in ("installed-models.json", "remote.json"):
+                if n.endswith((".js", ".mjs", ".ts", ".json", ".md")) and n not in ("installed-models.json", "remote.json"):
                     with open(os.path.join(root, n), encoding="utf-8") as f:
                         self.fs.write(self.BUNDLE + os.path.join(root, n)[len(CLIENT):], f.read())
         self.fs.writes.clear()

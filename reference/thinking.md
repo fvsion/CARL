@@ -61,6 +61,8 @@ llama.cpp gives these request fields to the template:
 | OpenCode → llama.cpp | `@ai-sdk/openai-compatible`, `options.reasoningEffort` and variants | top-level `reasoning_effort: "<level>"` | top-level `reasoning_effort: "none"` (patched template → `enable_thinking=false`) |
 | Pi → llama.cpp | `thinkingFormat: "chat-template"` and `chatTemplateKwargs` | `chat_template_kwargs {enable_thinking: true, preserve_thinking: true, reasoning_effort: "<level>"}` | `chat_template_kwargs {enable_thinking: false, preserve_thinking: true}` (no effort value) |
 
+**Thinking per role** (Phase 23.4.4): the dashboard sets the main session's and the coder's thinking for each model (Settings > Server: Main thinking, Coder thinking). The main session's goes into each OpenCode model entry's `options.reasoningEffort` and Pi's `modelThinkingLevels`; the coder's into the OpenCode coder agent's `options.reasoningEffort` and the Pi subagent extension (`carl.json` `"thinking"`). Details: [OpenCode and Pi configs](client-configs.md#thinking-per-role-phase-2344).
+
 **OpenCode precedence:** provider options → model `options` → agent `options` → **variant**.
 - OpenCode merges the variant last, so the variant has priority.
 - If the variant name is unknown (an old config), OpenCode uses the base options of the model. It gives no warning.

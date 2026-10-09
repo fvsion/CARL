@@ -10,6 +10,7 @@ from typing import Dict, List, Optional, Tuple
 sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "tools"))
 
+from carl_core.domain import thinking  # noqa: E402
 from carl_core.domain.autofit import AutoFit, Budget, Candidate, Plan  # noqa: E402
 from carl_core.domain.cards import apply_card  # noqa: E402
 from carl_core.domain.errors import ConfigError  # noqa: E402
@@ -92,10 +93,11 @@ class FakeStore:
         return next((m for m in models if m["name"] == name or os.path.basename(m["path"]) == name), None)
 
     def builtin_tune(self) -> JSONDict:
-        return dict(TUNE)
+        return dict(TUNE, thinking_main="on", thinking_coder="main")
 
     def effective_tune(self, m: ModelInfo, cfg: JSONDict) -> Tuple[JSONDict, Dict[str, str]]:
-        vals = dict(TUNE, **m.get("tune", {}))
+        """As carl_core's: the thinking of each role from the model's kind (domain/thinking.py)."""
+        vals = {**TUNE, **thinking.defaults(m.get("thinking")), **m.get("tune", {})}
         src = {k: "catalogue" for k in vals}
         for k, v in ((cfg.get("models") or {}).get(m["name"]) or {}).items():
             vals[k], src[k] = v, "config"
@@ -151,11 +153,17 @@ class FakeStore:
         self.config = copy.deepcopy(cfg)
         self.saved.append(copy.deepcopy(cfg))
 
-    def client_models(self) -> JSONDict:
+    def client_models(self, running: Optional[str] = None, router: Optional[bool] = None) -> JSONDict:
+        """As carl.client_models: single-model mode, only the model the server runs (else "big", the model a start
+        loads); router mode (router None: config.json's llama.mode), every downloaded model."""
         self._check()
+        if router is None:
+            router = (self.config.get("llama") or {}).get("mode") == "router"
+        down = [x for x in self.models if x["status"] == "downloaded"]
+        if not router:
+            down = [x for x in down if x["name"] == (running or "big")] or down
         return {"schema": 1, "default": "big", "models": [
-            {"id": x["name"], "label": x["name"], "ctx": 98304, "thinking": x.get("thinking", "on-off")}
-            for x in self.models if x["status"] == "downloaded"]}
+            {"id": x["name"], "label": x["name"], "ctx": 98304, "thinking": x.get("thinking", "on-off")} for x in down]}
 
     def launch_model(self, cfg: JSONDict) -> str:
         self._check()

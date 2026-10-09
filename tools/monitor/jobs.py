@@ -470,10 +470,12 @@ class ServerJobs:
         return n
 
     # ------------------------------------------------------------ Connect: the client config push
-    def push_client_config(self) -> None:
-        """Publish the client config (clientsync.py: the installed models) for the clients' sync service."""
+    def push_client_config(self, running: Optional[str] = None, router: Optional[bool] = None) -> None:
+        """Publish the client config (clientsync.py: the models the configs get; single-model mode: running, the model
+        the server runs) for the clients' sync service."""
         try:
-            version = clientsync.publish(os.path.dirname(self.paths.config_file), self.svc.store.client_models())
+            version = clientsync.publish(os.path.dirname(self.paths.config_file),
+                                         self.svc.store.client_models(running, router))
         except (OSError, ValueError) as e:
             self.ui.toast(f"{RED}CARL cannot send the config: {e}{R}", 10)
             return
@@ -518,9 +520,10 @@ class ServerJobs:
         ui.install_shown, ui.package_shown = True, False
 
     # ------------------------------------------------------------ Connect: the client package
-    def make_package(self) -> None:
+    def make_package(self, running: Optional[str] = None, router: Optional[bool] = None) -> None:
         """The client package for another computer (z): the code of ./carl.sh package, in a thread. Its result
-        (the zip, the key warning, or why CARL made none) shows in the Connect tab."""
+        (the zip, the key warning, or why CARL made none) shows in the Connect tab. running, router: the server's
+        model and mode (clients.serving) for the model list."""
         ui = self.ui
         if ui.package and not ui.package.done:
             ui.toast("CARL is already making the client package.", 5)
@@ -533,7 +536,7 @@ class ServerJobs:
         def work() -> None:
             try:
                 out = make_client_package(repo, client_dir, os.path.join(repo, "dist"),
-                                          self.svc.store.client_models(), self.svc.store.load_config())
+                                          self.svc.store.client_models(running, router), self.svc.store.load_config())
             except (OSError, ValueError, zipfile.BadZipFile) as e:
                 out = Outcome("", f"error: CARL cannot make the client package: {e}", ())
             run.outcome, run.done = out, True

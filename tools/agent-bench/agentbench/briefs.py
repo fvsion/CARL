@@ -2,7 +2,8 @@
 main agent gave the coder, its format, CARL's check of it, whether CARL refused it, and its tokens.
 
     collect(client, tools)      the briefs of a run's tool calls (the main agent's), in order
-    check_texts(texts)          CARL's check, through node and the repo's client/shared/carl-brief.js (one checker)
+    check_texts(texts)          CARL's check, through node and the repo's client/shared/carl-brief-check.mjs (the
+                                command that ships with CARL's client plugins: one checker)
     tokenizer(url, key)         a function that counts a text's tokens with the model server's POST /tokenize
     fill_tokens(doc, count)     fills a result line's missing brief_tokens (bench.py tokens)
 
@@ -24,7 +25,7 @@ from . import HERE, REPO
 from . import events as ev
 
 CHECKER = os.path.join(HERE, "brief_check.mjs")
-BRIEF_LIB = os.path.join(REPO, "client", "shared", "carl-brief.js")
+BRIEF_CLI = os.path.join(REPO, "client", "shared", "carl-brief-check.mjs")   # imports carl-brief.js next to it
 FORMATS = ("toml", "json", "kv", "other")
 Brief = Dict[str, Any]
 Counter = Callable[[str], Optional[int]]
@@ -62,17 +63,33 @@ def _text(v: Any) -> str:
     return "" if v is None else json.dumps(v, ensure_ascii=False)
 
 
-def check_texts(texts: Sequence[str], lib: str = BRIEF_LIB, node: Optional[str] = None,
+def find_node(home: Optional[str] = None) -> Optional[str]:
+    """The node program: on PATH, else where CARL's client setup installs it (~/.local/bin/node: the user's HOME and
+    the harness HOME), else ~/.local/lib/nodejs/bin/node. None when there is none."""
+    found = shutil.which("node")
+    if found:
+        return found
+    homes = [h for h in (home, os.environ.get("AGENT_BENCH_HOME"), os.path.expanduser("~")) if h]
+    for h in homes:
+        for rel in (".local/bin/node", ".local/lib/nodejs/bin/node"):
+            p = os.path.join(h, rel)
+            if os.path.isfile(p) and os.access(p, os.X_OK):
+                return p
+    return None
+
+
+def check_texts(texts: Sequence[str], cli: str = BRIEF_CLI, node: Optional[str] = None,
                 timeout: float = 60.0) -> List[Dict[str, Any]]:
-    """CARL's check of each text (brief_check.mjs with the repo's carl-brief.js): {format, valid, problems}. Without
-    node, or when it fails: format "unknown", valid None, and the reason in problems."""
+    """CARL's check of each text (brief_check.mjs runs the repo's carl-brief-check.mjs --json): {format, valid,
+    problems}. node: find_node() when not given. Without node, or when it fails: format "unknown", valid None, and
+    the reason in problems."""
     if not texts:
         return []
-    exe = node or shutil.which("node")
+    exe = node or find_node()
     why = "node is not installed" if not exe else ""
     if exe:
         try:
-            p = subprocess.run([exe, CHECKER, lib], input=json.dumps(list(texts)), capture_output=True, text=True,
+            p = subprocess.run([exe, CHECKER, cli], input=json.dumps(list(texts)), capture_output=True, text=True,
                                timeout=timeout)
             if p.returncode == 0:
                 out = json.loads(p.stdout)

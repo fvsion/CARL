@@ -3,8 +3,9 @@
 // extension is staged as the installer lays it out (index.ts, agents.ts, result.js, carl-brief.js, carl-chain.js),
 // with small stand-ins for Pi's packages, and a fake `pi` program: a node script that acts as the coder (it writes
 // files and prints Pi's JSON events). No model. Run: node --test tests/js.
+// Also (Phase 23.4.4): the coder's thinking level from carl.json "thinking" (the fake logs --thinking).
 import assert from "node:assert/strict";
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -75,7 +76,9 @@ const GREEN = ${JSON.stringify(GREEN)};
 const task = process.argv[process.argv.length - 1].replace(/^Task: /, "");
 const mode = /^mode = "test"/m.test(task) ? "test" : /^mode = "code"/m.test(task) ? "code" : "other";
 const how = process.env.FAKE_PI || "red";
-appendFileSync(process.env.FAKE_PI_LOG, JSON.stringify({ agent: process.env.CARL_AGENT, mode, task }) + "\\n");
+const at = process.argv.indexOf("--thinking");
+const thinking = at > 0 ? process.argv[at + 1] : null;
+appendFileSync(process.env.FAKE_PI_LOG, JSON.stringify({ agent: process.env.CARL_AGENT, mode, task, thinking }) + "\\n");
 let text = "Done.";
 if (mode === "test") {
   if (how === "failtest") { process.stderr.write("the server closed the connection"); process.exit(1); }
@@ -127,13 +130,13 @@ expect = "exit 0"
 `;
 
 /** A fresh project, a fresh log, the fake pi's behaviour; then the tool's execute. */
-async function call(params, how = "red", prepare = () => {}) {
+async function call(params, how = "red", prepare = () => {}, session = {}) {
   const cwd = mkdtempSync(join(tmpdir(), "carl-pi-chain-proj-"));
   prepare(cwd);
   process.env.FAKE_PI = how;
   process.env.FAKE_PI_LOG = join(cwd, "..", `log-${Date.now()}-${Math.random()}.jsonl`);
   writeFileSync(process.env.FAKE_PI_LOG, "");
-  const ctx = { cwd, hasUI: false, isProjectTrusted: () => true, ui: { setStatus() {}, notify() {} } };
+  const ctx = { cwd, hasUI: false, isProjectTrusted: () => true, ui: { setStatus() {}, notify() {} }, ...session };
   const out = await tool.execute("call-1", params, undefined, undefined, ctx);
   const log = () => readFileSync(process.env.FAKE_PI_LOG, "utf8").trim().split("\n").filter(Boolean).map((l) => JSON.parse(l));
   return { out, cwd, log, text: out.content[0].text };
@@ -205,4 +208,22 @@ test("Pi: parallel tasks refuse a brief that starts the chain, with one sentence
   const one = await call({ tasks: [{ agent: "coder", task: BRIEF() }], background: false });
   assert.deepEqual(one.log().map((r) => r.mode), ["test", "code"]);
   assert.match(one.text, /\[CARL\] Chain:/);
+});
+
+test("Pi: the coder thinks as carl.json says for the session's model, in both sessions; other agents as the session", async () => {
+  // Phase 23.4.4: the dashboard's Coder thinking, written by the installer as carl.json "thinking"
+  const st = join(agentDir, "carl.json");
+  writeFileSync(st, JSON.stringify({ thinking: { coder: { "llamacpp/qwen3.8-27b": "off", "llamacpp/gemma-4-e4b": "high" } } }));
+  try {
+    const session = { model: { provider: "llamacpp", id: "qwen3.8-27b" }, thinkingLevel: "low" };
+    const coder = await call({ agent: "coder", task: BRIEF(), background: false }, "red", () => {}, session);
+    assert.deepEqual(coder.log().map((r) => [r.mode, r.thinking]), [["test", "off"], ["code", "off"]]);
+    const scout = await call({ agent: "scout", task: "Look.", background: false }, "red", () => {}, session);
+    assert.deepEqual(scout.log().map((r) => r.thinking), ["low"]);                     // not the coder: the session's
+    const other = { model: { provider: "llamacpp", id: "not-listed" }, thinkingLevel: "medium" };
+    const unlisted = await call({ agent: "coder", task: BRIEF("none"), background: false }, "red", () => {}, other);
+    assert.deepEqual(unlisted.log().map((r) => r.thinking), ["medium"]);                // no entry: the session's
+  } finally {
+    rmSync(st);
+  }
 });

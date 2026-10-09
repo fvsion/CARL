@@ -49,7 +49,7 @@ cd ~/path/to/your/project
 opencode
 ```
 
-- **The first time,** CARL starts the model that **Auto fit** chooses for your Mac: the best stock model that holds two slots of 96K tokens. `./carl.sh fit` shows the choice and why.
+- **The first time,** CARL starts the model that **Auto fit** chooses for your Mac: the best stock model that holds two slots of 96K tokens (or the next setup of its order, down to 48K). `./carl.sh fit` shows the choice and why.
 - **The next time,** it starts llama.cpp with the settings that you saved.
 - **If a server runs already,** the dashboard attaches to it.
 - `./carl.sh -h` shows all commands. `./carl.sh help COMMAND` (or `./carl.sh COMMAND --help`) shows the help for one command.
@@ -78,7 +78,7 @@ The live state of the server and the Mac: what the server does now, the slots, t
 ![The CARL dashboard](assets/dashboard.gif)
 
 - **Tabs:** Live, Connect (install the clients, make the client package, send their config), Requests, Log, Settings.
-- **Settings (tab 5):** six panels: Server, Models, Auto fit, Auto-tune, Router, Caching. Push `[` or `]` to change the panel.
+- **Settings (tab 5):** seven panels: Server, Models, Agents, Auto fit, Auto-tune, Router, Caching. Push `[` or `]` to change the panel.
 - **Levels:** each section of a screen has its own level: collapsed, simple or full. Push Tab to select a section and `L` to change its level, or click its title. Push `D` to set every section to simple or full. The dashboard keeps your choice.
 - Every tab scrolls as one page. The footer shows the keys of the screen that you see. `?` shows all keys of that screen.
 - More: [The dashboard](USERGUIDE.md#10-the-dashboard).

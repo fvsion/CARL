@@ -49,7 +49,7 @@ class Pickers:
             L += ["", *[x for part in pk.foot.split("\n") for x in cwrap(part, w - 4)]]
         if ui is not None:
             ui.keys = [("↑↓", "select"), ("Enter", "choose"), ("Esc", "cancel")] + (
-                [("s f", "sort / show")] if pk.on_pick == "pickmodel" else [])
+                [("s f", "sort / show")] if pk.on_pick in ("pickmodel", "pickagents") else [])
         count = f"{n - 1} {pk.noun} + auto" if pk.on_pick == "pickmodel" else f"{n} {pk.noun}"
         return indent(draw_card("picker", pk.title, f"{DIM}{count}{R}", L, w, 1))
 
@@ -61,7 +61,7 @@ class Pickers:
         return Picker(title="SORT THE MODELS BY" if kind == "sort" else "SHOW THESE MODELS", items=items,
                       on_pick="picksort" if kind == "sort" else "pickfilter", sel=cur % len(opts),
                       noun="choices", header=f"{DIM}  Quality is CARL's quality rank (1 = best).{R}" if kind == "sort"
-                      else f"{DIM}  Fits this Mac: at least 32K tokens fit with 1 slot.{R}",
+                      else f"{DIM}  Fits this Mac: at least 48K tokens fit with 1 slot.{R}",
                       foot="", reopen=reopen)
 
     def model_picker(self, cur: str, sort: int = 0, filt: int = 0, p: Optional[Pending] = None) -> Picker:
@@ -84,6 +84,14 @@ class Pickers:
         return Picker(title="CHOOSE A MODEL", items=items, on_pick="pickmodel",
                       sel=next((i for i, it in enumerate(items) if it[0] == cur), 0),
                       noun="models", header=None, mark=pick, note=note,
+                      foot=f"Sort: {CYN}{so}{R} (s)   Show: {CYN}{fi}{R} (f)\n" + PICKER_FOOT)
+
+    def agents_picker(self, cur: str, sort: int = 0, filt: int = 0) -> Picker:
+        """The Agents panel's drop-down: the models in the chosen order and filter, the shown one selected."""
+        items: List[PickItem] = [(m["name"], m) for m in self.lines.visible(sort, filt)]
+        so, fi = arrange_label(sort, filt)
+        return Picker(title="CHOOSE A MODEL", items=items, on_pick="pickagents",
+                      sel=next((i for i, it in enumerate(items) if it[0] == cur), 0), noun="models", header=None,
                       foot=f"Sort: {CYN}{so}{R} (s)   Show: {CYN}{fi}{R} (f)\n" + PICKER_FOOT)
 
     @staticmethod

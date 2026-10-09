@@ -5,7 +5,32 @@ Dates are local dates on the development Mac (M3 Pro, 36 GB).
 
 ## Unreleased
 
-Phase 23.4.3 (to be tagged after the brief-format measurement).
+Phases 23.4.3 and 23.4.4 (to be tagged after the brief-format measurement).
+
+### Added (23.4.4)
+- **The Agents settings panel**: per model, Main thinking and Coder thinking (off, on, or low / medium / xhigh where
+  the model has levels). The coder's default is "same as main". A note says to use a full spec (spec-kit or a similar
+  tool) when the coder does not think. The rows left Settings > Server.
+- **/carl's Coder subagent row** opens a sub-list: Coder, Background coder, Delegation reminder, Coder thinking (this
+  computer's override per model, or "dashboard default"), Coder model ("same as main"). Rows that open something show
+  "›". Esc goes back one list in OpenCode and in Pi.
+- **The coder's thinking follows the model it runs on**: OpenCode sets it per request (chat.params), Pi passes it to
+  the coder; "same as main" is the model of the session /carl is opened in.
+- **A llama.cpp version check**: the start lines and the HEALTH card say when the installed llama.cpp is older than
+  the tested one (0.6.0, build 11429).
+- **`carl-brief-check.mjs`**: a command that checks a coder brief by hand; agent-bench uses it too.
+- agent-bench: `--coder auto|on|off` (default auto: the setup's own rule).
+
+### Changed (23.4.4)
+- **The memory estimate** counts the MTP draft context (its KV, the recurrent state per guess, two more compute
+  buffers), the compute buffer from the ubatch, and the whole model file; a 0.75% margin. Checked against the measured
+  runs (within 9 MiB); the 12B with the full sliding-window cache on 36 GB and the 35B Q4 with MTP on 32 GB now come out
+  as not fitting, as they failed.
+- **Auto fit's order, on every Mac, 48K floor**: 2 x 96K, 2 x 64K, 2 x 48K, 1 x 96K, 1 x 64K, 1 x 48K; MTP is dropped
+  (n-gram kept) before a slot or the window; the start line says so.
+- **Single-model mode**: OpenCode and Pi list only the model the server runs; after a model change the Connect tab
+  says the configs are out of date.
+- `--fit off` also for Auto-tune's llama-batched-bench.
 
 ### Changed
 - **The project part of the prompt goes back to the first user message for Qwen** (as in 1.8.0). A measurement

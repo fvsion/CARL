@@ -14,6 +14,7 @@ This page tells how CARL makes the main agent give large and stuck coding tasks 
 | The brief check | Sends an incomplete brief back to the main agent before the coder starts | `carl-delegation` | on; `"brief": false` turns it off (for measurements) |
 | The coder's gates | Keep the coder to its brief's files and to its mode | `carl-delegation` | comes with the coder |
 | The chain | A brief with `tests = "new"`: a test session, then a code session, each with a new context; one result. OpenCode: in the foreground; in the background only on the verified versions | OpenCode: `carl-delegation`. Pi: the `subagent` tool. Both: `client/shared/carl-chain.js` | on; `"chain": false` turns it off (for measurements) |
+| The coder's thinking | Each coder session (the test session and the code session too) thinks as **Coder thinking** says, for the model that the coder runs on | The dashboard: Settings > Server, per model. OpenCode: `coderThinking` of `carl-delegation`, set on each request of the coder by its `chat.params` hook. Pi: `"thinking"` in `~/.pi/agent/carl.json`, read by the `subagent` tool | same as main; off only with a full spec ([The coder's thinking](#the-coders-thinking)) |
 | `/code` | Gives your task straight to the coder | OpenCode: `~/.config/opencode/command/code.md`. Pi: `~/.pi/agent/prompts/code.md` | comes with the coder |
 | The new-file gate | Stops the main agent at its Nth new file in a turn | `carl-delegation` | off; the dashboard only: Connect > Setup, full level, `g` (advanced, not recommended) |
 
@@ -74,6 +75,18 @@ The main agent writes the brief from your request and the project's files. It in
 
 The reader is CARL's own (no package): strings in all four forms, lists, inline tables, `[table]`, `[[list of tables]]` and comments. It accepts what small models often write (an unknown escape such as `\d`, a `{ table }` over several lines). Errors give the line number. A task that continues an earlier one (OpenCode's `task_id`) is not checked. OpenCode: the check throws in `tool.execute.before`, as the new-file gate does. Pi: the `tool_call` event blocks the subagent call (also a coder item in `tasks` or `chain`).
 
+**Checking a brief by hand** (Phase 23.4.4; user, 2026-10-09: "checking the template with a local script should be a part of the carl plugin set"). The check is also a command, `carl-brief-check.mjs`, installed next to `carl-brief.js` wherever the setup installs it: `~/.config/opencode/plugins/carl-delegation/`, `~/.pi/agent/extensions/carl-delegation/` and `~/.pi/agent/extensions/subagent/` (in the repository: `client/shared/carl-brief-check.mjs`). It needs node (CARL's client setup installs it in `~/.local/bin` when it is not there):
+
+```
+node ~/.config/opencode/plugins/carl-delegation/carl-brief-check.mjs brief.toml
+node ~/.pi/agent/extensions/carl-delegation/carl-brief-check.mjs < brief.toml
+```
+
+- The input is a file, or the standard input (no file, or `-`): a brief in TOML or JSON, or a task text with a brief in it (a `` ```toml `` fence with text around it is fine), as the main agent writes it.
+- It prints the format (`TOML`, `JSON`, or `none`), then `The brief is valid.` or each problem as a sentence, the same sentences that the main agent gets when CARL refuses a brief (a TOML error names its line).
+- Exit code: 0 the brief is valid; 1 it has problems, or the text has no brief; 2 the command is wrong or the file cannot be read. `--help` shows the usage.
+- `--json`: the standard input is a JSON list of task texts, the output a JSON list of `{format, valid, problems}`. agent-bench checks the briefs of its runs this way (`tools/agent-bench/agentbench/brief_check.mjs` runs the command's `--json` mode with node from `find_node()`): the harness, the clients and a user have one checker.
+
 **The coder's gates.** In the coder's own session, `carl-delegation` keeps the coder to its brief. A write is refused with one sentence (`[CARL] Blocked: ...`) when:
 
 - the file is not one of the brief's files to create or change (a "read" file gets its own sentence);
@@ -105,6 +118,20 @@ The user's decision (2026-10-09): the tests come from a session that did not see
 Red start: CARL ran `python -m pytest tests/test_csv_export.py -q` before the code: it failed (exit 1).
 Tests unchanged after the code session (tests/test_csv_export.py).
 Run the checks yourself before you answer the user.
+
+## The coder's thinking
+
+The main session and the coder have a thinking setting each, for each model (Phase 23.4.4): **Main thinking** and **Coder thinking** in the dashboard (Settings > Server). The coder also has its own temperature (0.6, OpenCode).
+
+- **Default: same as main** (`main` in `config.json`; the user, 2026-10-09: "default should be the same thinking mode as your main session"). The coder thinks as the main session does with the model that it runs on. CARL sends no thinking value of its own for the coder.
+- **On:** a model with effort levels (the 27B builds) thinks at `medium` (the best of 9 coder runs on the 35B, 2026-10-02); the other models are on. The user (2026-10-09): coders do better with thinking on, because they solve problems.
+- **Off:** use it only with a full spec (spec-kit or a similar tool). A coder without thinking does well only when every requirement is written down. The dashboard shows this note when the coder thinks off: Coder thinking off, or same as main with Main thinking off.
+- **The model that the coder runs on decides.** Both clients apply the value of that model, request by request. In router mode, a coder on another model gets the value of that model. The coder runs on the main session's model (Coder model `same as main`): OpenCode's task tool gives a subagent with no model of its own the model (and the variant) of the main agent's message; Pi's `subagent` tool passes the session's model (`ctx.model`). Checked with OpenCode 1.18.35 and Pi 1.1.0 against agent-bench's fake server: a session on another model than the config's default gave the coder that model, and that model's Coder thinking ([details](client-configs.md#carls-coder-thinking-on-one-computer)).
+- **One computer can have its own value:** `/carl` > Coder subagent > Coder thinking, for the model of the session that `/carl` is opened in. `dashboard default` removes that computer's value ([the panel](plugins.md#carl-panel-the-carl-panel-opencode-and-pi)).
+- **Each coder session uses it:** in a chain, the test session and the code session both use Coder thinking.
+- **OpenCode:** the coder agent has no `reasoningEffort`. `carl-delegation` has the option `coderThinking`: `{"PROVIDER/MODEL": EFFORT}` (`none` for off, `high` for on, or the level), only for the models whose Coder thinking is not `main`. Its `chat.params` hook sets `output.options.reasoningEffort` on each request of the coder agent (`coder` or `carl-coder`) whose model has an entry. OpenCode sends it as `reasoning_effort`. The test session (the task tool) and the code session (started by `carl-delegation`) are both coder sessions. Other agents and models with no entry: the request stays as it is (the model's own `reasoningEffort`, Main thinking).
+- **Pi:** the `subagent` tool reads `"thinking": {"coder": {"PROVIDER/MODEL": LEVEL}}` in `~/.pi/agent/carl.json` and starts each coder session with `--thinking LEVEL` for the model of the coder. A model without an entry (`main`, or not one of CARL's): the coder uses the level of the session, as before. Other agents always use the level of the session.
+- The clients get a change at their next update (the Connect tab, `u`; other computers: `P`).
 
 ## The test session's report (mode test)
 ...

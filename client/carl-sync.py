@@ -31,6 +31,12 @@ Usage: carl-sync.py COMMAND
                     CODER: 1 (the coder also with 1 slot) or auto (with 2
                       slots or more). /carl sets CODER=1 when you turn the
                       coder on.
+                    CODER_THINKING: MODEL:VALUE, the coder's thinking with
+                      that model on this computer (over the dashboard's
+                      Coder thinking). VALUE: main (same as main), on, off,
+                      low, medium or xhigh; default removes the model's
+                      value (the dashboard's applies again). The other
+                      models keep theirs.
                   It shows the result as JSON: what changed, which client
                   (OpenCode, Pi) must restart, and the server's slots (as the
                   installer read them; null when the server does not answer).
@@ -75,13 +81,19 @@ INSTALL_ENV = os.path.join(CONF, "client-install.env")
 # the install switches a sync applies again (install.sh records them)
 SWITCHES = ("CLIENTS", "CODER", "NO_CODER", "WEB_SEARCH", "NO_LSP", "LSP", "NO_BROWSER", "BROWSER_HEADED",
             "NO_SIDEBAR", "NO_SWITCHER", "NO_MODEL_CHECK", "NO_BACKGROUND_SUBAGENTS", "NO_CACHE", "LLAMA_CTX",
-            "NO_REMINDER")
+            "NO_REMINDER", "CODER_THINKING")
 # the switches that "set" (the /carl panel) changes, and their values: 1 = off, "on" = the line goes (the default)
 OFF_SWITCHES = ("NO_CODER", "NO_BACKGROUND_SUBAGENTS", "NO_REMINDER", "NO_BROWSER", "NO_LSP", "NO_SIDEBAR",
                 "NO_SWITCHER", "NO_CACHE", "NO_MODEL_CHECK")
 SETTABLE = {**{k: ("1", "on") for k in OFF_SWITCHES}, "WEB_SEARCH": ("exa", "parallel", "off"),
-            "CODER": ("1", "auto")}    # /carl turns the coder on with CODER=1: also on a server with 1 slot
+            "CODER": ("1", "auto"),    # /carl turns the coder on with CODER=1: also on a server with 1 slot
+            "CODER_THINKING": ()}      # MODEL:VALUE (THINKING_VALUES), per model: a map in one line
+THINKING_VALUES = ("main", "on", "off", "low", "medium", "xhigh")
+THINKING_DEFAULT = "default"    # "set": the model's entry goes (the dashboard's Coder thinking applies again)
+MODEL_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")   # a model name (client/carl_models.py)
 OPENCODE_ONLY = ("NO_LSP", "NO_SIDEBAR", "NO_SWITCHER", "NO_MODEL_CHECK")    # Pi has no such part
+# Pi reads the coder's thinking (carl.json) each time it starts the coder: no restart
+PI_LIVE = (*OPENCODE_ONLY, "CODER_THINKING")
 OPENCODE_ENV = ("WEB_SEARCH", "NO_LSP", "NO_BACKGROUND_SUBAGENTS")   # opencode.env: read when the shell starts
 READ_TIMEOUT = 75            # the dashboard sends a comment every 25 s: silence this long = reconnect
 BACKOFF = (5, 10, 30, 60)
@@ -245,26 +257,53 @@ def parse_set(args: List[str]) -> Dict[str, str]:
         k, sep, v = a.partition("=")
         if not sep or k not in SETTABLE:
             raise ValueError(f"set does not change '{k if sep else a}'. The keys: {', '.join(SETTABLE)}.")
+        if k == "CODER_THINKING":
+            model, colon, value = v.partition(":")
+            if not colon or not MODEL_ID_RE.fullmatch(model) or value not in (*THINKING_VALUES, THINKING_DEFAULT):
+                raise ValueError(f"CODER_THINKING takes MODEL:VALUE (VALUE: {', '.join(THINKING_VALUES)} or "
+                                 f"{THINKING_DEFAULT}), not '{v}'.")
+            out[k] = thinking_text({**thinking_map(out.get(k, ""), keep_default=True), model: value}, keep_default=True)
+            continue
         if v not in SETTABLE[k]:
             raise ValueError(f"{k} takes {' or '.join(SETTABLE[k])}, not '{v}'.")
         out[k] = v
     return out
 
 
+def thinking_map(text: str, keep_default: bool = False) -> Dict[str, str]:
+    """CODER_THINKING's value ("MODEL:VALUE,MODEL:VALUE") as {model: value}; an entry that is not one is left out
+    (keep_default: also MODEL:default, the request of "set" to remove the model's entry)."""
+    ok = (*THINKING_VALUES, THINKING_DEFAULT) if keep_default else THINKING_VALUES
+    out: Dict[str, str] = {}
+    for part in (text or "").split(","):
+        model, colon, value = part.strip().partition(":")
+        if colon and MODEL_ID_RE.fullmatch(model) and value in ok:
+            out[model] = value
+    return out
+
+
+def thinking_text(m: Dict[str, str], keep_default: bool = False) -> str:
+    """The map as CODER_THINKING's value; a model whose value is "default" is left out (keep_default: kept, the
+    request of "set" before it is merged)."""
+    return ",".join(f"{k}:{m[k]}" for k in sorted(m) if keep_default or m[k] != THINKING_DEFAULT)
+
+
 def shown(key: str, env: Dict[str, str]) -> str:
-    """A switch as "set" takes it: its value, or the setup's default when the file has no line for it."""
-    return env.get(key) or ("exa" if key == "WEB_SEARCH" else "on")
+    """A switch as "set" takes it: its value, or the setup's default when the file has no line for it (CODER_THINKING:
+    "", the dashboard's values)."""
+    return env.get(key) or ("exa" if key == "WEB_SEARCH" else "" if key == "CODER_THINKING" else "on")
 
 
 def write_install_env(want: Dict[str, str]) -> None:
-    """client-install.env with the lines of `want` changed ("on": the line goes); every other line stays."""
+    """client-install.env with the lines of `want` changed ("on", or "" for CODER_THINKING: the line goes); every
+    other line stays."""
     try:
         with open(INSTALL_ENV, encoding="utf-8") as f:
             lines = f.read().splitlines()
     except OSError:
         lines = []
     keep = [ln for ln in lines if ln.strip().partition("=")[0] not in want]
-    text = "".join(f"{ln}\n" for ln in keep + [f"{k}={v}" for k, v in want.items() if v != "on"])
+    text = "".join(f"{ln}\n" for ln in keep + [f"{k}={v}" for k, v in want.items() if v not in ("on", "")])
     os.makedirs(CONF, exist_ok=True)
     fd = os.open(INSTALL_ENV + ".tmp", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w", encoding="utf-8") as f:
@@ -281,6 +320,10 @@ def set_switches(want: Dict[str, str]) -> Json:
     with open(LOCK, "w") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         before = install_env()
+        if "CODER_THINKING" in want:              # one model's value (default: none): the other models keep theirs
+            merged = thinking_text({**thinking_map(before.get("CODER_THINKING", "")),
+                                    **thinking_map(want["CODER_THINKING"], keep_default=True)})
+            want = {**want, "CODER_THINKING": merged}     # "": no model left, the line goes
         write_install_env(want)
         after = install_env()
         changed = {k: {"from": shown(k, before), "to": shown(k, after)} for k in want
@@ -288,11 +331,11 @@ def set_switches(want: Dict[str, str]) -> Json:
         # not NO_PROFILE: a switch may need the shell profile's line for OpenCode's tool switches, as ./setup adds it
         env = {**os.environ, **after, "CARL_SYNC": "1"}
         for k, v in want.items():
-            if v == "on":
+            if v in ("on", ""):
                 env.pop(k, None)                     # a switch from the environment must not undo the change
         clients = after.get("CLIENTS", "both")
         apps = [c for c in ("opencode", "pi") if clients in ("both", c)]
-        restart = [c for c in apps if c == "opencode" or any(k not in OPENCODE_ONLY for k in want)]
+        restart = [c for c in apps if c == "opencode" or any(k not in PI_LIVE for k in want)]
         result: Json = {"set": want, "changed": changed, "ok": True, "error": None, "restart": restart,
                         "new_terminal": "opencode" in restart and any(k in OPENCODE_ENV for k in want), "slots": None}
         # the slot count the installer reads for its coder rule (/props total_slots): /carl warns when it turns the

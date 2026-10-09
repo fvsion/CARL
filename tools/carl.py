@@ -33,10 +33,14 @@ CLI (./carl.sh models | download | verify use it through host/models.sh)
   carl.py verify NAME... | delete NAME | path NAME | get NAME FIELD | default | downloaded
                                        (default: auto fit's pick for this Mac, everyday goal)
   carl.py launch-env [--model NAME|PATH] [--no-config]   KEY=value lines for serve-llama.sh
+  carl.py llama-version                the start line when the installed llama.cpp is older than the version
+                                       CARL is tested with (carl_core/domain/llamacpp.py), else nothing
   carl.py router-preset --out FILE --templates DIR   router mode's presets INI (serve-llama.sh); prints
                                        "start NAME", "model NAME SETUP" and "skip NAME: WHY" lines
-  carl.py client-models                the installed models for the OpenCode / Pi configs (JSON:
-                                       client/install.sh writes it to client/installed-models.json)
+  carl.py client-models [--running NAME] [--router]   the models for the OpenCode / Pi configs (JSON:
+                                       client/install.sh writes it to client/installed-models.json);
+                                       single-model mode: only the model the server runs (NAME, else
+                                       the model a start loads); --router: every installed model
   carl.py config [show|path|get KEY|set KEY VALUE|unset KEY]   KEY like llama.net or models.NAME.ctx
   carl.py card NAME [set FIELD VALUE... | unset FIELD]   a model's card (custom models: yours, editable;
                                        catalogue models: read-only). FIELD like role, good_for, rank
@@ -199,10 +203,13 @@ def auto_fit(goal: Optional[str] = None, scope: Optional[str] = None, models: Op
     return app().auto_fit(models or app().all_models(c), as_goal(goal) if goal else g, as_scope(scope) if scope else s)
 
 
-def client_models(cfg: Optional[Mapping[str, object]] = None) -> JsonObject:
+def client_models(cfg: Optional[Mapping[str, object]] = None, running: Optional[str] = None,
+                  router: Optional[bool] = None) -> JsonObject:
     """The installed models for the OpenCode / Pi configs: {schema, default, models: [{id, label,
-    ctx, thinking}]} (client/carl_models.py turns them into entries)."""
-    return app().client_models(_config(cfg))
+    ctx, thinking}]} (client/carl_models.py turns them into entries). Single-model mode: only the
+    model the server runs (running: its name or alias; None: the model a start loads); router mode
+    (router None: config.json's llama.mode): every downloaded model."""
+    return app().client_models(_config(cfg), running, router)
 
 
 def launch_env(name: Optional[str] = None, use_config: bool = True) -> Tuple[Dict[str, SettingValue], Optional[str]]:
@@ -371,6 +378,14 @@ KEY_HELP: Dict[str, str] = {
     "models.NAME.presence": "The presence penalty.",
     "models.NAME.repeat": "The repetition penalty (1.0 = off).",
     "models.NAME.alias": "The model name that the server shows to the clients. Empty: the model name.",
+    "models.NAME.thinking_main": "How the main session of OpenCode and Pi thinks with this model (Settings > Server, "
+                                 "Main thinking): off, on, or a level for a model with effort levels (low, medium, "
+                                 "xhigh). Default: on; low for a model with effort levels. The clients use it after "
+                                 "the next update.",
+    "models.NAME.thinking_coder": "How the coder thinks with this model, also in its test session (Settings > Server, "
+                                  "Coder thinking): main (the default: as the main session), off, on, or a level "
+                                  "(low, medium, xhigh). On is medium for a model with effort levels. Off: use it only "
+                                  "with a full spec.",
 }
 
 
@@ -646,7 +661,9 @@ def main(argv: List[str]) -> int:
         if preset.start:
             print(f"start {preset.start}")
     elif cmd == "client-models":
-        print(json.dumps(client_models(), indent=2))
+        use = "client-models [--running NAME] [--router]"
+        running = _arg(a, a.index("--running") + 1, use) if "--running" in a else None
+        print(json.dumps(client_models(None, running or None, True if "--router" in a else None), indent=2))
     elif cmd == "push":
         from monitor import clientsync         # the dashboard's module: its API serves what this writes
         version = clientsync.publish(os.path.dirname(CONFIG_FILE), client_models())
@@ -661,6 +678,12 @@ def main(argv: List[str]) -> int:
         if note:
             print(note, file=sys.stderr)
         print(shell_lines(env))
+    elif cmd == "llama-version":
+        from carl_core.adapters.system import llama_server_version
+        from carl_core.domain.llamacpp import check_version, start_line
+        line = start_line(check_version(llama_server_version()))
+        if line:
+            print(line)
     elif cmd == "config":
         cmd_config(a)
     elif cmd == "card":

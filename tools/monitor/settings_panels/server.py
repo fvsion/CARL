@@ -327,6 +327,9 @@ class ServerPanel:
                 L.append(row("at most", f"{tokens(f.largest)} per slot with {plural(f.slots, 'slot')}" if f.largest
                              else "The weights alone do not fit."))
             summary = (f"{GRN}✓{R} {need.replace(' GiB', '')} of {limit}" if f.fits else f"{RED}✗ {need} of {limit}{R}")
+        if ok and f.dropped:
+            L.append(row("speculation", f"{YEL}n-gram only{R}: MTP does not fit with these slots and this context. "
+                                        f"The server starts without it."))
         if f.full is not None:
             L.append(row("sliding window", "Full cache: saved sessions can be restored." if f.full else
                          f"{YEL}Window cache{R}: saved sessions cannot be restored."))
@@ -360,7 +363,7 @@ class ServerPanel:
                                      f"Auto fit panel (A)."))
             if p.get("model") == "auto":
                 L.append(row("until then", f"Auto starts {svc.resolved_model(p)}."))
-        L.append(row("why", "See the Auto fit panel (A)."))
+        L.append(row("why", f"{af.order_text()}. The Auto fit panel (A) tells more."))
         return L, name
 
     def rec_source(self, p: Pending) -> str:

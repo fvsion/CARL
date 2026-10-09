@@ -41,7 +41,7 @@ class ModelStore(Protocol):
     def hf_files(self, repo: str) -> List[HFFile]: ...
     def delete(self, m: ModelInfo) -> None: ...
     def save_card(self, name: str, card: JSONDict) -> None: ...
-    def client_models(self) -> JSONDict: ...
+    def client_models(self, running: Optional[str] = None, router: Optional[bool] = None) -> JSONDict: ...
 
 
 class CarlStore:
@@ -140,9 +140,10 @@ class CarlStore:
         """Check and store a custom model's card (carl.ConfigError says what is wrong)."""
         self._carl.save_card(name, card)
 
-    def client_models(self) -> JSONDict:
-        """The installed models as the client configs list them (carl.client_models)."""
-        doc: JSONDict = self._carl.client_models()
+    def client_models(self, running: Optional[str] = None, router: Optional[bool] = None) -> JSONDict:
+        """The models as the client configs list them (carl.client_models): single-model mode, only the model the
+        server runs (running; None: the model a start loads); router mode, every installed model."""
+        doc: JSONDict = self._carl.client_models(None, running, router)
         return doc
 
 
@@ -163,7 +164,7 @@ class ModelList:
         self._auto: Dict[Tuple[str, str], Tuple[float, str]] = {}            # (goal, scope) -> (list time, model)
         self._fit: Dict[Tuple[str, str], Tuple[float, Optional[AutoFit]]] = {}
         self.fit_error: Optional[str] = None
-        self._clients: Optional[Tuple[float, Optional[JSONDict]]] = None
+        self._clients: Dict[Tuple[Optional[str], Optional[bool]], Tuple[float, Optional[JSONDict]]] = {}
 
     def get(self, refresh: bool = False) -> List[ModelInfo]:
         if refresh or self.clock() - self.t > 10:
@@ -225,17 +226,21 @@ class ModelList:
             hit = self._auto[key] = (self.t, name)
         return hit[1]
 
-    def client_list(self) -> Optional[JSONDict]:
-        """The installed models for the client configs (re-read with the list; None when it
-        can't be worked out)."""
+    def client_list(self, running: Optional[str] = None, router: Optional[bool] = None) -> Optional[JSONDict]:
+        """The models for the client configs (re-read with the list; None when it can't be worked out). Single-model
+        mode: only running (the model the server runs; None: the model a start loads); router mode: every installed
+        model (router None: config.json's llama.mode)."""
         self.get()
-        if self._clients is None or self._clients[0] != self.t:
+        key = (running, router)
+        hit = self._clients.get(key)
+        if hit is None or hit[0] != self.t:
             try:
-                doc: Optional[JSONDict] = self.store.client_models()
+                doc: Optional[JSONDict] = self.store.client_models(running, router)
             except Exception:           # a broken config / catalogue: the pasted config lists the served model
                 doc = None
-            self._clients = (self.t, doc)
-        return self._clients[1]
+            self._clients = {k: v for k, v in self._clients.items() if v[0] == self.t}
+            hit = self._clients[key] = (self.t, doc)
+        return hit[1]
 
     def _catalog_default(self) -> str:
         try:

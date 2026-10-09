@@ -2,7 +2,9 @@
 commands and environment, the server setup, the harness HOME checks and the fake server. No client runs here."""
 from __future__ import annotations
 
+import contextlib
 import dataclasses
+import io
 import json
 import os
 import shutil
@@ -326,6 +328,33 @@ class ClientSetupTest(unittest.TestCase):
             f.write("mine")
         with self.assertRaises(home.HomeError):                         # not empty, not a harness HOME
             home.prepare(home.PackageSource("/r", "/c", "/c", "/o"), os.path.join(self.tmp, "x"))
+
+    def test_the_coder_follows_the_setups_rule(self) -> None:
+        """--coder auto (the default) for prepare and run: ./setup's own rule (on with 2 or more slots); on and off
+        force it. The setup's "Coder subagent:" line is what it did; the HOME marker keeps both."""
+        import bench
+        p = bench.build_parser()
+        for cmd in (["prepare", "--home", "/h", "--model", "m"], ["run", "--home", "/h", "--models", "m", "--out", "r"]):
+            self.assertEqual(p.parse_args(cmd).coder, "auto")
+            self.assertEqual(p.parse_args(cmd + ["--coder", "off"]).coder, "off")
+            with self.assertRaises(SystemExit), contextlib.redirect_stderr(io.StringIO()):
+                p.parse_args(cmd + ["--coder", "yes"])
+        self.assertEqual(home.coder_state("Context for the clients: 48K tokens per slot.\n"
+                                          "Coder subagent: off. The server runs 1 slot. A subagent would take the\n"
+                                          "  slot of the main session.\n"), "off")
+        self.assertEqual(home.coder_state("Clients: both. Options: coder auto, browser on.\n"), "")
+        self.assertEqual(home.coder_of(self.tmp), {"coder": "", "coder_state": ""})       # an older harness HOME
+        home.write_marker(self.tmp, {"coder": "auto", "coder_state": "on"})
+        self.assertEqual(home.coder_of(self.tmp), {"coder": "auto", "coder_state": "on"})
+        self.assertEqual(bench.coder_text(home.coder_of(self.tmp)), "the coder on (auto)")
+        with self.assertRaises(home.HomeError):
+            home.refresh(home.PackageSource("/r", "/c", "/c", "/o"), self.tmp, coder="maybe")
+        r = results.Result(time="t", mode="decision", model="m", client="pi", client_version="1", thinking="off",
+                           thinking_level="off", variant="baseline", category="c", prompt="p", run=1,
+                           decision="answer", expected="keep", correct=True, coder="auto", coder_state="off")
+        doc = json.loads(r.to_json())
+        self.assertEqual((doc["coder"], doc["coder_state"]), ("auto", "off"))
+        self.assertNotIn("coder", results.KEY_FIELDS)
 
     def test_variants(self) -> None:
         self.assertIn("baseline", variant.available())

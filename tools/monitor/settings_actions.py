@@ -1,9 +1,9 @@
 """The Settings tab's actions and keys: the drop-downs and questions, and each panel's (Server,
-Models, Auto fit, Auto-tune, Router, Caching). Keys come one at a time (controller.Controller.key);
+Models, Agents, Auto fit, Auto-tune, Router, Caching). Keys come one at a time (controller.Controller.key);
 a text being typed takes a whole read (keys()). The card edit form: card_actions.py."""
 from __future__ import annotations
 
-from typing import Callable, Dict, List
+from typing import Callable, Dict, List, Optional
 
 from carl_core.domain.tuning import DEPTHS, as_depth
 from carl_core.domain.units import file_size, memory
@@ -16,11 +16,13 @@ from .fmt import R, RED, home_short, row
 from .jobs import ServerJobs
 from .keys import BACKSPACE, DOWN, ENTER, ESC, LEFTKEY, PGDN, PGUP, RIGHT, UP
 from .model import ModelInfo, ServerData, draft_bytes
-from .settings import NUMERIC, Pending, SettingsService, parse_typed, plan_words, spec_value, step_choice
+from .settings import (CODER_OFF_NOTE, NUMERIC, THINKING_LABELS, THINKING_ROWS, AgentsInfo, Pending, SettingsService,
+                       coder_off, parse_typed, plan_words, shown_value, spec_value, step_choice)
+from .settings_panels.agents import AGENT_ROWS
 from .settings_panels.caching import AUTO_CHOICES, CACHE_ROWS, DISK_CHOICES
 from .settings_view import SettingsView
-from .state import (SP_CACHE, SP_FIT, SP_MODELS, SP_ROUTER, SP_SERVER, SP_TUNE, SUBPANELS, TUNE_ALL, Confirm, PickItem,
-                    Picker, TextPrompt, UIState)
+from .state import (SP_AGENTS, SP_CACHE, SP_FIT, SP_MODELS, SP_ROUTER, SP_SERVER, SP_TUNE, SUBPANELS, TUNE_ALL, Confirm,
+                    PickItem, Picker, TextPrompt, UIState)
 from .words import plural, status_name
 
 MODEL_KEYS = {"\r": "museit", "\n": "museit", "d": "mdl", "v": "mverify", "x": "mdelete", "h": "mhf", "c": "mcancel",
@@ -29,6 +31,7 @@ ARRANGE_KEYS = {"s": "msort", "S": "msort-", "f": "mfilter", "F": "mfilter-"}   
 FIT_KEYS = {"\r": "fuse", "\n": "fuse", "d": "fdl", "g": "fgoal", "f": "fscope"}
 TUNE_KEYS = {"\r": "trun", "\n": "trun", RIGHT: "tnext", LEFTKEY: "tprev", "c": "tcancel", " ": "tquick", "x": "tclear"}
 SERVER_KEYS = {"a": "setapply", "r": "setrevert", "x": "setdefaults", "A": "setautofit"}
+AGENTS_KEYS = {"r": "agents:undo", "x": "agents:rec"}
 TUNE_ALL_LABEL = "All downloaded models, one after the other"
 # Actions without a prefix the controller routes here by itself (controller.Controller.do).
 SETTINGS_ACTIONS = ("msort", "mfilter", "msort-", "mfilter-", "msortpick", "mfilterpick",
@@ -80,6 +83,8 @@ class SettingsActions:
             self.fit_action(act)
         elif act.startswith("cache:"):
             self.cache_action(act[6:])
+        elif act.startswith("agents:"):
+            self.agents_action(act[7:])
         elif act.startswith(("rmode", "rload:", "runload:")):
             self.router_action(act)
         elif act.startswith("t"):
@@ -303,6 +308,91 @@ class SettingsActions:
             ui.confirm = False
             self.jobs.restart(p, d)
 
+    # ------------------------------------------------------------ the Agents panel (Phase 23.4.4)
+    def agents_model(self) -> str:
+        """The model the Agents panel shows: the one chosen there, else the running model, else the Server panel's
+        ("" when no model is known)."""
+        ui, svc = self.ui, self.svc
+        if ui.agents_model and svc.models.by_name(ui.agents_model):
+            return ui.agents_model
+        run = svc.running(self.snapshot()).get("model")
+        if isinstance(run, str) and svc.models.by_name(run):
+            return run
+        name = svc.resolved_model(ui.pending or {"model": "auto"})
+        return name if svc.models.by_name(name) else ""
+
+    def agents_info(self) -> Optional[AgentsInfo]:
+        """The shown model's thinking per role (None: no model is known)."""
+        name = self.agents_model()
+        return self.svc.agents(name) if name else None
+
+    def agents_action(self, act: str) -> None:
+        """The Agents panel: row:N selects a row, inc:N / dec:N change it (the model: the next one; a thinking row:
+        saved at once), pick opens the model drop-down, undo puts back the values from before this session's changes,
+        rec uses the recommended values."""
+        ui = self.ui
+        verb, _, n = act.partition(":")
+        if verb == "row":
+            ui.agents_row = max(0, min(int(n), len(AGENT_ROWS) - 1))
+        elif verb == "pick":
+            ui.agents_row = 0
+            ui.picker = self.view.agents_picker(self.agents_model(), ui.msort, ui.mfilter)
+        elif verb in ("inc", "dec"):
+            ui.agents_row = max(0, min(int(n), len(AGENT_ROWS) - 1))
+            step = 1 if verb == "inc" else -1
+            key = AGENT_ROWS[ui.agents_row]
+            if key == "model":
+                names = [m["name"] for m in self.visible()]
+                cur = self.agents_model()
+                if names:
+                    ui.agents_model = names[(names.index(cur) + step) % len(names)] if cur in names else names[0]
+                return
+            info = self.agents_info()
+            if info is not None:
+                self.agents_save(info, {key: str(step_choice(list(info.choices[key]), info.mine[key], step))})
+        elif verb in ("undo", "rec"):
+            info = self.agents_info()
+            if info is None:
+                return
+            if verb == "undo":
+                before = ui.agents_undo.get(info.name)
+                if not before:
+                    ui.toast(f"There is nothing to undo for {info.name}.", 5)
+                    return
+                self.agents_save(info, before, undo=True)
+            else:
+                self.agents_save(info, {k: None for k in THINKING_ROWS}, what="the recommended settings")
+
+    def agents_save(self, info: AgentsInfo, want: Dict[str, Optional[str]], undo: bool = False,
+                    what: str = "") -> None:
+        """Save Main thinking and Coder thinking of the shown model (None: the recommended value) and say so; the
+        values before the first change of this session are kept for r (undo)."""
+        ui = self.ui
+        try:
+            saved = self.svc.thinking_saved(info.name)
+            for key, value in want.items():
+                self.svc.save_thinking(info.name, key, value)
+        except Exception as e:      # config.json unreadable or not writable, a value the model does not take: say so
+            ui.toast(f"{RED}CARL cannot save config.json: {e}{R}", 10)
+            return
+        if undo:
+            ui.agents_undo.pop(info.name, None)
+        else:
+            ui.agents_undo.setdefault(info.name, saved)
+        now = self.svc.agents(info.name)
+        if what or undo:
+            said = f"{info.name} uses {'its earlier settings' if undo else what} again"
+        else:
+            key = next(iter(want))
+            said = f"{THINKING_LABELS[key]} of {info.name}: {shown_value(key, now.mine[key])}"
+        if coder_off(now.mine):
+            # the message line has two lines at most: the note alone after "Saved.", so its full-spec sentence is
+            # never cut (the panel shows the model and the values; its text above says when OpenCode and Pi use it)
+            ui.toast(f"Saved. {CODER_OFF_NOTE}", 12)
+            return
+        ui.toast(f"Saved. {said}. OpenCode and Pi use it after the next update (the Connect tab, u; other "
+                 f"computers: P).", 12)
+
     def router_action(self, act: str) -> None:
         """The Router panel: rmode:MODE asks to switch between single model and router mode, rmodeyes
         saves it (llama.mode) and restarts a running server in it; rload:ID / runload:ID load or unload a
@@ -524,13 +614,17 @@ class SettingsActions:
             self.choose_model(str(val))
         elif pk.on_pick == "pickhf" and ui.hf:
             self.jobs.start_download(f"hf:{ui.hf.repo}/{val}")
+        elif pk.on_pick == "pickagents":
+            ui.agents_model, ui.agents_row = str(val), 0
         elif pk.on_pick == "picktune":
             ui.tune_model = TUNE_ALL if val == TUNE_ALL_LABEL else val
         elif pk.on_pick == "pickcard" and ui.card:
             ui.card.add_pick(str(val))
         elif pk.on_pick in ("picksort", "pickfilter"):
             self.set_arrangement("sort" if pk.on_pick == "picksort" else "filter", int(str(val)))
-            if pk.reopen:                               # back to the model drop-down it came from
+            if pk.reopen and ui.sp == SP_AGENTS:       # back to the drop-down it came from
+                ui.picker = self.view.agents_picker(pk.reopen, ui.msort, ui.mfilter)
+            elif pk.reopen:
                 ui.picker = self.view.model_picker(pk.reopen, ui.msort, ui.mfilter, ui.pending)
 
     # ------------------------------------------------------------ the Server panel's rows
@@ -596,8 +690,8 @@ class SettingsActions:
             ui.sp = (ui.sp + (1 if k == "]" else -1)) % len(SUBPANELS)
             return True
         handlers: Dict[int, Callable[[str], bool]] = {
-            SP_SERVER: self.server_key, SP_MODELS: self.models_key, SP_FIT: self.fit_key, SP_TUNE: self.tune_key,
-            SP_ROUTER: self.router_key, SP_CACHE: self.cache_key}
+            SP_SERVER: self.server_key, SP_MODELS: self.models_key, SP_AGENTS: self.agents_key, SP_FIT: self.fit_key,
+            SP_TUNE: self.tune_key, SP_ROUTER: self.router_key, SP_CACHE: self.cache_key}
         return handlers[ui.sp](k)
 
     def picker_key(self, k: str) -> bool:
@@ -613,10 +707,11 @@ class SettingsActions:
             pk.sel = max(pk.sel - 10, 0)
         elif k == PGDN:
             pk.sel = min(pk.sel + 10, len(pk.items) - 1)
-        elif k in ARRANGE_KEYS and pk.on_pick == "pickmodel":
+        elif k in ARRANGE_KEYS and pk.on_pick in ("pickmodel", "pickagents"):
             cur = str(pk.items[pk.sel][0])
             self.action(ARRANGE_KEYS[k])
-            ui.picker = self.view.model_picker(cur, ui.msort, ui.mfilter, ui.pending)
+            ui.picker = (self.view.model_picker(cur, ui.msort, ui.mfilter, ui.pending) if pk.on_pick == "pickmodel"
+                         else self.view.agents_picker(cur, ui.msort, ui.mfilter))
         elif k in ENTER:
             self.picker_choose()
         elif k == ESC:
@@ -734,6 +829,25 @@ class SettingsActions:
             self.action(f"{'runload' if m.active else 'rload'}:{m.id}")
         elif k == "u":
             self.run("insconfig")
+        elif k in (PGUP, PGDN):
+            ui.page_scroll = max(0, ui.page_scroll + (-10 if k == PGUP else 10))
+        else:
+            return False
+        return True
+
+    def agents_key(self, k: str) -> bool:
+        """The Agents panel: ↑↓ a row, ← → its value (saved at once; the model row: the next model), Enter the model
+        drop-down, r undo, x recommended, PgUp PgDn scroll the page."""
+        ui = self.ui
+        if k in (UP, DOWN):
+            ui.agents_row = (ui.agents_row + (1 if k == DOWN else -1)) % len(AGENT_ROWS)
+            ui.page_scroll = 0
+        elif k in (RIGHT, LEFTKEY):
+            self.action(f"agents:{'inc' if k == RIGHT else 'dec'}:{ui.agents_row}")
+        elif k in ENTER and ui.agents_row == 0:
+            self.action("agents:pick")
+        elif k in AGENTS_KEYS:
+            self.action(AGENTS_KEYS[k])
         elif k in (PGUP, PGDN):
             ui.page_scroll = max(0, ui.page_scroll + (-10 if k == PGUP else 10))
         else:

@@ -11,11 +11,12 @@ import copy
 import os
 import re
 from dataclasses import dataclass
-from typing import Callable, Dict, List, NamedTuple, Optional, Sequence, Tuple, Union
+from typing import Callable, Dict, List, Mapping, NamedTuple, Optional, Sequence, Tuple, Union
 
+from carl_core.domain import thinking
 from carl_core.domain.autofit import AutoFit, setup_text
-from carl_core.domain.fit import check_start, max_ctx, need_bytes, prompt_cache_mib, reserve_bytes, swa_plan, swa_tokens
-from carl_core.domain.gguf import OVERHEAD, kv_bytes_per_token, swa_bytes_per_token
+from carl_core.domain.fit import (UBATCH, max_ctx, mtp_spec, need_bytes, need_parts, prompt_cache_mib, reserve_bytes,
+                                  start_plan)
 from carl_core.domain.units import MIB, memory, tokens
 
 from .fmt import GRN, R, RED, YEL, ctx_label
@@ -105,6 +106,10 @@ NUMERIC = {"ctx", "temp", "presence", "top_k", "top_p", "min_p", "repeat", "spec
 INT_KEYS = {"ctx", "cache", "top_k", "specn", "ub", "ckpt", "ckstep"}
 FROM_RUNNING = {"kv", "ctx", "temp", "presence", "spec", "specn", "top_k", "top_p", "min_p", "repeat", "ckpt", "ckstep",
                 "ub", "slots"}
+# Phase 23.4.4: the clients' thinking of each role, per model: the Agents panel (saved at once, no restart)
+THINKING_ROWS = ("thinking_main", "thinking_coder")
+THINKING_ROLE = {"thinking_main": "main", "thinking_coder": "coder"}
+THINKING_LABELS = {"thinking_main": "Main thinking", "thinking_coder": "Coder thinking"}
 NOT_RUNNING = {"goal", "scope"}                         # rows without a "running now" value
 FULL_ONLY = {"presence"} | {r.key for r in LLAMA_ADV}   # rows of the full detail level (More settings)
 REINSTALL = {"ctx", "slots"}         # clients need install.sh again when these change
@@ -154,6 +159,26 @@ SET_HELP = {
     "ckstep": "The smallest number of tokens between two checkpoints. In the Phase 6 test, 1024 and 4096 gave the same "
               "result.",
 }
+
+
+def coder_off(v: Mapping[str, object]) -> bool:
+    """The coder thinks off: Coder thinking off, or same as main with Main thinking off."""
+    return v.get("thinking_coder") == "off" or (v.get("thinking_coder") == thinking.MAIN and v.get("thinking_main") == "off")
+
+
+class AgentsInfo(NamedTuple):
+    """The Agents panel's model: its thinking kind ("effort" or "on-off"), and for thinking_main and thinking_coder:
+    your choice, the recommended value, where that comes from, the values it takes."""
+    name: str
+    kind: str
+    mine: Dict[str, str]
+    rec: Dict[str, str]
+    source: Dict[str, str]
+    choices: Dict[str, Tuple[str, ...]]
+
+
+CODER_OFF_NOTE = ("Coder thinking is off. Use it only with a full spec (spec-kit or a similar tool): a coder without "
+                  "thinking does well only when every requirement is written down.")
 SET_HELP = {k: re.sub(r"(^|[.!?] )([a-z])", lambda m: m.group(1) + m.group(2).upper(), v)    # sentences: a capital
             for k, v in SET_HELP.items()}
 
@@ -213,6 +238,8 @@ def shown_value(key: str, v: object, long: bool = False) -> str:
         return spec_name(v)
     if key == "swa":
         return SWA_NAMES.get(str(v), str(v))
+    if key == "thinking_coder" and v == thinking.MAIN:
+        return "same as main"
     return str(v)
 
 
@@ -292,6 +319,8 @@ def settings_to_config(p: Pending, cfg: JSONDict, schema: Schema, model: Optiona
     if model is not None and tuned is not None:
         prof = {pk: p[key] for key, pk in MODEL_ROW_KEYS.items() if str(fmt_val(key, tuned[pk])) != str(p[key])}
         cfg.setdefault("models", {})
+        old = jdict(cfg["models"].get(model))
+        prof.update({k: old[k] for k in THINKING_ROWS if k in old})    # the Agents panel's: saved at once, kept
         if prof:
             cfg["models"][model] = prof
         else:
@@ -336,6 +365,8 @@ class FitInfo:
     state: float = 0
     buffers: float = 0
     error: str = ""
+    spec: str = ""                  # the speculation the start runs (MTP dropped when it does not fit)
+    dropped: bool = False           # MTP does not fit with these slots and this context: n-gram only
 
     @property
     def fits(self) -> bool:
@@ -377,17 +408,29 @@ def fit_sentence(f: FitInfo) -> str:
 
 
 def llama_fit(name: str, weights: int, shape: Shape, kv: str, ctx: int, slots: str, limit: int,
-              swa: str = "auto", drafter: int = 0) -> FitInfo:
+              swa: str = "auto", drafter: int = 0, spec: str = "none", spec_n: int = 1, ub: int = UBATCH) -> FitInfo:
     """Does the model fit with these settings? Slots and, for a model with sliding-window layers, the
     full or the window cache as the launcher decides (fit.swa_plan with cache.swa); the same check the
-    launcher refuses a start with (carl_core.domain.fit.check_start). weights include the drafter."""
-    n, full = swa_plan(swa, shape, weights, ctx, slots, kv, limit)
-    chk = check_start(shape, weights, ctx, n, kv, limit, full is not False)
-    sw = full is not False
-    context = kv_bytes_per_token(shape, kv) * ctx * n + swa_bytes_per_token(shape, kv) * swa_tokens(shape, ctx, sw) * n
-    return FitInfo(name=name, need=chk.need, limit=limit, ctx=ctx, slots=n, kv=kv, full=full, largest=chk.largest,
-                   weights=weights - drafter, drafter=drafter, context=context, state=shape["rs_bytes"] * n,
-                   buffers=OVERHEAD)
+    launcher refuses a start with (carl_core.domain.fit.check_start). weights include the drafter; spec,
+    spec_n and ub: the start's speculation (MTP counted, and dropped before a slot as the launcher does) and -ub."""
+    file = weights - drafter
+    plan = start_plan(swa, shape, file, ctx, slots, kv, limit, mtp_spec(spec, spec_n, shape, drafter), ub)
+    sw = plan.swa_full is not False
+    parts = need_parts(shape, file, ctx, plan.slots, kv, sw, plan.spec, ub)
+    return FitInfo(name=name, need=parts.total, limit=limit, ctx=ctx, slots=plan.slots, kv=kv, full=plan.swa_full,
+                   largest=max_ctx(shape, file, limit, plan.slots, kv, sw, plan.spec, ub), weights=file,
+                   drafter=int(parts.drafter), context=parts.context, state=parts.state, buffers=parts.buffers,
+                   spec=plan.spec.kind, dropped=plan.dropped)
+
+
+def pending_spec(p: Pending) -> Tuple[str, int, int]:
+    """(speculation, guesses, -ub) of pending settings, for llama_fit."""
+    def num(v: object, default: int) -> int:
+        try:
+            return int(str(v))
+        except ValueError:
+            return default
+    return str(p.get("spec") or "none"), num(p.get("specn"), 1), num(p.get("ub"), UBATCH)
 
 
 class SettingsService:
@@ -417,6 +460,55 @@ class SettingsService:
         most = self.max_slots(p)
         return [r._replace(choices=[c for c in (r.choices or []) if not str(c).isdigit() or int(str(c)) <= max(most, 2)])
                 if r.key == "slots" else r for r in out]
+
+    # ------------------------------------------------------------ the Agents panel (Phase 23.4.4)
+    def agents(self, name: str) -> "AgentsInfo":
+        """A model's thinking per role: its kind, your choice (config.json, else recommended), the recommended value
+        and where it comes from. Not a known model: the defaults of an on / off model."""
+        m = self.models.by_name(name)
+        kind = thinking.kind_of(m.get("thinking") if m else None)
+        rec, src = self.recommended(name)
+        mine = self.recommended(name, with_config=True)[0]
+        own = jdict(m.get("tune")) if m else {}
+        source: Dict[str, str] = {}
+        for key in THINKING_ROWS:
+            s = src.get(key, "default")
+            # the coder's default comes from CARL, not from the catalogue entry (unless the entry has its own)
+            carl_default = key == "thinking_coder" and key not in own and s in ("catalogue", "header")
+            names = {"catalogue": "catalogue", "header": "the file", "default": "CARL's default", "auto-tune": "Auto-tune"}
+            source[key] = "CARL's default" if carl_default else names.get(s, s)
+        values = {k: thinking.normalize(kind, THINKING_ROLE[k], mine.get(k, thinking.default(kind, THINKING_ROLE[k])))
+                  for k in THINKING_ROWS}
+        recs = {k: thinking.normalize(kind, THINKING_ROLE[k], rec.get(k, thinking.default(kind, THINKING_ROLE[k])))
+                for k in THINKING_ROWS}
+        return AgentsInfo(name, kind, values, recs, source,
+                          {k: tuple(thinking.choices(kind, THINKING_ROLE[k])) for k in THINKING_ROWS})
+
+    def thinking_saved(self, name: str) -> Dict[str, Optional[str]]:
+        """The model's thinking values in config.json (None: not set there)."""
+        prof = jdict(jdict(self.store.load_config().get("models")).get(name))
+        return {k: (str(prof[k]) if k in prof else None) for k in THINKING_ROWS}
+
+    def save_thinking(self, name: str, key: str, value: Optional[str]) -> None:
+        """Main thinking or Coder thinking of a model: into its settings in config.json at once (the clients' setting:
+        no restart); the recommended value (or None) is left out. ValueError for a value the model does not take."""
+        if key not in THINKING_ROWS:
+            raise ValueError(f"{key}: not a thinking setting")
+        info = self.agents(name)
+        if value is not None and value not in info.choices[key]:
+            raise ValueError(f"{key}: {value!r} is not a choice for this model")
+        cfg = self.store.load_config()
+        models = cfg.setdefault("models", {})
+        prof = models.setdefault(name, {})
+        if value is None or value == info.rec[key]:
+            prof.pop(key, None)
+        else:
+            prof[key] = value
+        if not prof:
+            models.pop(name)
+        if not models:
+            cfg.pop("models")
+        self.store.save_config(cfg)
 
     def max_slots(self, p: Pending) -> int:
         """The most slots (up to 4) whose windows fit the GPU limit with these settings (2 when unknown);
@@ -601,7 +693,8 @@ class SettingsService:
             return FitInfo(name, downloaded=False, weights=int(m.get("bytes", 0)), drafter=draft_bytes(m))
         try:
             return llama_fit(name, self.weights(m), self.store.shape_of(m["path"]), str(p["kv"]),
-                             int(p["ctx"]), str(p["slots"]), self.gpu_limit(), self.swa_mode(p), draft_bytes(m))
+                             int(p["ctx"]), str(p["slots"]), self.gpu_limit(), self.swa_mode(p), draft_bytes(m),
+                             *pending_spec(p))
         except Exception as e:      # a GGUF that can't be read, a value that is not a number, ...: say so
             return FitInfo(name, error=str(e))
 
@@ -646,7 +739,8 @@ class SettingsService:
             vals = self.recommended(m["name"])[0]
             ctx = int(vals.get("ctx") or 98304)
             return llama_fit(m["name"], weights + draft_bytes(m), shape, str(vals.get("kv") or "q4_0"), ctx,
-                             str(vals.get("slots") or "auto"), self.gpu_limit(), self.swa_mode(), draft_bytes(m))
+                             str(vals.get("slots") or "auto"), self.gpu_limit(), self.swa_mode(), draft_bytes(m),
+                             str(vals.get("spec") or "none"), int(str(vals.get("spec_n") or 1)))
         except Exception:           # an unreadable header, a value that is not a number: unknown
             return None
 

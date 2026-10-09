@@ -10,6 +10,7 @@ from dataclasses import dataclass, field, replace
 from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
 from carl_core.domain.gguf import KV_BPE, kv_bytes_per_token
+from carl_core.domain.llamacpp import VersionCheck, health_rows
 from carl_core.domain.units import duration, file_size, memory, memory_pair, percent, speed, tokens
 
 from .cacheapi import Client
@@ -69,6 +70,8 @@ class View:
     api: str = ""                       # the dashboard API for other computers (host:port; "" when not running)
     listeners: int = 0                  # other computers holding its config event stream (their sync service)
     pushed: str = ""                    # the last config sent: "VERSION at TIME"
+    unsent: bool = False                # the config CARL would send now differs from the last one sent (23.4.4)
+    single: str = ""                    # single-model mode: the model the server runs (the configs list only it)
     clients: Tuple[Client, ...] = ()    # the other computers that sync (cacheapi.Client), newest first
     detail: str = "simple"              # simple | full
     drafter_size: int = 0               # the MTP drafter file the server loaded (-md), bytes
@@ -78,6 +81,7 @@ class View:
     reuse_from: str = ""                # where the busy request's reused tokens came from (Phase 23.5; mocked now)
     selected: str = ""                  # the selected section (Tab): its title is drawn reversed
     gate: int = 0                       # config.json delegation.gate: carl-delegation's new-file gate (0 = off)
+    llama: Optional[VersionCheck] = None    # the installed llama.cpp against the tested version (HEALTH)
 
     @property
     def full(self) -> bool:
@@ -491,8 +495,9 @@ def card_connect(v: View, d: ServerData, w: int = 66) -> Card:
 
 
 def card_health(v: View, d: ServerData) -> Card:
-    """Errors and warnings in the log (or none), whether the Mac stays awake; at full the counts, the /health
-    time, the last errors and the sleep events."""
+    """Errors and warnings in the log (or none), whether the Mac stays awake, a warning when llama.cpp is older than
+    the tested version (carl_core/domain/llamacpp.py; at full also the same or a newer version); at full the counts,
+    the /health time, the last errors and the sleep events."""
     c = v.log.counts
     broken = c["oom"] or c["compute"]
     if broken:
@@ -503,6 +508,9 @@ def card_health(v: View, d: ServerData) -> Card:
         first = f"{GRN}✓{R} No errors."
     L: List[CardLine] = [row("log", first),
                          row("sleep", "The Mac stays awake." if d.awake else f"{YEL}The Mac can sleep.{R}")]
+    old_llama = v.llama is not None and v.llama.state == "older"
+    for label, text, warn in health_rows(v.llama, v.full) if v.llama else ():
+        L.append(row(label, f"{YEL}⚠ {text}{R}" if warn else text))
     if v.full:
         L.append("")
         L.append(row("errors", str(c["E"])))
@@ -520,7 +528,7 @@ def card_health(v: View, d: ServerData) -> Card:
             L.append(row("sleeps", f"{len(sleeps)} since the Mac started"))
             L += [row(t, f"{kind}: {why}") for t, kind, why in v.slow.sleep_events[-3:]]
     summary = (f"{RED}GPU failed{R}" if broken else f"{YEL}{plural(c['E'] + c['W'], 'problem')}{R}" if c["E"] or c["W"]
-               else "no errors")
+               else f"{YEL}old llama.cpp{R}" if old_llama else "no errors")
     return Card("HEALTH", summary, L)
 
 

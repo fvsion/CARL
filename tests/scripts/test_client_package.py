@@ -393,7 +393,8 @@ class SetupTest(SetupCase):
         oc["theme"] = "my-theme"
         with open(oc_path, "w", encoding="utf-8") as f:
             json.dump(oc, f)
-        # a new package (a new model on the server), unzipped over the old folder; newer clients on npm
+        # a new package (a new model on the server, which now runs it), unzipped over the old folder; newer clients
+        self.srv.model = "test-b"
         self.install_package("test-a", "test-b", over=True)
         p = self.setup_run("--yes", latest="1.3.0")
         out = " ".join(p.stdout.split())
@@ -405,7 +406,9 @@ class SetupTest(SetupCase):
         oc = json.loads(self.read(".config/opencode/opencode.json"))
         self.assertEqual(oc["theme"], "my-theme")
         self.assertIn("mine", oc["provider"])
-        self.assertEqual(sorted(oc["provider"]["llamacpp"]["models"]), ["test-a", "test-b"])
+        # single-model mode (Phase 23.4.4 item 13): only the model the server runs
+        self.assertEqual(sorted(oc["provider"]["llamacpp"]["models"]), ["test-b"])
+        self.assertEqual(oc["model"], "llamacpp/test-b")
         self.assertNotIn("coder", oc.get("agent", {}))
         self.assertTrue(self.backups(".config/opencode"), "no backup of opencode.json")
         self.assertIn("Backups of the changed files", out)

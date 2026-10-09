@@ -26,6 +26,22 @@ Rules
 - Default model (OpenCode model/small_model, Pi defaultProvider/defaultModel/
   defaultThinkingLevel): the model the server runs now (else the one a start loads); set only
   when unset or still the value we set before.
+- Thinking per role (Phase 23.4.4; the dashboard's Main thinking and Coder thinking, per model, carried
+  in installed-models.json): the main session's is each OpenCode model entry's reasoningEffort and,
+  when it is not the default of its kind, a Pi modelThinkingLevels entry (only ours: an entry the user
+  changed stays). The coder's follows the model the coder runs on: OpenCode's coder agent has no
+  reasoningEffort; carl-delegation's option coderThinking ({"provider/model": effort}) is set on the
+  coder's requests by its chat.params hook. Pi: a map in carl.json "thinking" that the subagent
+  extension reads per model when it starts the coder. Both: also for the chain's test session; a model
+  whose Coder thinking is "main" (the default) has no entry, so the coder thinks as the main session.
+  /carl's Coder thinking (--coder-thinking MODEL:VALUE,...: CODER_THINKING in ~/.config/carl/client-install.env)
+  overrides the dashboard's value on this computer, per model. Both state files (carl.json) keep "models":
+  each model's thinking kind, main and coder values as written and the dashboard's coder value (what
+  /carl's "dashboard default" gives), for the /carl panel.
+- The brief check as a command (client/shared/carl-brief-check.mjs, Phase 23.4.4): installed next to
+  carl-brief.js wherever that goes (OpenCode carl-delegation, Pi carl-delegation and subagent).
+- The models (Phase 23.4.4 item 13): in single-model mode only the model the server runs (--running,
+  when the list has it); in router mode (no --running) every model of the list.
 - Agents, prompts, extensions: never overwrite a user's file or agent with the
   same name. CARL's coder subagent is "coder", or "carl-coder" when the user has
   an agent "coder" of their own (before 1.2.0 that fallback was "llm-deploy-coder":
@@ -148,6 +164,7 @@ PANEL = "carl-panel"                                    # the /carl panel: OpenC
 PANEL_CORE = "shared/carl-panel.js"
 DELEGATION_CORE = "shared/carl-delegation.js"           # the hand-off rules both clients' carl-delegation carry
 BRIEF_CORE = "shared/carl-brief.js"                     # the coder's TOML brief: reader, check (carl-delegation imports it)
+BRIEF_CHECK = "shared/carl-brief-check.mjs"             # the check as a command (a user's, agent-bench's): next to it
 CHAIN_CORE = "shared/carl-chain.js"                     # the test session, then the code session (carl-delegation, subagent)
 TUI_CORE = "shared/carl-tui.js"                         # the helpers the sidebar and the switcher carry
 CODER = "coder"                                         # the coder subagent's name in both clients
@@ -262,11 +279,14 @@ def parse_args(argv: list[str]) -> Options:
     ap.add_argument("--cache", "--prefix-cache", dest="cache", type=switch_arg, default=True)
     ap.add_argument("--clients", choices=CLIENTS, default="both")
     ap.add_argument("--reminder", type=switch_arg, default=True)
+    ap.add_argument("--coder-thinking", default="", help="/carl's Coder thinking on this computer: MODEL:VALUE,...")
     a = ap.parse_args(argv)
     try:
-        models = carl_models.load_list(a.models)
+        models = carl_models.only_running(carl_models.load_list(a.models), a.running)  # single-model mode (23.4.4)
     except (OSError, ValueError) as e:
         ap.error(f"--models: {e}")
+    # /carl's Coder thinking of this computer, over the dashboard's (23.4.4)
+    models = carl_models.coder_overrides(models, carl_models.parse_overrides(a.coder_thinking))
     return Options(bundle=a.bundle, home=a.home, host=a.host, llama_port=a.llama_port, ctx=a.ctx, models=models,
                    running=a.running, coder=a.coder, sidebar=a.sidebar, switcher=a.switcher,
                    model_check=a.model_check, web_search=a.web_search, lsp=a.lsp, background=a.background,
@@ -672,7 +692,8 @@ def merge_oc_browser(cfg: JsonObj, st: JsonObj, agent: JsonObj, server: JsonObj 
 
 def merge_oc_coder(cfg: JsonObj, st: JsonObj, agent: JsonObj, name: str, text: AgentText | None,
                    rule_path: str, rep: Report) -> None:
-    """The coder agent and its delegation rule in the instructions (text None: the rule out)."""
+    """The coder agent and its delegation rule in the instructions (text None: the rule out). The agent has no
+    reasoningEffort: carl-delegation sets the coder's thinking per request, for the model it runs on."""
     if text is None:
         drop_from(cfg, "instructions", (rule_path,))
         st.pop("coder_agent", None)
@@ -681,10 +702,10 @@ def merge_oc_coder(cfg: JsonObj, st: JsonObj, agent: JsonObj, name: str, text: A
         "description": text.desc,
         "mode": "subagent",
         "prompt": "{file:" + text.prompt_path + "}",
-        "options": {"reasoningEffort": "medium"},
-        # thinking on + temperature 0.6 (Qwen's coding value): the best of 9 coder
-        # runs on the 35B (2026-10-02: all functions typed, more tests, 26% faster
-        # than 1.0); the 27B uses the same value without its own test.
+        # temperature 0.6 (Qwen's coding value; with thinking at medium the best of 9 coder
+        # runs on the 35B, 2026-10-02: all functions typed, more tests, 26% faster than 1.0);
+        # the 27B uses the same value without its own test. The thinking: no value here
+        # (Phase 23.4.4): carl-delegation's chat.params hook sets it per model (coderThinking).
         "temperature": 0.6,
         "permission": {"task": "deny"},
         "steps": 80,
@@ -741,6 +762,57 @@ def merge_pi_defaults(sett: JsonObj, st: JsonObj, provider_id: str, model: str |
     rep.add("kept", f"Pi defaults (yours: {mine}{gone_note(mine, renamed)})")
     st.pop("settings", None)
     return False
+
+
+def merge_pi_model_thinking(sett: JsonObj, st: JsonObj, provider_id: str, ml: ModelList, rep: Report) -> bool:
+    """settings.json modelThinkingLevels: the main session's thinking of each of our models whose Main thinking is
+    not the default of its kind (the default comes from defaultThinkingLevel, as before). Only ours: an entry that
+    the user changed (Pi's /settings) stays. True when settings.json changed."""
+    cur_levels = sett.get("modelThinkingLevels")
+    levels: JsonObj = dict(cur_levels) if isinstance(cur_levels, dict) else {}
+    raw = st.get("model_thinking")
+    prev: JsonObj = raw if isinstance(raw, dict) else {}
+    want = {f"{provider_id}/{m.id}": str(m.pi_level("main")) for m in ml.models
+            if m.role("main") != carl_models.ROLE_DEFAULTS["effort" if m.thinking == "effort" else "on-off"]["main"]}
+    mine: dict[str, str] = {}
+    for key in sorted(set(want) | set(prev)):
+        cur = levels.get(key)
+        if cur is not None and cur != prev.get(key):
+            if key in want and cur != want[key]:
+                rep.add("kept", f"Pi thinking of {key} (yours: {cur})")
+            continue
+        if key in want:
+            levels[key] = mine[key] = want[key]
+        else:
+            levels.pop(key, None)
+    st["model_thinking"] = mine
+    if not mine:
+        st.pop("model_thinking")
+    changed = levels != (sett.get("modelThinkingLevels") or {})
+    if changed:
+        rep.add("updated", "Pi thinking per model (settings.json modelThinkingLevels): "
+                + (", ".join(f"{k} {v}" for k, v in mine.items()) or "the defaults"))
+        if levels:
+            sett["modelThinkingLevels"] = levels
+        else:
+            sett.pop("modelThinkingLevels", None)
+    return changed
+
+
+def models_state(ml: ModelList) -> JsonObj:
+    """The state file's "models" (Phase 23.4.4): each model's thinking kind, the values written for the main session
+    and the coder (/carl's override of this computer merged), and the dashboard's coder value (what /carl's
+    "dashboard default" gives), for the /carl panel."""
+    return {m.id: {"thinking": m.thinking, "main": m.role("main"), "coder": m.role("coder"),
+                   "dashboard": m.dashboard_coder()} for m in ml.models}
+
+
+def pi_coder_thinking(provider_id: str, ml: ModelList) -> JsonObj:
+    """carl.json "thinking": the coder's Pi thinking level per model ("provider/model"), which the subagent extension
+    passes when it starts the coder. A model whose coder thinks as the main session ("main") has no entry: the
+    extension then passes the session's level."""
+    levels = {f"{provider_id}/{m.id}": m.pi_level("coder") for m in ml.models}
+    return {"coder": {k: v for k, v in levels.items() if v is not None}}
 
 
 def merge_pi_default_tools(sett: JsonObj, st: JsonObj, rep: Report) -> bool:
@@ -1129,7 +1201,7 @@ class Installer:
 
         self._oc_tui()
 
-        st.update({"providers": ids, "base_url": o.base_url, "updated": self.stamp})
+        st.update({"providers": ids, "base_url": o.base_url, "updated": self.stamp, "models": models_state(o.models)})
         self.cf.save(path, cfg)
         self.save_state(oc, "OpenCode", st)
         return ids
@@ -1160,7 +1232,7 @@ class Installer:
             if merge_plugin_entry(cfg, entry, None, self.fs.isdir(dest), name, self.report):
                 self.fs.rmtree(dest)
             return
-        shared = {CACHE: (CACHE_CORE, PANEL_CORE), DELEGATION: (DELEGATION_CORE, BRIEF_CORE, CHAIN_CORE)}.get(name, ())
+        shared = {CACHE: (CACHE_CORE, PANEL_CORE), DELEGATION: (DELEGATION_CORE, BRIEF_CORE, BRIEF_CHECK, CHAIN_CORE)}.get(name, ())
         self.install_folder(os.path.join("opencode/plugins", name), dest, shared)
         want = [entry, {"provider": provider_id, **({"cacheApi": self.o.cache_api} if name == CACHE else {}),
                         **(extra or {})}]
@@ -1202,8 +1274,12 @@ class Installer:
                 rep.add("updated", f"OpenCode {what} ({self.short(p)})")
             self.fs.write(p, t)
         merge_oc_coder(cfg, st, agent, name, AgentText(desc, prompt_path), rule_path, rep)
+        # the coder's thinking per model (23.4.4): set on the coder's requests by the plugin's chat.params hook (none
+        # when every model's coder thinks as the main session)
+        thinking = carl_models.coder_efforts(self.o.models, provider_id)
         self._oc_server_plugin(cfg, DELEGATION, True, provider_id, "the hand-off to the coder",
-                               {"reminder": self.o.reminder, "cacheApi": self.o.cache_api, "coder": name})
+                               {"reminder": self.o.reminder, "cacheApi": self.o.cache_api, "coder": name,
+                                **({"coderThinking": thinking} if thinking else {})})
         # (the new-file gate is a setting of the dashboard: carl-delegation reads it through cacheApi, Phase 23.4)
         self._code_command(os.path.join(oc, "command", "code.md"), "opencode/commands/code.md", name, "OpenCode")
 
@@ -1349,6 +1425,7 @@ class Installer:
         sett = self.cf.load(sp)
         write = merge_pi_defaults(sett, st, new_id, default_model(o.models, o.running), first_install and had_ours_before,
                                   renamed, rep)
+        write = merge_pi_model_thinking(sett, st, new_id, o.models, rep) or write
         if merge_pi_default_tools(sett, st, rep) or write:
             self.cf.save(sp, sett)
         mp = os.path.join(pi, "mcp.json")
@@ -1364,17 +1441,23 @@ class Installer:
         coder_on = "coder_agent" in st
         self._code_command(os.path.join(o.pi_dir, "prompts", "code.md"), "pi/prompts/code.md" if coder_on else "",
                            str(st.get("coder_agent") or CODER), "Pi")
-        self._pi_ext(DELEGATION, coder_on, (DELEGATION_CORE, BRIEF_CORE), "the hand-off to the coder", st, "delegation_ext")
+        self._pi_ext(DELEGATION, coder_on, (DELEGATION_CORE, BRIEF_CORE, BRIEF_CHECK), "the hand-off to the coder", st, "delegation_ext")
         if coder_on:
             st["delegation"] = {"reminder": o.reminder}            # the gate: the dashboard's setting (23.4)
+            coder_thinking = pi_coder_thinking(new_id, o.models)   # the coder's thinking per model (23.4.4)
+            if coder_thinking["coder"]:
+                st["thinking"] = coder_thinking
+            else:                                               # "main" everywhere: the session's level
+                st.pop("thinking", None)
         else:
             st.pop("delegation", None)
+            st.pop("thinking", None)
         if o.cache:
             st["cache_api"] = o.cache_api
         else:
             st.pop("cache_api", None)
 
-        st.update({"providers": ids, "base_url": o.base_url, "updated": self.stamp})
+        st.update({"providers": ids, "base_url": o.base_url, "updated": self.stamp, "models": models_state(o.models)})
         self.save_state(pi, "Pi", st)
         return ids
 
@@ -1408,7 +1491,7 @@ class Installer:
         rule: str | None = None
         if plan.install:
             if sub_ours:
-                self.install_folder("pi/extensions/subagent", sub, (BRIEF_CORE, CHAIN_CORE))   # the chain (Phase 23.4.3)
+                self.install_folder("pi/extensions/subagent", sub, (BRIEF_CORE, BRIEF_CHECK, CHAIN_CORE))   # the chain (Phase 23.4.3)
                 st["subagent_ext"] = True
             else:
                 rep.add("kept", "Pi extensions/subagent (yours; it provides the subagent tool ours would)")

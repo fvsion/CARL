@@ -55,6 +55,8 @@ class Result:
     # every coder brief of the run, in order (briefs.collect): text (full), format, valid, problems, refused, ...
     briefs: List[Dict[str, Any]] = field(default_factory=list)
     brief_tokens: List[Optional[int]] = field(default_factory=list)   # one per brief; None: no server known
+    coder: str = ""                 # bench.py --coder at the HOME's last setup: auto | on | off ("": an older harness)
+    coder_state: str = ""           # what that setup did: on | off ("": not known)
     schema: int = SCHEMA
 
     def key(self) -> Key:

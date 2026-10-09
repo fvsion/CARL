@@ -12,6 +12,7 @@ from carl_core.domain import models as dm
 from carl_core.domain import tuning as t
 from carl_core.domain.autofit import candidate
 from carl_core.domain.errors import ConfigError
+from carl_core.domain.fit import Spec, need_bytes
 from carl_core.domain.gguf import ModelShape
 from carl_core.domain.records import parse_catalog
 from carl_core.domain.router import Common, ModelPlan, Preset, plan_model, preset_ini
@@ -249,7 +250,10 @@ class RouterTest(unittest.TestCase):
     def test_app_presets(self) -> None:
         p = self.gem_plan(BOTH)
         self.assertEqual((p.spec, p.draft), ("draft-mtp", DRAFT_PATH))
-        self.assertAlmostEqual(p.need - self.gem_plan({GEM_PATH: 4 * GIB}).need, DRAFT_BYTES)   # its weights count
+        # its weights count, and its draft context: two more compute buffers (Phase 23.4.4)
+        mtp = Spec("draft-mtp", p.spec_n, DRAFT_BYTES)
+        self.assertAlmostEqual(p.need, need_bytes(GEM_SHAPE, 4 * GIB, p.ctx, p.slots, p.kv, p.swa, mtp))
+        self.assertGreater(p.need - self.gem_plan({GEM_PATH: 4 * GIB}).need, DRAFT_BYTES)
 
     def test_app_presets_without_the_drafter(self) -> None:
         p = self.gem_plan({GEM_PATH: 4 * GIB})
@@ -259,11 +263,15 @@ class RouterTest(unittest.TestCase):
 
 class FitTest(unittest.TestCase):
     def test_auto_fit_counts_the_drafter(self) -> None:
+        """The drafter's weights count while MTP runs: they are in the candidate's speculation, not its weights
+        (Auto fit drops them with MTP when MTP does not fit)."""
         m = model(world())
-        self.assertEqual(candidate(m, GEM_SHAPE).weights, 4 * GIB + DRAFT_BYTES)
+        c = candidate(m, GEM_SHAPE)
+        self.assertEqual((c.weights, c.spec.mtp, c.spec.draft_bytes), (4 * GIB, True, DRAFT_BYTES))
+        self.assertEqual(c.spec.without_mtp().draft_bytes, 0)
         plain = copy.deepcopy(m)
         plain.pop("draft")
-        self.assertEqual(candidate(plain, GEM_SHAPE).weights, 4 * GIB)
+        self.assertEqual((candidate(plain, GEM_SHAPE).weights, candidate(plain, GEM_SHAPE).spec.mtp), (4 * GIB, False))
 
 
 class TuneModesTest(unittest.TestCase):

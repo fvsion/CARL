@@ -16,11 +16,11 @@ from .settings import Pending
 from .store import HFFile
 
 TABS = ["Live", "Connect", "Requests", "Log", "Settings"]
-SUBPANELS = ["Server", "Models", "Auto fit", "Auto-tune", "Router", "Caching"]
+SUBPANELS = ["Server", "Models", "Agents", "Auto fit", "Auto-tune", "Router", "Caching"]
 DETAILS = ("simple", "full")       # the detail level (D): simple = the state, the next action, one sentence per number
 CONNECT_SUBPANELS = ["Setup", "Clients"]
 TUNE_ALL = "*all*"                 # Auto-tune's choice "every downloaded model" (carl-tune.py all)
-SP_SERVER, SP_MODELS, SP_FIT, SP_TUNE, SP_ROUTER, SP_CACHE = range(len(SUBPANELS))
+SP_SERVER, SP_MODELS, SP_AGENTS, SP_FIT, SP_TUNE, SP_ROUTER, SP_CACHE = range(len(SUBPANELS))
 
 
 class Process(Protocol):
@@ -173,7 +173,7 @@ class UIState:
     sections: List[str] = field(default_factory=list)   # the sections of the screen shown, in order (set as it draws)
     more: bool = False              # the page shown goes on below the screen (the footer says "↓ more")
     # Settings
-    sp: int = SP_SERVER             # panel: Server, Models, Auto fit, Auto-tune, Router
+    sp: int = SP_SERVER             # panel: Server, Models, Agents, Auto fit, Auto-tune, Router, Caching
     pending: Optional[Pending] = None               # Server panel: the values being chosen
     set_run: Pending = field(default_factory=dict)  # what ran when they were first shown
     set_row: int = 0
@@ -192,6 +192,9 @@ class UIState:
     fit_scroll: int = 0             # Auto fit panel: lines scrolled off the top
     cache_row: int = 0              # Caching panel: the selected row
     router_row: int = 0             # Router panel: the selected model
+    agents_row: int = 1             # Agents panel: the selected row (0 the model, 1 Main thinking, 2 Coder thinking)
+    agents_model: str = ""          # Agents panel: the model shown ("": the running model, else the Server panel's)
+    agents_undo: Dict[str, Dict[str, Optional[str]]] = field(default_factory=dict)  # Agents: r restores these
     card: Optional[CardForm] = None # Models panel: a custom model's card being edited (e)
     picker: Optional[Picker] = None
     confirm2: Optional[Confirm] = None

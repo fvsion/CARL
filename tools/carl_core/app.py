@@ -5,7 +5,7 @@ build it with fakes.
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Dict, List, Optional, Sequence, Tuple, cast
 
 from .domain import cards
@@ -14,9 +14,9 @@ from .domain.router import Common, Preset, plan_model
 from .domain import models as dm
 from .domain.drafters import matching_drafter
 from .domain.autofit import (AutoFit, Budget, Candidate, Goal, Plan, Scope, as_goal, as_scope, auto_fit,
-                             best_downloaded, candidate)
+                             best_downloaded, candidate, model_plan, order_note)
 from .domain.errors import ConfigError
-from .domain.fit import estimated_limit, offline_default, reserve_bytes
+from .domain.fit import UBATCH, estimated_limit, mtp_spec, offline_default, reserve_bytes
 from .domain.gguf import GIB, ModelShape
 from .domain.hf import (commit_sha, download_url, gguf_files, local_file_name, model_name, parse_hf,
                         revision_api_path, tree_api_path, validate_repo)
@@ -355,20 +355,34 @@ class Carl:
         out["thinking"] = "effort" if shape.get("effort_levels") else "on-off"
         return out
 
-    def client_models(self, cfg: Config) -> JsonObject:
+    def client_models(self, cfg: Config, running: Optional[str] = None, router: Optional[bool] = None) -> JsonObject:
         """The installed models for the OpenCode / Pi configs (domain/clientlist.py): each with
         its window per slot from its effective settings, and the model a start loads as the
-        default (none when nothing can start)."""
+        default (none when nothing can start). Single-model mode (Phase 23.4.4 item 13): only the
+        model the server runs (running: its name or alias, from the server), else the model a start
+        loads; every downloaded model when neither is known. Router mode: every downloaded model.
+        router None: config.json's llama.mode."""
         models = [self.with_thinking(m) for m in self.all_models(cfg)]
+        if router is None:
+            router = cfg.llama.get("mode", LLAMA_KEYS["mode"].default) == "router"
 
         def ctx_of(m: ModelInfo) -> int:
             ctx = self.effective_tune(m, cfg)[0].get("ctx")
             return ctx if isinstance(ctx, int) else dm.CTX_FLOOR
+
+        def roles_of(m: ModelInfo) -> Dict[str, object]:
+            return dict(self.effective_tune(m, cfg)[0])          # thinking_main, thinking_coder (Phase 23.4.4)
         try:
             default: Optional[str] = self.resolve_launch(None, cfg)[0].get("name")
         except ConfigError:
             default = None
-        return client_list(models, ctx_of, default)
+        if not router:
+            down = [m for m in models if m.get("status") == "downloaded"]
+            served = [m for m in down if running and running in (m.get("name"), self.effective_tune(m, cfg)[0].get("alias"))]
+            one = served[:1] or [m for m in down if m.get("name") == default]
+            if one:
+                models, default = one, one[0].get("name")
+        return client_list(models, ctx_of, default, roles_of)
 
     def router_preset(self, cfg: Config, templates_dir: str) -> Tuple[Preset, Common]:
         """Router mode's presets (domain/router.py): every downloaded model with the settings a
@@ -396,9 +410,9 @@ class Carl:
             source = dm.mtp_source(m, shape)
             vals["spec"] = dm.mtp_fallback(m, str(vals["spec"]), source)[0]
             draft = m.get("draft_path") if source == "drafter" and "draft-mtp" in str(vals["spec"]) else None
-            weights = self.files.size(path) + (self.files.size(draft) if draft else 0)
-            plan, why = plan_model(name, path, vals, shape, weights, limit, ram, reserve_bytes(None, vm), common,
-                                   tmpl if ll["think_toggle"] and self.files.exists(tmpl) else None, draft)
+            plan, why = plan_model(name, path, vals, shape, self.files.size(path), limit, ram, reserve_bytes(None, vm),
+                                   common, tmpl if ll["think_toggle"] and self.files.exists(tmpl) else None, draft,
+                                   self.files.size(draft) if draft else 0)
             if plan:
                 preset.models.append(plan)
             else:
@@ -423,26 +437,52 @@ class Carl:
         cfg = self.load_config() if use_config else Config()
         path = self.model_file(name)
         note: Optional[str] = None
-        plan: Optional[Plan] = None
         if path:
             m = self.find(path, self.all_models(self.load_config())) or dm.custom_entry(
                 model_name(path), path, {"source": "file"}, self.files)
         elif name or dm.configured_model(cfg):
             m, _, note = self.resolve_launch(name, cfg)
         else:
-            m, note, plan = self.auto_launch(self.all_models(cfg), cfg)
+            m, note, _ = self.auto_launch(self.all_models(cfg), cfg)
         vals, src = self.effective_tune(m, cfg)
-        ctx = vals.get("ctx")
-        if plan and plan.ctx < dm.CTX_FLOOR and src.get("ctx") != "config" and isinstance(ctx, int) and plan.ctx < ctx:
-            vals["ctx"], src["ctx"] = plan.ctx, "auto-fit"      # no 96K window fits: auto fit's largest
         advice = dm.tune_advice(m, vals, src)
         shape = self.shape_of(m)
         source = dm.mtp_source(m, shape) if shape is not None else None
         fallback = None
         if source is not None:                # header unreadable: llama-server reports the file itself
             vals["spec"], fallback = dm.mtp_fallback(m, str(vals["spec"]), source)
-        note = "\n".join(n for n in (note, advice, fallback) if n) or None
+        order = self.apply_order(m, vals, src, cfg, shape, source) if shape is not None else ""
+        note = "\n".join(n for n in (note, advice, fallback, order) if n) or None
         return build_launch_env(m, vals, src, cfg, swa=bool(shape and shape.get("swa_window")), mtp=source), note
+
+    def apply_order(self, m: ModelInfo, vals: Settings, src: Dict[str, SettingSource], cfg: Config,
+                    shape: ModelShape, source: Optional[dm.MtpSource]) -> str:
+        """Auto fit's order for the model a start runs (domain/autofit.py, Phase 23.4.4), when the window
+        is not the user's (config.json or Auto-tune): 2 x 96K, 2 x 64K, 2 x 48K, 1 x 96K, 1 x 64K, 1 x 48K,
+        never above the model's own window; MTP goes (n-gram stays) before a slot or the window. Sets ctx
+        and spec in vals (source auto-fit; the launcher's llama-fit.py --plan then takes the same slots) and
+        returns the start line ("" when nothing changed or nothing fits: the launcher's check refuses)."""
+        ctx, want = vals.get("ctx"), str(vals.get("slots", "auto"))
+        if src.get("ctx") in ("config", "auto-tune") or not isinstance(ctx, int) or not (want == "auto" or want.isdigit()):
+            return ""
+        path = m.get("path", "")
+        weights = self.files.size(path) if self.files.exists(path) else int(m.get("bytes", 0))
+        dpath = m.get("draft_path", "")
+        drafter = self.files.size(dpath) if source == "drafter" and dpath and self.files.exists(dpath) else 0
+        n = vals.get("spec_n", 1)
+        spec = mtp_spec(str(vals.get("spec") or "none"), n if isinstance(n, int) else 1, shape, drafter)
+        c = replace(candidate(m, shape), weights=weights, kv=str(vals.get("kv") or "q4_0"), spec=spec)
+        budget = self.budget()
+        ub = cfg.llama.get("ub")
+        tier, plan = model_plan(c, budget.allowed, budget.swa_full, ctx, None if want == "auto" else int(want),
+                                ub if isinstance(ub, int) else UBATCH)
+        if plan is None:
+            return ""
+        if plan.ctx != ctx:
+            vals["ctx"], src["ctx"] = plan.ctx, "auto-fit"
+        if plan.dropped:
+            vals["spec"], src["spec"] = plan.spec.kind, "auto-fit"
+        return order_note(m.get("name", ""), tier, plan, ctx)
 
     # ------------------------------------------------------------ Hugging Face + downloads
     def hf_files(self, repo: str, revision: str = "main") -> HfFileList:

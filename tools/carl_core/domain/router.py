@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
 from .errors import ConfigError
-from .fit import check_start, prompt_cache_mib, swa_plan, window_label
+from .fit import Spec, check_start, mtp_spec, prompt_cache_mib, start_plan, window_label
 from .gguf import ModelShape
 from .types import Settings
 
@@ -82,13 +82,17 @@ SAMPLING_KEYS = (("temp", "temp"), ("top_p", "top-p"), ("top_k", "top-k"), ("min
 
 def plan_model(name: str, path: str, vals: Settings, shape: ModelShape, weights: int, limit: float, ram: int,
                reserve: float, common: Common, template: Optional[str],
-               draft: Optional[str] = None) -> Tuple[Optional[ModelPlan], str]:
+               draft: Optional[str] = None, draft_bytes: int = 0) -> Tuple[Optional[ModelPlan], str]:
     """(the model's section, "") or (None, why it is left out): its effective settings, slots
-    auto = 2 when two windows fit, the same memory check a start makes. draft: the MTP drafter
-    file its speculation loads (its weights are in `weights`)."""
+    auto = 2 when two windows fit, MTP dropped (n-gram kept) before a slot when it does not fit, the
+    same memory check a start makes. weights: the model file; draft: the MTP drafter file its
+    speculation loads, draft_bytes its size."""
     ctx, kv = int(str(vals["ctx"])), str(vals["kv"])
-    slots, swa_full = swa_plan(common.swa_mode, shape, weights, ctx, str(vals["slots"]), kv, limit)
-    chk = check_start(shape, weights, ctx, slots, kv, limit, swa_full=swa_full is not False)
+    kind, n = str(vals["spec"]), int(str(vals["spec_n"]))
+    spec = Spec(kind, n, draft_bytes) if draft else mtp_spec(kind, n, shape)
+    sp = start_plan(common.swa_mode, shape, weights, ctx, str(vals["slots"]), kv, limit, spec, common.ubatch)
+    slots, swa_full = sp.slots, sp.swa_full
+    chk = check_start(shape, weights, ctx, slots, kv, limit, swa_full is not False, sp.spec, common.ubatch)
     if not chk.fits:
         largest = (f"The largest context that fits is {window_label(chk.largest)} tokens per slot."
                    if chk.largest else "The weights alone do not fit.")
@@ -100,8 +104,8 @@ def plan_model(name: str, path: str, vals: Settings, shape: ModelShape, weights:
             raise ConfigError(f"{name}: a file path with a line break can't go into the presets file")
     cache = common.cache_ram if common.cache_ram is not None else prompt_cache_mib(ram, chk.need, reserve)
     sampling = tuple((key, float(str(vals[k]))) for k, key in SAMPLING_KEYS)
-    return ModelPlan(name, path, ctx, slots, kv, str(vals["spec"]), int(str(vals["spec_n"])), sampling, cache,
-                     template, chk.need, bool(swa_full), draft, swa_full is False), ""
+    return ModelPlan(name, path, ctx, slots, kv, sp.spec.kind, int(str(vals["spec_n"])), sampling, cache,
+                     template, chk.need, bool(swa_full), draft if sp.spec.mtp else None, swa_full is False), ""
 
 
 def _num(v: float) -> str:

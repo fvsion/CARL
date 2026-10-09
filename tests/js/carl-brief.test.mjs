@@ -184,10 +184,6 @@ test("checkBrief: a complete brief has no problem; so have the examples in deleg
   assert.equal(ex.requirements.length, 3);
   const guide = readFileSync(join(REPO, "USERGUIDE.md"), "utf8");                // the user guide's short example
   assert.deepEqual(B.checkBrief(brief(guide.slice(guide.indexOf("```toml\nmode = ")))), []);
-  const plan = readFileSync(join(REPO, "docs/phase-plans/phase23.4.3/full_plan.md"), "utf8");
-  const schema = brief(plan.slice(plan.indexOf("```toml")));
-  assert.deepEqual(B.checkBrief(schema), []);
-  assert.deepEqual(schema.error, { run: "the command that fails", output: "the exact output" });
 });
 
 test("checkBrief: mode, tests and goal", () => {

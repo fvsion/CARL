@@ -1,7 +1,8 @@
 """The llama-server Auto-tune measures (implements TuneServer).
 
-It is started through host/serve-llama.sh (so the measured server is the one CARL runs),
-on its own port, local only, in its own process group so a stop takes the whole server down.
+It is started through host/serve-llama.sh (so the measured server is the one CARL runs: --port, --fit off),
+on its own port, local only, in its own process group so a stop takes the whole server down. Nothing here reads
+llama.cpp's buffer sizes from a log (the memory step uses CARL's estimate), so no start needs -lv 4.
 """
 from __future__ import annotations
 
@@ -124,7 +125,8 @@ class LlamaServerControl:
         self.stop()
         argv = ["llama-batched-bench", "-m", self.model_path, "-c", str(max(counts) * (prompt + gen) + 1024),
                 "-b", "2048", "-ub", "512", "-npp", str(prompt), "-ntg", str(gen),
-                "-npl", ",".join(str(n) for n in counts), "-fa", "on", "-ctk", kv, "-ctv", kv, "-ngl", "999"]
+                "-npl", ",".join(str(n) for n in counts), "-fa", "on", "-ctk", kv, "-ctv", kv, "-ngl", "999",
+                "--fit", "off"]           # as every CARL start: llama.cpp 0.6 fits by default
         try:
             r = subprocess.run(argv, capture_output=True, text=True, timeout=PARALLEL_TIMEOUT)
         except (OSError, subprocess.TimeoutExpired):

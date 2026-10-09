@@ -3,9 +3,10 @@ Pure: the templates (client/opencode/opencode.json, client/pi/models.json) come 
 
 Snippets for pasting by hand are additive: one provider block under the id "carl",
 which can't collide with a provider the user already has, and nothing else (no default
-model, $schema or agents). It lists every installed model, built as client/install.sh
-builds them (client/carl_models.py), so pasting and installing give the same entries.
-drift() compares what an installed client config lists with what is installed."""
+model, $schema or agents). It lists the models the client configs get, built as client/install.sh
+builds them (client/carl_models.py), so pasting and installing give the same entries: in
+single-model mode only the model the server runs (Phase 23.4.4 item 13), in router mode every
+installed model. drift() compares what an installed client config lists with that list."""
 from __future__ import annotations
 
 import json
@@ -48,6 +49,16 @@ def served(d: ServerData, alias_lookup: Callable[[], Optional[str]]) -> Served:
     when /props has no alias."""
     alias = d.props.get("model_alias") or alias_lookup() or "model"
     return Served(str(alias), d.n_ctx or 98304)
+
+
+def serving(d: ServerData) -> Tuple[Optional[str], Optional[bool]]:
+    """(running, router) for the client list (ModelList.client_list): a single-model server's model (its alias), or
+    router True; (None, None) when no server runs (the list follows config.json: the model a start loads)."""
+    if not d.up:
+        return None, None
+    if d.router is not None:
+        return None, True
+    return d.alias or None, False
 
 
 def model_list(doc: Optional[JSONDict], s: Served) -> ModelList:
@@ -105,13 +116,15 @@ def config_text(kind: str, s: Served, templates: Dict[str, JSONDict], base: str,
 
 @dataclass(frozen=True)
 class Drift:
-    """A client config that is out of date: its model list differs from the installed models,
-    or the running model's window differs from the server's (the context or slots changed)."""
+    """A client config that is out of date: its model list differs from the list the configs get (single-model
+    mode: the model the server runs; router mode: the installed models), or the running model's window differs from
+    the server's (the context or slots changed)."""
     client: str
     listed: int
-    added: List[str]            # installed, not in the config
-    removed: List[str]          # in the config, not installed (OpenCode would get HTTP 400 in router mode)
+    added: List[str]            # in the list, not in the config
+    removed: List[str]          # in the config, not in the list (OpenCode would get HTTP 400 in router mode)
     window: Optional[str] = None    # "MODEL: 96K in the config, 128K on the server"
+    server: str = ""            # single-model mode: the model the server runs (the configs list only it)
 
     def line(self, installed: int) -> str:
         """The drift in sentences: what an update changes, and the key."""
@@ -119,17 +132,24 @@ class Drift:
         if self.added or self.removed:
             change = " and ".join(x for x in (f"adds {', '.join(self.added)}" if self.added else "",
                                               f"removes {', '.join(self.removed)}" if self.removed else "") if x)
-            parts.append(f"{self.client} lists {self.listed} {'model' if self.listed == 1 else 'models'}, {installed} "
-                         f"{'is' if installed == 1 else 'are'} installed. An update {change}.")
+            lists = f"{self.client} lists {self.listed} {'model' if self.listed == 1 else 'models'}"
+            parts.append(f"{lists}. {single_mode(self.server)} An update {change}." if self.server else
+                         f"{lists}, {installed} {'is' if installed == 1 else 'are'} installed. An update {change}.")
         if self.window:
             parts.append(f"{self.client}: the context of {self.window}.")
         return " ".join(parts) + " Press u."
 
 
+def single_mode(server: str) -> str:
+    """Why the configs list one model (single-model mode), as a sentence."""
+    return f"In single-model mode, OpenCode and Pi list only the model of the server: {server}."
+
+
 def drift(listed: Dict[str, Optional[Dict[str, int]]], installed: Sequence[str],
-          running: Optional[Tuple[str, int]] = None) -> List[Drift]:
+          running: Optional[Tuple[str, int]] = None, server: str = "") -> List[Drift]:
     """The clients (configured for this server) whose config is out of date; a config that
-    can't be read is left out. running: the served model and its window per slot."""
+    can't be read is left out. installed: the models the configs get (single-model mode: the model the server runs,
+    named in server). running: the served model and its window per slot."""
     out = []
     for client, ids in listed.items():
         if ids is None:
@@ -140,5 +160,5 @@ def drift(listed: Dict[str, Optional[Dict[str, int]]], installed: Sequence[str],
         if running and running[1] and ids.get(running[0]) not in (None, 0, running[1]):
             window = f"{running[0]} is {ids[running[0]] // 1024}K in the config, {running[1] // 1024}K on the server"
         if added or removed or window:
-            out.append(Drift(client, len(ids), added, removed, window))
+            out.append(Drift(client, len(ids), added, removed, window, server))
     return out

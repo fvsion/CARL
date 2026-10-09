@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """agent-bench: does the main agent of OpenCode and Pi hand coding work to the coder subagent?
 
-    bench.py prepare --home DIR --model NAME          OpenCode and Pi in a HOME of the harness (client package)
+    bench.py prepare --home DIR --model NAME [--coder auto|on|off]   OpenCode and Pi in a HOME of the harness
     bench.py run --home DIR --models A,B --out results.jsonl [...]   the matrix (resumable)
     bench.py report results.jsonl [--md]              the tables
     bench.py fetch MODEL / bench.py drop MODEL        copy a model in from the library / remove the local copy
@@ -83,11 +83,19 @@ def cmd_prepare(a: argparse.Namespace) -> int:
         say(f"The server is ready after {srv.wait_ready():.0f} s. Making the client package and running ./setup "
             f"in {home} (this installs OpenCode and Pi; some minutes)")
         found = hm.prepare(package_source(a, s), home, None if a.latest else a.opencode_version,
-                           None if a.latest else a.pi_version)
+                           None if a.latest else a.pi_version, coder=a.coder)
     finally:
         srv.stop()
-    say(f"Ready: {home} (OpenCode {found.get('opencode')}, Pi {found.get('pi')}). The server is stopped.")
+    say(f"Ready: {home} (OpenCode {found.get('opencode')}, Pi {found.get('pi')}, {coder_text(hm.coder_of(home))}). "
+        f"The server is stopped.")
     return 0
+
+
+def coder_text(c: Dict[str, str]) -> str:
+    """The HOME's coder in words: "the coder on (auto)"."""
+    if not c.get("coder"):
+        return "the coder as an older harness set it (on)"
+    return f"the coder {c.get('coder_state') or 'state not known'} ({c['coder']})"
 
 
 # ------------------------------------------------------------------------------------------------ run
@@ -100,7 +108,7 @@ def measure_name(limits: cl.Limits) -> str:
 
 def run_cell(cell: matrix.Cell, home: str, env: Dict[str, str], runs_dir: str, limit: float,
              versions: Dict[str, str], keep_copy: bool, limits: cl.Limits = cl.Limits(),
-             count: Optional[bf.Counter] = None) -> Result:
+             count: Optional[bf.Counter] = None, coder: Optional[Dict[str, str]] = None) -> Result:
     repo_dir = fixtures.make_fresh(cell.prompt.fixture, runs_dir)
     spec = cl.RunSpec(cell.client, cell.model, cell.thinking, cell.prompt.text, repo_dir, home, limit)
     stamp = time.strftime("%Y-%m-%dT%H:%M:%S")
@@ -142,7 +150,8 @@ def run_cell(cell: matrix.Cell, home: str, env: Dict[str, str], runs_dir: str, l
         thinking_tokens=o.thinking_tokens or None, thinking_tokens_decision=o.thinking_tokens_all or None,
         thinking_chars=o.thinking_chars,
         first_event=ev.trim(o.first_event, 300), error=error[:2000], full=full,
-        briefs=briefs, brief_tokens=bf.count_all(briefs, count))
+        briefs=briefs, brief_tokens=bf.count_all(briefs, count),
+        coder=(coder or {}).get("coder", ""), coder_state=(coder or {}).get("coder_state", ""))
     if not keep_copy and cell.mode != "full":
         shutil.rmtree(os.path.dirname(repo_dir), ignore_errors=True)
     return result
@@ -201,8 +210,10 @@ def cmd_run(a: argparse.Namespace) -> int:
                     say(f"server: pid {pid}, port {a.port}, log {srv.log_file}")
                     say(f"server: ready after {srv.wait_ready():.0f} s")
                     count = bf.tokenizer(srv.url, ensure_key(s.key_file))      # the briefs' tokens
-                    hm.refresh(package_source(a, s), home)
+                    hm.refresh(package_source(a, s), home, coder=a.coder)
                     say("clients: configs written again for this model (./setup --no-install)")
+                coder = hm.coder_of(home)                  # --no-server: as the last setup left it
+                say(f"clients: {coder_text(coder)}")
                 changed = var.apply(home)
                 if changed:
                     say(f"variant {var.name}: changed {', '.join(changed)}")
@@ -211,7 +222,7 @@ def cmd_run(a: argparse.Namespace) -> int:
                 say("clients: " + ", ".join(f"{k} {v}" for k, v in versions.items()))
                 for cell in mcells:
                     n += 1
-                    res = run_cell(cell, home, env, runs_dir, limit, versions, a.keep_runs, limits, count)
+                    res = run_cell(cell, home, env, runs_dir, limit, versions, a.keep_runs, limits, count, coder)
                     store.append(res)
                     times.append(res.seconds)
                     eta = matrix.eta_seconds(times, len(todo) - n)
@@ -331,6 +342,8 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--opencode-version", default=hm.DEFAULT_OPENCODE)
     sp.add_argument("--pi-version", default=hm.DEFAULT_PI)
     sp.add_argument("--latest", action="store_true", help="keep the newest versions that ./setup installs")
+    sp.add_argument("--coder", choices=hm.CODER_CHOICES, default=hm.DEFAULT_CODER,
+                    help="the coder subagent (./setup --coder): auto = on with 2 or more slots (default), on, off")
     sp.set_defaults(fn=cmd_prepare)
 
     sp = sub.add_parser("run", help="run the matrix (resumable: a run with a result is skipped)")
@@ -352,6 +365,9 @@ def build_parser() -> argparse.ArgumentParser:
                     help=f"seconds from the first model step before 'undecided' (default {ev.MAX_SECONDS:.0f})")
     sp.add_argument("--port", type=int, default=DEFAULT_PORT)
     sp.add_argument("--slots", type=int, default=2)
+    sp.add_argument("--coder", choices=hm.CODER_CHOICES, default=hm.DEFAULT_CODER,
+                    help="the coder subagent at each config refresh (./setup --coder): auto = on with 2 or more "
+                         "slots (default), on, off; not with --no-server (the HOME keeps its last setup)")
     sp.add_argument("--fetch", action="store_true", help="copy each model in from the library first")
     sp.add_argument("--drop", action="store_true", help="remove each model's local copy after its batch")
     sp.add_argument("--keep", default="", help="more model files that --drop never removes")

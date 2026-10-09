@@ -6,7 +6,7 @@
 
 | | llama.cpp (`./carl.sh llama`) |
 |---|---|
-| Program | `llama-server` from Homebrew `llama.cpp`. Measured with 0.4.1 (M3 Pro) and 0.5.0, build 11146 (M2 Max). |
+| Program | `llama-server` from Homebrew `llama.cpp`. CARL is tested with 0.6.0, build 11429 (both Macs since 2026-10-09). An older version gives a warning ([The llama.cpp version](#the-llamacpp-version)). The older measurements used 0.4.1 (M3 Pro) and 0.5.0, build 11146 (M2 Max). |
 | Port | 8080 |
 | API | The OpenAI API (`/v1/chat/completions`, `/v1/models`) and the Bearer key `~/.config/carl/api-key` |
 | Weights | GGUF files in `~/models/gguf/`: the catalogue models and any other GGUF |
@@ -50,6 +50,7 @@
 | Line | Example |
 |---|---|
 | The model | `CARL starts the server: NAME (FILE).` |
+| An older llama.cpp (only then) | `llama.cpp 0.4.1 (build 9001) is older than the version that CARL is tested with (0.6.0, build 11429): update it with brew upgrade llama.cpp.` |
 | The address | `Address: http://127.0.0.1:8080. Only this Mac can use the server.` |
 | Slots and context | `Slots: 2 (from Auto-tune). Context: 96K tokens per slot (from Auto-tune).` With `--slots auto`: `Slots: 2 (auto: two slots fit).` |
 | Context memory and RAM cache | `Context memory type: q4 (from Auto-tune). RAM cache: 8.0 GiB.` |
@@ -59,6 +60,16 @@
 
 - The sources (`CARL_SOURCES`) are: `from your option` (a flag), `from the environment`, `from your settings` (`config.json`), `from Auto-tune`, `from the catalogue`, `from the model file`, `from Auto fit: the largest context that fits`, and `CARL's default`.
 - Each refusal starts with `error:`. The dashboard shows these lines when a start fails.
+
+### The llama.cpp version
+
+CARL keeps one tested version of llama.cpp: `TESTED` in `tools/carl_core/domain/llamacpp.py` (now 0.6.0, build 11429). Reason: the M3 Pro ran 0.4.1 for weeks, and nothing showed it.
+- **How CARL reads it:** `llama-server --version` (`carl_core/adapters/system.py`). The launcher reads it at each start (`carl.py llama-version`). The dashboard reads it one time when it opens.
+- **The format:** `version: 0.6.0 (build 11429, commit d81235049)`. Builds before 0.x write `version: 6789 (bc091a4d)`: there, the number is the build number.
+- **The comparison:** by the build number when both versions have one, else by the dotted version (0.6 = 0.6.0; 0.10 is newer than 0.9).
+- **Older than the tested version:** one start line (the table above), and on the HEALTH card of the dashboard a warning row (**Version**) and a **To update** row (`Run brew upgrade llama.cpp, then restart the server.`), at each detail level. The collapsed HEALTH card shows `old llama.cpp` when there is no other problem. The server starts.
+- **The same or newer:** no start line. At full detail, the HEALTH card shows the version in a quiet row (for example `llama.cpp 0.7.0 (build 12001) is newer than the tested version, 0.6.0 (build 11429).`).
+- **Not known** (no `llama-server` on the `PATH`, or a format that CARL cannot read): nothing.
 
 ### Slots
 
@@ -94,7 +105,7 @@ The slots, the RAM cache (`--cache-ram`, 1–8 GiB from the free RAM) and the di
   - **Evidence:** before this change, idle sleep (1 min on battery) stopped a 74K prompt for 30+ min.
 - **The server ignores the model name in a request** (single model). The GGUF that is loaded answers all requests. Thus, the model in the client must match the server. The OpenCode plugin `carl-model-check` warns when they are different.
 - **Served names (since 1.3.0):** each model is served under its CARL name (`--alias` = the catalogue or custom name). Before 1.3.0, builds shared a family alias such as `qwen3.8-27b`, and OpenCode could show the wrong build.
-- **The client lists (since 1.3.0):** the client configs list only the installed models, one entry each (`tools/carl.py client-models`). Each entry has the id, the label and the context for each slot (from the effective settings). It also has the thinking type from the card: `on-off` or `effort`. The default model of the clients is the model that the server runs now (a single model), else the model that a start loads ([OpenCode and Pi configs](client-configs.md#the-provider-and-the-models)).
+- **The client lists (since 1.3.0):** the client configs list only the installed models, one entry each (`tools/carl.py client-models`). Since Phase 23.4.4, single-model mode lists only the model that the server runs, and router mode all the installed models ([the model list](client-configs.md#the-model-list-single-model-mode-and-router-mode-phase-2344)). Each entry has the id, the label and the context for each slot (from the effective settings). It also has the thinking type from the card: `on-off` or `effort`. The default model of the clients is the model that the server runs now (a single model), else the model that a start loads ([OpenCode and Pi configs](client-configs.md#the-provider-and-the-models)).
 - The dashboard compares the models in the configs on this Mac (`opencode.json`, `models.json`, CARL's provider) with the downloaded models. The Connect tab shows a warning when they are different.
 - **Template override.** The server uses `--chat-template-file ~/models/templates/<model>.thinking-toggle.jinja`. The launcher makes this file at start ([How thinking works](thinking.md#how-thinking-works)). `THINK_TOGGLE=0` uses the template of the GGUF.
 
@@ -164,6 +175,7 @@ When you start from a terminal, `run_server` (`host/common.sh`) does these steps
 
 Router mode is opt-in: `llama.mode = router`, `LLAMA_MODE=router` or `--router` (`carl_core/domain/router.py`, the router branch of `serve-llama.sh`).
 - The router of llama.cpp 0.5.0 (`llama-server --models-preset FILE --models-max 1`, no `-m`) starts one child `llama-server` for the loaded model on a free port. It sends each request to the child by the `model` field.
+- The router gets `--port`. Each child gets the keys of the presets file: `fit = off` and CARL's other shared flags in `[*]`, and the settings of its model in its own section.
 - The presets file is `~/.config/carl/router-presets.ini`. The launcher writes it again at each router start.
 - The start lines list the models that the router offers, each with its setup (for example `2 slots × 96K tokens, q4, window cache`), the models that it leaves out (with the reason), and the model that it loads first.
 
@@ -259,11 +271,12 @@ The setup takes the API key from the first of these sources:
 **Auto fit** (`carl_core/domain/autofit.py`, pure, with unit tests):
 - The candidates are the ranked stock models: a rank, and not abliterated. A custom model is a candidate only when its card says `auto_fit: true`.
 - The goal selects the family first: `everyday` = the fast builds (`arch: moe`, and a dense build with `fast: true`, the Gemma 4 E4B), `hard-code` = `arch: dense`. The other builds are the fallback.
-- The passes, in this order: 2 × 96K, then 1 × 96K, then 1 × the largest context ≥ 32K. The first pass that a candidate of the family meets wins, best rank first.
+- The passes, in this order, on every Mac: 2 × 96K, 2 × 64K, 2 × 48K, then 1 × 96K, 1 × 64K, 1 × 48K. Nothing below 48K. The first pass that a candidate of the family meets wins, best rank first ([Auto fit's order](memory.md#auto-fits-order)).
+- In each pass, a model with MTP that fits only without it runs n-gram only (`Plan.dropped`, `Plan.spec_note()`), before Auto fit takes the next pass. The memory counts MTP's draft context ([The estimate](memory.md#the-estimate-what-is-counted-and-the-measured-check)).
 - The memory that a model can use is min(GPU memory limit, RAM − the memory kept free). The memory kept free is as for the RAM cache: 6 GiB, 10 GiB with the VM network, or `RESERVE_GB`.
 - The result gives each candidate with a better quality rank that was not selected, and why (`Rejection.line()`). Examples: `qwen3.8-27b (quality rank 1) is dense: Auto fit keeps it for the hard code goal`, and for a model that fits no pass, a reason that starts with `does not fit:`.
 - `Plan.label()` gives the plan in short (`2 × 96K tokens, q4`), `Plan.describe()` in words (`2 slots × 96K tokens (q4)`).
-- If the context of the choice is less than 96K, an `auto` start uses that context, unless `config.json` sets one. `CARL_SOURCES` then shows `ctx:auto-fit`.
+- Every start whose context is not set in `config.json` or by Auto-tune (`app.apply_order`) takes the same order for its model: never above the model's own context, MTP dropped before a slot or the context. A smaller context shows `ctx:auto-fit` in `CARL_SOURCES`, n-gram for MTP `spec:auto-fit`, and a start line says why. The launcher's `llama-fit.py --plan` (`SLOTS CACHE_MIB SWA SPEC`) then takes 2 slots when they fit the same memory, and drops MTP before the second slot also for a context from your option or settings.
 - Offline (no header can be read), the download offer and `./carl.sh download default` use the catalogue `default`. If the weights of the default alone do not fit, they use `default_small`.
 
 ### Port and PID lookups (no lsof)
@@ -400,11 +413,11 @@ This table shows the flags that `host/serve-llama.sh` gives to `llama-server` (s
 
 | Setting | Value | Why |
 |---|---|---|
-| Bind | `--host 127.0.0.1 --port 8080 --api-key-file ~/.config/carl/api-key` | This Mac only by default (`--vm`: 192.168.42.1). A shared key. |
+| Bind | `--host 127.0.0.1 --port 8080 --api-key-file ~/.config/carl/api-key` | This Mac only by default (`--vm`: 192.168.42.1). A shared key. llama.cpp's own default port changes to 9931 in a later release: CARL always gives `--port` (the single start, the router, Auto-tune and agent-bench, which start the server through the launcher). |
 | Model name | `--alias NAME` | The CARL name of the model |
 | Offload | `-ngl 999` | The whole model is on the GPU (Metal). |
 | Flash attention | `-fa on` | Necessary for a quantized V cache. It was on for each measurement. |
-| Memory fitting | `--fit off` (router presets: `fit = off`) | CARL sets `-ngl` and `-c`, and checks the memory itself (`llama-fit.py --check`). llama.cpp's own memory fitting only probes here. Its probe fails for the Gemma 4 MTP drafter ("Gemma4Assistant requires ctx_other"), and that showed as 1 error on every Gemma start. |
+| Memory fitting | `--fit off` (router presets: `fit = off` in `[*]`, for each model that the router starts; Auto-tune: through the launcher, and also on `llama-batched-bench`) | llama.cpp fits by default (`--fit on`). CARL sets `-ngl` and `-c`, and checks the memory itself (`llama-fit.py --check`). llama.cpp's own memory fitting only probes here. Its probe fails for the Gemma 4 MTP drafter ("Gemma4Assistant requires ctx_other"), and that showed as 1 error on every Gemma start. |
 | Context memory (KV cache) | `-ctk q4_0 -ctv q4_0` (`--kv q8` → q8_0) | q4 against q8 (27B, M3 Pro, 2026-09-24): +16% read speed, about 2 GiB less memory, the same write speed, 8/8 needle recall at 66K. Do not mix K and V types (the read speed is about 5× slower). |
 | Context | `-c` = slots × 96K (`--ctx` sets the context for each slot) | A large context reads cold prompts and writes much more slowly ([Context length](memory.md#context-length-what-a-larger-context-costs)). The model maximum is 262144. The server allocates the whole context memory at start. |
 | Batching | `-b 2048 -ub 512` | `-ub 512` gave the best measured result (90.5 tok/s vs 88.6 and 86.1 for 1024 and 2048). |
@@ -417,7 +430,7 @@ This table shows the flags that `host/serve-llama.sh` gives to `llama-server` (s
 | Sampling | `--temp 1.0 --top-p 0.95 --top-k 20 --min-p 0 --presence-penalty 0 --repeat-penalty 1.0` (Gemma 4: `--top-k 64`) | The values of the catalogue `tune` of the model: the Qwen values for thinking mode, Google's values for Gemma 4 ([Sampling](sampling.md#sampling-and-output-limits)). `TEMP`, `TOP_P`, `TOP_K`, `MIN_P`, `PRESENCE`, `REPEAT` override them. |
 | Speculation | `--spec-type TYPE --spec-draft-n-max N` (from the tune of each model; none with `SPEC=none`) | The best of the modes that were measured on each model ([Performance](performance.md#performance-measured), [IQ3 speculation](models.md#iq3-speculation-measured-2026-10-03)). |
 | MTP drafter | `-md DRAFT` (only a model with a separate drafter, Gemma 4, when `--spec-type` contains `draft-mtp`) | The drafter gives MTP speculation to a model file without an MTP head. On the Gemma 4 E4B (new code, M2 Max, llama.cpp 0.5.0, 2026-10-04): 76.0 tok/s with MTP and 2 guesses, 61.1 without speculation. |
-| Logging | `--log-file ~/models/logs/llama-server-<ts>.log --log-timestamps --log-prefix` | `llama-server-latest.log` points to the newest log. Use `tools/llama-log.sh` to read it. `LOG_FILE=none` turns the file off. |
+| Logging | `--log-file ~/models/logs/llama-server-<ts>.log --log-timestamps --log-prefix` | `llama-server-latest.log` points to the newest log. Use `tools/llama-log.sh` to read it. `LOG_FILE=none` turns the file off. The log level is llama.cpp's default (3). llama.cpp 0.6 writes the buffer sizes (`… buffer size = N MiB`) only at `-lv 4`, and that log is much longer. No CARL code reads the buffer sizes (Auto-tune uses CARL's memory estimate, and the dashboard uses the process footprint), so no CARL start adds `-lv 4`. |
 | Metrics | `--metrics` | A Prometheus endpoint at `/metrics` |
 | Keep awake | `caffeinate -i -w <server pid>` | If the Mac goes to sleep, requests stop in the middle of the prompt. |
 | Dashboard in the same terminal | `run_server` in `host/common.sh` | One command shows the server live. `MONITOR=0` gives a plain foreground server. |

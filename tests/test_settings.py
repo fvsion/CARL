@@ -24,6 +24,18 @@ class CoerceTest(unittest.TestCase):
         self.assertEqual(coerce(LLAMA_KEYS["extra_args"], "--a 1", "x"), ["--a", "1"])
         self.assertEqual(coerce(LLAMA_KEYS["extra_args"], ["--b", 2], "x"), ["--b", "2"])
 
+    def test_the_thinking_of_each_role(self) -> None:
+        """Phase 23.4.4: off, on or a level; the coder also "main" (as the main session, its default); anything else
+        names the setting."""
+        for v in ("main", "on", "off", "low", "medium", "xhigh"):
+            self.assertEqual(coerce(MODEL_KEYS["thinking_coder"], v, "c"), v)
+        self.assertEqual((MODEL_KEYS["thinking_main"].default, MODEL_KEYS["thinking_main"].env), ("on", None))
+        self.assertEqual(MODEL_KEYS["thinking_coder"].default, "main")
+        with self.assertRaisesRegex(ConfigError, r"models.x.thinking_main: 'main' is not one of on, off, low, medium, xhigh"):
+            coerce(MODEL_KEYS["thinking_main"], "main", "models.x.thinking_main")
+        with self.assertRaisesRegex(ConfigError, r"models.x.thinking_main: 'high' is not one of on, off, low, medium, xhigh"):
+            coerce(MODEL_KEYS["thinking_main"], "high", "models.x.thinking_main")
+
     def test_errors_name_the_setting(self) -> None:
         with self.assertRaisesRegex(ConfigError, r"models.x.kv: 'q5' is not one of q4_0, q8_0, f16"):
             coerce(MODEL_KEYS["kv"], "q5", "models.x.kv")

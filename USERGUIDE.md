@@ -37,7 +37,7 @@ Commands with the label **Mac** run in the CARL folder on the Mac. Commands with
 | Item | Requirement |
 |---|---|
 | Mac | An **Apple Silicon** Mac. A 36 GB Mac runs all models of the catalogue. A 24 GB Mac runs the IQ3 and Q3 builds and the smaller Gemma 4 models ([Sharing with a friend](#sharing-with-a-friend)). A 16 GB Mac runs `gemma-4-e4b`, `gemma-4-12b` and `qwen3.8-9b`. |
-| Homebrew tools | [Homebrew](https://brew.sh), for `llama.cpp` (tested with 0.4.1 and 0.5.0), `aria2`, `ansifilter` and `zstd` |
+| Homebrew tools | [Homebrew](https://brew.sh), for `llama.cpp` (tested with 0.6.0, build 11429; with an older version, the start and the dashboard tell you to update it), `aria2`, `ansifilter` and `zstd` |
 | Python | `python3`. The first time that you use it, macOS offers to install it with the command-line developer tools. |
 | Swift | The `fit` command uses `swift` to read the exact GPU memory limit. It comes with the command-line developer tools (`xcode-select --install`). |
 | Disk space | 4.6–23 GB for each model, and up to 10 GB for the disk cache |
@@ -90,6 +90,7 @@ Commands with the label **Mac** run in the CARL folder on the Mac. Commands with
      Log file: ~/models/logs/llama-server-….log. Batch: -ub 512. Your settings: ./carl.sh config show.
      ```
    - The sources of a setting are: your option (a flag), the environment, your settings (`config.json`), Auto-tune, the catalogue, the model file, Auto fit, and CARL's default.
+   - If your llama.cpp is older than the version that CARL is tested with, the second line tells you: `llama.cpp 0.4.1 (build 9001) is older than the version that CARL is tested with (0.6.0, build 11429): update it with brew upgrade llama.cpp.` The server starts. The HEALTH card of the dashboard shows the same warning.
    - A refused start shows one `error:` sentence first, then the lines that tell you what to do.
    - `./carl.sh` with no arguments also starts the server, and opens the dashboard ([Daily use](#2-daily-use)).
    - `./carl.sh -h` shows the help. `./carl.sh help llama` (or `./carl.sh llama --help`) shows the options of one command.
@@ -294,19 +295,19 @@ Use this procedure for clients that are not on the server Mac and not in the VMw
 
 | Model | Largest context (q4 context memory) |
 |---|---|
-| **`qwen3.6-35b-a3b-iq3`** (the default on 24 GB: stock fast MoE, 14.1 GB) | 2 × 96K slots (the default) fit in ~15.3 GiB, so subagents work. 1 slot can go to 256K. |
-| `qwen3.8-27b-iq3` (stock, the smallest 27B, 10.9 GB) | 2 × 96K slots fit, so subagents work. 2 slots can go to 128K each. 1 slot can go to 256K. |
-| `qwen3.8-27b-q3` (stock, 13.1 GB) | ~148K with 1 slot. The default 96K fits. |
+| **`qwen3.6-35b-a3b-iq3`** (the default on 24 GB: stock fast MoE, 14.1 GB) | 2 × 96K slots (the default) fit in ~15.0 GiB with n-gram speculation (MTP does not fit), so subagents work. |
+| `qwen3.8-27b-iq3` (stock, the smallest 27B, 10.9 GB) | 2 × 96K slots fit in ~15.0 GiB with n-gram speculation, so subagents work. |
+| `qwen3.8-27b-q3` (stock, 13.1 GB) | 2 × 64K slots with n-gram speculation (Auto fit's order). ~84K with 1 slot and MTP. |
 | `heretic-35b-a3b-iq3` (abliterated fast MoE, 13.6 GB) | 2 × 96K slots fit, so subagents work. It has no MTP head: n-gram speculation. |
-| `orcarouter-27b-iq3` (abliterated, the smallest abliterated 27B, 12.6 GB) | 2 × 96K slots fit, so subagents work. |
-| `orcarouter-27b-q3` (abliterated, 14.6 GB) | ~68K with 1 slot. Its default context is 64K. |
-| `qwen3.8-9b` (5.8 GB), `gemma-4-e4b` (4.6 GB) and `gemma-4-12b` (7.2 GB) | 2 × 96K slots fit (the Gemma models with the window cache) |
-| `gemma-4-26b-a4b` (14.6 GB) | 1 slot, up to ~192K with the window cache. 2 × 96K slots need 16.1 GiB: just over the limit. |
+| `orcarouter-27b-iq3` (abliterated, the smallest abliterated 27B, 12.6 GB) | 2 × 64K slots with n-gram speculation, so subagents work. |
+| `orcarouter-27b-q3` (abliterated, 14.6 GB) | 1 × 64K with n-gram speculation. Its default context is 64K. |
+| `qwen3.8-9b` (5.8 GB), `gemma-4-e4b` (4.6 GB) and `gemma-4-12b` (7.2 GB) | 2 × 96K slots fit with MTP (the Gemma models with the window cache) |
+| `gemma-4-26b-a4b` (14.6 GB) | 2 × 64K slots with n-gram speculation and the window cache (Auto fit's order). |
 | `qwen3.8-27b`, `orcarouter-27b` (Q4) | They do not fit under the default limit. |
 | `qwen3.6-35b-a3b`, `heretic-35b-a3b` (Q4), `gemma-4-31b` | They do not fit. |
 
 - `orcarouter-27b-q3` is the one exception to the 96K floor, because this build is for 24 GB Macs. The start tells you this. It suggests `./carl.sh tune orcarouter-27b-q3`, which selects the largest context that fits.
-- **Experts only: a larger GPU memory limit.** CAUTION: keep at least 6 GiB for macOS, or the Mac can stop. `sudo sysctl iogpu.wired_limit_mb=18432` gives the GPU more memory until the next restart. Then the stock Q4 `qwen3.8-27b` can run with ~84K. The abliterated Q4 gets only ~16K: use its Q3.
+- **Experts only: a larger GPU memory limit.** CAUTION: keep at least 6 GiB for macOS, or the Mac can stop. `sudo sysctl iogpu.wired_limit_mb=18432` gives the GPU more memory until the next restart. Then the stock Q4 `qwen3.8-27b` can run with ~52K and MTP. The abliterated Q4 gets only ~20K: use its Q3.
 - **Watch the memory on the Live tab of the dashboard.** The **Pressure** row of the THIS MAC card shows the macOS memory pressure. If it says `warning` or `critical`, use a smaller `--ctx`.
 - **The launcher refuses a model and a context that do not fit.** It shows what they need and the GPU memory limit. It also shows the largest context that fits, and Auto fit's choice. `FIT_CHECK=0` is the expert override.
 - With 1 slot, the setup does not install the coder subagent ([The coder subagent](#the-coder-subagent-opencode-and-pi)).
@@ -398,7 +399,8 @@ Each model has its own name on the server, and the clients list it under the sam
 **Key points:**
 - CAUTION: **Only one model can run at a time.** Stop the server before you start a different model. Two models do not fit in 36 GB, and the second model breaks the model that runs.
 - **By default, the client does not change the server's model.** llama-server answers with the loaded model, for each model name that the client sends. If the selection and the server do not agree, you get the loaded model with the wrong label and the wrong thinking options. OpenCode then shows a CARL warning. Router mode (below) is the other way round.
-- **The clients list only the installed models** (downloaded, or in the models folder), one entry each. After a download or a delete, update the lists: run `./carl.sh install --config-only`, or push `u` in the dashboard's Connect tab. The tab warns when the lists are out of date.
+- **In single-model mode, the clients list only the model that the server runs.** The server answers with its one model, so the other models are of no use in the list. When you start a different model, update the lists: push `u` in the dashboard's Connect tab (this Mac), or run `./carl.sh install --config-only`. For other computers, push `P` (send the config). The Connect tab warns when the lists are out of date.
+- **In router mode, the clients list all the installed models** (downloaded, or in the models folder), one entry each. After a download or a delete, update the lists in the same way.
 - **Stock or abliterated:** the stock models (`qwen3.8-27b`, the 35B, the 9B, Gemma 4) keep their refusals. The orcarouter and Heretic builds have no refusals. Only `orcarouter-27b` has full measurements in CARL. The stock 27B has the same architecture and speed profile.
 - **Q3 or Q4:** Q3 is 2.5–3.5 GB smaller, but its quality is lower (more slips in long agent sessions). Use Q3 if Q4 does not fit.
 - **IQ3:** the IQ3 builds are smaller again, and their quality is lower again. The IQ formats unpack more slowly on Metal. MTP helps them less, and 2 guesses make them slower. Thus, their recommended speculation is MTP + n-gram with 1 guess ([IQ3 speculation](reference/models.md#iq3-speculation-measured-2026-10-03)). Use IQ3 only if nothing larger fits.
@@ -420,7 +422,7 @@ The catalogue has four Gemma 4 models from Google. Each one is Google's QAT buil
 | Model | Size | For |
 |---|---|---|
 | `gemma-4-e4b` | 4.6 GB | Small and fast, for any Mac from 16 GB. 2 × 96K with the full cache needs ~8.2 GiB. Weaker on hard code. |
-| `gemma-4-12b` | 7.2 GB | The dense 12B: much stronger than the E4B on code (Google: LiveCodeBench 72% vs 52%), for any Mac from 16 GB. 2 × 96K with the window cache needs ~9.1 GiB. The full cache needs ~25.7 GiB. |
+| `gemma-4-12b` | 7.2 GB | The dense 12B: much stronger than the E4B on code (Google: LiveCodeBench 72% vs 52%), for any Mac from 16 GB. 2 × 96K with the window cache needs ~8.6 GiB with n-gram, ~10.2 GiB with MTP (16 GB Macs: n-gram). The full cache with MTP needs ~30.8 GiB. |
 | `gemma-4-26b-a4b` | 14.6 GB | The MoE (3.8B active), for fast everyday coding. 2 × 96K with the full cache fits a 36 GB Mac. On a 32 GB Mac it gets 2 slots with the window cache. |
 | `gemma-4-31b` | 18.0 GB | The dense 31B, for hard code when you can wait. It runs with the window cache on 32 and 36 GB Macs. |
 
@@ -471,7 +473,7 @@ Other ways:
 - The launcher writes the presets to `~/.config/carl/router-presets.ini` at each start. Do not edit this file.
 - **The model that loads first** is the model that a single start loads (`llama.model`, or Auto fit's choice).
 - **The Router panel** (router mode only) lists the models that the router offers, with their state, their slots and context (`2 × 96K`), and **[ Load ]** or **[ Unload ]**. Push ↑ ↓ to select a model, and Enter to load or unload it. The panel also shows the recent switches.
-- The panel also tells you if the OpenCode and Pi configs on this Mac list the installed models. **[ Update the OpenCode and Pi configs (u) ]** runs the setup for this Mac. The Connect tab shows its output.
+- The panel also tells you if the OpenCode and Pi configs on this Mac list the installed models (router mode) or the model that the server runs (single-model mode). **[ Update the OpenCode and Pi configs (u) ]** runs the setup for this Mac. The Connect tab shows its output.
 - **A model that is not installed** gets an error (HTTP 400 "not found"), and nothing loads. OpenCode shows a CARL warning.
 - **Custom models:** set the *thinking* field of the card (Models panel, `e`), so that OpenCode offers the correct levels.
 - The dashboard follows the loaded model (memory, context, requests). The header shows `router mode (N models)` after the model name.
@@ -500,6 +502,24 @@ In OpenCode 1.18, the thinking levels are model **variants**. Type `/variants` a
 | The 35B-A3B builds, the 9B, Gemma 4 | off, high |
 
 The setup sets the Pi defaults: provider `llamacpp`, the default model ([What the setup changes](#what-the-setup-changes)), and thinking `low`. It sets them only if they are unset, or if they still have the values that it set before.
+
+### The main session and the coder: a setting for each
+
+Each model has two thinking settings in the dashboard (Settings > Agents, [Agents panel](#agents-panel)): **Main thinking** (the main session of OpenCode and Pi) and **Coder thinking** (the coder subagent). You set them independently, as the coder already has its own temperature (0.6).
+
+| Model | Main thinking: values (default) | Coder thinking: values (default) |
+|---|---|---|
+| The 27B builds (effort levels) | off, low, medium, xhigh (low) | same as main, off, low, medium, xhigh (same as main) |
+| The 35B-A3B builds, the 9B, Gemma 4 (on / off) | off, on (on) | same as main, off, on (same as main) |
+
+- **The default of Coder thinking is "same as main"** (`main` in `config.json`): the coder thinks as the main session does with the model that it runs on. Main thinking keeps the value that CARL used before these settings were available.
+- **On is good for a coder.** A coder solves problems, and thinking helps it. On a 27B build, "on" for the coder is `medium`. Turn its thinking off only when you give it a full spec (spec-kit or a similar tool): a coder without thinking does well only when every requirement is written down. The dashboard shows this note when the coder thinks off (Coder thinking off, or same as main with Main thinking off).
+- The coder's setting applies to each coder session, also to the test session before the code ([The chain](reference/delegation.md)). It follows the model that the coder runs on.
+- **The clients get the settings at the next update:** the Connect tab, `u` (this Mac), or `P` (other computers that sync). The dashboard saves a change at once; the server does not restart.
+- **One computer can have its own Coder thinking:** `/carl` > **Coder subagent** > **Coder thinking** ([The /carl panel](#carls-plugins-and-extensions)). That choice is stronger than the dashboard's value on that computer, for that model: the model of the session that you open `/carl` in. The setup and the sync keep it (`CODER_THINKING` in `~/.config/carl/client-install.env`). Its value `dashboard default` removes it again.
+- **OpenCode:** Main thinking is the default of each model entry (`options.reasoningEffort`). A variant that you select (`/variants`, ctrl+t) is stronger than it. For Coder thinking, CARL's `carl-delegation` plugin sets the thinking on each request of the coder, for the model of the request. With "same as main", it does not change the request: the model's own setting (Main thinking) applies.
+- **Pi:** Main thinking that is not the default goes into `modelThinkingLevels` in `settings.json` (one level for each model). If you change a level there yourself, the setup keeps your level. Coder thinking goes into `~/.pi/agent/carl.json`. The subagent extension uses the value for the model of the coder when it starts the coder. With "same as main", the coder gets the thinking level of the session.
+- **Off** turns thinking off only. The sampling settings stay those of the server.
 
 **Notes:**
 - **A change applies from the next message.** A reply in progress keeps its mode.
@@ -713,7 +733,7 @@ covers = ["R1"]
 run = "python -m pytest tests/test_csv_export.py -q"
 ```
 
-**CARL checks the brief.** Before the coder starts, CARL checks that the brief is complete. For example, each requirement must be in a check, and a code task must name its files and at least one thing to leave alone. If something is missing, the coder does not start: the main agent gets the list of what to fix, and it sends the brief again. You see this as a failed call to the coder with `[CARL] Brief refused`.
+**CARL checks the brief.** Before the coder starts, CARL checks that the brief is complete. For example, each requirement must be in a check, and a code task must name its files and at least one thing to leave alone. If something is missing, the coder does not start: the main agent gets the list of what to fix, and it sends the brief again. You see this as a failed call to the coder with `[CARL] Brief refused`. To check a brief yourself (for example one that you wrote for `/code`), run the same check by hand: `node ~/.config/opencode/plugins/carl-delegation/carl-brief-check.mjs brief.toml` (Pi: `~/.pi/agent/extensions/carl-delegation/carl-brief-check.mjs`). It prints `The brief is valid.` or each problem ([details](reference/delegation.md#the-coders-two-modes-and-the-brief)).
 
 **Tests first, in a separate session.** For new code with new tests (`mode = "code"` and `tests = "new"`), CARL runs the coder two times, each in a new session:
 1. **The test session** (mode test) writes the tests from the requirements. It does not see the code session, so its tests do not bend to the code.
@@ -770,7 +790,7 @@ Delegation depends on the judgment of the model. Thus, it occurs "usually", not 
 - The browser subagent checks only the live page. If the page does not load, it says so. It does not read the code instead.
 - Without the browser (`NO_BROWSER=1`), the main agent gives the list of checks to you.
 
-**Same model.** The coder uses the loaded model. Thus, the gain is a new, focused context and more reasoning (OpenCode: effort medium), not a stronger model. With 2 slots, the main session keeps its cache while the coder works.
+**Same model.** The coder uses the loaded model. Thus, the gain is a new, focused context and more reasoning (its own thinking setting: Coder thinking, same as the main session by default), not a stronger model. With 2 slots, the main session keeps its cache while the coder works.
 
 **To ask for the coder directly:**
 - **OpenCode:** type `@coder` and your task in the prompt, for example `@coder add tests for parse_config`. The subagents are in the `@` list, and Tab completes the name. The task goes directly to the coder: the main agent does not decide. If you already have an agent of your own with the name `coder`, CARL's coder is `@carl-coder`. "Use the coder agent to …" also works.
@@ -783,8 +803,8 @@ Delegation depends on the judgment of the model. Thus, it occurs "usually", not 
 | Item | Place |
 |---|---|
 | Source | `client/agents/coder.md` (the frontmatter description tells when to use it; the body holds its instructions) and `client/agents/delegation.md` (the rule for the main agent). To change the coder, edit these files and run the setup again. |
-| OpenCode | `agent.coder` in `opencode.json` (mode subagent, reasoning medium, temperature 0.6, no nested subagents, at most 80 steps), and `instructions`. Its prompt is in `~/.config/opencode/carl/coder.md`. |
-| Pi | `~/.pi/agent/agents/coder.md`, the `subagent` extension, and a marked block in `~/.pi/agent/APPEND_SYSTEM.md` |
+| OpenCode | `agent.coder` in `opencode.json` (mode subagent, temperature 0.6, thinking from Coder thinking through `carl-delegation` (default: same as main), no nested subagents, at most 80 steps), and `instructions`. Its prompt is in `~/.config/opencode/carl/coder.md`. |
+| Pi | `~/.pi/agent/agents/coder.md`, the `subagent` extension (it starts the coder with the thinking level of Coder thinking, from `~/.pi/agent/carl.json`), and a marked block in `~/.pi/agent/APPEND_SYSTEM.md` |
 
 The setup never replaces your own `coder` agent, Pi `agents/coder.md` or `extensions/subagent`. CARL's agent then gets the name `carl-coder`. If you also have your own `carl-coder`, the setup skips it and shows a note.
 
@@ -810,9 +830,7 @@ The setup (`./carl.sh install`, `./setup`) adds these to OpenCode and Pi. Each o
 **The /carl panel.** Type `/carl` in OpenCode or Pi. The panel is a control panel: one list, one row for each CARL piece, with its label and its state. For example (OpenCode):
 
 ```
-Coder subagent                      on
-Background coder                    on
-Delegation reminder                 on
+Coder subagent                    on ›
 Browser                             on
 Web search                         exa
 LSP                                off
@@ -827,17 +845,33 @@ Check for a new config
 
 - **Enter** changes the selected row in place (in Pi, also **Space**). While the setup runs, the state reads `turning off…`, then the new state. A message says what CARL did (red when it failed). The title says when OpenCode or Pi must restart to use the changes (`Restart OpenCode to use 1 change.`).
 - **Web search** opens its values: `exa`, `parallel` or `off`. Each provider says where the queries go (`Queries go to exa.ai.`).
+- **Coder subagent** opens the coder's own list (the `›` after its state says so). Its state is the state of the coder:
+
+  ```
+  Coder                               on
+  Background coder                    on
+  Delegation reminder                 on
+  Coder thinking       dashboard default
+  Coder model               same as main
+  ```
+
+  - **Coder** turns the coder on or off.
+  - **Coder thinking** is for the model that the coder runs on: with Coder model `same as main`, the model of the session that you open `/carl` in (in router mode, the model that you chose for that session). Without a session (OpenCode's home screen, before the first message), or when the session's model is not a CARL model, it is the default model of your config. The title of its values names the model (`Coder thinking with qwen3.8-27b`). The values: `dashboard default` (with the dashboard's value in grey, for example `same as main (low)`), `same as main` (with the main session's thinking in grey, for example `the main session's thinking (low)`; without a session: `the default model's thinking (low)`), then `off` and `on`, or `off`, `low`, `medium` and `xhigh` for a model with effort levels. ● marks the current value (OpenCode). A value other than `dashboard default` changes the dashboard's Coder thinking ([Settings > Agents](#agents-panel)) **on this computer only**, for that model. `dashboard default` removes this computer's value: the dashboard's value applies again. When the coder will not think (`off`, or a value that gives off), the message tells you to use the coder only with a full spec (spec-kit or a similar tool). OpenCode must restart to use the change; Pi uses it the next time that it starts the coder.
+  - **Coder model** is `same as main`: the coder runs on the model of the main session. It has no other value now, so Enter does nothing.
+  - **Esc** goes back one list (from the values to the Coder subagent list, then to the first list); on the first list it closes `/carl`. In OpenCode, ctrl+c and a click outside the panel close `/carl` from any list, as they close OpenCode's own dialogs.
 - **Sync service** opens the state of the config sync: the sync service, the last contact, the last config, the version of the client package, the CARL version of the server and the addresses.
 - **Check for a new config** asks the dashboard now. **Apply the waiting config** shows only when a config waits.
-- Without the coder, the **Background coder** and **Delegation reminder** rows are not in the list: they have no effect.
-- When you turn on the **Coder subagent** and the server runs 1 slot, CARL turns the coder on and shows a warning: the coder uses the slot of the main session while it works.
+- Without the coder, the coder's list has only the **Coder** row: the other rows have no effect.
+- When you turn on the **Coder** and the server runs 1 slot, CARL turns the coder on and shows a warning: the coder uses the slot of the main session while it works.
 - The sync rows show only when the server runs on another computer.
 
 | Row | In | Setup switch |
 |---|---|---|
-| Coder subagent | OpenCode, Pi | `NO_CODER` |
-| Background coder | OpenCode, Pi (with the coder) | `NO_BACKGROUND_SUBAGENTS` |
-| Delegation reminder | OpenCode, Pi (with the coder) | `NO_REMINDER` |
+| Coder subagent > Coder | OpenCode, Pi | `NO_CODER` |
+| Coder subagent > Background coder | OpenCode, Pi (with the coder) | `NO_BACKGROUND_SUBAGENTS` |
+| Coder subagent > Delegation reminder | OpenCode, Pi (with the coder) | `NO_REMINDER` |
+| Coder subagent > Coder thinking | OpenCode, Pi (with the coder) | `CODER_THINKING` (`MODEL:VALUE`, one entry for each model, separated by commas) |
+| Coder subagent > Coder model | OpenCode, Pi (with the coder) | — (same as main) |
 | Browser | OpenCode, Pi | `NO_BROWSER` |
 | Web search | OpenCode, Pi | `WEB_SEARCH` (exa, parallel or off) |
 | LSP | OpenCode | `NO_LSP` |
@@ -1313,7 +1347,7 @@ If a value is not available, the card shows a dash or a sentence (for example `n
 | MEMORY (`server 17.9 GiB`) | **Server**: a bar and the RAM that the server uses (`17.9 of 32.0 GiB`). This is the memory of the server process (with the GPU buffers) plus the model file and the drafter file, which the server maps from the disk. Then the parts: **Model**, **Drafter** (Gemma), **Context memory**, **Buffers** (the rest). The parts add up to the **Server** value. While the model loads, **Model** says `loading`. | **Server process** (the memory of the process without the model files: the value that Activity Monitor shows), **GPU limit** (the GPU memory limit), **GPU, all apps** (the GPU memory that all apps use), **Server CPU** |
 | THIS MAC (`pressure normal`; `GPU 95%` when the GPU is 90% busy or more) | **Memory**: a bar and the RAM that this Mac uses. It is the same value as **Memory Used** in Activity Monitor: app memory + wired + compressed. **Pressure**: the macOS memory pressure (`normal`, `warning`, `critical`). **Swap** (`none (no swap file)` when the Mac has no swap file). **GPU**: a bar and `38% busy`. **Power**. **Heat** (`normal`, `warm`, `hot`, `very hot`). The card shows also when no server runs. | **App memory**, **Wired**, **Compressed** (the three parts of **Memory**), **Cached files** (files in RAM that macOS can free when apps need the memory; not in **Memory**), **Free**, **Load** (1, 5 and 15 min), **Disk free** |
 | CONNECT (`this Mac only`) | **Address**, **Key** (masked; `k` shows it), **Connections** (and the computers they come from, when another computer is connected), **OpenCode, Pi** (if they are set up), **Disk cache** (`2.4 of 10 GB`) | **Saved** (the saved prompts and sessions), **Model name**, **From**, **Key file**, the copy buttons |
-| HEALTH (`no errors`, `N problems` or `GPU failed`) | **Log**: `✓ No errors.`, the number of errors and warnings in the log (the same lines as **Errors and warnings** in the Log tab), or `✗ The GPU failed. Restart the server (Settings > Server, a).`. **Sleep**: if the Mac stays awake while the server runs. | **Errors**, **Warnings**, **Routine notices**, **GPU errors**, **Health check** (ms), **Sleeps**, the last errors, the sleep and wake events |
+| HEALTH (`no errors`, `N problems`, `GPU failed` or `old llama.cpp`) | **Log**: `✓ No errors.`, the number of errors and warnings in the log (the same lines as **Errors and warnings** in the Log tab), or `✗ The GPU failed. Restart the server (Settings > Server, a).`. **Sleep**: if the Mac stays awake while the server runs. Only when llama.cpp is older than the version that CARL is tested with: **Version** (`⚠ llama.cpp 0.4.1 (build 9001) is older than the tested version, 0.6.0 (build 11429).`) and **To update** (`Run brew upgrade llama.cpp, then restart the server.`). | **Version** (also the tested or a newer llama.cpp), **Errors**, **Warnings**, **Routine notices**, **GPU errors**, **Health check** (ms), **Sleeps**, the last errors, the sleep and wake events |
 | MODEL (the quantization, for example `UD-IQ3_XXS`) | **File**, **Speculation** | **Weights**, **MTP drafter** (its file and size), **Layers**, **MTP**, **Experts**, **Thinking**, **Batch**, **Flash attention**, **Architecture**, **Process** (the PID) |
 | RECENT REQUESTS (`50 finished`) | The newest requests, as in the Requests tab | The **Slot** and **Reused from** columns |
 | LOG (the number of errors and the file name) | The last lines of the server log, with their times | The **File** row (the path), and the times with milliseconds |
@@ -1348,7 +1382,8 @@ The buttons of the Setup sub-tab:
 
 - The screen masks the key. Push `k` to show or hide it. The copy has the real key.
 - CAUTION: Protect a copied config as you protect the key.
-- When the OpenCode and Pi configs on this Mac do not agree with the installed models, the tab shows **2 Connect ⚠**. The card tells what an update adds and removes, for example `⚠ OpenCode and Pi on this Mac are out of date.` and `An update adds qwen3.8-27b.` Push `u` to update them.
+- When the OpenCode and Pi configs on this Mac do not agree with the models for the clients, the tab shows **2 Connect ⚠**. In single-model mode, this is the model that the server runs: a start with a different model makes the configs out of date. In router mode, these are the installed models. The card tells what an update adds and removes, for example `⚠ OpenCode and Pi on this Mac are out of date.`, `In single-model mode, OpenCode and Pi list only the model of the server: qwen3.8-27b.` and `An update adds qwen3.8-27b.` Push `u` to update them.
+- When the models for the clients changed after the last config that you sent, step 3 (and the Clients sub-tab) says `The last config sent is out of date`. Push `P` to send the new config to the other computers.
 
 **Clients sub-tab.** Push `[` or `]` to change between Setup and Clients.
 - The section **CLIENTS** (for example `2 computers` in its title) shows **Last config sent**, and the **Sync address** (the dashboard API).
@@ -1371,7 +1406,7 @@ The buttons of the Setup sub-tab:
 
 ### The Settings tab
 
-The Settings tab (tab 5) has six panels: **Server**, **Models**, **Auto fit**, **Auto-tune**, **Router** ([Router mode](#router-mode-switch-models-from-opencode-or-pi)) and **Caching** ([The disk cache](#7-fast-starts-the-disk-cache)). Push `[` or `]`, or click the name of a panel, to change the panel.
+The Settings tab (tab 5) has seven panels: **Server**, **Models**, **Agents** ([Agents panel](#agents-panel)), **Auto fit**, **Auto-tune**, **Router** ([Router mode](#router-mode-switch-models-from-opencode-or-pi)) and **Caching** ([The disk cache](#7-fast-starts-the-disk-cache)). Push `[` or `]`, or click the name of a panel, to change the panel.
 
 #### Server panel
 
@@ -1390,7 +1425,7 @@ From 151 columns, ABOUT and MODELS are in a column on the right. Below 151 colum
 
 **To change the server settings:**
 1. Push `5`, or click **5 Settings**.
-2. Push ↑ ↓ to select a setting. The settings are Model, Context, Slots, Speculation, Context memory, Sliding window (only for a Gemma model), RAM cache, Network and Temperature. At the full level of the SERVER section, the **More settings** row changes to Presence, Top k, Top p, Min p, Repeat penalty, Batch size, Checkpoints and Checkpoint step.
+2. Push ↑ ↓ to select a setting. The settings are Model, Context, Slots, Speculation, Context memory, Sliding window (only for a Gemma model), RAM cache, Network and Temperature. The thinking of the main session and of the coder is in the [Agents panel](#agents-panel). At the full level of the SERVER section, the **More settings** row changes to Presence, Top k, Top p, Min p, Repeat penalty, Batch size, Checkpoints and Checkpoint step.
 3. Push ← → to change the value. On the Context row and the other number rows, you can also type a number, then push Enter (`96k` = 96K tokens).
 4. Look at the three columns:
 
@@ -1523,6 +1558,29 @@ The list has the catalogue models and each `.gguf` in the models folder. For eac
 - **On a terminal of 156 columns or more,** the list shows the speeds of each source in place of Prose tok/s: **This Mac** and **Catalogue**, each with **Prose**, **Code** and **Edit**.
 - **The speeds view** (`t`): the list shows each model with the speeds of this Mac and of the catalogue (prose, code, edit), the Mac that measured them (**Measured on**), the **Date** and the **Speculation**. Push `t` again for the list.
 
+#### Agents panel
+
+The Agents panel sets the thinking of the main session and of the coder, for each model ([The main session and the coder: a setting for each](#the-main-session-and-the-coder-a-setting-for-each)). It has one section, **AGENTS** (its title shows the model):
+
+```
+  Model            qwen3.6-35b-a3b-iq3 ▾
+
+  Setting          Your choice            Values                                 Recommended
+  Main thinking    low                    off, low, medium, xhigh                low (catalogue)
+› Coder thinking   ‹ same as main ›       same as main, off, low, medium, xhigh  same as main (CARL's default)
+
+[ Undo my changes (r) ]  [ Use the recommended settings (x) ]
+```
+
+- **Model:** the model whose settings the rows show. At first it is the model that the server runs (with no server: the model of the Server panel). Select the row and push Enter (or click the name) to open the list of models; ← → selects the next model.
+- **Main thinking:** the main session of OpenCode and Pi. A model with effort levels (the 27B builds) has off, low, medium and xhigh. The other models have off and on.
+- **Coder thinking:** the coder subagent. It also has **same as main**, its default: the coder thinks as the main session does with the model that it runs on.
+- **Values** (the full level of the section) shows the values of the row. **Recommended** shows the recommended value and its source: the catalogue, or CARL's default.
+- Push ↑ ↓ to select a row, and ← → to change it. **CARL saves the change at once**: there is no Apply, and the server does not restart (`models.NAME.thinking_main`, `models.NAME.thinking_coder` in `config.json`; the recommended value is left out). A message says when the clients use it: after their next update (the Connect tab, `u`; other computers: `P`).
+- When the coder does not think (Coder thinking off, or same as main with Main thinking off), a note tells you to use it only with a full spec (spec-kit or a similar tool).
+- `r` (**[ Undo my changes (r) ]**) puts back the values of the model from before your changes in this dashboard session. `x` (**[ Use the recommended settings (x) ]**) uses the recommended values.
+- `/carl` in OpenCode or Pi can change Coder thinking on one computer ([The /carl panel](#carls-plugins-and-extensions)). That choice is stronger than this panel's value on that computer.
+
 #### Auto fit panel
 
 The Auto fit panel shows the full [Auto fit](#auto-fit-the-best-model-for-this-mac) answer for this Mac. The title of its AUTO FIT section shows the choice, for example `AUTO FIT ●○  qwen3.6-35b-a3b`.
@@ -1628,7 +1686,8 @@ Auto fit chooses the best **stock** model that fits this Mac, with its slots and
 | `hard-code` | The dense builds (27B; the Gemma 4 12B on 16 GB Macs) | Better at code and hard tasks, but slower |
 
 - **Quality rank** is the catalogue `rank` (1 = best): published benchmarks and CARL's code test first, then the quantization. These ranks are temporary. A later CARL version measures quality on your Mac.
-- **The rule:** in the goal's family, the best quality rank that holds **two slots of 96K tokens** (the main session and a coder subagent). If none does, one slot of 96K tokens. If none does, the largest context of at least 32K. If no build of the family fits, the best of the other family (it tells you).
+- **The rule:** in the goal's family, the best quality rank that holds the first setup of this order, on every Mac: **2 slots × 96K tokens**, 2 × 64K, 2 × 48K (the main session and a coder subagent), then 1 slot × 96K, 1 × 64K, 1 × 48K. Nothing below 48K. If no build of the family fits, the best of the other family (it tells you).
+- **MTP goes first:** when a model fits a setup only without MTP, Auto fit uses n-gram speculation only, before it removes a slot or makes the context smaller. It says so: `MTP does not fit with 2 slots × 96K tokens on this Mac, so the speculation is n-gram only.` A start of any model whose context is not set by you follows the same order and says what it changed.
 - **Memory:** the smaller of the GPU memory limit and the RAM less the memory kept free for macOS and apps (6 GiB; 10 GiB while VMware's network is up; `RESERVE_GB` or `--reserve-gb`).
 - **Stock only:** Auto fit and each automatic default never choose an abliterated model. You select those yourself.
 - **Custom models** (Hugging Face, the models folder) are candidates only when their [card](#cards-for-custom-models) switches `auto_fit` on (with a rank and an arch, and not abliterated). Your rank is not measured.
@@ -1649,9 +1708,10 @@ Auto fit chooses the best **stock** model that fits this Mac, with its slots and
 
 | RAM | everyday | hard code |
 |---|---|---|
-| 16 GB | `gemma-4-e4b` (no MoE build fits; the E4B is the fast small dense build) | `gemma-4-12b` |
-| 24 GB | `qwen3.6-35b-a3b-iq3` | `qwen3.8-27b-iq3` |
-| 32 GB and more | `qwen3.6-35b-a3b` | `qwen3.8-27b` |
+| 16 GB | `gemma-4-e4b` (no MoE build fits; the E4B is the fast small dense build) | `gemma-4-12b` (n-gram: MTP does not fit) |
+| 24 GB | `qwen3.6-35b-a3b-iq3` (n-gram) | `qwen3.8-27b-iq3` (n-gram) |
+| 32 GB | `qwen3.6-35b-a3b` (n-gram: with MTP it needs 25.1 GiB) | `qwen3.8-27b` |
+| 36 GB and more | `qwen3.6-35b-a3b` | `qwen3.8-27b` |
 
 - On 32 GB, this is true only while VMware's network is down. With the network up, CARL keeps 10 GiB free for macOS and the VM, and the everyday choice becomes the IQ3.
 - Previews (`--ram`) estimate the GPU memory limit at 2/3 of the RAM below 32 GB, and 3/4 from 32 GB. A real Mac reports its own limit.
@@ -1669,7 +1729,7 @@ The dashboard and the launchers keep your settings in `~/.config/carl/config.jso
 | Section | What it holds |
 |---|---|
 | `llama` | Server-wide llama.cpp settings: `model` (`auto` = Auto fit's choice for this Mac), `auto_goal` (`everyday` \| `hard-code`), `auto_fit` (`catalogue` \| `downloaded`), `mode` (`single` \| `router`), `net` (`local` \| `vm`; default local), `host`, `cache_ram`, `ub`, `batch`, `ckpt`, `ckpt_step`, `think_toggle`, `extra_args` (more `llama-server` flags, as a list) |
-| `models.<name>` | The profile of one model: `kv`, `ctx`, `slots`, `spec`, `spec_n`, `temp`, `top_p`, `top_k`, `min_p`, `presence`, `repeat`, `alias` |
+| `models.<name>` | The profile of one model: `kv`, `ctx`, `slots`, `spec`, `spec_n`, `temp`, `top_p`, `top_k`, `min_p`, `presence`, `repeat`, `alias`, and the clients' `thinking_main` and `thinking_coder` (off, on, low, medium or xhigh) |
 | `paths` | `models_dir` (default `~/models/gguf`) |
 | `cache` | The [disk cache](#7-fast-starts-the-disk-cache): `disk_gb` (default 10), `prefix` (each agent's prompt, default true), `sessions` (each session, default true), `save` (`auto` \| `turn` \| `switch` \| `stop`), `auto_s` (default 120 s), `share` (default true), `swa` (`auto` \| `full` \| `window`) |
 
@@ -1727,7 +1787,7 @@ NOTE: CARL does not use `lsof`. On a Mac with a stale network share (for example
 ## 11. Updating the client configs
 
 Run the setup again in these conditions:
-- You downloaded or deleted a model. The lists show only the installed models. The dashboard's Connect tab warns when they are out of date: the tab shows ⚠, and `u` there updates the configs of this Mac.
+- The server runs a different model (single-model mode: the lists show only the model that the server runs), or you downloaded or deleted a model (router mode: the lists show the installed models). The dashboard's Connect tab warns when they are out of date: the tab shows ⚠, and `u` there updates the configs of this Mac.
 - CARL changed (a new version with new plugins or options).
 - You restarted the server with a different `--ctx`, model or number of slots.
 
@@ -1772,8 +1832,8 @@ Then **fully restart OpenCode or Pi.**
   8. A prompt (the key does not show when you type it)
 - Before 1.2.0, the client copy was `~/.config/mtplx/api-key`. If the setup finds no other key, it uses that one. It changes old configs to the new path. It does not delete the old file, because a provider of your own can use it. Delete it yourself when nothing uses it.
 
-**The models.** It writes one entry for each installed model, under the model's own name.
-- Each entry gets its family's thinking options (custom models: the *thinking* field of their card) and its context. The model that runs gets the context of the server. The others get the context of their own settings.
+**The models.** In single-model mode, it writes one entry: the model that the server runs. In router mode, it writes one entry for each installed model. Each entry has the model's own name.
+- Each entry gets its family's thinking options (custom models: the *thinking* field of their card) and its context. The model that runs gets the context of the server. The others (router mode) get the context of their own settings.
 - **The default model** (`model` / `small_model`, Pi's `defaultModel`) is the model that the server runs now, when the server runs a single model that is in the installed list. Else, it is the model that a server start loads (`llama.model`, or Auto fit's choice). In router mode, it is the model that a start loads.
   - Reason: the dashboard saves the model that it applies (`llama.model`), so a restart runs it again. Only `./carl.sh --model NAME` is not saved: the next start without `--model` runs the saved model again.
   - The setup changes the default only if it is unset, or if it still has the value that the setup set before. Your own default model stays.
@@ -1828,6 +1888,7 @@ Both still work alone, for scripts and for the instructions of earlier versions.
 | The VM cannot reach 192.168.42.1:8080 | Since 1.3.0, the server serves only this Mac unless you ask for more. | Start it with `./carl.sh --vm`, or set **Network** to **this Mac and the VM** in Settings (`llama.net = vm`). The Connect tab tells you which one runs. |
 | `error: --vm: no network interface has the address 192.168.42.1. …` | The Fusion network is not up. | Start VMware Fusion, or use `--local`. |
 | The HEALTH card says `✗ The GPU failed (out of memory or a compute error). …` | GPU out-of-memory or compute errors in the log | Restart the server. Make sure that no other large program runs. |
+| The start or the HEALTH card says `llama.cpp … is older than the version that CARL is tested with` (or `… older than the tested version`) | The installed llama.cpp is older than the version that CARL is tested with. Some functions can fail or work differently. | Run `brew upgrade llama.cpp`, then restart the server (Settings > Server, `a`). |
 | `error: port 8080 is in use by process PID (…). Stop it first: …` | A server runs already (one model at a time). | Stop it first: `./carl.sh monitor`, then `q` and `s`. Or use the `kill` command of [Daily use](#stop-the-server-or-keep-it-running). Or only watch it with `./carl.sh monitor`. |
 | `error: another large process (possibly a model) is in memory. …` | A model server runs already: llama.cpp, or a server that started in a different way. Two models do not fit in the GPU memory. | Stop the other server first. The message shows its process ID and its size. If the large process is not a model, start with `ALLOW_SECOND_MODEL=1`. |
 | The prompt progress stops for many minutes, then continues | The Mac went to sleep (lid closed on battery power, or `KEEP_AWAKE=0`). | Connect the power supply and keep the lid open. To check, run `pmset -g log \| grep -E "Sleep\|Wake"`. |
@@ -1943,7 +2004,7 @@ CARL_DOCKER_TESTS=1 python3 -m unittest tests/integration/test_sync_docker.py
 | `./carl.sh tune NAME\|all [--quick\|--long]` | Auto-tunes a model (or every downloaded model) for this Mac: speculation, context, slots (~5–10 min; quick ~4 min; long +10–40 min, up to 192K; stop the server first) |
 | `./carl.sh config [show\|path\|get KEY\|set KEY VALUE\|unset KEY]` | The settings file `~/.config/carl/config.json`. KEY is like `llama.net` or `models.NAME.ctx`. `show` lists every key with what it does, its values and its default. |
 | `./carl.sh cache [show\|trim\|clear]` | The [disk cache](#7-fast-starts-the-disk-cache) that OpenCode and Pi fill: the saved prompts and saved sessions, trim to the limit (and store new saved sessions as changes), remove all |
-| `./carl.sh push` | Sends the client config (the installed models) to the clients on other computers ([Clients on other computers](reference/client-sync.md)) |
+| `./carl.sh push` | Sends the client config (the models for the clients: single-model mode, the model that a start loads; router mode, the installed models) to the clients on other computers ([Clients on other computers](reference/client-sync.md)) |
 | `./carl.sh help COMMAND` | The help for one command: llama, dashboard (or monitor), install, package, models, fit, download, verify, delete, card, tune, config, cache, push. Also the topics env and tuning. `./carl.sh COMMAND --help` and `./carl.sh COMMAND -h` do the same. The help wraps to the width of the terminal. |
 | `./carl.sh -h` | The help: all commands. An unknown command gives one `error:` line and exits with 2. |
 | `./carl.sh --help-adv` | All `llama-server` flags |

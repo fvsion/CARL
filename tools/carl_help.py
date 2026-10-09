@@ -362,12 +362,16 @@ def topics(cmd: str) -> Dict[str, List[Block]]:
                   "abliterated model. It chooses a custom model only when the card of the model says auto_fit yes. "
                   "The goal everyday takes the fast models first (MoE and small dense models). The goal hard-code "
                   "takes the dense models first."),
-            ("p", "Auto fit wants two slots of 96K tokens (the main session and a subagent). If no model fits, it "
-                  "tries one slot of 96K, then the largest context of 32K or more. The model must fit in the memory "
+            ("p", "Auto fit tries these setups in this order, on every Mac: 2 slots of 96K tokens, 2 slots of 64K, "
+                  "2 slots of 48K (the main session and a subagent), then 1 slot of 96K, 64K or 48K. It takes the "
+                  "first setup that a model fits. It never offers less than 48K. The model must fit in the memory "
                   "that a model can use: the GPU memory limit, or the RAM minus the memory kept free, whichever is "
                   "smaller."),
-            ("p", "Memory needed = weights (with an MTP drafter) + context memory + recurrent state + about 1 GiB of "
-                  "buffers. These are estimates: keep some memory free."),
+            ("p", "When MTP does not fit a setup, Auto fit uses n-gram speculation only, before it removes a slot or "
+                  "makes the context smaller. The output says so. A start does the same."),
+            ("p", "Memory needed = weights (the whole file; an MTP drafter while MTP runs) + context memory + "
+                  "recurrent state + compute buffers (by the batch size, -ub, and the context) + with MTP its draft "
+                  "context + 0.75%. These are estimates: keep some memory free."),
             ("h", "EXAMPLES"),
             ("c", [f"{c} fit", f"{c} fit --ram 24", f"{c} fit --goal hard-code --scope downloaded",
                    f"{c} fit --ctx 128k --slots 2"]),

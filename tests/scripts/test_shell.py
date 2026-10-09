@@ -275,8 +275,18 @@ class ServeLlama(unittest.TestCase):
             os.makedirs(conf)
             argv_file = os.path.join(d, "argv")
             fake = os.path.join(bindir, "llama-server")
+            preset_copy = os.path.join(d, "preset.ini")
             with open(fake, "w", encoding="utf-8") as f:
-                f.write(f'#!/usr/bin/env bash\nprintf "%s\\n" "$@" > {argv_file!r}\n')
+                # --version: a made-up version (FAKE_LLAMA_VERSION); a start: its argv, and the router's presets file
+                f.write('#!/usr/bin/env bash\n'
+                        'if [[ "${1:-}" == --version ]]; then\n'
+                        '  echo "version: ${FAKE_LLAMA_VERSION:-0.6.0 (build 11429, commit 0000000)}" >&2\n'
+                        '  echo "built with a fake for tests" >&2; exit 0\n'
+                        'fi\n'
+                        f'printf "%s\\n" "$@" > {argv_file!r}\n'
+                        'prev=""; for a in "$@"; do\n'
+                        f'  [[ "$prev" == --models-preset ]] && cp "$a" {preset_copy!r}\n'
+                        '  prev="$a"; done\n')
             os.chmod(fake, 0o755)
             model = os.path.join(d, "fake.gguf")
             with open(model, "wb") as f:
@@ -299,6 +309,10 @@ class ServeLlama(unittest.TestCase):
                 with open(argv_file, encoding="utf-8") as f:
                     argv = f.read().splitlines()
             key_mode = oct(stat.S_IMODE(os.stat(key).st_mode)) if os.path.exists(key) else ""
+            self.preset = ""                                      # the router's presets file, as llama-server got it
+            if os.path.exists(preset_copy):
+                with open(preset_copy, encoding="utf-8") as f:
+                    self.preset = f.read()
             return p, argv, key_mode
 
 
@@ -468,6 +482,17 @@ class ServeLlamaDrafter(ServeLlama):
         self.assertEqual(argv[argv.index("--spec-type") + 1], "ngram-mod")
         self.assertNotIn("-md", argv)
         self.assertEqual(p.stderr.count("n-gram"), 1, p.stderr)
+
+    def test_router_mode_passes_the_port_and_fit_off(self) -> None:
+        """The router gets --port; each model it starts gets fit = off from the presets' [*] section (llama.cpp 0.6
+        fits by default)."""
+        p, argv, _ = self.run_gem("--router", env={"THINK_TOGGLE": "0", "PORT": "8124"})
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(argv[argv.index("--port") + 1], "8124")
+        self.assertIn("--models-preset", argv)
+        shared = self.preset.split("[*]", 1)[1].split("\n[", 1)[0]
+        self.assertIn("\nfit = off\n", shared)
+        self.assertIn("[gem]", self.preset)
 
     def test_mtp_from_the_environment_without_a_drafter(self) -> None:
         p, argv, _ = self.run_gem(drafter=False, env={"SPEC": "draft-mtp,ngram-mod", "DRAFT": "/etc/passwd"})

@@ -9,16 +9,17 @@ import unittest
 
 from mon_support import GIB, FakeStore
 from monitor.arrange import FILTERS
-from monitor.fmt import ANSI, vlen
+from monitor.fmt import ANSI, cwrap, vlen
 from monitor.api import Endpoint
 from monitor.app import App, Machine
 from monitor.cli import Options
 from monitor.collector import Collector
 from monitor.jobs import Paths, ServerJobs
 from monitor.keys import InputBuffer
+from monitor.model import ServerData
 from monitor.settings import Schema, SettingsService, net_choices
 from monitor.settings_view import SettingsView
-from monitor.state import SP_CACHE, SP_FIT, SP_MODELS, SP_ROUTER, SP_SERVER, SP_TUNE, UIState
+from monitor.state import SP_AGENTS, SP_CACHE, SP_FIT, SP_MODELS, SP_ROUTER, SP_SERVER, SP_TUNE, SUBPANELS, UIState
 from monitor.store import ModelList
 
 DOWN, UP, ESC = "\x1b[B", "\x1b[A", "\x1b"
@@ -54,6 +55,20 @@ class AppTest(unittest.TestCase):
         for c in chunks:
             self.ctl.handle_input(c)
             self.app.frame(self.ctl.data)
+
+    def test_the_llama_cpp_version_is_read_again_for_a_new_server(self) -> None:
+        """HEALTH's version check: the value read at the start until a server runs, then read again for each new
+        server process (a restart after brew upgrade llama.cpp clears the warning). Made-up versions."""
+        app = App(self.app.opts, Machine(16384, 32 * GIB, "version: 0.4.1 (build 9001, commit a)"), self.app.collector,
+                  self.ui, self.app.svc, self.app.jobs, self.app.view, None, None)
+        self.assertEqual(app.llama_check(None).state, "older")
+        reads = ["version: 0.6.0 (build 11429, commit b)"]
+        app.read_llama_version = lambda: reads[-1]
+        self.assertEqual(app.llama_check(101).state, "same")
+        reads.append("version: 0.4.1 (build 9001, commit a)")
+        self.assertEqual(app.llama_check(101).state, "same")          # the same process: not read again
+        self.assertEqual(app.llama_check(102).state, "older")
+        self.assertIsNotNone(self.app.view_ctx().llama)
 
     def test_g_steps_the_new_file_gate_in_connect(self) -> None:
         """The gate is a dashboard setting only (Phase 23.4): g in Connect > Setup steps it off, 1, 2, 3, 5, off and
@@ -147,6 +162,76 @@ class AppTest(unittest.TestCase):
         self.keys("r")                                  # revert: from config.json again on the next frame
         self.assertEqual(self.ui.pending and self.ui.pending["model"], "auto")
 
+    def test_agents_panel_saves_at_once_and_coder_off_shows_the_note(self) -> None:
+        """Phase 23.4.4, the Agents panel (after Models): the model's Main thinking and Coder thinking, saved at once (no
+        restart question, the toast says when the clients use it); Coder thinking off shows the note about a full spec;
+        r undoes this session's changes, x uses the recommended values; the Server panel has no thinking rows."""
+        self.keys("5")
+        self.assertNotIn("Coder thinking", ANSI.sub("", self.screen()))     # moved out of the Server panel
+        self.keys("]", "]")
+        self.assertEqual(self.ui.sp, SP_AGENTS)
+        text = ANSI.sub("", self.screen())
+        for want in ("[Agents]", "AGENTS", "Model            big ▾", "Main thinking", "Coder thinking", "same as main",
+                     "same as main (CARL's default)", "on (catalogue)", "[ Undo my changes (r) ]",
+                     "[ Use the recommended settings (x) ]", "/carl can change the coder's thinking on one computer."):
+            self.assertIn(want, text)
+        bar = text.splitlines()[3]
+        self.assertTrue(bar.index("Models") < bar.index("[Agents]") < bar.index("Auto fit"), bar)   # after Models
+        self.keys(DOWN, "\x1b[C", "\x1b[C")             # Coder thinking: same as main -> off -> on
+        self.assertEqual(self.store.load_config()["models"]["big"], {"thinking_coder": "on"})
+        self.keys("\x1b[D")                             # <- off
+        self.assertEqual(self.store.load_config()["models"]["big"], {"thinking_coder": "off"})
+        self.assertFalse(self.ui.confirm)
+        toast = ANSI.sub("", self.ui.toast_msg[0])
+        # the note alone after "Saved.": its full-spec sentence whole on the message line (two lines at most) at 100
+        # columns too
+        self.assertEqual(toast, "Saved. Coder thinking is off. Use it only with a full spec (spec-kit or a similar "
+                                "tool): a coder without thinking does well only when every requirement is written down.")
+        self.assertLessEqual(len(cwrap(toast, 98)), 2)
+        self.keys("\x1b[C")                             # on: the toast says what CARL saved and when the clients use it
+        self.assertIn("Saved. Coder thinking of big: on. OpenCode and Pi use it after the next update",
+                      ANSI.sub("", self.ui.toast_msg[0]))
+        self.keys("\x1b[D")
+        text = " ".join(" ".join(x.strip(" │") for x in ANSI.sub("", self.screen()).splitlines()).split())
+        self.assertIn("‹ off ›", text)
+        self.assertIn("Coder thinking is off. Use it only with a full spec (spec-kit or a similar tool): a coder without "
+                      "thinking does well only when every requirement is written down.", text)
+        self.assertNotIn("Apply", text)                 # not a server change: nothing to apply
+        self.keys("r")                                  # undo: back to before this session's changes
+        self.assertNotIn("models", self.store.load_config())
+        self.assertIn("big uses its earlier settings again.", ANSI.sub("", self.ui.toast_msg[0]))
+        self.keys(UP, "\x1b[D")                         # Main thinking: on -> off; the coder (same as main) thinks off
+        self.assertEqual(self.store.load_config()["models"]["big"], {"thinking_main": "off"})
+        self.assertIn("Coder thinking is off.", ANSI.sub("", self.screen()))
+        self.keys("x")                                  # the recommended settings
+        self.assertNotIn("models", self.store.load_config())
+        self.assertEqual(self.ui.keys[:4], [("↑↓", "setting"), ("← →", "change"), ("r", "undo"), ("x", "recommended")])
+
+    def test_agents_panel_model_picker(self) -> None:
+        """The Model row: Enter opens the drop-down of the models, ← → the next model; the values are that model's."""
+        self.store.models[1]["thinking"] = "effort"
+        self.keys("5", "]", "]", UP)
+        self.assertEqual(self.ui.agents_row, 0)
+        self.assertIn(("Enter", "choose a model"), self.ui.keys)
+        self.keys("\r")
+        assert self.ui.picker is not None
+        self.assertEqual(self.ui.picker.on_pick, "pickagents")
+        names = [x[0] for x in self.ui.picker.items]
+        self.assertNotIn("auto", names)
+        self.ui.picker.sel = names.index("iq")
+        self.keys("\r")
+        self.assertIsNone(self.ui.picker)
+        text = ANSI.sub("", self.screen())
+        self.assertIn("AGENTS ●○  iq", text)
+        self.assertNotIn("off, low, medium, xhigh", text)          # simple: no Values column
+        self.keys("\t", "L")                            # full: the values each setting takes
+        self.assertIn("off, low, medium, xhigh", ANSI.sub("", self.screen()))
+        self.assertIn("low (catalogue)", text)
+        self.keys("\x1b[C")                             # the next model in the list
+        self.assertNotEqual(self.ui.agents_model, "iq")
+        self.app.ctl.do("agents:pick")                  # a click on the model's name
+        self.assertIsNotNone(self.ui.picker)
+
     def test_server_model_list_keys_and_click(self) -> None:
         self.keys("5")
         p = self.ui.pending
@@ -194,6 +279,9 @@ class AppTest(unittest.TestCase):
         self.keys("]")
         self.assertEqual(self.ui.sp, SP_MODELS)
         self.screen()
+        self.keys("]", DOWN, "\x1b[C", "\r", ESC, "r", "x")   # Agents panel: rows, a value, the picker, undo, defaults
+        self.assertEqual(self.ui.sp, SP_AGENTS)
+        self.assertIn("models.x.rank: not a number", self.screen())
         self.keys("]", DOWN)                            # Auto fit panel
         self.assertEqual(self.ui.sp, SP_FIT)
         self.screen()
@@ -203,7 +291,7 @@ class AppTest(unittest.TestCase):
         self.store.broken = None                       # fixed: the list comes back on the next read
         self.app.svc.models.get(refresh=True)
         self.assertIsNone(self.app.svc.models.error)
-        self.keys("[", "[", "[")
+        self.keys("[", "[", "[", "[")
         self.assertNotIn("The model list is not available", self.screen())
 
     def test_settings_panel_error_is_shown_not_raised(self) -> None:
@@ -341,14 +429,45 @@ class AppTest(unittest.TestCase):
         self.assertIn("OPENCODE CONFIG", self.screen())
 
     def test_connect_warns_when_the_client_lists_are_out_of_date(self) -> None:
+        """Single-model mode (Phase 23.4.4 item 13): the configs list only the model of the server; router mode:
+        every installed model."""
         self.write_client_state({"gone": {}})
         self.keys("2")
         text = " ".join(" ".join(x.strip(" │") for x in ANSI.sub("", self.screen()).splitlines()).split())
-        installed = [m["name"] for m in self.store.models if m["status"] == "downloaded"]
         self.assertIn("⚠ OpenCode on this Mac is out of date.", text)
+        self.assertIn("In single-model mode, OpenCode and Pi list only the model of the server: big.", text)
+        self.assertIn("An update adds big. An update removes gone.", text)
+        self.assertIn("Press u to put the model the server runs in the configs.", text)    # the quick tip
+        self.store.config = {"schema": 1, "llama": {"mode": "router"}}
+        text = " ".join(" ".join(x.strip(" │") for x in ANSI.sub("", self.screen()).splitlines()).split())
+        installed = [m["name"] for m in self.store.models if m["status"] == "downloaded"]
         self.assertIn(f"An update adds {', '.join(installed[:-1])} and {installed[-1]}.", text)
-        self.assertIn("An update removes gone.", text)
-        self.assertIn("Press u to put the installed models", text)          # the quick tip
+        self.assertNotIn("single-model mode", text)
+        self.assertIn("Press u to put the installed models", text)
+
+    def test_a_change_of_the_servers_model_makes_the_configs_out_of_date(self) -> None:
+        """Phase 23.4.4 item 13: in single-model mode the configs list the model of the server; when the server runs
+        another model, this Mac's configs are out of date (u), and the config sent to other computers too (P)."""
+        from monitor import clientsync
+        conf = os.path.join(self.tmp.name, "carl", "config.json")
+        self.app.jobs.paths = Paths(repo=self.tmp.name, logs=self.tmp.name, config_file=conf)
+        self.ctl.data = ServerData(up=True, props={"model_alias": "big"})
+        self.write_client_state({"big": {}})
+        self.assertNotIn("Connect ⚠", self.screen())
+        clientsync.publish(os.path.dirname(conf), self.store.client_models("big", False))
+        self.keys("2")
+        self.assertNotIn("The last config sent is out of date", ANSI.sub("", self.screen()))
+        self.ctl.data = ServerData(up=True, props={"model_alias": "iq"})                 # the server's model changed
+        self.app.svc.models.get(refresh=True)
+        text = " ".join(" ".join(x.strip(" │") for x in ANSI.sub("", self.screen()).splitlines()).split())
+        self.assertTrue(self.app.configs_stale())                         # the tab's ⚠
+        self.assertIn("⚠ OpenCode on this Mac is out of date. In single-model mode, OpenCode and Pi list only the "
+                      "model of the server: iq. An update adds iq. An update removes big.", text)
+        self.assertIn("The last config sent is out of date: the models for the clients changed. Press P to send the "
+                      "new config.", text)
+        self.keys("P")                                                   # sent: the clients get iq
+        self.assertEqual([m["id"] for m in clientsync.published(os.path.dirname(conf))["models"]["models"]], ["iq"])
+        self.assertNotIn("The last config sent is out of date", ANSI.sub("", self.screen()))
 
     def test_connect_install_failure_is_shown(self) -> None:
         self.fake_serve('echo "npm: network down"; exit 3\n')
@@ -587,7 +706,7 @@ class AppTest(unittest.TestCase):
         text = " ".join(ANSI.sub("", self.screen()).split())
         self.assertIn("CLIENTS", text)
         self.assertIn("No other computer yet", text)
-        self.store.client_models = lambda: {"schema": 1, "models": [{"id": "m"}]}   # type: ignore[method-assign]
+        self.store.client_models = lambda *a, **k: {"schema": 1, "models": [{"id": "m"}]}   # type: ignore[method-assign]
         self.keys("P")                                                  # push
         self.assertTrue(self.app.jobs.pushed())
         version = self.app.jobs.pushed().split(" at ")[0]
@@ -648,8 +767,7 @@ class AppTest(unittest.TestCase):
         self.assertNotIn("Connect ⚠", self.screen())           # no client set up here
         self.write_client_state({"gone": {}})
         self.assertIn("2 Connect ⚠", self.screen())
-        installed = {m["name"]: {} for m in self.store.models if m["status"] == "downloaded"}
-        self.write_client_state(installed)
+        self.write_client_state({"big": {}})                       # single-model mode: the model of the server
         self.assertNotIn("Connect ⚠", self.screen())
 
     def test_server_card_sections_at_80_160_and_200_columns(self) -> None:
@@ -691,7 +809,7 @@ class AppTest(unittest.TestCase):
         self.app.jobs.paths = Paths(repo=self.tmp.name, logs=self.tmp.name, config_file=conf)
         for cols in (100, 140, 200):
             with mock.patch.object(shutil, "get_terminal_size", return_value=os.terminal_size((cols, 60))):
-                for tab, sub in [(4, sp) for sp in range(6)] + [(1, 0), (1, 1)]:
+                for tab, sub in [(4, sp) for sp in range(len(SUBPANELS))] + [(1, 0), (1, 1)]:
                     with self.subTest(cols=cols, tab=tab, sub=sub):
                         self.ui.tab = tab
                         if tab == 4:
@@ -706,9 +824,11 @@ class AppTest(unittest.TestCase):
                             self.assertIn("Press Enter to choose a model from the list.", shown)
                         elif (tab, sub) == (4, 1):
                             self.assertIn("Press Enter to use it in the Server panel.", shown)   # the selected model's tip
-                        elif (tab, sub) != (4, 3) or self.store.models:
+                        elif (tab, sub) == (4, SP_AGENTS):    # the mock-up: the intro says it all, no tip
+                            self.assertIn("The thinking of the main session and of the coder, for each model.", shown)
+                        elif (tab, sub) != (4, SP_TUNE) or self.store.models:
                             self.assertIn("quick tip", shown.lower())     # a QUICK TIP section, or a Quick tip heading
-        for tab, sp in [(4, n) for n in range(6)] + [(0, 0), (1, 0), (2, 0), (3, 0)]:   # ? works everywhere
+        for tab, sp in [(4, n) for n in range(len(SUBPANELS))] + [(0, 0), (1, 0), (2, 0), (3, 0)]:   # ? everywhere
             self.ui.tab, self.ui.sp, self.ui.help = tab, sp, False
             self.keys("?")
             self.assertTrue(self.ui.help, (tab, sp))

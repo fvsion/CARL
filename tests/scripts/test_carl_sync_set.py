@@ -132,6 +132,53 @@ class SetTest(unittest.TestCase):
         self.assertEqual(json.loads(self.run_set("NO_SWITCHER=1").stdout)["restart"], [])
         self.assertEqual(json.loads(self.run_set("NO_CACHE=1").stdout)["restart"], ["pi"])
 
+    def test_coder_thinking_is_kept_per_model(self) -> None:
+        """/carl's Coder thinking (Phase 23.4.4): CODER_THINKING=MODEL:VALUE changes that model's value in one line of
+        the env file (the other models keep theirs); the installer gets the whole line; only OpenCode restarts (Pi
+        reads it each time it starts the coder)."""
+        p = self.run_set("CODER_THINKING=qwen3.6-35b-a3b-iq3:off")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("CODER_THINKING=qwen3.6-35b-a3b-iq3:off", self.env_lines())
+        r = json.loads(p.stdout)
+        self.assertEqual(r["changed"], {"CODER_THINKING": {"from": "", "to": "qwen3.6-35b-a3b-iq3:off"}})
+        self.assertEqual((r["restart"], r["new_terminal"]), (["opencode"], False))
+        self.assertEqual(self.installer_env()["CODER_THINKING"], "qwen3.6-35b-a3b-iq3:off")
+        self.run_set("CODER_THINKING=gemma-4-e4b:on")
+        self.assertIn("CODER_THINKING=gemma-4-e4b:on,qwen3.6-35b-a3b-iq3:off", self.env_lines())
+        self.run_set("CODER_THINKING=qwen3.6-35b-a3b-iq3:main", "CODER_THINKING=gemma-4-e4b:xhigh")
+        self.assertIn("CODER_THINKING=gemma-4-e4b:xhigh,qwen3.6-35b-a3b-iq3:main", self.env_lines())
+        self.assertEqual(sum(ln.startswith("CODER_THINKING=") for ln in self.env_lines()), 1)
+        self.assertIn("CLIENTS=both", self.env_lines())                    # the other lines stay
+        self.write_env("CLIENTS=pi\n")
+        self.assertEqual(json.loads(self.run_set("CODER_THINKING=m:low").stdout)["restart"], [])
+        before = self.env_lines()
+        for bad in ("CODER_THINKING=m", "CODER_THINKING=m:high", "CODER_THINKING=:off", "CODER_THINKING=a b:off",
+                    "CODER_THINKING=m:off,n:on"):
+            p = self.run_set(bad)
+            self.assertEqual(p.returncode, 2, bad)
+            self.assertIn("CODER_THINKING takes MODEL:VALUE", p.stderr)
+        self.assertEqual(self.env_lines(), before)
+
+    def test_coder_thinking_default_removes_the_models_value(self) -> None:
+        """/carl's "dashboard default": CODER_THINKING=MODEL:default takes that model's entry out (the dashboard's value
+        applies again); the other models keep theirs; with none left, the line goes and the installer gets no value."""
+        self.run_set("CODER_THINKING=a:off", "CODER_THINKING=b:xhigh")
+        self.assertIn("CODER_THINKING=a:off,b:xhigh", self.env_lines())
+        p = self.run_set("CODER_THINKING=a:default")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("CODER_THINKING=b:xhigh", self.env_lines())
+        r = json.loads(p.stdout)
+        self.assertEqual(r["changed"], {"CODER_THINKING": {"from": "a:off,b:xhigh", "to": "b:xhigh"}})
+        self.assertEqual(self.installer_env()["CODER_THINKING"], "b:xhigh")
+        self.run_set("CODER_THINKING=c:default")                            # a model with no value: nothing changes
+        self.assertIn("CODER_THINKING=b:xhigh", self.env_lines())
+        p = self.run_set("CODER_THINKING=b:default")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertFalse(any(ln.startswith("CODER_THINKING") for ln in self.env_lines()), self.env_lines())
+        self.assertIn("CLIENTS=both", self.env_lines())
+        self.assertNotIn("CODER_THINKING", self.installer_env())
+        self.assertEqual(json.loads(p.stdout)["changed"], {"CODER_THINKING": {"from": "b:xhigh", "to": ""}})
+
     def test_a_failed_installer_is_reported(self) -> None:
         open(os.path.join(self.home, "fail"), "w").close()
         p = self.run_set("NO_REMINDER=1")

@@ -187,6 +187,29 @@ class LauncherTextTest(ServeLlama):
         self.assertNotIn("settings from:", out)
         self.assertEqual(argv[argv.index("--fit") + 1], "off")
 
+    def test_an_older_llama_cpp_is_said_in_one_start_line(self) -> None:
+        """The installed llama.cpp against the tested version (carl_core/domain/llamacpp.py): older says so in one
+        sentence after the first start line; the same, newer or a version that cannot be read say nothing."""
+        p, argv, _ = self.run_serve(env={"FAKE_LLAMA_VERSION": "0.4.1 (build 9001, commit 1234567)"})
+        self.assertEqual(p.returncode, 0, p.stderr)
+        lines = p.stdout.splitlines()
+        first = next(i for i, ln in enumerate(lines) if ln.startswith("CARL starts the server: "))
+        self.assertRegex(lines[first + 1], r"^llama\.cpp 0\.4\.1 \(build 9001\) is older than the version that CARL "
+                                           r"is tested with \(\d+\.\d+\.\d+, build \d+\): update it with brew upgrade "
+                                           r"llama\.cpp\.$")
+        self.assertIn("--parallel", argv)                                       # a warning, not a refusal
+        for version in ("0.6.0 (build 11429, commit 0000000)", "9.9.9 (build 99999, commit 1)", "garbage"):
+            with self.subTest(version=version):
+                p, _, _ = self.run_serve(env={"FAKE_LLAMA_VERSION": version})
+                self.assertEqual(p.returncode, 0, p.stderr)
+                self.assertNotIn("llama.cpp", p.stdout)
+
+    def test_the_port_is_always_passed(self) -> None:
+        """llama.cpp's default port moves (to 9931): CARL passes --port on every start."""
+        p, argv, _ = self.run_serve(env={"PORT": "8123"})
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(argv[argv.index("--port") + 1], "8123")
+
     def test_auto_slots_say_what_auto_chose(self) -> None:
         p, _, _ = self.run_serve(env={"SLOTS": "auto"})
         self.assertEqual(p.returncode, 0, p.stderr)

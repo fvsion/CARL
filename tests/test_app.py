@@ -171,6 +171,27 @@ class LaunchTest(unittest.TestCase):
         w = self.world(gpu=11 * GIB + GIB // 5, config={"models": {"small": {"ctx": 98304}}})
         self.assertEqual(w.carl.launch_env(None, use_config=True)[0]["CTX"], 98304)
 
+    def test_a_named_model_follows_the_order_and_drops_mtp_first(self) -> None:
+        """Phase 23.4.4: a start whose window is not yours takes Auto fit's order (2 x 96K, 2 x 64K, ...);
+        MTP goes (n-gram stays) before a slot or the window. small: 2 x 96K needs 14.1 GiB with MTP, 12.0 GiB
+        with n-gram; 2 x 64K 12.8 and 11.4 GiB."""
+        named = {"llama": {"model": "small"}}
+        env, note = self.world(gpu=int(12.5 * GIB), config=named).carl.launch_env(None, use_config=True)
+        self.assertEqual((env["CTX"], env["SPEC"]), (98304, "ngram-mod"))
+        self.assertIn("spec:auto-fit", str(env["CARL_SOURCES"]))
+        self.assertEqual(note, "MTP does not fit with 2 slots × 96K tokens on this Mac, so the speculation is n-gram "
+                               "only.")
+        env, note = self.world(gpu=int(11.5 * GIB), config=named).carl.launch_env(None, use_config=True)
+        self.assertEqual((env["CTX"], env["SPEC"]), (65536, "ngram-mod"))
+        self.assertEqual(note, "small starts with 2 slots × 64K tokens (q4), the first setup in Auto fit's order that "
+                               "fits: 2 slots × 96K tokens do not fit this Mac. MTP does not fit with 2 slots × 64K "
+                               "tokens on this Mac, so the speculation is n-gram only.")
+        env, note = self.world(gpu=24 * GIB, config=named).carl.launch_env(None, use_config=True)
+        self.assertEqual((env["CTX"], env["SPEC"], note), (98304, "draft-mtp,ngram-mod", None))   # it all fits
+        mine = {"llama": {"model": "small"}, "models": {"small": {"ctx": 98304}}}
+        env, _ = self.world(gpu=int(11.5 * GIB), config=mine).carl.launch_env(None, use_config=True)
+        self.assertEqual(env["CTX"], 98304)                     # your window: the launcher's check decides
+
     def test_launch_env_uses_config(self) -> None:
         w = self.world(config={"llama": {"model": "small", "net": "local"}, "models": {"small": {"ctx": "128k"}}})
         env, note = w.carl.launch_env(None, use_config=True)

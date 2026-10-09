@@ -41,6 +41,12 @@
 //     project was not delivered (its OpenCode process is gone), the plugin delivers what exists: the one result
 //     when the code session finished, else the test session's report and a sentence that the code session did not
 //     finish. A delivered chain's record is removed.
+// Phase 23.4.4 (thinking per role): the coder's thinking follows the model it runs on. Option "coderThinking":
+// { "<provider>/<model>": reasoningEffort } (the dashboard's Coder thinking, written by CARL's client setup). The
+// chat.params hook sets output.options.reasoningEffort on each request of the coder agent (its test and code
+// sessions of the chain too) whose model has an entry; OpenCode sends it as reasoning_effort (checked with OpenCode
+// 1.18.34 against agent-bench's fake server, 2026-10-09). A model without an entry ("same as main", the default):
+// the request stays as it is, so the model entry's own reasoningEffort (the main session's thinking) applies.
 
 import { execFile } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
@@ -128,6 +134,18 @@ export function holdGate(version, missing) {
     return { ok: false, why: `OpenCode ${version} is not a version that CARL checked the background hold on (${VERIFIED_VERSIONS.join(", ")})` };
   }
   return { ok: true, why: `OpenCode ${version}` };
+}
+
+/**
+ * The coder's reasoningEffort for a request (the chat.params hook), or undefined: not the coder, or its model has
+ * no entry in the table (the coder thinks as the main session).
+ * @param {unknown} table the option coderThinking @param {string} agent @param {string} coder CARL's coder name
+ * @param {{ providerID?: unknown, id?: unknown } | undefined} model @returns {string | undefined}
+ */
+export function coderEffort(table, agent, coder, model) {
+  if (!agent || (agent !== coder && !isCoderName(agent)) || typeof table !== "object" || table === null) return undefined;
+  const v = /** @type {Record<string, unknown>} */ (table)[`${String(model?.providerID ?? "")}/${String(model?.id ?? "")}`];
+  return typeof v === "string" && v ? v : undefined;
 }
 
 /** A process still runs (the OpenCode that holds a chain). @param {unknown} pid */
@@ -514,6 +532,13 @@ export default {
     }
 
     return {
+      // the coder's thinking for the model it runs on (Phase 23.4.4): only for the coder, only with an entry
+      "chat.params": async (input, output) => {
+        const effort = coderEffort(opts.coderThinking, String(input?.agent ?? ""), coder, /** @type {any} */ (input)?.model);
+        if (effort && output && typeof output.options === "object" && output.options !== null) {
+          output.options.reasoningEffort = effort;
+        }
+      },
       event: async ({ event }) => {
         const props = /** @type {any} */ (event)?.properties;
         const info = props?.info;

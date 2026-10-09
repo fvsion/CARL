@@ -14,7 +14,7 @@ from typing import Dict, List, Optional, Sequence, Tuple
 from carl_core.domain.units import duration, file_size
 
 from .cards import View, sections, wrapped
-from .clients import Drift
+from .clients import Drift, single_mode
 from .fmt import (reveal, ANSI, B, CYN, DIM, GRN, LW, NA, R, RED, ROW_MARK, ROW_SEP, YEL, CardLine, Ln, Row, aligned,
                   button_rows, buttons, cwrap, draw_card, fit, heading, home_short, indent, row, side_by_side, vlen, wrap)
 from .model import ServerData, clean
@@ -272,9 +272,14 @@ def setup_keys(ui: UIState) -> None:
 
 
 def tip_of(here: List[Tuple[str, str]], stale: Sequence[Drift]) -> str:
-    return ("Press u to put the installed models in the configs." if stale
+    single = any(dr.server for dr in stale)
+    return (("Press u to put the model the server runs in the configs." if single
+             else "Press u to put the installed models in the configs.") if stale
             else "Press i to set up OpenCode and Pi on this Mac." if not here
             else "Press u after you add a model or change the context or slots.")
+
+
+UNSENT = "The last config sent is out of date: the models for the clients changed. Press P to send the new config."
 
 
 def drift_rows(stale: Sequence[Drift]) -> List[CardLine]:
@@ -310,6 +315,9 @@ def setup_lines(v: View, ui: UIState, here: List[Tuple[str, str]], stale: Sequen
         summary = f"{YEL}⚠ out of date{R}"
         L.append(f"{YEL}⚠{R} {' and '.join(dr.client for dr in stale)} on this Mac "
                  f"{'is' if len(stale) == 1 else 'are'} out of date.")
+        server = next((dr.server for dr in stale if dr.server and (dr.added or dr.removed)), "")
+        if server:                      # single-model mode (23.4.4): the server's model changed
+            L += cwrap(single_mode(server), tw)
         L += drift_rows(stale)
     elif here:
         summary = f"{GRN}✓ set up{R}"
@@ -342,6 +350,8 @@ def setup_lines(v: View, ui: UIState, here: List[Tuple[str, str]], stale: Sequen
     L += cwrap("3. Send the config to the computers that sync.", tw, "   ")
     L.append(row("   Sync", f"{GRN}{v.listeners} connected now{R}" if v.api
                  else f"{YEL}Off: the dashboard API is not running.{R}"))
+    if v.unsent:
+        L += cwrap(f"{YEL}{UNSENT}{R}", tw, "   ")
     L.append(buttons("   ", [("Send the config (P)", "inspush")]))
     L += ["", heading("By hand", tw)]
     L.append(row("address", f"{B}{v.base}/v1{R}"))
@@ -561,6 +571,10 @@ def clients_lines(v: View, here: List[Tuple[str, str]], stale: Sequence[Drift], 
         L.append(row("version", version))
     L.append(row("sync address", f"{GRN}{v.api}{R}" if v.api
                  else f"{YEL}Off: other computers cannot sync now.{R}"))
+    if v.unsent:
+        L += ["", *para(f"{YEL}{UNSENT}{R}", tw=tw)]
+        if v.single:
+            L += para(single_mode(v.single), tw=tw)
     L.append("")
     head, cells, notes = client_cells(v, here, stale, version, is_full)
     _, one = table(head, cells)

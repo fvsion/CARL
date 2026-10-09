@@ -5,10 +5,19 @@
 // place. No explanations (user, 2026-10-08: "a control panel, not the readme").
 //
 // panel(client) -> { title, rows }: each row is { id, label, state, kind } with its actions: a switch (on / off), a
-// choice (web search: exa, parallel, off), a view (the sync service: label rows) or an action (check for a new
-// config). A switch runs `carl-sync.py set KEY=VALUE` (the setup's switches, then the config step again), so /carl,
-// ./setup and the dashboard's sync use the same switches. act() runs an action and says what happened (the toast).
-// The words follow reference/glossary.md and the 23.2 writing rules.
+// choice (web search: exa, parallel, off), a list (Coder subagent: its own rows), a view (the sync service: label
+// rows) or an action (check for a new config). A switch runs `carl-sync.py set KEY=VALUE` (the setup's switches,
+// then the config step again), so /carl, ./setup and the dashboard's sync use the same switches. act() runs an
+// action and says what happened (the toast). The words follow reference/glossary.md and the 23.2 writing rules.
+//
+// Phase 23.4.4: the coder's settings are a sub-list under one top-level row "Coder subagent" (its state: the coder's
+// on / off, and a "›": it opens a list): Coder, Background coder, Delegation reminder (these two only while the coder
+// is on), Coder thinking and Coder model. Coder thinking overrides the dashboard's Coder thinking on this computer
+// only, per model (CODER_THINKING=MODEL:VALUE in client-install.env, through `carl-sync.py set`; the setup merges it;
+// "dashboard default" removes the model's entry). The row is for the model the coder runs on: Coder model "same as
+// main" is the model of the session /carl is opened in (the front end passes it: Session); without one (no session
+// yet, a model that is not CARL's) the config's default model. Coder model has one value now ("same as main"; Phase
+// 23.4.5 adds other models): a choice with one value opens nothing.
 import { spawn } from "node:child_process";
 import * as fs from "node:fs";
 import { homedir } from "node:os";
@@ -183,22 +192,35 @@ export function when(stamp, now = new Date()) {
 }
 
 /**
- * @typedef {{ id: string, args: string[], busy: string, row?: string, want?: string, name?: string }} Action
+ * @typedef {{ id: string, args: string[], busy: string, row?: string, want?: string, name?: string, did?: string,
+ *             live?: Client[] }} Action
  *   busy: the row's state while it runs ("turning off…"); a switch's action also has the row it changes, the state
- *   it asks for and the part's name in a sentence (the toast).
+ *   it asks for and the part's name in a sentence (the toast); did: the toast's first sentences instead of "CARL set
+ *   NAME to WANT."; live: the clients that use the change without a restart (Pi reads the coder's thinking each time
+ *   it starts the coder).
  * @typedef {object} Row
  * @property {string} id
  * @property {string} label
  * @property {string} state      short, lower case: on, off, exa, connected; "" for an action
- * @property {"switch" | "choice" | "view" | "action"} kind
- *   switch: Enter turns it on or off; choice: Enter opens `values`; view: Enter shows `view`; action: Enter runs it
+ * @property {"switch" | "choice" | "list" | "view" | "action"} kind
+ *   switch: Enter turns it on or off; choice: Enter opens `values` (nothing with fewer than two); list: Enter opens
+ *   `rows`; view: Enter shows `view`; action: Enter runs it
+ * @property {string} [value]    a choice's current value when `state` shows it in words ("main": same as main)
  * @property {string[]} [values] a choice's values
+ * @property {Record<string, string>} [titles] a choice's values in words, where they differ ("main": same as main)
  * @property {Record<string, string>} [notes] a note next to some of a choice's values (where web search queries go)
  * @property {Record<string, Action>} [actions] a switch's or a choice's action for each other state
  * @property {Action} [action]  an action row's action
+ * @property {Row[]} [rows]     a list's rows
+ * @property {string} [listTitle] the list's title
+ * @property {boolean} [arrow]  a list row whose state shows a "›" (it opens a list: Coder subagent)
+ * @property {string} [choiceTitle] a choice's title over its values, where it differs from the label
  * @property {[string, string][]} [view] a view row's label rows
  * @property {string} [viewTitle] the view's title
  * @typedef {{ title: string, rows: Row[] }} Panel
+ * @typedef {{ model?: string }} Session
+ *   the session /carl is opened in: its model as "provider/model" (OpenCode: the newest message of the session;
+ *   Pi: ctx.model); none on OpenCode's home screen or before the first message
  *   title: "CARL", or "CARL" and the restart note
  * @typedef {{ message: string, ok: boolean, warn?: boolean }} Said
  *   what the toast or the notice says; ok false: an error; warn: a warning (the change is done)
@@ -312,12 +334,161 @@ function pluginOptions(plugins, name) {
   return undefined;
 }
 
-/** The parts' rows, in the order of their groups: coder, tools, side panels, server. @param {Client} client @returns {Row[]} */
-function parts(client) {
+/** Coder thinking's values for a model of this kind, in the dashboard's order (its Agents panel), after "default"
+ * (dashboard default: no value of this computer). @param {string} kind */
+export function thinkingValues(kind) {
+  return ["default", "main", ...(kind === "effort" ? ["off", "low", "medium", "xhigh"] : ["off", "on"])];
+}
+
+/** A thinking value in words ("main": same as main; "default": dashboard default). @param {string} v */
+export function thinkingWord(v) {
+  return v === "main" ? "same as main" : v === "default" ? "dashboard default" : v;
+}
+
+const THINKING = new Set(["main", "on", "off", "low", "medium", "xhigh"]);
+const MODEL_ID = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+const FULL_SPEC = "Use it only with a full spec (spec-kit or a similar tool).";
+
+/**
+ * @typedef {{ id: string, kind: string, main: string, coder: string, dashboard: string, override: boolean }} StateModel
+ *   main, coder: the values written (the override merged); dashboard: the dashboard's Coder thinking ("" when not
+ *   known: a state file from before it was written); override: this computer has a value of its own (CODER_THINKING)
+ */
+
+/**
+ * /carl's Coder thinking of this computer (CODER_THINKING=MODEL:VALUE,... in client-install.env) as {model: value}.
+ * @param {string | undefined} text @returns {Record<string, string>}
+ */
+export function thinkingOverrides(text) {
+  /** @type {Record<string, string>} */
+  const out = {};
+  for (const part of String(text ?? "").split(",")) {
+    const [id, value] = part.trim().split(":");
+    if (id && MODEL_ID.test(id) && THINKING.has(value ?? "")) out[id] = String(value);
+  }
+  return out;
+}
+
+/**
+ * The models CARL wrote into this client's config, from its state file (carl.json "models": each model's thinking
+ * kind, the main session's thinking and the coder's, /carl's choice of this computer merged, and the dashboard's
+ * coder value): [] when none. over: this computer's overrides (thinkingOverrides).
+ * @param {unknown} models @param {Record<string, string>} [over]
+ * @returns {StateModel[]}
+ */
+export function stateModels(models, over = {}) {
+  return Object.entries(obj(models)).filter(([id]) => MODEL_ID.test(id)).map(([id, m]) => {
+    const o = obj(m);
+    const val = (/** @type {unknown} */ v, /** @type {string} */ d) => (typeof v === "string" && THINKING.has(v) ? v : d);
+    const coder = val(o.coder, "main");
+    const override = Object.hasOwn(over, id);
+    return { id, kind: o.thinking === "effort" ? "effort" : "on-off", main: val(o.main, "on"), coder,
+             dashboard: val(o.dashboard, override ? "" : coder), override };
+  });
+}
+
+/**
+ * The model the coder runs on, of the models in the state file: Coder model "same as main" (the only value now) is
+ * the session's model; without a session, or with a model that is not CARL's, the config's default model, else the
+ * first. from: "session" or "default". undefined when the state file has no models.
+ * @param {StateModel[]} models @param {string[]} providers CARL's provider ids in this client
+ * @param {Session} session @param {string} fallback the config's default model ("provider/model")
+ * @returns {{ m: StateModel, from: "session" | "default" } | undefined}
+ */
+export function coderModel(models, providers, session, fallback) {
+  const find = (/** @type {string | undefined} */ ref) => {
+    const at = String(ref ?? "").indexOf("/");
+    if (at < 1) return undefined;
+    const prov = String(ref).slice(0, at);
+    const id = String(ref).slice(at + 1);
+    return providers.includes(prov) ? models.find((m) => m.id === id) : undefined;
+  };
+  const m = find(session.model);
+  if (m) return { m, from: "session" };
+  const d = find(fallback) ?? models[0];
+  return d ? { m: d, from: "default" } : undefined;
+}
+
+/** CARL's provider ids in a client's state file (carl.json "providers"; ours is "llamacpp", or "carl" next to a user's
+ * own "llamacpp"). @param {JsonObject} st @returns {string[]} */
+function providerIds(st) {
+  const ids = Object.values(obj(st.providers)).filter((v) => typeof v === "string");
+  return ids.length ? ids.map(String) : ["llamacpp"];
+}
+
+/** Does the coder think as nothing (off) with this value? @param {StateModel} m @param {string} v */
+function thinksOff(m, v) {
+  const main = m.main === "off";
+  if (v === "off" || (v === "main" && main)) return true;
+  return v === "default" && (m.dashboard === "off" || (m.dashboard === "main" && main));
+}
+
+/**
+ * Coder thinking for the model the coder runs on: its values, the current one ("dashboard default" when this computer
+ * has no value of its own), and an action for each other value (CODER_THINKING=MODEL:VALUE; "default" removes the
+ * model's entry). Grey notes: what "dashboard default" gives, and the main session's thinking with that model (from
+ * the config's default model when /carl has no session). Off (or a value that gives off) says to use a full spec.
+ * @param {StateModel} m @param {"session" | "default"} from @returns {Row}
+ */
+function thinkingRow(m, from) {
+  const values = thinkingValues(m.kind);
+  const cur = m.override && values.includes(m.coder) ? m.coder : "default";
+  const name = `the coder's thinking with ${m.id}`;
+  const main = thinkingWord(m.main);
+  /** @type {Record<string, Action>} */
+  const actions = {};
+  for (const v of values.filter((x) => x !== cur)) {
+    const words = v === "default" && m.dashboard ? `${thinkingWord(v)} (${thinkingWord(m.dashboard)})` : thinkingWord(v);
+    actions[v] = { id: `set:CODER_THINKING=${m.id}:${v}`, args: ["set", `CODER_THINKING=${m.id}:${v}`],
+                   busy: v === "off" ? "turning off…" : `switching to ${thinkingWord(v)}…`, row: "thinking", want: v, name,
+                   did: `CARL set ${name} to ${words} on this computer.${thinksOff(m, v) ? ` ${FULL_SPEC}` : ""}`,
+                   live: ["pi"] };
+  }
+  /** @type {Record<string, string>} */
+  const notes = { main: `${from === "session" ? "the main session's" : "the default model's"} thinking (${main})` };
+  if (m.dashboard) notes.default = dashText(m);
+  return { id: "thinking", label: "Coder thinking", state: thinkingWord(cur), value: cur, kind: "choice", values,
+           titles: { main: thinkingWord("main"), default: thinkingWord("default") }, notes, actions,
+           choiceTitle: `Coder thinking with ${m.id}` };
+}
+
+/** What "dashboard default" gives for this model, in words: "medium", "same as main (low)". @param {StateModel} m */
+function dashText(m) {
+  return m.dashboard === "main" ? `${thinkingWord("main")} (${thinkingWord(m.main)})` : thinkingWord(m.dashboard);
+}
+
+/**
+ * The Coder thinking row: the model the coder runs on (coderModel). None when the state file has no models (an
+ * install from before 23.4.4: the next setup or sync writes them).
+ * @param {StateModel[]} models @param {string[]} providers @param {Session} session @param {string} fallback
+ * @returns {Row[]}
+ */
+function coderThinking(models, providers, session, fallback) {
+  const c = coderModel(models, providers, session, fallback);
+  return c ? [thinkingRow(c.m, c.from)] : [];
+}
+
+/**
+ * The Coder model row: "same as main" (the coder runs on the main session's model). One value now: Enter opens
+ * nothing; Phase 23.4.5 adds the other models of the client's config as values (and Coder thinking then follows the
+ * model chosen here).
+ * @returns {Row}
+ */
+function coderModelRow() {
+  return { id: "coder-model", label: "Coder model", state: thinkingWord("main"), value: "main", kind: "choice",
+           values: ["main"], titles: { main: thinkingWord("main") }, actions: {} };
+}
+
+/**
+ * The parts' rows, in the order of their groups: coder, tools, side panels, server.
+ * @param {Client} client @param {Session} session @returns {Row[]}
+ */
+function parts(client, session) {
   const env = switches();
+  const over = thinkingOverrides(env.CODER_THINKING);
   const envOn = (/** @type {string} */ key) => env[key] !== "1";
   const oc = text(join(CARL, "opencode.env"));
-  let coderOn, bg, reminder, browser, search;
+  let coderOn, bg, reminder, browser, search, models, providers, fallback;
   /** @type {Row[]} */
   let panels = [];
   /** @type {Row[]} */
@@ -335,6 +506,10 @@ function parts(client) {
     reminder = coderOn && deleg ? deleg.reminder !== false : envOn("NO_REMINDER");
     browser = Boolean(obj(cfg.mcp)["carl-browser"]);
     search = openCodeSearch(oc);
+    const st = obj(json(join(OC, "carl.json")));
+    models = stateModels(st.models, over);
+    providers = providerIds(st);
+    fallback = typeof cfg.model === "string" ? cfg.model : "";
     lsp = [switchRow("lsp", "LSP", "LSP", "NO_LSP", cfg.lsp === true && /OPENCODE_EXPERIMENTAL_LSP_TOOL=1/.test(oc))];
     panels = [switchRow("sidebar", "Subagents side panel", "the subagents side panel", "NO_SIDEBAR", tui.includes("subagents-sidebar")),
               switchRow("switcher", "Session switcher", "the session switcher", "NO_SWITCHER", tui.includes("session-switcher"))];
@@ -347,15 +522,26 @@ function parts(client) {
     coderOn = exists(join(PI, "agents", "coder.md")) || exists(join(PI, "agents", "carl-coder.md"));
     bg = coderOn ? st.background_subagents !== false : envOn("NO_BACKGROUND_SUBAGENTS");
     reminder = coderOn ? obj(st.delegation).reminder !== false : envOn("NO_REMINDER");
+    models = stateModels(st.models, over);
+    providers = providerIds(st);
+    const sett = obj(json(join(PI, "settings.json")));
+    fallback = typeof sett.defaultProvider === "string" && typeof sett.defaultModel === "string"
+      ? `${sett.defaultProvider}/${sett.defaultModel}` : "";
     browser = Boolean(servers["carl-browser"]);
     search = piSearch(servers["carl-web-search"]);
     server = [switchRow("cache", "Disk cache", "the disk cache", "NO_CACHE", exists(join(PI, "extensions", "carl-cache", "index.ts")))];
   }
-  return [
-    switchRow("coder", "Coder subagent", "the coder subagent", "NO_CODER", coderOn),
-    // they do nothing without the coder (user, 2026-10-08: they disappear while it is off)
+  // the coder's rows: a sub-list (user, 2026-10-09); without the coder only its switch (user, 2026-10-08: the
+  // others do nothing then, and they disappear)
+  const coder = [
+    switchRow("coder", "Coder", "the coder subagent", "NO_CODER", coderOn),
     ...(coderOn ? [switchRow("background", "Background coder", "the background coder", "NO_BACKGROUND_SUBAGENTS", bg),
-                   switchRow("reminder", "Delegation reminder", "the delegation reminder", "NO_REMINDER", reminder)] : []),
+                   switchRow("reminder", "Delegation reminder", "the delegation reminder", "NO_REMINDER", reminder),
+                   ...coderThinking(models, providers, session, fallback), coderModelRow()] : []),
+  ];
+  return [
+    { id: "subagent", label: "Coder subagent", state: coderOn ? "on" : "off", kind: "list", listTitle: "Coder subagent",
+      arrow: true, rows: coder },
     switchRow("browser", "Browser", "the browser", "NO_BROWSER", browser),
     webRow(search),
     ...lsp,
@@ -364,11 +550,58 @@ function parts(client) {
   ];
 }
 
-/** Every row for this client (the parts, then the config sync) and the title. @param {Client} client @returns {Panel} */
-export function panel(client) {
-  const rows = [...parts(client), ...syncRows()];
-  const changed = rows.filter((r) => BEFORE.has(r.id) && BEFORE.get(r.id) !== r.state).length
-    + (appliedSinceStart() ? 1 : 0);
+/** Every row of a panel, the rows of its lists too (depth first). @param {Row[]} rows @returns {Row[]} */
+export function allRows(rows) {
+  return rows.flatMap((r) => [r, ...allRows(r.rows ?? [])]);
+}
+
+/**
+ * The rows of the list at `path` (the ids of the list rows opened from the top; [] for the top), or undefined when
+ * that list is not there now (the coder went off).
+ * @param {Row[]} rows @param {string[]} path @returns {Row[] | undefined}
+ */
+export function rowsAt(rows, path) {
+  let now = rows;
+  for (const id of path) {
+    const r = now.find((x) => x.id === id);
+    if (!r || r.kind !== "list") return undefined;
+    now = r.rows ?? [];
+  }
+  return now;
+}
+
+/** A row's value: what a choice has (its `value`), else its state. @param {Row} r */
+function valueOf(r) {
+  return r.value ?? r.state;
+}
+
+/**
+ * Does Enter on this row open something (a sub-list, its values, a view)? The Coder model row opens nothing while
+ * it has one value.
+ * @param {Row} r
+ */
+export function opens(r) {
+  return Boolean(r.arrow) || r.kind === "view" || (r.kind === "choice" && (r.values?.length ?? 0) > 1);
+}
+
+/**
+ * A row's state as the lists show it: a row that opens something gets " ›" (user, 2026-10-09: "the Coder subagent
+ * needs a little right arrow to indicate it expands"; "add the arrow to other rows that open something"); busy: the
+ * state while an action runs.
+ * @param {Row} r @param {string} [busy]
+ */
+export function shownState(r, busy) {
+  return busy ?? (opens(r) ? `${r.state} ›` : r.state);
+}
+
+/**
+ * Every row for this client (the parts, then the config sync) and the title.
+ * @param {Client} client @param {Session} [session] the session /carl is opened in @returns {Panel}
+ */
+export function panel(client, session = {}) {
+  const rows = [...parts(client, session), ...syncRows()];
+  const changed = allRows(rows).filter((r) => r.kind !== "list" && BEFORE.has(r.id) && BEFORE.get(r.id) !== valueOf(r))
+    .length + (appliedSinceStart() ? 1 : 0);
   const title = changed ? `Restart ${appName(client)} to use ${changed === 1 ? "1 change" : `${changed} changes`}.` : "";
   return { title, rows };
 }
@@ -400,11 +633,12 @@ function parsed(out) {
  * @param {number} code
  * @param {Client} client
  * @param {JsonObject} [result]
+ * @param {Session} [session] the session /carl is opened in (the Coder thinking row's model)
  * @returns {Said}
  */
-export function outcome(action, code, client, result = {}) {
+export function outcome(action, code, client, result = {}, session = {}) {
   if (code === -1) return { ok: false, message: "CARL cannot find carl-sync.py. Run the setup again." };
-  if (action.args[0] === "set") return switchOutcome(action, code, client, result);
+  if (action.args[0] === "set") return switchOutcome(action, code, client, result, session);
   if (code !== 0) {
     return { ok: false, message: action.id.startsWith("auto")
       ? "CARL could not change the setting. Sync service in /carl shows the error."
@@ -423,27 +657,32 @@ export function outcome(action, code, client, result = {}) {
  * After `carl-sync.py set`. The coder turned on while the server runs 1 slot (the slot count the setup reads for
  * its coder rule; not known: no warning) is a warning (user, 2026-10-09: it turns the coder on, and says that this
  * system has only one slot).
- * @param {Action} action @param {number} code @param {Client} client @param {JsonObject} result @returns {Said}
+ * @param {Action} action @param {number} code @param {Client} client @param {JsonObject} result
+ * @param {Session} session @returns {Said}
  */
-function switchOutcome(action, code, client, result) {
+function switchOutcome(action, code, client, result, session) {
   if (code !== 0) {
     const why = typeof result.error === "string" && result.error ? result.error
       : "Its output is in ~/.config/carl/client-sync.log.";
     return { ok: false, message: `CARL could not change the setting. ${why}` };
   }
   const name = action.name ?? "the part";
-  const now = panel(client).rows.find((r) => r.id === action.row)?.state ?? "";
+  const row = allRows(panel(client, session).rows).find((r) => r.id === action.row);
+  const now = row ? valueOf(row) : "";
   if (action.want && now !== action.want) {
-    return { ok: false, message: `CARL changed the setting, but ${name} is still ${now || "the same"}. The setup's `
+    const shown = row?.state || "the same";
+    return { ok: false, message: `CARL changed the setting, but ${name} is still ${shown}. The setup's `
       + "output is in ~/.config/carl/client-sync.log." };
   }
-  const did = action.want === "on" || action.want === "off" ? `CARL turned ${name} ${action.want}.`
-    : `CARL set ${name} to ${action.want}.`;
+  const did = action.did ?? (action.want === "on" || action.want === "off" ? `CARL turned ${name} ${action.want}.`
+    : `CARL set ${name} to ${action.want}.`);
   const apps = /** @type {Client[]} */ ((Array.isArray(result.restart) ? result.restart : [client])
     .filter((c) => c === "opencode" || c === "pi"));
   const oneSlot = action.row === "coder" && action.want === "on" && result.slots === 1;
   const said = oneSlot ? `${did} This server runs 1 slot: the coder takes the main session's slot while it works.` : did;
-  const message = restartNotice(client, said, apps, result.new_terminal === true);
+  // no client to restart (the change reaches them at once): no restart sentence
+  const message = Array.isArray(result.restart) && !apps.length ? said
+    : restartNotice(client, said, apps, result.new_terminal === true);
   return oneSlot ? { ok: true, warn: true, message } : { ok: true, message };
 }
 
@@ -481,15 +720,16 @@ export function run(args) {
  * opened row can say that OpenCode or Pi must restart.
  * @param {Action} action
  * @param {Client} client
+ * @param {Session} [session] the session /carl is opened in
  * @returns {Promise<Said>}
  */
-export async function act(action, client) {
-  if (action.row && !BEFORE.has(action.row)) {
-    const cur = panel(client).rows.find((r) => r.id === action.row);
-    if (cur) BEFORE.set(action.row, cur.state);
+export async function act(action, client, session = {}) {
+  if (action.row && !BEFORE.has(action.row) && !action.live?.includes(client)) {
+    const cur = allRows(panel(client, session).rows).find((r) => r.id === action.row);
+    if (cur) BEFORE.set(action.row, valueOf(cur));
   }
   const r = await exec(action.args);
-  return outcome(action, r.code, client, parsed(r.out));
+  return outcome(action, r.code, client, parsed(r.out), session);
 }
 
 /**

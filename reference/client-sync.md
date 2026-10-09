@@ -12,7 +12,7 @@ At each server start, the launcher writes two files into `client/` (`host/common
 | `api-key` | The server's API key | 0600 |
 
 - Git ignores both files.
-- `./carl.sh package` (or `z` in the dashboard's Connect tab) puts them in a zip with the client folder: `dist/carl-client-VERSION-HOST.zip` (`tools/carl_core/adapters/client_package.py`). The file list is `git ls-files client/`, the entry points `setup` and `setup.command`, and the generated files `remote.json`, `api-key`, `installed-models.json` (the installed models now) and `VERSION`. The zip has mode 0600. In the zip, the key file and `remote.json` have mode 0600 and the scripts 0755. `unzip` and the Finder keep these modes.
+- `./carl.sh package` (or `z` in the dashboard's Connect tab) puts them in a zip with the client folder: `dist/carl-client-VERSION-HOST.zip` (`tools/carl_core/adapters/client_package.py`). The file list is `git ls-files client/`, the entry points `setup` and `setup.command`, and the generated files `remote.json`, `api-key`, `installed-models.json` (the models for the clients now: single-model mode, the model that the server runs; router mode, the installed models) and `VERSION`. The zip has mode 0600. In the zip, the key file and `remote.json` have mode 0600 and the scripts 0755. `unzip` and the Finder keep these modes.
 - `package` refuses a server that serves only this Mac (an address such as 127.0.0.1 in `remote.json`): it writes nothing, and it tells you how to change the network. `--anyway` writes the zip all the same.
 - On the other computer: `unzip carl-client-*.zip && cd carl-client && ./setup`. The setup needs no arguments: it reads `remote.json` and `api-key`. It sets the mode of the key file to 0600 again.
 - An update is the same: a new zip unzipped over the old folder (`unzip -o`), then `./setup`.
@@ -38,7 +38,7 @@ The dashboard serves a small API while it runs (`tools/monitor/cacheapi.py`). It
 
 ## Send the config to the clients
 
-The server decides some parts of the client config: the installed models, their contexts and the default model. When these change, send them:
+The server decides some parts of the client config: the models (single-model mode: the model that the server runs; router mode: the installed models), their contexts, their thinking settings and the default model. When these change, send them. The Connect tab says when the last config sent is out of date, for example after the server starts a different model in single-model mode:
 
 1. On the Mac, open the dashboard. Push `2` for the Connect tab.
 2. Push `P` (or click **[ Send the config (P) ]**; in the Clients sub-tab: **[ Send the config to them (P) ]**). Or run `./carl.sh push`.

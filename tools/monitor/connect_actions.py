@@ -9,7 +9,7 @@ from typing import Callable, Optional
 
 from . import fsio, system
 from .api import FETCH_ERRORS, Endpoint
-from .clients import LABELS, config_text, fill_template, masked, model_list, served
+from .clients import LABELS, config_text, fill_template, masked, model_list, served, serving
 from .collector import SHAPE_ERRORS
 from .jobs import ServerJobs
 from .fmt import R, RED
@@ -72,7 +72,7 @@ class ConnectActions:
         if rel:     # read each time: install.sh may update the bundle while the monitor runs
             templates[kind] = fill_template(fsio.read_text(os.path.join(self.repo, "client", rel)), ep.host, ep.port, self.home)
         s = served(d, self.alias_from_server)
-        text = config_text(kind, s, templates, ep.base, ep.key, model_list(self.models.client_list(), s))
+        text = config_text(kind, s, templates, ep.base, ep.key, model_list(self.models.client_list(*serving(d)), s))
         return masked(text, ep.key) if mask else text
 
     def alias_from_server(self) -> Optional[str]:
@@ -103,7 +103,7 @@ class ConnectActions:
         ui.tab = 1
         running = bool(ui.install and not ui.install.done)
         if act == "inspush":
-            self.jobs.push_client_config()
+            self.jobs.push_client_config(*serving(self.snapshot()))
             return
         if act in ("insall", "insconfig"):
             if running:
@@ -131,7 +131,7 @@ class ConnectActions:
         ui = self.ui
         ui.tab, ui.connect_sp = 1, 0
         if act == "pkgmake":
-            self.jobs.make_package()
+            self.jobs.make_package(*serving(self.snapshot()))
         elif act == "pkgshow":
             self.jobs.show_package()
         elif act == "pkgclose":

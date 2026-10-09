@@ -21,6 +21,7 @@ from agentbench import events as ev
 from agentbench import report, results
 
 NODE = shutil.which("node")
+REPO = bf.REPO
 TOML = sp.BRIEF
 JSON_BRIEF = json.dumps({
     "mode": "code", "tests": "new", "goal": "Add a readability module to textstats.",
@@ -86,6 +87,14 @@ class CheckTest(unittest.TestCase):
         pi = bf.collect("pi", [call("subagent", {"tasks": [{"agent": "coder", "task": TOML * 3}]})])
         self.assertEqual(len(pi[0]["text"]), len(TOML) * 3)
         self.assertFalse(pi[0]["refused"])                                     # no result yet: not refused
+
+    def test_one_checker_the_command_of_the_client_plugins(self) -> None:
+        """The harness runs CARL's brief check command (client/shared/carl-brief-check.mjs, installed with the client
+        plugins) in its --json mode: the same answer as the command gives a user."""
+        self.assertEqual(os.path.relpath(bf.BRIEF_CLI, REPO), os.path.join("client", "shared", "carl-brief-check.mjs"))
+        p = subprocess.run([NODE, bf.BRIEF_CLI, "-"], input=TOML, capture_output=True, text=True, timeout=60)
+        self.assertEqual((p.returncode, p.stdout), (0, "Format: TOML\nThe brief is valid.\n"), p.stderr)
+        self.assertTrue(bf.check_texts([TOML])[0]["valid"])
 
     def test_without_node(self) -> None:
         out = bf.check_texts(["x"], node="/nonexistent/node")

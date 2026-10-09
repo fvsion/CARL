@@ -104,6 +104,7 @@ Switches (environment variables, for example NO_CACHE=1 ./install.sh):
   CODER=1, NO_CODER=1\tAlways install the coder subagent, or never. Without them, the script installs the coder when the server runs 2 or more slots.
   NO_BACKGROUND_SUBAGENTS=1\tThe main session waits for the coder.
   NO_REMINDER=1\tNo reminder about the coder at the end of each message of the main session (it is on by default: it is what moves large and stuck tasks to the coder).
+  CODER_THINKING=MODEL:VALUE,...\tThe coder's thinking on this computer, per model, over the dashboard's Coder thinking. VALUE: main (same as main), on, off, low, medium or xhigh. /carl sets it.
   NO_BROWSER=1\tDo not install the browser tools.
   BROWSER_HEADED=1\tShow the browser on the screen.
   WEB_SEARCH=PROVIDER\texa (the default), parallel or off.
@@ -304,22 +305,30 @@ say "Coder subagent: $([[ $CODER == 1 ]] && echo on || echo off). $coder_src"
 # carl-sync.py set (the /carl panel) asks for the slot count it read: /carl warns when it turns the coder on with 1 slot
 if [[ -n "${CARL_SLOTS_OUT:-}" && -n "$slots" ]]; then printf '%s\n' "$slots" > "$CARL_SLOTS_OUT" 2>/dev/null || true; fi
 
-# --- The installed models: one OpenCode / Pi entry each (client/carl_models.py) ---
+# --- The models: one OpenCode / Pi entry each (client/carl_models.py) ---
 # On the server Mac CARL lists them (tools/carl.py client-models) into
 # installed-models.json next to this script, so a copy of this folder carries the
-# list into a VM. Without the list (a bundle copied before 1.3.0): the ids the server
-# reports on /v1/models, as generic entries. Re-run after a download or a delete
-# (the dashboard's Connect tab says when the list is out of date).
+# list into a VM. Single-model mode (Phase 23.4.4): only the model the server runs;
+# router mode: every installed model. Without the list (a bundle copied before 1.3.0):
+# the ids the server reports on /v1/models, as generic entries. Re-run after a
+# download, a delete or a change of the server's model (the dashboard's Connect tab
+# says when the list is out of date).
 MODELS_FILE="$HERE/installed-models.json"
+# the server's /props: the model it runs (single-model mode) or "router"
+served=$(api_get "http://$HOST:$LLAMA_PORT/props" 2>/dev/null \
+         | python3 -c 'import json,sys; p=json.load(sys.stdin); print("router" if p.get("role") == "router" else "model " + (p.get("model_alias") or ""))' 2>/dev/null || true)
+running=""; router_arg=()
+case "$served" in
+  router) router_arg=(--router) ;;
+  "model "*) running="${served#model }" ;;
+esac
 if [[ -f "$HERE/../tools/carl.py" ]]; then
-  if python3 "$HERE/../tools/carl.py" client-models > "$MODELS_FILE.tmp"; then
+  if python3 "$HERE/../tools/carl.py" client-models --running "$running" ${router_arg[@]+"${router_arg[@]}"} > "$MODELS_FILE.tmp"; then
     mv "$MODELS_FILE.tmp" "$MODELS_FILE"
   else
     rm -f "$MODELS_FILE.tmp"; say "Warning: the script could not list the models of this Mac with tools/carl.py client-models." >&2
   fi
 fi
-running=$(api_get "http://$HOST:$LLAMA_PORT/props" 2>/dev/null \
-          | python3 -c 'import json,sys; p=json.load(sys.stdin); print("" if p.get("role") == "router" else p.get("model_alias") or "")' 2>/dev/null || true)
 models_arg="$MODELS_FILE"
 if [[ ! -s "$MODELS_FILE" ]]; then
   models_arg="$(mktemp)"; trap 'rm -f "$models_arg"' EXIT
@@ -385,6 +394,7 @@ python3 "$HERE/configure.py" --bundle "$HERE" --home "$HOME" --host "$HOST" --cl
   --web-search "$web_search" --lsp "$([[ "${NO_LSP:-0}" == 1 || "${LSP:-1}" == 0 ]] && echo 0 || echo 1)" \
   --background "$([[ "${NO_BACKGROUND_SUBAGENTS:-0}" == 1 ]] && echo 0 || echo 1)" \
   --reminder "$([[ "${NO_REMINDER:-0}" == 1 ]] && echo 0 || echo 1)" \
+  --coder-thinking "${CODER_THINKING:-}" \
   --profile "$([[ "${NO_PROFILE:-0}" == 1 ]] && echo 0 || echo 1)" \
   --cache "$([[ "${NO_CACHE:-0}" == 1 || "${NO_PREFIX_CACHE:-0}" == 1 ]] && echo 0 || echo 1)" \
   --browser "$([[ "${NO_BROWSER:-0}" == 1 ]] && echo 0 || echo 1)" --browser-headed "$([[ "${BROWSER_HEADED:-0}" == 1 ]] && echo 1 || echo 0)"
@@ -446,7 +456,7 @@ UNIT
 if [[ "${CARL_SYNC:-0}" != 1 ]]; then
   ( umask 077; mkdir -p "$HOME/.config/carl"
     for k in CLIENTS CODER NO_CODER WEB_SEARCH NO_LSP LSP NO_BROWSER BROWSER_HEADED NO_SIDEBAR NO_SWITCHER \
-             NO_MODEL_CHECK NO_BACKGROUND_SUBAGENTS NO_CACHE LLAMA_CTX NO_REMINDER; do
+             NO_MODEL_CHECK NO_BACKGROUND_SUBAGENTS NO_CACHE LLAMA_CTX NO_REMINDER CODER_THINKING; do
       [[ -n "${!k:-}" ]] && printf '%s=%s\n' "$k" "${!k}"
     done > "$HOME/.config/carl/client-install.env" ) || true
   if [[ "$MODE" == local || ! -s "$HERE/remote.json" || "${NO_SYNC_SERVICE:-0}" == 1 ]]; then

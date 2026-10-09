@@ -5,6 +5,21 @@ CARL name, which is also the name the server serves it under, so OpenCode's /mod
 /model list what this Mac really has. Each entry carries its family's thinking options:
   on-off   thinking on or off only (Qwen3.6 35B-A3B): variants none / high, default high
   effort   effort levels (Qwen3.8 27B): variants none / low / medium / xhigh, default low
+The thinking of each role (Phase 23.4.4: the dashboard's Main thinking and Coder thinking, per
+model): thinking_main is the entry's default (OpenCode's model option reasoningEffort, Pi's
+modelThinkingLevels), thinking_coder is the coder's (OpenCode: carl-delegation's chat.params hook
+sets reasoningEffort per request for the model the coder runs on; Pi: the subagent extension's
+--thinking). Values: off, on, low, medium, xhigh (on / off only for on-off models); the coder also
+"main": as the main session (no value of its own: the request stays as it is). A list without them
+(an older server) gets the defaults of tools/carl_core/domain/thinking.py: main on (effort models:
+low), coder "main".
+/carl's Coder thinking (Phase 23.4.4) overrides the dashboard's value on one computer, per model:
+CODER_THINKING=MODEL:VALUE,MODEL:VALUE in ~/.config/carl/client-install.env (carl-sync.py set writes it;
+install.sh passes it to configure.py, which merges it over the list: coder_overrides(), which keeps the
+dashboard's value in dash_coder for the /carl panel's "dashboard default"; "set MODEL:default" removes the entry).
+Single-model mode (Phase 23.4.4 item 13): the list holds only the model the server runs (the
+server Mac writes it so; only_running() also keeps only the running model of a longer list).
+Router mode: every installed model.
 The list comes from the server Mac (tools/carl.py client-models, written to
 installed-models.json next to this file, so a client bundle copied into a VM carries it), or,
 without it, from the server's /v1/models (ids only: generic on / off entries).
@@ -15,7 +30,7 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Dict, List, Optional
 
 LIST_FILE = "installed-models.json"
@@ -27,11 +42,19 @@ _CONTROL = re.compile(r"[\x00-\x1f\x7f-\x9f]")
 NO_THINK = {"reasoningEffort": "none", "temperature": 0.7, "top_p": 0.8, "presence_penalty": 1.5}
 OC_LEVELS = ("minimal", "low", "medium", "high", "xhigh")
 OC_ON = {"on-off": ("high",), "effort": ("low", "medium", "xhigh")}
-DEFAULT_EFFORT = {"on-off": "high", "effort": "low"}
 PI_LEVEL_MAP: Dict[str, Dict[str, Optional[str]]] = {
     "on-off": {"minimal": None, "low": None, "medium": None, "xhigh": None},
     "effort": {"minimal": None, "high": None, "xhigh": "xhigh"},
 }
+# Thinking per role (the same rules as tools/carl_core/domain/thinking.py; this file runs without it)
+MAIN = "main"                        # the coder's value "same as main"
+ROLE_LEVELS = ("low", "medium", "xhigh")
+ROLE_VALUES = {"main": ("on", "off", *ROLE_LEVELS), "coder": (MAIN, "on", "off", *ROLE_LEVELS)}
+ROLE_DEFAULTS = {"effort": {"main": "low", "coder": MAIN}, "on-off": {"main": "on", "coder": MAIN}}
+ON_LEVEL = {"main": "low", "coder": "medium"}    # "on" on a model with effort levels
+# "on" as OpenCode's reasoningEffort on an on / off model (its "high" variant; CARL's template patch turns thinking
+# off only for none / minimal / off, so any other value is on)
+ON_EFFORT = "high"
 
 
 @dataclass(frozen=True)
@@ -43,9 +66,45 @@ class ClientModel:
     thinking: str
     off_sampling: str = "qwen"   # "qwen": the none variant sends Qwen's non-thinking sampling; "same": it only
                                   # turns thinking off (Gemma 4: one sampling for every use)
+    think_main: str = ""         # the main session's thinking: off, on or a level ("": the default of its kind)
+    think_coder: str = ""        # the coder's
+    dash_coder: Optional[str] = None   # the dashboard's coder value when /carl's override of this computer replaced it
+
+    def dashboard_coder(self) -> str:
+        """The coder's thinking as the dashboard sets it (without this computer's override), as this model takes it."""
+        return role_value(self.thinking, "coder", self.think_coder if self.dash_coder is None else self.dash_coder)
 
     def title(self, ctx: Optional[int] = None) -> str:
         return f"{self.label} — llama.cpp, {(ctx or self.ctx) // 1024}K"
+
+    def role(self, role: str) -> str:
+        """The thinking of a role (main, coder) as this model takes it: off, on, a level (effort models), or for
+        the coder "main"."""
+        return role_value(self.thinking, role, self.think_main if role == "main" else self.think_coder)
+
+    def effort(self, role: str) -> Optional[str]:
+        """The role's thinking as OpenCode's reasoningEffort: "none" (off: CARL's template patch turns thinking
+        off), a level, or for "on" the value that turns it on. None: the coder as the main session (no value)."""
+        v = self.role(role)
+        return None if v == MAIN else "none" if v == "off" else ON_EFFORT if v == "on" else v
+
+    def pi_level(self, role: str) -> Optional[str]:
+        """The role's thinking as a Pi thinking level: off, high (on: the level an on-off model offers) or a
+        level. None: the coder as the main session (the session's level)."""
+        v = self.role(role)
+        return None if v == MAIN else "high" if v == "on" else v
+
+
+def role_value(thinking: str, role: str, value: str) -> str:
+    """A role's value as a model of this kind takes it (tools/carl_core/domain/thinking.py normalize)."""
+    kind = "effort" if thinking == "effort" else "on-off"
+    if value not in ROLE_VALUES[role]:
+        return ROLE_DEFAULTS[kind][role]
+    if value == MAIN:
+        return value
+    if kind == "effort":
+        return ON_LEVEL[role] if value == "on" else value
+    return value if value == "off" else "on"
 
 
 @dataclass(frozen=True)
@@ -81,7 +140,13 @@ def parse_list(doc: Any, where: str = LIST_FILE) -> ModelList:
         off = m.get("off_sampling", "qwen")             # lists from before 1.7.0 have none: Qwen's, as before
         if off not in ("qwen", "same"):
             raise ValueError(f"{at}: off_sampling must be qwen or same")
-        out.append(ClientModel(mid, label, ctx, thinking, off))
+        roles = []
+        for role, key in (("main", "thinking_main"), ("coder", "thinking_coder")):   # lists from before 1.13.0
+            v = m.get(key, "")                                                        # have none: the defaults
+            if v != "" and v not in ROLE_VALUES[role]:
+                raise ValueError(f"{at}: {key} must be one of {', '.join(ROLE_VALUES[role])}")
+            roles.append(v)
+        out.append(ClientModel(mid, label, ctx, thinking, off, roles[0], roles[1]))
     default = doc.get("default")
     return ModelList(out, default if isinstance(default, str) and default in [m.id for m in out] else None)
 
@@ -89,6 +154,45 @@ def parse_list(doc: Any, where: str = LIST_FILE) -> ModelList:
 def load_list(path: str) -> ModelList:
     with open(path, encoding="utf-8") as f:
         return parse_list(json.load(f), path)
+
+
+def only_running(ml: ModelList, running: Optional[str]) -> ModelList:
+    """Single-model mode: only the model the server runs, when the list has it (install.sh passes no running model
+    in router mode). Else the list as it is (the server Mac already wrote it for its mode)."""
+    if not running or running not in ml.ids:
+        return ml
+    return ModelList([m for m in ml.models if m.id == running], running)
+
+
+def coder_efforts(ml: ModelList, provider_id: str) -> Dict[str, str]:
+    """carl-delegation's option coderThinking: {"provider/model": reasoningEffort} for each model whose Coder
+    thinking has a value of its own (the chat.params hook sets it on the coder's requests); a model whose coder
+    thinks as the main session has no entry."""
+    out: Dict[str, str] = {}
+    for m in ml.models:
+        e = m.effort("coder")
+        if e is not None:
+            out[f"{provider_id}/{m.id}"] = e
+    return out
+
+
+def parse_overrides(text: str) -> Dict[str, str]:
+    """CODER_THINKING ("MODEL:VALUE,MODEL:VALUE", /carl's choices on this computer) as {model: value}; an entry
+    that is not a model name and a coder value is left out (the line is the user's file)."""
+    out: Dict[str, str] = {}
+    for part in (text or "").split(","):
+        mid, sep, v = part.strip().partition(":")
+        if sep and _ID.fullmatch(mid) and v in ROLE_VALUES["coder"]:
+            out[mid] = v
+    return out
+
+
+def coder_overrides(ml: ModelList, over: Dict[str, str]) -> ModelList:
+    """The list with /carl's Coder thinking of this computer over the dashboard's (only the models it has)."""
+    if not over:
+        return ml
+    return ModelList([replace(m, think_coder=over[m.id], dash_coder=m.think_coder) if m.id in over else m
+                      for m in ml.models], ml.default)
 
 
 def from_server_ids(ids: List[str], ctx: int) -> ModelList:
@@ -116,7 +220,8 @@ def opencode_model(m: ClientModel, ctx: int) -> Dict[str, Any]:
         # parallel_tool_calls: llama.cpp lets the model call several tools in one turn only when the
         # request asks (measured 2026-10-03: 2 reads in one turn with it, 1 without); OpenCode
         # sends a model's options as they are
-        "options": {"reasoningEffort": DEFAULT_EFFORT[m.thinking], "parallel_tool_calls": True},
+        # the main session's thinking (Main thinking in the dashboard); a variant chosen in OpenCode wins over it
+        "options": {"reasoningEffort": m.effort("main") or ON_EFFORT, "parallel_tool_calls": True},
         "variants": variants,
     }
 

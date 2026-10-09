@@ -108,9 +108,14 @@ class FitTest(unittest.TestCase):
     def test_need_and_max_ctx(self) -> None:
         per_tok = kv_bytes_per_token(self.S, "q4_0")
         self.assertEqual(per_tok, 4608)
-        self.assertEqual(fit.need_bytes(self.S, 10 * GIB, 65536, 2), 10 * GIB + per_tok * 65536 * 2 + GIB // 2 + GIB)
-        room = 16 * GIB - 10 * GIB - GIB // 4 - GIB
-        self.assertEqual(fit.max_ctx(self.S, 10 * GIB, 16 * GIB), min(int(room // per_tok) // 4096 * 4096, 262144))
+        # weights + KV + recurrent state per slot + the compute buffer (no MTP) + the margin (Phase 23.4.4)
+        parts = 10 * GIB + per_tok * 65536 * 2 + GIB // 2 + fit.compute_bytes(self.S, 65536, 2)
+        self.assertAlmostEqual(fit.need_bytes(self.S, 10 * GIB, 65536, 2), parts * (1 + fit.MARGIN))
+        top = fit.max_ctx(self.S, 10 * GIB, 12 * GIB)                  # the last 4K step that fits
+        self.assertTrue(top % 4096 == 0 and 98304 < top < 262144, top)
+        self.assertLessEqual(fit.need_bytes(self.S, 10 * GIB, top), 12 * GIB)
+        self.assertGreater(fit.need_bytes(self.S, 10 * GIB, top + 4096), 12 * GIB)
+        self.assertEqual(fit.max_ctx(self.S, 10 * GIB, 16 * GIB), 262144)   # the trained length fits
         self.assertEqual(fit.max_ctx(self.S, 20 * GIB, 16 * GIB), 0)
         self.assertEqual(fit.max_ctx(shape(kv_elems=0), GIB, 16 * GIB), 262144)
 
@@ -133,7 +138,7 @@ class FitTest(unittest.TestCase):
     def test_offline_default_or_small(self) -> None:
         self.assertEqual(fit.offline_default("big", "small", 30 * GIB, 24 * GIB), "small")
         self.assertEqual(fit.offline_default("big", "small", 20 * GIB, 24 * GIB), "big")
-        self.assertEqual(fit.offline_default("big", "small", 23.5 * GIB, 24 * GIB), "small")   # + 1 GiB buffers
+        self.assertEqual(fit.offline_default("big", "small", 23.5 * GIB, 24 * GIB), "small")   # + 1 GiB: no header
         self.assertEqual(fit.offline_default("big", "small", None, 1), "big")
         self.assertEqual(fit.offline_default("big", None, 30 * GIB, 24 * GIB), "big")
 
@@ -244,10 +249,12 @@ class SlidingWindowFitTest(unittest.TestCase):
     SWA = with_window(shape(kv_elems=2048, rs_bytes=0), 512, 8192)
 
     def test_need_with_and_without_the_full_cache(self) -> None:
-        from carl_core.domain.fit import need_bytes
-        full = need_bytes(self.SWA, GIB, 98304, 2, "q4_0", swa_full=True)
-        window = need_bytes(self.SWA, GIB, 98304, 2, "q4_0", swa_full=False)
-        self.assertAlmostEqual(full - window, 8192 * 18 / 32 * (98304 - 1024) * 2)
+        from carl_core.domain.fit import need_bytes, need_parts
+        full = need_parts(self.SWA, GIB, 98304, 2, "q4_0", swa_full=True)
+        window = need_parts(self.SWA, GIB, 98304, 2, "q4_0", swa_full=False)
+        self.assertAlmostEqual(full.context - window.context, 8192 * 18 / 32 * (98304 - 1024) * 2)
+        # the full cache also needs a second mask over the whole pool in the compute buffer (E4B, measured)
+        self.assertGreater(full.compute, window.compute)
         self.assertEqual(need_bytes(shape(), GIB, 98304, 2), need_bytes(shape(), GIB, 98304, 2, swa_full=False))
 
     def test_auto_takes_the_full_cache_when_it_fits_and_prefers_a_second_slot(self) -> None:

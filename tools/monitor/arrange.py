@@ -21,7 +21,7 @@ FILTERS: Tuple[str, ...] = ("all", "agent coding", "hard code", "chat & writing"
                             "dense", "MoE", "downloaded", "fits this Mac")
 USE_CASES = ("agent coding", "hard code", "chat & writing", "uncensored")
 UNRANKED = 99                     # no rank: a custom model whose card (yet) has none
-MIN_FIT = 32768                   # "fits this Mac": at least a 32K window with 1 slot
+MIN_FIT = 49152                   # "fits this Mac": at least a 48K window with 1 slot (Auto fit's floor)
 
 
 def _rank(m: ModelInfo) -> int:

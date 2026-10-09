@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Literal, Mapping, Optional, Sequence, Tuple, Union
 
 from .errors import ConfigError
+from .thinking import CODER_VALUES, MAIN, MAIN_VALUES
 from .types import JsonObject, JsonValue, SettingValue, Settings
 
 SCHEMA = 1
@@ -93,6 +94,11 @@ MODEL_KEYS: Dict[str, SettingSpec] = {
     "presence": _float(0, 0, 2, "PRESENCE"),
     "repeat": _float(1.0, 0.5, 2, "REPEAT"),
     "alias": _str("", "ALIAS"),
+    # Thinking per role (Phase 23.4.4 item 11; domain/thinking.py): the clients' setting, not the server's (no
+    # variable). The default depends on the model: thinking.defaults() is its catalogue layer (effective_tune). The
+    # coder's "main": as the main session (the default).
+    "thinking_main": _choice("on", MAIN_VALUES),
+    "thinking_coder": _choice(MAIN, CODER_VALUES),
 }
 # Server-wide llama.cpp settings (config.json "llama").
 LLAMA_KEYS: Dict[str, SettingSpec] = {

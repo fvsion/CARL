@@ -26,7 +26,7 @@ from monitor.jobs import Paths, ServerJobs
 from monitor.model import ServerData, SlotInfo, SystemStats
 from monitor.settings import Schema, SettingsService, net_choices
 from monitor.settings_view import SettingsView
-from monitor.state import Confirm, UIState
+from monitor.state import SUBPANELS, Confirm, UIState
 
 SIZES = ((100, 40), (130, 40), (160, 50), (200, 60))
 TAIL = "? all keys   q quit"                           # the footer's end on every screen (no " · ": Phase 23.2)
@@ -45,9 +45,9 @@ LONE = re.compile(r"[a-z][a-z).,:;]*[.,:;)]")          # one lone word at the en
 
 def repeated(line: str) -> str:
     """A word next to itself, or next to its plural ("fit fits"), with no punctuation between them; '' when
-    none."""
-    toks = line.split()
-    for a, b in zip(toks, toks[1:]):
+    none. Two spaces or more are a column gap (a table: the Agents panel's "off, on   on (catalogue)"), not prose."""
+    pairs = [p for cell in re.split(r" {2,}", line) for p in zip(cell.split(), cell.split()[1:])]
+    for a, b in pairs:
         if a[-1:] in ",:;.·/" or not re.fullmatch(r"[A-Za-z][A-Za-z'-]+", a):
             continue
         x, y = a.lower(), re.sub(r"[^A-Za-z'-]", "", b).lower()
@@ -111,7 +111,7 @@ class ScreensTest(unittest.TestCase):
         """(name, snapshot, width) of every tab and Settings panel, with and without a server."""
         for name, d in (("stopped", ServerData()), ("idle", self.server()), ("writing", self.server("writing"))):
             for tab in range(5):
-                for sp in (range(6) if tab == 4 else range(2) if tab == 1 else [0]):
+                for sp in (range(len(SUBPANELS)) if tab == 4 else range(2) if tab == 1 else [0]):
                     self.ui.tab, self.ui.sp, self.ui.connect_sp = tab, sp, sp
                     self.ui.pending = None
                     for cols, rows in SIZES:

@@ -6,8 +6,9 @@ import unittest
 from dataclasses import replace
 from typing import Any
 
+from mon_support import GIB, shape  # noqa: I001  (first: it puts tools/ on sys.path)
+from carl_core.domain.llamacpp import check_version
 from carl_core.domain.units import memory
-from mon_support import GIB, shape
 from monitor.cards import (View, card_connect, card_health, card_memory, card_requests, card_slots, card_speed,
                            card_thismac, column, kv_info, live_sentence, log_view, req_row, server_memory, status_of)
 from monitor.fmt import ANSI, Ln, aligned, vlen
@@ -179,6 +180,27 @@ class CardsTest(unittest.TestCase):
         self.assertEqual((book.counts["E"], book.counts["W"], book.counts["notice"]), (0, 0, 2))
         self.assertIn("No errors.", text(card_health(view(log=book), ServerData()).lines))
         self.assertRegex(text(card_health(view(log=book, detail="full"), ServerData()).lines), r"Routine notices +2\n")
+
+    def test_health_says_when_llama_cpp_is_older_than_the_tested_version(self) -> None:
+        """An older llama.cpp: a warning row and how to update, at every detail level, and the collapsed card says
+        it; a newer one: a quiet row at full detail only; the version not known: nothing (made-up versions)."""
+        older = check_version("version: 0.4.1 (build 9001, commit abc)")
+        for detail in ("simple", "full"):
+            card = card_health(view(llama=older, detail=detail), ServerData())
+            body = text(card.lines)
+            self.assertRegex(body, r"Version +⚠ llama\.cpp 0\.4\.1 \(build 9001\) is older than the tested version, "
+                                   r"\d+\.\d+\.\d+ \(build \d+\)\.\n")
+            self.assertRegex(body, r"To update +Run brew upgrade llama\.cpp, then restart the server\.")
+            self.assertIn("old llama.cpp", ANSI.sub("", card.summary))
+            self.assertNotIn(" · ", body)
+        newer = check_version("version: 99.0.0 (build 999999, commit abc)")
+        self.assertNotIn("llama.cpp", text(card_health(view(llama=newer), ServerData()).lines))
+        full = text(card_health(view(llama=newer, detail="full"), ServerData()).lines)
+        self.assertRegex(full, r"Version +llama\.cpp 99\.0\.0 \(build 999999\) is newer than the tested version")
+        self.assertNotIn("⚠", full)
+        self.assertEqual(card_health(view(llama=newer), ServerData()).summary, "no errors")
+        for llama in (None, check_version("?")):
+            self.assertNotIn("llama.cpp", text(card_health(view(llama=llama, detail="full"), ServerData()).lines))
 
     def test_column_rows_are_exactly_w_wide(self) -> None:
         for detail in ("simple", "full"):

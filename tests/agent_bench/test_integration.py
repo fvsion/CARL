@@ -137,6 +137,7 @@ class RealClientsTest(unittest.TestCase):
             self.assertEqual(d["measure"], ev.MEASURE)
             self.assertEqual(d["decision"], d["decision_strict"])
             self.assertEqual(d["variant"], "baseline")
+            self.assertIn(d["coder"], ("", "auto", "on", "off"))       # --no-server: the HOME marker's
             self.assertNotEqual(d["client_version"], "unknown")
             if d["prompt"] == "large-cli":                     # the brief as the main agent wrote it, checked
                 self.assertEqual([(b["text"], b["format"], b["valid"], b["refused"]) for b in d["briefs"]],

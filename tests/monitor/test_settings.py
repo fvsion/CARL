@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import unittest
 
-from carl_core.domain.fit import max_ctx
+from carl_core.domain.fit import max_ctx, need_bytes
 from mon_support import GIB, FakeStore, model, model_list, shape
 from monitor.fmt import GRN, RED, YEL
 from monitor.model import ServerData
 from monitor.fmt import ANSI, aligned
-from monitor.settings import (LLAMA_ADV, MODEL_ROW_KEYS, SET_HELP, SPEC_COMBOS, FitInfo, Schema, SettingsService, env_from_cmd,
+from monitor.settings import (LLAMA_ADV, MODEL_ROW_KEYS, SET_HELP, SPEC_COMBOS, FitInfo, Schema, SettingsService, coder_off, env_from_cmd,
                               fit_sentence, fmt_val, llama_fit, net_choices, parse_typed, row_instruction, rows,
                               running_settings, settings_to_config, shown_value, step_choice)
 from monitor.settings_panels.model_card import ModelCard
@@ -76,6 +76,7 @@ class ValuesTest(unittest.TestCase):
     def test_rows(self) -> None:
         llama = rows({}, SCHEMA, lambda: ["auto", "big"])
         self.assertEqual([r.key for r in llama], ["model", "ctx", "slots", "spec", "kv", "swa", "cache", "net", "temp"])
+        # Phase 23.4.4: Main thinking and Coder thinking moved to the Agents panel
         svc = service(FakeStore())                                    # the Sliding window row: Gemma models only
         self.assertNotIn("swa", [r.key for r in svc.rows(dict(SCHEMA.defaults(), model="big"))])
         self.assertEqual([r.label for r in llama][:5], ["Model", "Context", "Slots", "Speculation", "Context memory"])
@@ -149,12 +150,23 @@ class FitMathTest(unittest.TestCase):
         self.assertTrue(f.fits)
         self.assertEqual((f.slots, f.ctx), (2, 65536))
         self.assertEqual(ANSI.sub("", fit_sentence(f)),
-                         "✓ It fits. This model with 2 slots × 64K tokens needs 11.7 GiB. This Mac gives the GPU 25.0 GiB.")
-        need2 = 10 * GIB + per_tok * 65536 * 2 + GIB
+                         "✓ It fits. This model with 2 slots × 64K tokens needs 11.3 GiB. This Mac gives the GPU 25.0 GiB.")
+        need2 = need_bytes(shp, 10 * GIB, 65536, 2)                 # weights + KV + compute buffers + the margin
+        self.assertGreater(need2, 10 * GIB + per_tok * 65536 * 2)
         f1 = llama_fit("m", 10 * GIB, shp, "q4_0", 65536, "auto", int(need2) - 1)
         self.assertTrue(f1.fits)
         self.assertEqual(f1.slots, 1)
         self.assertFalse(llama_fit("m", 30 * GIB, shp, "q4_0", 65536, "1", 25 * GIB).fits)
+
+    def test_mtp_goes_before_a_slot(self) -> None:
+        """Phase 23.4.4: the MTP draft context counts; when only n-gram fits two slots, the fit says so."""
+        shp = shape(kv_elems=10240, rs_bytes=0)
+        mtp = llama_fit("m", 10 * GIB, shp, "q4_0", 65536, "auto", 25 * GIB, spec="draft-mtp,ngram-mod", spec_n=2)
+        self.assertEqual((mtp.slots, mtp.spec, mtp.dropped), (2, "draft-mtp,ngram-mod", False))
+        plain = llama_fit("m", 10 * GIB, shp, "q4_0", 65536, "auto", 25 * GIB, spec="ngram-mod")
+        self.assertGreater(mtp.need, plain.need)
+        tight = llama_fit("m", 10 * GIB, shp, "q4_0", 65536, "auto", int(plain.need) + 1, spec="draft-mtp,ngram-mod")
+        self.assertEqual((tight.slots, tight.spec, tight.dropped, tight.fits), (2, "ngram-mod", True, True))
 
     def test_need_and_limit_that_round_alike_get_two_decimals(self) -> None:
         shp = shape(kv_elems=10240, rs_bytes=0)
@@ -264,6 +276,50 @@ class ServiceTest(unittest.TestCase):
         bad = BadConfig()
         vals, _ = service(bad).recommended("big", with_config=True)     # the tune without the overrides
         self.assertEqual(vals["kv"], "q4_0")
+
+    def test_agents_offer_what_the_model_takes(self) -> None:
+        """Phase 23.4.4, the Agents panel: Main thinking and Coder thinking per model: on / off, or off and the levels for
+        an effort model; the coder first has "main" (same as main, its default, CARL's); the main session's default is
+        the model's (low for an effort model, from the catalogue)."""
+        a = self.svc.agents("big")
+        self.assertEqual((a.kind, a.mine, a.rec), ("on-off", {"thinking_main": "on", "thinking_coder": "main"},
+                                                   {"thinking_main": "on", "thinking_coder": "main"}))
+        self.assertEqual(a.choices, {"thinking_main": ("off", "on"), "thinking_coder": ("main", "off", "on")})
+        self.assertEqual(a.source, {"thinking_main": "catalogue", "thinking_coder": "CARL's default"})
+        self.store.models[0]["thinking"] = "effort"
+        a = self.svc.agents("big")
+        self.assertEqual(a.mine, {"thinking_main": "low", "thinking_coder": "main"})
+        self.assertEqual(a.choices["thinking_main"], ("off", "low", "medium", "xhigh"))
+        self.assertEqual(a.choices["thinking_coder"], ("main", "off", "low", "medium", "xhigh"))
+        self.store.models[0]["tune"]["thinking_coder"] = "medium"           # a catalogue entry with its own value
+        self.assertEqual(self.svc.agents("big").source["thinking_coder"], "catalogue")
+        self.assertEqual(shown_value("thinking_coder", "main"), "same as main")
+        self.assertTrue(coder_off({"thinking_coder": "main", "thinking_main": "off"}))   # as the main session: off
+        self.assertFalse(coder_off({"thinking_coder": "main", "thinking_main": "low"}))
+        self.assertNotIn("thinking_main", [r.key for r in self.svc.rows(dict(SCHEMA.defaults(), model="big"))])
+
+    def test_thinking_is_saved_at_once_and_apply_keeps_it(self) -> None:
+        p = self.svc.pending_init(ServerData(), self.store.load_config())
+        p["model"] = "big"
+        self.svc.load_profile(p, "big")
+        p["temp"] = "0.6"
+        self.svc.save_thinking("big", "thinking_coder", "off")
+        self.assertEqual(self.store.saved[-1]["models"]["big"], {"temp": 0.6, "thinking_coder": "off"})
+        self.assertEqual(self.svc.agents("big").mine["thinking_coder"], "off")
+        self.assertEqual(self.svc.thinking_saved("big"), {"thinking_main": None, "thinking_coder": "off"})
+        self.svc.save(p)                                                   # Apply writes the profile again: kept
+        self.assertEqual(self.store.saved[-1]["models"]["big"]["thinking_coder"], "off")
+        self.svc.save_thinking("big", "thinking_coder", "main")            # the recommended value is left out
+        self.assertEqual(self.store.saved[-1]["models"]["big"], {"temp": "0.6"})
+        self.svc.save_thinking("big", "thinking_main", "off")
+        self.svc.save_thinking("big", "thinking_main", None)               # None: the recommended value
+        self.assertEqual(self.store.saved[-1]["models"]["big"], {"temp": "0.6"})
+        with self.assertRaises(ValueError):
+            self.svc.save_thinking("big", "thinking_main", "xhigh")        # an on / off model has no levels
+        with self.assertRaises(ValueError):
+            self.svc.save_thinking("big", "thinking_main", "main")         # the coder's value only
+        with self.assertRaises(ValueError):
+            self.svc.save_thinking("big", "temp", "1.0")                   # not a thinking setting
 
     def test_auto_model_and_max_ctx(self) -> None:
         self.assertEqual(self.svc.resolved_model({"model": "auto"}), "big")

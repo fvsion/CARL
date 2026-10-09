@@ -97,6 +97,32 @@ test("carl-delegation: the reminder on main sessions only; off with reminder: fa
   assert.equal(quiet.messages[0].parts[0].text, "Add a CLI.");
 });
 
+test("carl-delegation: chat.params sets the coder's thinking for the model it runs on; other agents and models stay", async () => {
+  // Phase 23.4.4: the option coderThinking ({"provider/model": reasoningEffort}); OpenCode sends output.options as the
+  // request's reasoning_effort (checked with OpenCode 1.18.34 against agent-bench's fake server)
+  const hooks = await delegation.server({}, { coder: "carl-coder",
+    coderThinking: { "llamacpp/qwen3.8-27b": "none", "llamacpp/gemma-4-e4b": "high" } });
+  const params = async (agent, providerID, id) => {
+    const output = { temperature: 0.6, topP: 1, topK: 0, maxOutputTokens: undefined,
+                     options: { reasoningEffort: "low", parallel_tool_calls: true } };
+    await hooks["chat.params"]({ sessionID: "s", agent, model: { providerID, id }, provider: {}, message: {} }, output);
+    return output.options;
+  };
+  assert.deepEqual(await params("carl-coder", "llamacpp", "qwen3.8-27b"), { reasoningEffort: "none", parallel_tool_calls: true });
+  assert.equal((await params("carl-coder", "llamacpp", "gemma-4-e4b")).reasoningEffort, "high");
+  assert.equal((await params("coder", "llamacpp", "qwen3.8-27b")).reasoningEffort, "none");     // CARL's coder names
+  assert.equal((await params("build", "llamacpp", "qwen3.8-27b")).reasoningEffort, "low");      // the main agent
+  assert.equal((await params("explore", "llamacpp", "qwen3.8-27b")).reasoningEffort, "low");    // another subagent
+  assert.equal((await params("carl-coder", "llamacpp", "other")).reasoningEffort, "low");       // "same as main"
+  assert.equal((await params("carl-coder", "mine", "qwen3.8-27b")).reasoningEffort, "low");     // not our provider
+  const none = await delegation.server({}, {});                                                    // no table: as is
+  const output = { options: { reasoningEffort: "low" } };
+  await none["chat.params"]({ agent: "coder", model: { providerID: "llamacpp", id: "qwen3.8-27b" } }, output);
+  assert.equal(output.options.reasoningEffort, "low");
+  assert.equal(delegationMod.coderEffort(null, "coder", "coder", { providerID: "a", id: "b" }), undefined);
+  assert.equal(delegationMod.coderEffort({ "a/b": 3 }, "coder", "coder", { providerID: "a", id: "b" }), undefined);
+});
+
 test("carl-delegation: the gate is off unless the dashboard sets it; then it stops the main agent at the Nth new file", async () => {
   const client = { session: { get: async () => ({ data: {} }) } };
   const dir = mkdtempSync(join(tmpdir(), "gate-"));

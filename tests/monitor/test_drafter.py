@@ -66,13 +66,15 @@ class ServiceTest(unittest.TestCase):
 
     def test_fit_counts_the_drafter(self) -> None:
         store = FakeStore(models=[gem()], limit=8 * GIB)
+        store.shape_of = lambda _path: shape(nextn=0)       # type: ignore[method-assign]  # Gemma 4: no MTP head
         svc = SettingsService(model_list(store), SCHEMA, "192.168.42.1", lambda: store.limit)
         m = store.models[0]
         self.assertEqual(svc.weights(m), 4 * GIB + DRAFT)
         self.assertEqual(svc.max_ctx(m), max_ctx(shape(), 4 * GIB + DRAFT, 8 * GIB, 1, "q4_0", False))
         p = dict(SCHEMA.defaults(), model="gem", ctx=65536, spec="draft-mtp", specn="2", kv="q4_0", slots="1")
         f = svc.fit_line(p)
-        self.assertEqual((f.weights, f.drafter), (4 * GIB, DRAFT))           # the need counts both
+        self.assertEqual((f.weights, f.drafter, f.spec), (4 * GIB, DRAFT, "draft-mtp"))   # the need counts both
+        self.assertGreater(f.buffers, 0)                                   # and the draft context's buffers
         self.assertIn("needs", ANSI.sub("", fit_sentence(f)))
 
 

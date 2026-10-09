@@ -14,7 +14,7 @@ STATUS_NAMES = {"downloaded": "downloaded", "partial": "partial", "missing": "no
 GOAL_NAMES = {"everyday": "everyday (fast first)", "hard-code": "hard code (better code, slower)"}
 SCOPE_NAMES = {"catalogue": "catalogue", "downloaded": "downloaded only"}
 DEPTH_NAMES = {"quick": "quick", "default": "normal", "long": "long"}
-THINKING_NAMES = {"on-off": "on / off", "effort": "levels (low, medium, high) and off", "always": "always on",
+THINKING_NAMES = {"on-off": "on / off", "effort": "levels (low, medium, xhigh) and off", "always": "always on",
                   "none": "no thinking"}
 
 

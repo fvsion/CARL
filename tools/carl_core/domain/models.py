@@ -15,6 +15,7 @@ from .errors import ConfigError
 from .gguf import ModelShape, ctx_train
 from .hf import is_extra_part, local_file_name, model_name
 from .ports import ModelFolder
+from . import thinking
 from .settings import MODEL_KEYS, Config
 from .types import (Catalog, CtxZones, CustomInfo, HfRef, LocalDb, LocalEntry, ModelInfo, SettingSource,
                     Settings, Status, Zone)
@@ -211,7 +212,8 @@ def effective_tune(m: ModelInfo, cfg: Config,
     vals: Settings = {k: s.default for k, s in MODEL_KEYS.items()}
     src: Dict[str, SettingSource] = {k: "default" for k in vals}
     custom = bool(m.get("custom"))
-    base: Settings = dict(m.get("tune") or {})
+    # the thinking of each role: its default from the model's thinking kind, below the catalogue's own tune
+    base: Settings = {**thinking.defaults(m.get("thinking")), **dict(m.get("tune") or {})}
     if custom and m.get("status") == "downloaded" and header is not None:
         base = {**header, **base}
     layers: List[Tuple[Settings, SettingSource]] = [
@@ -224,6 +226,8 @@ def effective_tune(m: ModelInfo, cfg: Config,
             if k in vals:
                 vals[k], src[k] = v, source
     vals["alias"] = vals["alias"] or m.get("name", "")      # served under its own name (unique)
+    if m.get("thinking"):                                   # a level on an on / off model is "on", and the reverse
+        vals.update(thinking.values(m.get("thinking"), vals))
     return vals, src
 
 

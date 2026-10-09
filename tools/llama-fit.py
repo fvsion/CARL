@@ -12,15 +12,18 @@ Auto fit picks the best ranked stock model (rank 1 = best: published benchmarks 
 code test, then quantization; abliterated models are only picked by hand; a custom model only
 when its card says auto_fit: ./carl.sh card NAME) for a goal: everyday = the fast builds
 first (MoE, and small dense models such as the Gemma 4 E4B: fast, usually sufficient),
-hard-code = the dense builds first (better at code and hard tasks, slower). It wants two 96K windows (main session + a subagent), else
-one, else the largest window of at least 32K, within the GPU limit and RAM less a reserve
-for macOS and apps (6 GiB, 10 with the VM up; --reserve-gb N). llama.model = auto starts it;
-config.json llama.auto_goal / llama.auto_fit (catalogue | downloaded) set goal and scope.
+hard-code = the dense builds first (better at code and hard tasks, slower). Its order, on every
+Mac: 2 x 96K, 2 x 64K, 2 x 48K (main session + a subagent), then 1 x 96K, 1 x 64K, 1 x 48K;
+nothing below 48K. A model whose MTP fits only without it runs n-gram in that setup first. All within
+the GPU limit and RAM less a reserve for macOS and apps (6 GiB, 10 with the VM up; --reserve-gb N).
+llama.model = auto starts it; config.json llama.auto_goal / llama.auto_fit (catalogue | downloaded)
+set goal and scope.
 
-Need = weights (with a separate MTP drafter's, Gemma 4) + KV cache (window x bytes/token)
-+ recurrent state + ~1 GiB of compute buffers. The limit is what macOS lets the GPU use (Metal's
-recommendedMaxWorkingSetSize, ~2/3 of RAM on 24-32 GB Macs, ~3/4 above), or an
-`sudo sysctl iogpu.wired_limit_mb=N` override. Estimates: leave some margin.
+Need = weights (the whole file; a separate MTP drafter's while MTP runs) + KV cache (window x
+bytes/token) + recurrent state + compute buffers (by -ub and the KV pool) + with MTP the draft
+context + a 0.75% margin (carl_core/domain/fit.py, reference/memory.md). The limit is what macOS
+lets the GPU use (Metal's recommendedMaxWorkingSetSize, ~2/3 of RAM on 24-32 GB Macs, ~3/4
+above), or an `sudo sysctl iogpu.wired_limit_mb=N` override.
 The launcher (--check) refuses a start that needs more than the limit (FIT_CHECK=0 skips it).
 """
 import os
@@ -40,8 +43,8 @@ from carl_core.adapters.system import sysctl_int, vm_network_up  # noqa: E402
 from carl_core.domain.autofit import (GOAL_NAME, GOALS, SCOPE_TEXT, SCOPES, AutoFit, Budget,  # noqa: E402
                                       Goal, Scope, as_goal, as_scope, gib)
 from carl_core.domain.errors import ConfigError  # noqa: E402
-from carl_core.domain.fit import (DEFAULT_CTX, check_start, estimated_limit, max_ctx, need_bytes,  # noqa: E402
-                                  prompt_cache_mib, reserve_bytes, swa_plan, window_label)
+from carl_core.domain.fit import (DEFAULT_CTX, UBATCH, Spec, check_start, estimated_limit, max_ctx,  # noqa: E402
+                                  mtp_spec, need_bytes, prompt_cache_mib, reserve_bytes, start_plan, window_label)
 from carl_core.domain.gguf import GIB, ModelShape, kv_bytes_per_token, model_shape  # noqa: E402
 from carl_core.domain.models import draft_bytes  # noqa: E402
 from carl_core.domain.types import ModelInfo  # noqa: E402
@@ -94,6 +97,9 @@ def parse_args(argv: List[str]) -> argparse.Namespace:
     ap.add_argument("--kv", default="q4_0", help=argparse.SUPPRESS)
     ap.add_argument("--swa", default="auto", choices=("auto", "full", "window"), help=argparse.SUPPRESS)
     ap.add_argument("--draft", metavar="GGUF", help=argparse.SUPPRESS)     # the MTP drafter the start loads (-md)
+    ap.add_argument("--spec", default="none", help=argparse.SUPPRESS)      # the start's --spec-type (MTP counted)
+    ap.add_argument("--spec-n", type=int, default=1, help=argparse.SUPPRESS)  # its --spec-draft-n-max
+    ap.add_argument("--ub", type=int, default=UBATCH, help=argparse.SUPPRESS)  # its -ub (the compute buffers)
     return ap.parse_args(argv)
 
 
@@ -115,20 +121,30 @@ def pair(a: float, b: float) -> Tuple[str, str]:
 
 def local_shape(path: str, draft: Optional[str] = None) -> Tuple[ModelShape, int]:
     """The model's header shape and its weights: the file, plus the MTP drafter a start loads with it
-    (-md; it shares the model's KV cache, so only its weights add memory)."""
+    when draft is given (-md). The launcher options give the drafter through --spec (start_spec)."""
     return model_shape(local_meta(path)), os.path.getsize(path) + (os.path.getsize(draft) if draft else 0)
 
 
+def start_spec(args: argparse.Namespace, shape: ModelShape) -> Spec:
+    """The start's speculation (--spec, --spec-n; the drafter's weights from --draft)."""
+    return mtp_spec(args.spec, args.spec_n, shape, os.path.getsize(args.draft) if args.draft else 0)
+
+
 def cmd_plan(args: argparse.Namespace, limit: int) -> None:
-    """Launcher plan, as "SLOTS CACHE_MIB SWA": slots (auto = 2 when two full windows fit the GPU
-    limit, else 1), a RAM prompt cache from what is left after a reserve for macOS + apps (+ the
-    VM), and for a model with sliding-window layers full or window (--swa; "-" for other models)."""
-    shape, w = local_shape(args.plan, args.draft)
+    """Launcher plan, as "SLOTS CACHE_MIB SWA SPEC" (Auto fit's order at the start's window): slots
+    (auto = 2 when two windows fit what a model can use: the GPU limit, or RAM less the reserve for
+    macOS + apps (+ the VM), whichever is smaller), MTP dropped before a slot (SPEC: the speculation
+    to run, n-gram when MTP does not fit), a RAM prompt cache from what is left after the reserve, and
+    for a model with sliding-window layers full or window (--swa; "-" for other models)."""
+    shape, w = local_shape(args.plan)
     ctx = args.ctx or DEFAULT_CTX
-    slots, full = swa_plan(args.swa, shape, w, ctx, args.want_slots, args.kv, limit)
     reserve = reserve_bytes(args.reserve_gb, vm_network_up())
-    need = need_bytes(shape, w, ctx, slots, args.kv, swa_full=full is not False)
-    print(slots, prompt_cache_mib(sysctl_int("hw.memsize"), need, reserve), "-" if full is None else "full" if full else "window")
+    ram = sysctl_int("hw.memsize")
+    allowed = min(limit, ram - reserve) if ram else limit
+    sp = start_plan(args.swa, shape, w, ctx, args.want_slots, args.kv, allowed, start_spec(args, shape), args.ub)
+    need = need_bytes(shape, w, ctx, sp.slots, args.kv, sp.swa_full is not False, sp.spec, args.ub)
+    print(sp.slots, prompt_cache_mib(ram, need, reserve), "-" if sp.swa_full is None else "full" if sp.swa_full
+          else "window", sp.spec.kind)
 
 
 def start_hint(fit: AutoFit) -> str:
@@ -173,8 +189,9 @@ def cmd_check(args: argparse.Namespace, limit: int, how: str) -> int:
     """Refuse (exit 3, the reasons on stderr) a start that needs more than the GPU limit: it
     would fail to load or swap the Mac to a crawl. The first line is one whole "error:" sentence
     (the dashboard shows the launcher's error lines); the advice follows, indented."""
-    shape, w = local_shape(args.check, args.draft)
-    chk = check_start(shape, w, args.ctx or DEFAULT_CTX, args.slots, args.kv, limit, swa_full=args.swa != "window")
+    shape, w = local_shape(args.check)
+    spec, full = start_spec(args, shape), args.swa != "window"
+    chk = check_start(shape, w, args.ctx or DEFAULT_CTX, args.slots, args.kv, limit, full, spec, args.ub)
     if chk.fits:
         return 0
     err = sys.stderr
@@ -183,8 +200,12 @@ def cmd_check(args: argparse.Namespace, limit: int, how: str) -> int:
     print(f"{RED}error:{R} {model_label(args.check)} does not fit this Mac with {chk.setup()}: it needs {need}, "
           f"and the GPU memory limit is {lim}. CARL refuses the start, because the model would fail to load or "
           f"the Mac would become very slow.", file=err)
+    if spec.mtp:
+        plain = need_bytes(shape, w, chk.ctx, chk.slots, args.kv, full, spec.without_mtp(), args.ub)
+        print(f"{pad}With MTP, it needs the draft context of MTP too. Without MTP (n-gram only), it needs "
+              f"{pair(plain, limit)[0]}.", file=err)
     if chk.largest:
-        one = max_ctx(shape, w, limit, 1, args.kv) if chk.slots > 1 else 0
+        one = max_ctx(shape, w, limit, 1, args.kv, full, spec, args.ub) if chk.slots > 1 else 0
         text = (f"With {chk.slots} slot{'s' if chk.slots != 1 else ''}, the largest context that fits is "
                 f"{window_label(chk.largest)} tokens (--ctx {window_label(chk.largest).lower()}).")
         if one:
@@ -207,6 +228,8 @@ class Row:
     shape: Optional[ModelShape]
     status: str                      # "downloaded", "not downloaded", or why the header is unavailable
     note: str = ""                   # a custom model's rank: from the user's card (in auto fit or not)
+    weights: int = 0                 # the model file (size: with its MTP drafter)
+    spec: Spec = Spec()              # its speculation from the catalogue (MTP counted)
 
 
 def model_rows(models: List[ModelInfo]) -> List[Row]:
@@ -223,8 +246,11 @@ def model_rows(models: List[ModelInfo]) -> List[Row]:
             shape, status = None, str(e)[:40]
         note = (f" · your card's rank (auto fit: {'on' if m.get('auto_fit') else 'off'})"
                 if m.get("custom") and isinstance(rank, int) else "")
+        tune = m.get("tune") or {}
+        n = tune.get("spec_n", 1)
+        spec = mtp_spec(str(tune.get("spec") or "none"), n if isinstance(n, int) else 1, shape, draft_bytes(m))
         rows.append(Row(m.get("name", ""), m.get("bytes", 0) + draft_bytes(m), rank if isinstance(rank, int) else None,
-                        bool(m.get("abliterated")), shape, status, note))
+                        bool(m.get("abliterated")), shape, status, note, m.get("bytes", 0), spec))
     rows.sort(key=lambda r: (r.rank is None, r.rank or 0, r.name))
     return rows
 
@@ -236,13 +262,17 @@ def auto_lines(fits: List[AutoFit], shown: Goal, mine: Tuple[Goal, Scope], here:
     out += wrap(f"Auto fit chooses from the stock models with a quality rank ({SCOPE_TEXT[fits[0].scope]}). "
                 "It never chooses an abliterated model. The goal everyday takes the fast models first (MoE and "
                 "small dense). The goal hard code takes the dense models first: better code, but slower.", w, "  ")
+    out += wrap("Its order of setups: 2 slots × 96K, 64K or 48K tokens (the main session and a subagent), then "
+                "1 slot × 96K, 64K or 48K tokens. Nothing below 48K. When MTP does not fit a setup, Auto fit "
+                "uses n-gram only before it takes the next setup.", w, "  ")
     for f in fits:
         yours = " (your goal)" if f.goal == mine[0] else ""
         if f.pick and f.plan:
             where = ("" if f.pick.downloaded else
                      f" It is not downloaded. To download it: ./carl.sh download {f.pick.name}")
+            note = f.plan.spec_note()
             text = (f"Goal {GOAL_NAME[f.goal]}{yours}: {f.pick.name} with {f.plan.describe()}. It needs "
-                    f"{gib(f.plan.need)}.{where}")
+                    f"{gib(f.plan.need)}." + (f" {note}." if note else "") + where)
         else:
             text = f"Goal {GOAL_NAME[f.goal]}{yours}: no model fits."
         out += wrap(text, w, "  ", "    ")
@@ -284,7 +314,8 @@ def cmd_table(args: argparse.Namespace, limit: int, how: str) -> None:
     cache = "the full cache" if swa_full else "the window cache"
     print("\n".join(wrap(f"{B}ALL MODELS{R}", w)))
     print("\n".join(wrap(f"The largest context of each slot that fits the GPU memory limit, with {slots} "
-                         f"slot{'s' if slots != 1 else ''}, for each context memory type (q4 and q8).", w, "  ")))
+                         f"slot{'s' if slots != 1 else ''}, for each context memory type (q4 and q8), with the "
+                         f"speculation of the catalogue (MTP counted).", w, "  ")))
     rows = model_rows(models)
     nw = max([len("model")] + [len(r.name) for r in rows])
     extra = f"  {'needed ' + window_label(args.ctx):>11}" if args.ctx else ""
@@ -300,19 +331,19 @@ def cmd_table(args: argparse.Namespace, limit: int, how: str) -> None:
         if not row.shape:
             print(f"{lead}  {RED}CARL cannot read its GGUF header: {row.status}{R}")
             continue
-        m4 = max_ctx(row.shape, row.size, limit, slots, "q4_0", swa_full)
-        m8 = max_ctx(row.shape, row.size, limit, slots, "q8_0", swa_full)
+        m4 = max_ctx(row.shape, row.weights, limit, slots, "q4_0", swa_full, row.spec)
+        m8 = max_ctx(row.shape, row.weights, limit, slots, "q8_0", swa_full, row.spec)
         col = RED if not m4 else YEL if m4 < 65536 else GRN
         per_k = kv_bytes_per_token(row.shape, "q4_0") * 1024 / 2 ** 20
         line = f"{lead}  {per_k:4.1f} MiB  {col}{window_label(m4):>7}{R} {window_label(m8):>7}"
         if args.ctx:
-            nd = need_bytes(row.shape, row.size, args.ctx, slots, "q4_0", swa_full)
+            nd = need_bytes(row.shape, row.weights, args.ctx, slots, "q4_0", swa_full, row.spec)
             line += f"  {(GRN if nd <= limit else RED)}{nd / GIB:7.1f} GiB{R}"
         notes = []
         if row.abliterated:
             notes.append("abliterated")
         if row.shape.get("swa_window"):              # sliding-window layers: the other cache, for comparison
-            other = max_ctx(row.shape, row.size, limit, slots, "q4_0", swa_full=not swa_full)
+            other = max_ctx(row.shape, row.weights, limit, slots, "q4_0", not swa_full, row.spec)
             notes.append(f"{'window' if swa_full else 'full'} cache: {window_label(other)}")
         if row.note:
             notes.append(row.note)
@@ -339,8 +370,9 @@ def cmd_table(args: argparse.Namespace, limit: int, how: str) -> None:
                                                           f"in each slot (q4)."))
     print("\n".join(columns(legend, w, max_term=16)))
     print()
-    print("\n".join(wrap("Memory needed = weights + context memory + recurrent state + about 1 GiB of buffers. "
-                         "These are estimates: keep some memory free.", w)))
+    print("\n".join(wrap("Memory needed = weights + context memory + recurrent state + compute buffers (by the "
+                         "batch size and the context) + with MTP its draft context (its context memory and two more "
+                         "compute buffers) + 0.75%. These are estimates: keep some memory free.", w)))
     print("\n".join(wrap("Experts only: sudo sysctl iogpu.wired_limit_mb=MB gives the GPU more memory until the next "
                          "restart. Keep at least 6 GiB for macOS, or the Mac can stop.", w)))
 

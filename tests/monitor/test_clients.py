@@ -14,7 +14,8 @@ sys.dont_write_bytecode = True                                  # keep tools/ fr
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "tools"))
 
 from monitor import fsio
-from monitor.clients import Served, drift, model_list, opencode_config, pi_config
+from monitor.clients import Served, drift, model_list, opencode_config, pi_config, serving
+from monitor.model import RouterInfo, ServerData
 
 BASE = "http://127.0.0.1:8080"
 
@@ -50,6 +51,17 @@ class DriftTest(unittest.TestCase):
         out = drift({"OpenCode": {"a": 98304, "gone": 98304}, "Pi": {"a": 98304, "b": 0}, "broken": None}, ["a", "b"])
         self.assertEqual([(d.client, d.added, d.removed) for d in out], [("OpenCode", ["b"], ["gone"])])
         self.assertEqual(out[0].line(2), "OpenCode lists 2 models, 2 are installed. An update adds b and removes gone. Press u.")
+
+    def test_single_model_mode_names_the_model_of_the_server(self) -> None:
+        """Phase 23.4.4 item 13: the configs list only the model of the server; another model makes them out of
+        date, in whole sentences."""
+        out = drift({"OpenCode": {"a": 98304, "b": 98304}, "Pi": {"b": 98304}}, ["b"], server="b")
+        self.assertEqual([d.client for d in out], ["OpenCode"])
+        self.assertEqual(out[0].line(1), "OpenCode lists 2 models. In single-model mode, OpenCode and Pi list only the "
+                                         "model of the server: b. An update removes a. Press u.")
+        self.assertEqual(serving(ServerData()), (None, None))                              # no server: config.json
+        self.assertEqual(serving(ServerData(up=True, props={"model_alias": "m"})), ("m", False))
+        self.assertEqual(serving(ServerData(up=True, router=RouterInfo())), (None, True))
 
     def test_the_running_window_changed(self) -> None:
         listed = {"OpenCode": {"a": 98304}, "Pi": {"a": 131072}}

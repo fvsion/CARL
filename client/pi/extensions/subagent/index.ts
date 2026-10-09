@@ -20,6 +20,9 @@
 //   the test session and then the code session, with one result (runAgentTask, carl-chain.js); single, background
 //   and chain steps alike. Parallel tasks with more than one task refuse such a brief (the two sessions of each
 //   item would see the other items' test files).
+// - the coder's thinking (Phase 23.4.4): CARL's coder starts with the thinking level that carl.json "thinking" names
+//   for the model it runs on (the dashboard's Coder thinking). A model without an entry (Coder thinking "same as
+//   main", the default): the session's own level, as before.
 /**
  * Subagent Tool - Delegate tasks to specialized agents
  *
@@ -338,8 +341,10 @@ async function runSingleAgent(
 	const inheritsDispatchConfig = !agent.model;
 	const model = agent.model ?? dispatchDefaults.model;
 	if (model) args.push("--model", model);
-	if (inheritsDispatchConfig && dispatchDefaults.thinkingLevel) {
-		args.push("--thinking", dispatchDefaults.thinkingLevel);
+	// CARL: CARL's coder thinks as its own setting says (coderThinking), not as the session does
+	const thinkingLevel = (CODERS.has(agent.name) && coderThinking(model)) || dispatchDefaults.thinkingLevel;
+	if (inheritsDispatchConfig && thinkingLevel) {
+		args.push("--thinking", thinkingLevel);
 	}
 	if (agent.tools && agent.tools.length > 0) args.push("--tools", agent.tools.join(","));
 	if (agent.excludeTools && agent.excludeTools.length > 0) args.push("--exclude-tools", agent.excludeTools.join(","));
@@ -487,6 +492,24 @@ function chainOn(): boolean {
 		return !(typeof d === "object" && d !== null && (d as Record<string, unknown>).chain === false);
 	} catch {
 		return true;
+	}
+}
+
+// CARL: the coder's thinking (Phase 23.4.4): the dashboard's Coder thinking of each model, which the installer writes
+// into carl.json as "thinking": {"coder": {"provider/model": level}}. Every coder session gets it, the chain's test
+// session too. A model without an entry (Coder thinking "same as main", not CARL's, or an older install): the
+// session's level, as before.
+const THINKING_LEVELS = new Set(["off", "minimal", "low", "medium", "high", "xhigh"]);
+function coderThinking(model: string | undefined): ThinkingLevel | undefined {
+	if (!model) return undefined;
+	try {
+		const st: unknown = JSON.parse(fs.readFileSync(path.join(getAgentDir(), "carl.json"), "utf-8"));
+		const t = typeof st === "object" && st !== null ? (st as Record<string, unknown>).thinking : undefined;
+		const coder = typeof t === "object" && t !== null ? (t as Record<string, unknown>).coder : undefined;
+		const level = typeof coder === "object" && coder !== null ? (coder as Record<string, unknown>)[model] : undefined;
+		return typeof level === "string" && THINKING_LEVELS.has(level) ? (level as ThinkingLevel) : undefined;
+	} catch {
+		return undefined;
 	}
 }
 

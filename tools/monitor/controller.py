@@ -20,7 +20,8 @@ from .settings import Pending, SettingsService
 from .settings_actions import SETTINGS_ACTIONS, SettingsActions
 from .settings_view import SettingsView
 from .cards import NO_COLLAPSE, THREE_LEVELS
-from .state import CONNECT_SUBPANELS, DETAILS, SP_CACHE, SP_FIT, SP_MODELS, SP_ROUTER, SP_SERVER, SP_TUNE, UIState
+from .state import (CONNECT_SUBPANELS, DETAILS, SP_AGENTS, SP_CACHE, SP_FIT, SP_MODELS, SP_ROUTER, SP_SERVER, SP_TUNE,
+                    UIState)
 
 SHIFT_TAB = "\x1b[Z"
 
@@ -63,7 +64,7 @@ class Controller:
         """Run an action: a clicked region's or button's, or one a key stands for."""
         ui, d = self.ui, self.data
         if action.startswith(("set", "sp:", "pick", "mrow:", "smodel:", "msortset:", "mfilterset:", "c2no", "card",
-                              "fgoal:", "fscope:", "rmode", "rload:", "runload:", "tdepth:", "cache:")) \
+                              "fgoal:", "fscope:", "rmode", "rload:", "runload:", "tdepth:", "cache:", "agents:")) \
                 or action in SETTINGS_ACTIONS:
             self.settings.action(action)
         elif action.startswith("level:"):
@@ -174,7 +175,7 @@ class Controller:
                 ui.fit_scroll = max(0, ui.fit_scroll - step)
             elif ui.sp == SP_MODELS:
                 ui.mrow = max(ui.mrow - step, 0)
-            elif ui.sp in (SP_TUNE, SP_ROUTER, SP_CACHE):     # these pages scroll as one (Phase 23.2)
+            elif ui.sp in (SP_AGENTS, SP_TUNE, SP_ROUTER, SP_CACHE):     # these pages scroll as one (Phase 23.2)
                 ui.page_scroll = max(0, ui.page_scroll - step)
             else:
                 ui.set_scroll = max(0, ui.set_scroll - step)

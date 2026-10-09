@@ -15,8 +15,6 @@ MetaValue = Union[int, float, bool, str]
 Meta = Dict[str, MetaValue]
 
 GIB = 2 ** 30
-# compute buffers, MTP draft context and allocator slack: a conservative allowance
-OVERHEAD = 1.0 * GIB
 DEFAULT_CTX_TRAIN = 262144                  # when a header doesn't say
 
 GGUF_TYPES: Dict[int, str] = {0: "<B", 1: "<b", 2: "<H", 3: "<h", 4: "<I", 5: "<i", 6: "<f", 7: "<?",
@@ -64,9 +62,15 @@ class ModelShape(_Shape, total=False):
     """_Shape, and the sliding-window layers (Gemma): swa_window = the window (0: none), and
     kv_elems_per_token_swa = their KV elements per token (kv_elems_per_token then counts only the
     full-attention layers). Such layers keep only the window unless the server runs --swa-full,
-    which a restored state needs (fit.need_bytes(swa_full)). Absent in shapes cached before 11.6."""
+    which a restored state needs (fit.need_bytes(swa_full)). Absent in shapes cached before 11.6.
+    The compute buffers (fit.compute_bytes, 23.4.4): attn_elems = the K + V elements per token of the
+    widest full-attention layer (attn_elems_swa: of the widest sliding-window layer), act_width = the
+    widest activation of one token (the FFN, the MoE experts' outputs, the recurrent projections)."""
     swa_window: int
     kv_elems_per_token_swa: int
+    attn_elems: int
+    attn_elems_swa: int
+    act_width: int
 
 
 class GGUFError(ValueError):
@@ -228,19 +232,29 @@ def model_shape(meta: Meta) -> ModelShape:
     kvh = max(per_layer) if per_layer else g("attention.head_count_kv")
     # an array: the layers with KV heads (a recurrent layer has none); a number: every attention layer
     kv_full, kv_swa = (sum(per_layer) if per_layer else attn * kvh) * (kl + vl), 0
+    width, width_swa = kvh * (kl + vl), 0                 # the widest layer's K + V elements per token
     window = g("attention.sliding_window")
     pattern = meta.get(f"{a}.attention.sliding_window_pattern")
     own = main - g("attention.shared_kv_layers")     # Gemma 4: the last layers reuse earlier layers' KV
     if window and isinstance(pattern, str) and 0 < own <= len(pattern):
         heads = per_layer or [kvh] * own
-        kv_full = sum(heads[i] for i in range(own) if pattern[i] == "0") * (kl + vl)
-        kv_swa = (sum(heads[i] for i in range(own) if pattern[i] == "1")
-                  * (g("attention.key_length_swa", kl) + g("attention.value_length_swa", vl)))
+        kls = g("attention.key_length_swa", kl) + g("attention.value_length_swa", vl)
+        full_heads = [heads[i] for i in range(own) if pattern[i] == "0"]
+        swa_heads = [heads[i] for i in range(own) if pattern[i] == "1"]
+        kv_full, kv_swa = sum(full_heads) * (kl + vl), sum(swa_heads) * kls
+        width, width_swa = max(full_heads, default=0) * (kl + vl), max(swa_heads, default=0) * kls
     inner, rank, state = g("ssm.inner_size"), g("ssm.time_step_rank"), g("ssm.state_size")
     conv, groups = g("ssm.conv_kernel"), g("ssm.group_count")
     rs_layer = 0
     if rec and rank and state:
         rs_layer = rank * state * (inner // rank) * 4 + max(conv - 1, 0) * (inner + 2 * groups * state) * 4
+    embd, used = g("embedding_length"), g("expert_used_count")
+    # the widest activation of one token: the FFN; an MoE layer's expert FFNs (+ the shared one) and the
+    # experts' outputs before they are summed (embd x used); a recurrent layer's q, k, v and gate projections
+    act = max(embd, g("feed_forward_length"),
+              g("expert_feed_forward_length") * used + g("expert_shared_feed_forward_length"),
+              embd * used if g("expert_count") else 0,
+              2 * groups * state + 2 * inner if rec else 0)
     ft = meta.get("general.file_type")
     return {
         "arch": a, "blocks": blocks, "nextn": nextn, "attn_layers": attn, "rec_layers": rec,
@@ -252,6 +266,7 @@ def model_shape(meta: Meta) -> ModelShape:
         "effort_levels": bool(meta.get("_has_reasoning_effort")),
         "thinking_switch": bool(meta.get("_has_enable_thinking")),
         "swa_window": window, "kv_elems_per_token_swa": kv_swa,
+        "attn_elems": width, "attn_elems_swa": width_swa, "act_width": act,
     }
 
 

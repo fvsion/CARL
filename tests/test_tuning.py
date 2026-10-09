@@ -167,14 +167,14 @@ class AutoTunerTest(unittest.TestCase):
         self.assertNotIn("parallel", rec["results"])                                   # quick: skipped
 
     def test_picks_less_than_96k_when_it_does_not_fit(self) -> None:
-        rec = t.AutoTuner(FakeServer(self.SPEEDS), Steps()).run(plan(limit=int(15.45 * GIB)))
+        rec = t.AutoTuner(FakeServer(self.SPEEDS), Steps()).run(plan(limit=int(15.06 * GIB)))
         self.assertEqual(rec["max_ctx"]["1"], 81920)
         self.assertEqual(rec["settings"]["ctx"], 65536)
         self.assertEqual(rec["settings"]["slots"], "1")
 
     def test_refuses_without_a_16k_window(self) -> None:
         with self.assertRaisesRegex(ConfigError, "a context of 16K tokens"):
-            t.AutoTuner(FakeServer(self.SPEEDS), Steps()).run(plan(limit=15 * GIB))
+            t.AutoTuner(FakeServer(self.SPEEDS), Steps()).run(plan(limit=int(14.3 * GIB)))
 
     def test_no_mtp_head_measures_ngram_with_1_and_2_drafts(self) -> None:
         server = FakeServer(dict(self.SPEEDS, **{"ngram-mod:1": 48.0}))

@@ -1,6 +1,6 @@
 """The Settings tab: one object for the app and the controller over the panels in
-settings_panels (Server with the MODEL card, Models, Auto fit, Auto-tune, Router, Caching), the
-drop-downs and the questions. Draws from the UI state; reads models and config.json through
+settings_panels (Server with the MODEL card, Models, Agents, Auto fit, Auto-tune, Router, Caching), the
+drop-downs and the questions. The Agents panel: settings_panels.agents. Draws from the UI state; reads models and config.json through
 SettingsService (the ModelStore port)."""
 from __future__ import annotations
 
@@ -9,7 +9,8 @@ from typing import List, Optional, Sequence, Tuple
 from .diskcache import CacheConfig, CacheFile
 from .fmt import Row
 from .model import ModelInfo, ServerData
-from .settings import Pending, SettingsService
+from .settings import AgentsInfo, Pending, SettingsService
+from .settings_panels.agents import agents_panel
 from .settings_panels.autofit import AutoFitPanel
 from .settings_panels.caching import caching_panel
 from .settings_panels.model_card import ModelCard
@@ -42,6 +43,11 @@ class SettingsView:
     def models(self, ui: UIState, cols: int, height: int, mdir: ModelsDir, running: str = "") -> List[Row]:
         """Panel 2: every model, the selected one's details, a download, the actions (settings_panels.models)."""
         return self._models.draw(ui, cols, height, mdir, running)
+
+    @staticmethod
+    def agents(ui: UIState, info: Optional[AgentsInfo], cols: int, height: int, error: str = "") -> List[Row]:
+        """Panel 3: the thinking of the main session and of the coder, per model (settings_panels.agents)."""
+        return agents_panel(ui, info, cols, height, error)
 
     def autofit(self, ui: UIState, p: Pending, cols: int, height: int) -> List[Row]:
         """Panel 3: auto fit's pick for this Mac, its reasons and the ranking (settings_panels.autofit)."""
@@ -81,3 +87,7 @@ class SettingsView:
     def model_picker(self, cur: str, sort: int = 0, filt: int = 0, p: Optional[Pending] = None) -> Picker:
         """The model drop-down ("auto" on top)."""
         return self.pickers.model_picker(cur, sort, filt, p)
+
+    def agents_picker(self, cur: str, sort: int = 0, filt: int = 0) -> Picker:
+        """The Agents panel's model drop-down (no "auto")."""
+        return self.pickers.agents_picker(cur, sort, filt)

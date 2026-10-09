@@ -9,29 +9,31 @@ import signal
 import threading
 import time
 from dataclasses import dataclass
-from typing import List, Optional, Sequence, Tuple
+from typing import Callable, List, Optional, Sequence, Tuple
 
 from carl_core.adapters.client_package import carl_version
+from carl_core.adapters.system import llama_server_version
+from carl_core.domain.llamacpp import VersionCheck, check_version
 from carl_core.domain.units import duration, tokens
 
-from . import cli, diskcache, fsio, system, uiprefs
+from . import cli, clientsync, diskcache, fsio, system, uiprefs
 from .cacheapi import CacheApi, Registry
 from .api import Endpoint
 from .card_view import FORM_KEYS, TYPING_KEYS, draw_form
 from .cards import STOPPED, THREE_LEVELS, View, status_of
-from .clients import Drift, drift
+from .clients import Drift, drift, serving
 from .collector import Collector
 from .controller import Controller, Region
 from .fmt import (B, CYN, DIM, GRN, R, RED, YEL, CardLine, Key, Row, cwrap, draw_card, fit, footer_keys, indent, pill, row, vlen,
                   wwrap)
 from .jobs import Paths, ServerJobs, launcher_errors
 from .keys import InputBuffer
-from .model import ServerData, flag, jdict
+from .model import JSONDict, ServerData, flag, jdict
 from .settings import Pending, Schema, SettingsService, fit_sentence, gib_pair, net_choices
 from .settings_panels.common import subpanel_bar
 from .settings_panels.models import ModelsDir
 from .settings_view import SettingsView
-from .state import SP_CACHE, SP_FIT, SP_MODELS, SP_ROUTER, SP_SERVER, TABS, UIState
+from .state import SP_AGENTS, SP_CACHE, SP_FIT, SP_MODELS, SP_ROUTER, SP_SERVER, TABS, UIState
 from .store import CarlStore, ModelList
 from .terminal import LOGO_COLS, Terminal, logo_escape, logo_mode, place_lines
 from .views import body_connect, body_live, body_log, body_requests, drain_dialog, keys_card, quit_dialog
@@ -48,6 +50,7 @@ class Machine:
     """Facts about this Mac read once at start."""
     page: int           # VM page size
     total_mem: int
+    llama_version: str = ""     # `llama-server --version` (its "version:" line; "" or "?" when not known)
 
 
 class App:
@@ -74,11 +77,16 @@ class App:
         self._api_where: Optional[Tuple[str, int]] = None
         self._clients_file = os.path.join(os.path.dirname(jobs.paths.config_file), "clients.json")
         self._errors: Tuple[str, float, List[str]] = ("", 0.0, [])    # the launcher's output: (path, mtime, error lines)
+        # The installed llama.cpp (HEALTH): read at the dashboard's start (Machine) and again when the server process
+        # changes (a restart after brew upgrade llama.cpp); create() sets the reader, tests keep the start value.
+        self.read_llama_version: Callable[[], str] = lambda: machine.llama_version
+        self._llama: Tuple[Optional[int], VersionCheck] = (None, check_version(machine.llama_version))
 
     @classmethod
     def create(cls, opts: cli.Options) -> "App":
         """Wire the parts together (the composition root)."""
-        machine = Machine(page=system.sysctl_int("hw.pagesize", 16384), total_mem=system.sysctl_int("hw.memsize", 1))
+        machine = Machine(page=system.sysctl_int("hw.pagesize", 16384), total_mem=system.sysctl_int("hw.memsize", 1),
+                          llama_version=llama_server_version())
         host = opts.host or system.listen_host(system.netstat_tcp(), opts.port) or opts.env_host or "127.0.0.1"
         endpoint = Endpoint(host, opts.port, fsio.read_key(opts.key_file))
         collector = Collector(endpoint, fixed_host=bool(opts.host), key_file=opts.key_file, server_pid=opts.server_pid,
@@ -105,7 +113,9 @@ class App:
                     png = f.read()
             except OSError:
                 kind = None
-        return cls(opts, machine, collector, ui, svc, jobs, view, png, kind)
+        app = cls(opts, machine, collector, ui, svc, jobs, view, png, kind)
+        app.read_llama_version = llama_server_version
+        return app
 
     # ------------------------------------------------------------ drawing
     def view_ctx(self) -> View:
@@ -121,10 +131,17 @@ class App:
                     log_scroll=ui.log_scroll, cache=self.cache_line(),
                     api=f"{self._api.host}:{self._api.port}" if self._api else "",
                     listeners=self._api.listeners if self._api else 0, pushed=self.jobs.pushed(),
+                    unsent=self.config_unsent(d), single=self.single_model(d),
                     clients=tuple((self._api.registry if self._api else Registry(self._clients_file)).list()),
                     detail=ui.detail, drafter_size=fsio.file_size(md) if md else 0,
                     model_quant=str(m.get("quant") or "") if m else "", here=self.here_text(),
-                    gate=self.jobs.cache_conf().gate)
+                    gate=self.jobs.cache_conf().gate, llama=self.llama_check(d.pid))
+
+    def llama_check(self, pid: Optional[int]) -> VersionCheck:
+        """The installed llama.cpp against the tested version; read again when a new server process runs."""
+        if pid and pid != self._llama[0]:
+            self._llama = (pid, check_version(self.read_llama_version()))
+        return self._llama[1]
 
     def here_text(self) -> str:
         """OpenCode and Pi on this Mac, for the CONNECT card."""
@@ -341,15 +358,52 @@ class App:
         return self.body_settings(d, cols, height)
 
     def client_drift(self, here: List[Tuple[str, str]]) -> Tuple[List[Drift], int]:
-        """The client configs on this Mac (for this server) that list other models than are
-        installed, and how many are installed."""
+        """The client configs on this Mac (for this server) that list other models than the configs get, and how many
+        they get: single-model mode, only the model the server runs (Phase 23.4.4 item 13: a change of the server's
+        model makes the configs out of date); router mode, every installed model."""
         if not here:                # no client set up here for this server: nothing to compare
             return [], 0
-        installed = [m["name"] for m in self.svc.models.downloaded()]
         d = self.ctl.data
+        router = d.router is not None if d.up else self.saved_mode() == "router"    # no server: config.json's mode
+        doc = self.client_doc(d)
+        try:
+            want = [str(jdict(m)["id"]) for m in doc["models"]] if doc else None
+        except (KeyError, TypeError):
+            want = None
+        if want is None:            # no list: the installed models
+            want = [m["name"] for m in self.svc.models.downloaded()]
+        server = want[0] if not router and len(want) == 1 else ""
         running = (d.alias, d.n_ctx) if d.up and d.alias and d.n_ctx else None
-        return (drift({c: fsio.listed_models(self.opts.home, c, pid) for c, pid in here}, installed, running),
-                len(installed))
+        return (drift({c: fsio.listed_models(self.opts.home, c, pid) for c, pid in here}, want, running, server),
+                len(want))
+
+    def client_doc(self, d: ServerData) -> Optional[JSONDict]:
+        """The model list the client configs get now (single-model mode: the model the server runs)."""
+        run, router = serving(d)
+        return self.svc.models.client_list(run, self.saved_mode() == "router" if router is None else router)
+
+    def single_model(self, d: ServerData) -> str:
+        """Single-model mode: the model the server runs (or a start loads), which the configs list alone; else ""."""
+        if d.router is not None or (not d.up and self.saved_mode() == "router"):
+            return ""
+        try:
+            doc = self.client_doc(d)
+            ms = doc.get("models") if doc else None
+            return str(jdict(ms[0]).get("id") or "") if isinstance(ms, list) and len(ms) == 1 else ""
+        except Exception:           # a model list that can't be read: say nothing
+            return ""
+
+    def config_unsent(self, d: ServerData) -> bool:
+        """The config sent to the other computers is out of date: the list they would get now differs (Phase 23.4.4:
+        in single-model mode, a change of the server's model)."""
+        sent = self.jobs.pushed().partition(" at ")[0]
+        if not sent:
+            return False
+        try:
+            doc = self.client_doc(d)
+        except Exception:           # a model list that can't be read: no warning
+            return False
+        return doc is not None and clientsync.version_of(doc) != sent
 
     def configs_stale(self) -> bool:
         """The client configs on this Mac need ./carl.sh install --config-only (the Connect tab's ⚠)."""
@@ -383,6 +437,9 @@ class App:
             elif ui.sp == SP_MODELS and ui.card:
                 ui.keys = list(TYPING_KEYS if ui.card.typing is not None else FORM_KEYS)
                 body = draw_form(ui.card, cols, height - 2)
+            elif ui.sp == SP_AGENTS:
+                body = self.view.agents(ui, self.ctl.settings.agents_info(), cols, height - 2,
+                                        self.svc.models.error or "")
             elif ui.sp == SP_FIT:
                 body = self.view.autofit(ui, self.ensure_pending(d), cols, height - 2)
             elif ui.sp == SP_ROUTER:

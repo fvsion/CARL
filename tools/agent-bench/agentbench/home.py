@@ -1,11 +1,13 @@
 """The harness HOME: OpenCode and Pi installed from a CARL client package into a folder of the harness, never
 the user's HOME. prepare() installs them once; refresh() writes their configs again for the model that the
-server runs now (the package lists the downloaded models only)."""
+server runs now (the package lists the downloaded models only). Both run the package's ./setup with --coder auto
+by default, the setup's own rule (the coder on with 2 or more slots), or on / off (bench.py --coder)."""
 from __future__ import annotations
 
 import glob
 import json
 import os
+import re
 import time
 from dataclasses import dataclass
 from typing import Any, Dict, Mapping, Optional
@@ -18,6 +20,11 @@ OPENCODE_PKG = "opencode-ai"
 PI_PKG = "@earendil-works/pi-coding-agent"
 DEFAULT_OPENCODE = "1.18.34"       # the versions of the baseline (the same for every run)
 DEFAULT_PI = "1.0.2"
+# The coder subagent, as ./setup --coder takes it. auto (the default): the setup's own rule, on when the server runs
+# 2 or more slots (with 1 slot a subagent takes the main session's slot). on / off: forced.
+CODER_CHOICES = ("auto", "on", "off")
+DEFAULT_CODER = "auto"
+_CODER_LINE = re.compile(r"^Coder subagent: (on|off)\.", re.M)
 
 
 class HomeError(Exception):
@@ -96,18 +103,43 @@ def setup_env(home: str) -> Dict[str, str]:
     return env
 
 
-def unpack_and_setup(zip_path: str, home: str, install: bool, timeout: float = 1800) -> str:
-    """Unzip the package into the harness HOME and run its ./setup --yes (the coder on). The setup's output."""
+def check_coder(coder: str) -> str:
+    if coder not in CODER_CHOICES:
+        raise HomeError(f"--coder takes {', '.join(CODER_CHOICES)}, not {coder!r}")
+    return coder
+
+
+def coder_state(setup_output: str) -> str:
+    """What the setup did with the coder ("on" or "off"; "" when its output does not say): its "Coder subagent:
+    on." line (client/install.sh)."""
+    found = _CODER_LINE.findall(setup_output.replace("\r", ""))
+    return found[-1] if found else ""
+
+
+def unpack_and_setup(zip_path: str, home: str, install: bool, timeout: float = 1800,
+                     coder: str = DEFAULT_CODER) -> str:
+    """Unzip the package into the harness HOME and run its ./setup --yes --coder CODER (auto: the setup's rule, on
+    with 2 or more slots). The setup's output; the coder's choice and state go into the HOME marker."""
+    check_coder(coder)
     os.makedirs(home, exist_ok=True)
     code, out = run(["unzip", "-o", "-q", zip_path, "-d", home], home, setup_env(home), 300)
     if code != 0:
         raise HomeError(f"unzip failed:\n{tail(out)}")
     folder = os.path.join(home, "carl-client")
-    argv = [os.path.join(folder, "setup"), "--yes", "--coder", "on"] + ([] if install else ["--no-install"])
+    argv = [os.path.join(folder, "setup"), "--yes", "--coder", coder] + ([] if install else ["--no-install"])
     code, out = run(argv, folder, setup_env(home), timeout)
     if code != 0:
         raise HomeError(f"./setup failed (code {code}):\n{tail(out, 40)}")
+    if is_harness_home(home):
+        write_marker(home, {"coder": coder, "coder_state": coder_state(out)})
     return out
+
+
+def coder_of(home: str) -> Dict[str, str]:
+    """The HOME's coder, from its marker: {"coder": auto | on | off, "coder_state": on | off} ("" when not known:
+    a HOME of an older harness ran ./setup --coder on)."""
+    doc = read_marker(home)
+    return {"coder": str(doc.get("coder") or ""), "coder_state": str(doc.get("coder_state") or "")}
 
 
 def pin_versions(home: str, opencode: Optional[str], pi: Optional[str]) -> Dict[str, str]:
@@ -126,21 +158,24 @@ def pin_versions(home: str, opencode: Optional[str], pi: Optional[str]) -> Dict[
 
 
 def prepare(src: PackageSource, home: str, opencode: Optional[str] = DEFAULT_OPENCODE,
-            pi: Optional[str] = DEFAULT_PI) -> Dict[str, str]:
-    """A new harness HOME: the client package, ./setup with the install, the pinned client versions."""
+            pi: Optional[str] = DEFAULT_PI, coder: str = DEFAULT_CODER) -> Dict[str, str]:
+    """A new harness HOME: the client package, ./setup with the install (--coder CODER), the pinned client
+    versions."""
+    check_coder(coder)
     home = check_home_path(home)
     if os.path.isdir(home) and os.listdir(home) and not is_harness_home(home):
         raise HomeError(f"{home} is not empty and is not a harness HOME: give an empty or a new folder")
     os.makedirs(home, exist_ok=True)
     write_marker(home, {"created_by": "tools/agent-bench/bench.py prepare", "repo": src.repo})
-    unpack_and_setup(make_package(src), home, install=True)
+    unpack_and_setup(make_package(src), home, install=True, coder=coder)
     found = pin_versions(home, opencode, pi)
     write_marker(home, {"versions": found})
     return found
 
 
-def refresh(src: PackageSource, home: str) -> str:
-    """Write the client configs again (./setup --no-install) from a package of the running server, so they
-    list its model. The variant is applied after this."""
+def refresh(src: PackageSource, home: str, coder: str = DEFAULT_CODER) -> str:
+    """Write the client configs again (./setup --no-install --coder CODER) from a package of the running server,
+    so they list its model (and, with auto, the coder follows its slots). The variant is applied after this."""
+    check_coder(coder)
     home = require_harness_home(home)
-    return unpack_and_setup(make_package(src), home, install=False)
+    return unpack_and_setup(make_package(src), home, install=False, coder=coder)

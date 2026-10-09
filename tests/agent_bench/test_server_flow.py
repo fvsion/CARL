@@ -102,12 +102,25 @@ class PackageSetupTest(unittest.TestCase):
         with open(os.path.join(h, ".config", "opencode", "opencode.json")) as f:
             oc = json.load(f)
         self.assertEqual(oc["provider"]["llamacpp"]["options"]["baseURL"], f"http://127.0.0.1:{port}/v1")
-        self.assertIn("coder", oc["agent"])                     # --coder on
+        self.assertIn("coder", oc["agent"])                     # --coder auto with 2 slots: on
+        self.assertEqual(hm.coder_of(h), {"coder": "auto", "coder_state": "on"})
+        self.assertTrue(hm.read_marker(h)["test"])              # the marker keeps its other keys
         self.assertTrue(os.path.isfile(os.path.join(h, ".pi", "agent", "agents", "coder.md")))
         with open(os.path.join(h, ".config", "carl", "api-key")) as f:
             self.assertEqual(f.read().strip(), key)
         self.assertEqual(cl.client_env(h)["OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS"], "1")
         self.assertFalse(os.path.exists(os.path.join(h, ".zshrc")))   # NO_PROFILE=1
+        # the setup's coder rule: 1 slot = the coder off (auto); --coder on forces it
+        srv.slots = 1
+        out = hm.unpack_and_setup(z, h, install=False)
+        self.assertIn("Coder subagent: off.", out)
+        self.assertEqual(hm.coder_of(h), {"coder": "auto", "coder_state": "off"})
+        with open(os.path.join(h, ".config", "opencode", "opencode.json")) as f:
+            self.assertNotIn("coder", json.load(f).get("agent", {}))
+        hm.unpack_and_setup(z, h, install=False, coder="on")
+        self.assertEqual(hm.coder_of(h), {"coder": "on", "coder_state": "on"})
+        with self.assertRaises(hm.HomeError):
+            hm.unpack_and_setup(z, h, install=False, coder="yes")
 
 
 if __name__ == "__main__":

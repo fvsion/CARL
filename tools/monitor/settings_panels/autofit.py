@@ -148,7 +148,9 @@ class AutoFitPanel:
                            f"of {limit}"),
               row("status", f"{GRN}downloaded{R}" if af.pick.downloaded else
                   f"{YEL}not downloaded{R}" + (f"   {size} to download" if size else "")),
-              row("why", af.because().rstrip(".") + ".")]
+              row("why", af.because().rstrip(".") + "."),
+              row("order", "2 slots × 96K, 64K or 48K tokens, then 1 slot × 96K, 64K or 48K tokens. Nothing below "
+                           "48K. MTP goes before a slot or the context.")]
         if full:
             L.append(row("quality rank", "The parameters and the density count first, then the quantization. "
                                          "Rank 1 is the best."))

@@ -149,8 +149,9 @@ The top-level keys `default` and `default_small` are the offline fallback of Aut
 
 | Path | What it is |
 |---|---|
-| `tools/carl_core/domain/` | Pure logic (no I/O): `types`, `errors`, `settings`, `gguf`, `fit`, `autofit`, `models`, `cards`, `records`, `hf`, `launch`, `router`, `tuning`, `clientlist`, `apikey`, `confdir`, `ports`, `units`, `package` (the client package: the version, the name of the zip, its files and modes, the refusals) |
+| `tools/carl_core/domain/` | Pure logic (no I/O): `types`, `errors`, `settings`, `gguf`, `fit`, `autofit`, `models`, `cards`, `records`, `hf`, `launch`, `router`, `tuning`, `clientlist`, `apikey`, `confdir`, `ports`, `units`, `package` (the client package: the version, the name of the zip, its files and modes, the refusals), `llamacpp` (the tested llama.cpp version and the check of the installed one) |
 | `tools/carl_core/domain/units.py` | The units of every screen: GB and MB for files, GiB and MiB for memory, K = 1024 tokens, tok/s, the durations. It replaces `fit.human_gb` and the `fmt.size`, `knum` and `dur` of the dashboard. |
+| `tools/carl_core/domain/llamacpp.py` | The llama.cpp version that CARL is tested with (`TESTED`, one place), the parse of `llama-server --version`, the comparison (by the build number, else by the dotted version), the start line and the rows of the HEALTH card ([The llama.cpp version](server.md#the-llamacpp-version)). |
 | `tools/carl_core/domain/cards.py` | The model cards. `card_rows()` gives the rows of `./carl.sh card` (the labels of the dashboard; for a custom model, every field with the key to set it). |
 | `tools/carl_core/adapters/` | The I/O: `json_files`, `filesystem`, `gguf_reader`, `system` (sysctl, the GPU memory limit, `netstat`), `huggingface`, `downloader`, `llama_server`, `api_key`, `console`, `client_package` (`git ls-files client/`, the zip with mode 0600; `./carl.sh package` and the dashboard use it) |
 | `tools/carl_core/app.py`, `wiring.py` | The use cases, and the connection of the adapters |
@@ -199,7 +200,7 @@ The `tools/monitor/` package:
 | Connect | The address, the key and the client configs to copy. Sub-tabs: **Setup** and **Clients**. `i` installs the clients on this Mac (`u`: the model lists only). `z` makes the client package, `f` shows it in the Finder. `P` sends the client config. |
 | Requests | Each finished request with its speeds, and a mean row |
 | Log | The server log |
-| Settings | Six panels: Server, Models, Auto fit, Auto-tune, Router, Caching |
+| Settings | Seven panels: Server, Models, Agents, Auto fit, Auto-tune, Router, Caching |
 
 | Settings panel | What it does |
 |---|---|

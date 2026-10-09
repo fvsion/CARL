@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import unittest
+from operator import itemgetter
 from typing import Dict, List, cast
 
 from support import GIB, HOME, MDIR, FakeFolder, catalog, entry, shape
@@ -82,6 +83,23 @@ class EffectiveTuneTest(unittest.TestCase):
         self.assertEqual((vals["kv"], src["kv"]), ("q4_0", "catalogue"))
         self.assertEqual((vals["repeat"], src["repeat"]), (1.0, "default"))
         self.assertEqual((vals["alias"], src["alias"]), ("small", "default"))   # the model's alias fills an empty one
+
+    def test_the_thinking_of_each_role_defaults_from_the_models_kind(self) -> None:
+        """Phase 23.4.4: the main session as CARL did before the setting (on; effort: low); the coder "main" (as the
+        main session; user: "default should be the same thinking mode as your main session"); a value from
+        config.json as the model takes it (the coder's "on" on an effort model: medium)."""
+        small = cast(ModelInfo, dict(self.ms["small"], thinking="effort"))
+        vals, src = dm.effective_tune(small, Config())
+        self.assertEqual((vals["thinking_main"], vals["thinking_coder"], src["thinking_coder"]),
+                         ("low", "main", "catalogue"))
+        on_off = cast(ModelInfo, dict(self.ms["small"], thinking="on-off"))
+        self.assertEqual(itemgetter("thinking_main", "thinking_coder")(dm.effective_tune(on_off, Config())[0]),
+                         ("on", "main"))
+        cfg = Config(models={"small": {"thinking_main": "medium", "thinking_coder": "off"}})
+        vals, src = dm.effective_tune(on_off, cfg)
+        self.assertEqual((vals["thinking_main"], vals["thinking_coder"], src["thinking_coder"]), ("on", "off", "config"))
+        self.assertEqual(dm.effective_tune(small, Config(models={"small": {"thinking_coder": "on"}}))[0]["thinking_coder"],
+                         "medium")
 
     def test_custom_model_starts_from_its_header(self) -> None:
         header = dm.custom_defaults(shape(experts=0, nextn=0, ctx_train=40960))[0]
