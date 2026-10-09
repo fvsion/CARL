@@ -3,6 +3,26 @@
 All notable changes to CARL. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Dates are local dates on the development Mac (M3 Pro, 36 GB).
 
+## 1.12.1 - 2026-10-08
+
+Phase 23.4, reopened: `/carl` rebuilt from mock-ups as a real control panel.
+
+### Changed
+- **`/carl` is one list, changed in place** (OpenCode and Pi). Each row is a label and its state; Enter (Pi: also
+  Space) changes it at once: the state reads `turning off…` while the setup runs, then the new state, and a message
+  says what CARL did (red on an error). The title says when OpenCode or Pi must restart. No second dialog per row, no
+  explanations, no setup switch names on screen.
+- OpenCode: the state is at the right of the row, in OpenCode's 60-column dialog; the list updates in place, so the
+  cursor stays. Pi: Pi's own settings list (as `/settings`).
+- **Web search** opens its values (exa, parallel, off), each provider with where the queries go. **Sync service**
+  opens a view of the sync's state, the versions and the addresses. **Check for a new config** and **Apply the
+  waiting config** are rows of their own.
+- Without the coder, the **Background coder** and **Delegation reminder** rows are not in the list.
+
+### Fixed
+- 1.12.0's panel cut words at the edge of OpenCode's dialog (its text was 88 columns wide in a 60-column dialog) and
+  listed its sentences as rows that you could select.
+
 ## 1.12.0 - 2026-10-08
 
 Phase 23.4: `/carl` is a control panel, and the new-file gate is a setting of the dashboard.

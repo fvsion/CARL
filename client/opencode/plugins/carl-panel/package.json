@@ -5,10 +5,15 @@
   "type": "module",
   "license": "MIT",
   "exports": {
-    ".": { "import": "./index.js" },
-    "./tui": { "import": "./tui.js" }
+    ".": {
+      "import": "./index.js"
+    },
+    "./tui": {
+      "import": "./tui.js"
+    }
   },
   "peerDependencies": {
-    "@opencode-ai/plugin": ">=1.14.0"
+    "@opencode-ai/plugin": ">=1.14.0",
+    "solid-js": ">=1.8.0"
   }
 }

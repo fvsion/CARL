@@ -59,12 +59,11 @@ The setup on another computer adds the sync service (`client/carl-sync.py watch`
 
 ## Apply at once, and the /carl panel
 
-- A new config is applied at once. To keep it waiting, type `/carl` in OpenCode or Pi, open **Apply new configs at once**, then **Turn it off**. Or run `carl-sync.py auto off`. **Turn it on** (`carl-sync.py auto on`) turns it back on.
-- When a new config waits, the panel says "A new config from the dashboard waits." and offers **Apply the new config now**. **Check for a new config now** asks the dashboard.
-- The section uses plain sentences, for example "Last config from the dashboard: today 10:53.". Its **Details** part holds the server address, the dashboard API address and the config version. **‹ back** goes back to the list.
+- A new config is applied at once. To keep it waiting, type `/carl` in OpenCode or Pi and turn **Apply new configs at once** off. Or run `carl-sync.py auto off`. `carl-sync.py auto on` turns it back on.
+- When a new config waits, the panel shows the row **Apply the waiting config**. **Check for a new config** asks the dashboard now.
+- **Sync service** (its state: `connected`, `not connected`, `not installed` or `error`) opens a view with label rows: the sync service, the last contact, the last config, a waiting config, the last failed check, the version of the client package (`VERSION` in the client folder), the CARL version of the server, the server address and the dashboard API address. When the two versions differ, make a new package, unzip it over the folder and run `./setup`.
 - OpenCode and Pi read their configs when they start. After a config is applied, OpenCode shows a message and Pi shows a notice: restart it to use the new config.
-- The **Details** part also holds the version of the client package (`VERSION` in the client folder) and the CARL version of the server. When they differ, the section says so: make a new package, unzip it over the folder and run `./setup`.
-- The server version comes from the dashboard API: each reply has the header `X-Carl-Version`, also a reply that says that the config did not change (304). The sync service saves it (`server_version` in its state file). Thus, `/carl` tells you about a CARL update on the server Mac at the next contact. Before the first contact, `/carl` uses the version in `remote.json` (from the package).
+- The server version comes from the dashboard API: each reply has the header `X-Carl-Version`, also a reply that says that the config did not change (304). The sync service saves it (`server_version` in its state file). Thus, `/carl` shows a CARL update on the server Mac at the next contact. Before the first contact, `/carl` uses the version in `remote.json` (from the package).
 - `/carl` also turns every CARL piece on this computer on or off: the coder, the background coder, the delegation reminder, the browser, web search, LSP, the subagents side panel, the session switcher, the disk cache and the model check. A switch runs `carl-sync.py set KEY=VALUE`: it writes `~/.config/carl/client-install.env` and runs `install.sh` again with the models this folder has (no new config from the dashboard), under the sync's lock ([the /carl panel](plugins.md#carl-panel-the-carl-panel-opencode-and-pi)). The new-file gate is not there: it is a setting of the dashboard.
 
 ## The Clients tab

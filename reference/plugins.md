@@ -4,7 +4,7 @@
 
 The setup (`./carl.sh install` on the server Mac, `./setup` in the client package on another computer) copies these pieces and registers them. It keeps your own plugins and extensions. A piece of yours with the same name stays, and CARL does not install its own.
 
-Type `/carl` in OpenCode or Pi to see each piece and its state on this computer, and to turn it on or off.
+Type `/carl` in OpenCode or Pi to turn each piece on this computer on or off.
 
 ## Overview
 
@@ -138,15 +138,16 @@ The list has the top-level sessions of this project that changed in the last 72 
 
 ## carl-panel: the /carl panel (OpenCode and Pi)
 
-Type `/carl`. The panel is a control panel: one row for each CARL piece on this computer, with its label in a column and its state (`Coder subagent             on`). The state values are short and lower case: `on`, `off`, `exa`, `parallel`, `connected`. No row joins values with ` · `. A row opens a dialog:
-- First, its actions: **Turn it off** or **Turn it on** (Web search: **Use exa**, **Use parallel**, **Turn it off**; Config sync: **Apply the new config now**, **Check for a new config now**).
-- Then what the piece does, in whole sentences (at most 88 characters on a line).
-- A **Details** part: label rows (the setup switch and its value in `~/.config/carl/client-install.env`; for Config sync the addresses, the config version, the version of the client package and the CARL version of the server), then sentences.
-- **‹ back** goes back to the list. (OpenCode shows **‹ back** before the details, Pi after them.)
+Type `/carl`. The panel is a control panel (user, 2026-10-08: no explanations): one list, one row for each CARL piece on this computer, with its label and its state. The state values are short and lower case: `on`, `off`, `exa`, `parallel`, `connected`. The rows keep the order of their groups: the coder, the tools, the side panels, the server, the config sync.
+- **OpenCode** (a TUI plugin): one `DialogSelect`. The label is the row's title, the state is its footer (at the right). The options come from a Solid signal, so a change updates the list in place and the cursor stays. The dialog is OpenCode's medium size (60 columns): every label and state fits. No group headings: OpenCode shows at most half the terminal height minus 6 lines, and the list fits 13 rows on a 40-row terminal.
+- **Pi** (an extension): Pi's `SettingsList` (as Pi's `/settings`) in `ctx.ui.custom`, with Pi's own hint line.
+- **Enter** (Pi: also **Space**) on a switch runs its action at once: the state reads `turning off…`, then the new state. **Web search** opens its values, the current one marked, each provider with where the queries go. **Sync service** opens a read-only view of label rows (OpenCode: a `DialogAlert`). **Check for a new config** and **Apply the waiting config** run at once (`checking…`, `applying…`).
+- The title says `Restart OpenCode to use N changes.` (Pi: `Restart Pi …`) while rows changed since the program started, or a config was applied.
+- One action at a time; a second Enter waits.
 
 | Row | Client | State from | Action |
 |---|---|---|---|
-| Config sync | OpenCode, Pi | `~/.config/carl/client-sync.json` | `carl-sync.py apply`, `carl-sync.py once` |
+| Sync service (a view), Apply the waiting config, Check for a new config | OpenCode, Pi (only with `remote.json`) | `~/.config/carl/client-sync.json` | `carl-sync.py apply`, `carl-sync.py once` |
 | Apply new configs at once | OpenCode, Pi (only with `remote.json`) | `client-sync.json` `auto_apply` | `carl-sync.py auto on\|off` |
 | Coder subagent | OpenCode, Pi | the coder agent (`opencode.json`; Pi: `agents/coder.md`) | `set NO_CODER=1\|on` |
 | Background coder | OpenCode, Pi | `opencode.env`; Pi: `carl.json` `background_subagents` | `set NO_BACKGROUND_SUBAGENTS=1\|on` |
@@ -161,9 +162,10 @@ Type `/carl`. The panel is a control panel: one row for each CARL piece on this 
 
 - **A switch** runs `client/carl-sync.py set KEY=VALUE` (in the client folder that the setup recorded). It writes the key to `~/.config/carl/client-install.env` (`1`: off; `on`: the line goes, so the default holds; the other lines stay; mode 0600), then runs `install.sh` next to it with the recorded switches and `CARL_SYNC=1`, as a sync does, but with the models that the folder has now (`installed-models.json`): it gets no new config from the dashboard. It holds the sync's lock, so it never runs beside a sync. It does not set `NO_PROFILE`: a switch can add the shell-profile line for OpenCode's tool switches, as `./setup` does. The output of the installer goes to `~/.config/carl/client-sync.log`.
 - `set` prints JSON: `changed` (each key, `from` and `to`), `ok` and `error`, `restart` (the clients that must restart: `opencode`, `pi`; the keys of LSP, the side panel, the switcher and the model check are OpenCode only) and `new_terminal` (OpenCode reads web search, LSP and the background coder from the shell, so it must start from a new terminal). An unknown key or value: exit code 2, and nothing changes.
-- After a switch, the panel reads the row again. A message says what changed and which program must restart ("CARL turned the subagents side panel off. Restart OpenCode to use it."), and the opened row says "Restart OpenCode to use the change." until the program restarts. When the state did not change (the coder on a 1-slot server), the message says so.
-- Without the coder, the Background coder and Delegation reminder rows show their switch from `client-install.env`, and say that it has no effect now.
+- After a switch, the panel reads the rows again. A message says what changed and which program must restart ("CARL turned the subagents side panel off. Restart OpenCode to use it."); it is red when the switch failed, or when the state did not change.
+- Turning the coder on also sets `CODER=1`: it stays on with a 1-slot server.
+- Without the coder, the Background coder and Delegation reminder rows are not in the list.
 - The new-file gate (`delegation.gate`) is not in `/carl`: it is a setting of the dashboard only.
 - Without the sync service, the panel checks the server for a new config one time when OpenCode or Pi starts.
 - When a config from the dashboard is applied while OpenCode or Pi runs, OpenCode shows a message and Pi shows a notice: restart it to use the new config.
-- Things that happen now use the -ing form ("CARL is turning the browser off…"); the results are whole sentences ("New configs from the dashboard now wait for you.").
+- A state while an action runs uses the -ing form (`turning off…`); the messages are whole sentences ("New configs from the dashboard now wait for you.").

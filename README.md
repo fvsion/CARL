@@ -102,7 +102,7 @@ The setup (`./carl.sh install`, or `./setup` on another computer) adds CARL's pl
 - **Coder subagent, in the background:** large tasks go to a specialist coder while the main session stays free (OpenCode, Pi).
 - **Subagents panel** and **session switcher** in OpenCode's sidebar and prompt box.
 - **Model check:** a warning when the model that you select is not the one that the server runs (OpenCode).
-- **`/carl`:** every CARL piece and its state, and the config sync (OpenCode, Pi).
+- **`/carl`:** a control panel: turn each CARL piece on or off; the config sync (OpenCode, Pi).
 
 What each one does and how to turn it off: [USERGUIDE.md, "CARL's plugins and extensions"](USERGUIDE.md#carls-plugins-and-extensions). How they work: [reference/plugins.md](reference/plugins.md).
 

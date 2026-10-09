@@ -1,71 +1,91 @@
 // @ts-check
-// The /carl panel for OpenCode (TUI plugin, installed by CARL's client/install.sh): a control panel
-// (carl-panel.js). The list has one row for each CARL part: its label and its state ("Coder subagent   on"):
-// the config sync, new configs at once, the coder, the background coder, the delegation reminder, the browser,
-// web search, LSP, the subagents side panel, the session switcher, the disk cache and the model check.
-// OpenCode's dialogs are lists, so a row opens its own dialog: its actions first ("▸ Turn it off"), then what
-// the part does, then "‹ back", then the details (the setup switch, addresses, versions) under their own
-// heading. A switch runs `carl-sync.py set`; a toast says what changed and what must restart.
-import { act, sections } from "./carl-panel.js";
+// The /carl panel for OpenCode (TUI plugin, installed by CARL's client/install.sh): a control panel (carl-panel.js).
+// One list: each row is a CARL part's label and its state at the right ("Coder subagent   on"). Enter changes it
+// in place: the state reads "turning off…" while the setup runs, then the new state, and a toast says what CARL did
+// (red on an error); the title says when OpenCode must restart. Web search opens its values; Sync service opens a
+// view of its state. The list is a signal, so a change keeps the cursor where it is.
+import { createSignal } from "solid-js";
+import { act, panel, viewText } from "./carl-panel.js";
 
 /** @typedef {import("@opencode-ai/plugin/tui").TuiPluginApi} TuiPluginApi */
 /** @typedef {import("@opencode-ai/plugin/tui").TuiPluginModule} TuiPluginModule */
-
-const BACK = "‹ back";   // not exported: OpenCode may call every export of an entry module
+/** @typedef {import("./carl-panel.js").Row} Row */
+/** @typedef {import("./carl-panel.js").Action} Action */
 
 /** @param {TuiPluginApi} api */
-function panel(api) {
-  let running = false;                       // one action at a time: a second select waits for the first
-  const top = () => {
-    const all = sections("opencode");
-    api.ui.dialog.replace(() => api.ui.DialogSelect({
-      title: "CARL",
-      placeholder: "Filter",
-      options: all.map((s) => ({ title: s.row, value: s.id, description: "" })),
-      onSelect: (opt) => section(String(opt.value)),
-    }));
+function controlPanel(api) {
+  const [now, setNow] = createSignal(panel("opencode"));
+  /** @type {Map<string, string>} */
+  const busy = new Map();                    // row id -> its state while an action runs
+  let running = false;                       // one action at a time
+  const refresh = () => setNow(panel("opencode"));
+
+  /** @param {Row} r @param {Action} a */
+  const run = async (r, a) => {
+    if (running) return;
+    running = true;
+    busy.set(r.id, a.busy);
+    refresh();
+    try {
+      const said = await act(a, "opencode");
+      api.ui.toast({ message: said.message, variant: said.ok ? "success" : "error" });
+    } finally {
+      busy.delete(r.id);
+      running = false;
+      refresh();
+    }
   };
+
   /** @param {string} id */
-  const section = (id) => {
-    const s = sections("opencode").find((x) => x.id === id);
-    if (!s) return top();
+  const choose = (id) => {
+    const r = now().rows.find((x) => x.id === id);
+    if (!r || running) return;
+    if (r.kind === "switch") {
+      const a = Object.values(r.actions ?? {})[0];
+      if (a) void run(r, a);
+    } else if (r.kind === "action" && r.action) {
+      void run(r, r.action);
+    } else if (r.kind === "choice") {
+      api.ui.dialog.replace(() => api.ui.DialogSelect({
+        title: r.label,
+        options: (r.values ?? []).map((v) => ({ title: v, value: v, description: r.notes?.[v] })),
+        current: r.state,
+        onSelect: (opt) => {
+          const a = r.actions?.[String(opt.value)];
+          open();
+          if (a) void run(r, a);
+        },
+      }));
+    } else if (r.kind === "view") {
+      api.ui.dialog.replace(() => api.ui.DialogAlert({ title: r.viewTitle ?? r.label, message: viewText(r.view ?? []), onConfirm: open }));
+    }
+  };
+
+  const open = () => {
+    refresh();
     api.ui.dialog.replace(() => api.ui.DialogSelect({
-      title: `CARL › ${s.title}`,
-      options: [
-        ...s.actions.map((a, i) => ({ title: `▸ ${a.label}`, value: `act:${i}`, description: "" })),
-        ...s.lines.map((l, i) => ({ title: l, value: `line:${i}`, description: "" })),
-        { title: BACK, value: "back", description: "" },
-        ...s.details.map((l, i) => ({ title: l, value: `detail:${i}`, description: "", category: "Details" })),
-      ],
-      onSelect: async (opt) => {
-        const v = String(opt.value);
-        if (v === "back") return top();
-        if (!v.startsWith("act:") || running) return;
-        const a = s.actions[Number(v.slice(4))];
-        if (!a) return;
-        running = true;
-        try {
-          if (a.busy) api.ui.toast({ message: a.busy, variant: "info" });
-          const said = await act(a, "opencode");
-          api.ui.toast({ message: said.message, variant: said.ok ? "success" : "error" });
-        } finally {
-          running = false;
-        }
-        section(id);
+      get title() {
+        const t = now().title;
+        return t ? `CARL   ${t}` : "CARL";
       },
+      placeholder: "Search",
+      get options() {
+        return now().rows.map((r) => ({ title: r.label, value: r.id, footer: busy.get(r.id) ?? r.state }));
+      },
+      onSelect: (opt) => choose(String(opt.value)),
     }));
   };
-  return top;
+  return open;
 }
 
 /** @type {TuiPluginModule & { id: string }} */
 const plugin = {
   id: "carl-panel:tui",
   tui: async (api) => {
-    const open = panel(api);
+    const open = controlPanel(api);
     const unreg = api.command?.register?.(() => [{
       title: "CARL", value: "carl.panel", category: "CARL",
-      description: "Turn the CARL parts on this computer on or off: the coder, the tools, the config sync",
+      description: "Turn the CARL parts on this computer on or off",
       slash: { name: "carl" },
       onSelect: () => open(),
     }]);
