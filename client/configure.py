@@ -45,6 +45,9 @@ Rules
   with --model) and, with a thinking level, "thinking": {"coder": {"PROVIDER/MODEL": LEVEL}}. Both state files keep
   "coder_model" ("main" when the coder runs on the main session's model). The provider's keys stay the client's:
   CARL writes only the model's name.
+- The Tests setting (Phase 23.4.6; --coder-tests before|after|off: CODER_TESTS, /carl's Tests row): when the chain's
+  test session runs. Both state files keep "coder_tests"; OpenCode's carl-delegation gets the option "stateFile" (its
+  carl.json) and Pi's subagent extension reads its own carl.json, each at every coder task (no restart).
 - The brief check as a command (client/shared/carl-brief-check.mjs, Phase 23.4.4): installed next to
   carl-brief.js wherever that goes (OpenCode carl-delegation, Pi carl-delegation and subagent).
 - The models (Phase 23.4.4 item 13): in single-model mode only the model the server runs (--running,
@@ -146,6 +149,7 @@ OLD_PI_EXT = "extensions/mtplx-request-policy.ts"
 OLD_PI_EXT_SIG = "Pi <-> MTPLX request bridge"
 WEB_SEARCH = ("exa", "parallel", "off")
 CLIENTS = ("both", "opencode", "pi")
+CODER_TESTS = ("before", "after", "off")   # the Tests setting (23.4.6)
 SEARCH_MCP = {"exa": "https://mcp.exa.ai/mcp", "parallel": "https://search.parallel.ai/mcp"}
 SEARCH_NAME = "carl-web-search"                         # Pi's MCP server entry
 PI_TOOLS = ["+grep", "+find", "+ls"]                    # Pi's built-in tools that are off by default
@@ -216,6 +220,7 @@ class Options:
     clients: str = "both"     # both | opencode | pi: the configs to write (the other client's stay as they are)
     coder_model: str = ""     # an external model for the coder: PROVIDER/MODEL of the client ("": the main session's)
     coder_model_thinking: str = ""   # its variant (OpenCode) or thinking level (Pi); "": the model's own default
+    coder_tests: str = "before"   # the Tests setting (23.4.6): before | after | off (the chain's test session)
 
     @property
     def oc_dir(self) -> str:
@@ -314,6 +319,8 @@ def parse_args(argv: list[str]) -> Options:
                     help="/carl's Coder model: an external PROVIDER/MODEL of the client for the coder (main: none)")
     ap.add_argument("--coder-model-thinking", type=level_arg, default="",
                     help="the thinking of that model: a variant (OpenCode) or a thinking level (Pi)")
+    ap.add_argument("--coder-tests", choices=CODER_TESTS, default="before",
+                    help="/carl's Tests: the coder's test session before the code session, after it, or off")
     a = ap.parse_args(argv)
     try:
         models = carl_models.only_running(carl_models.load_list(a.models), a.running)  # single-model mode (23.4.4)
@@ -326,7 +333,7 @@ def parse_args(argv: list[str]) -> Options:
                    model_check=a.model_check, web_search=a.web_search, lsp=a.lsp, background=a.background,
                    browser=a.browser, browser_headed=a.browser_headed, profile=a.profile,
                    cache=a.cache, clients=a.clients, reminder=a.reminder, coder_model=a.coder_model,
-                   coder_model_thinking=a.coder_model_thinking if a.coder_model else "")
+                   coder_model_thinking=a.coder_model_thinking if a.coder_model else "", coder_tests=a.coder_tests)
 
 
 # ================================================================== merge rules (no I/O)
@@ -1240,7 +1247,7 @@ class Installer:
         self._oc_tui()
 
         st.update({"providers": ids, "base_url": o.base_url, "updated": self.stamp, "models": models_state(o.models),
-                   "coder_model": o.coder_model or "main"})
+                   "coder_model": o.coder_model or "main", "coder_tests": o.coder_tests})
         self.cf.save(path, cfg)
         self.save_state(oc, "OpenCode", st)
         return ids
@@ -1319,6 +1326,7 @@ class Installer:
         thinking = carl_models.coder_efforts(self.o.models, provider_id)
         self._oc_server_plugin(cfg, DELEGATION, True, provider_id, "the hand-off to the coder",
                                {"reminder": self.o.reminder, "cacheApi": self.o.cache_api, "coder": name,
+                                "stateFile": os.path.join(oc, NAMES.state),
                                 **({"coderThinking": thinking} if thinking else {}),
                                 **({"coderModel": ext} if ext else {}),
                                 **({"coderVariant": self.o.coder_model_thinking} if ext and self.o.coder_model_thinking
@@ -1504,7 +1512,7 @@ class Installer:
 
         # the coder's model (23.4.5): an external one the subagent extension passes as --model, else "main"
         st.update({"providers": ids, "base_url": o.base_url, "updated": self.stamp, "models": models_state(o.models),
-                   "coder_model": o.coder_model or "main"})
+                   "coder_model": o.coder_model or "main", "coder_tests": o.coder_tests})
         self.save_state(pi, "Pi", st)
         return ids
 

@@ -223,6 +223,22 @@ class SetTest(unittest.TestCase):
         self.run_set("CODER_MODEL_THINKING=default")
         self.assertFalse(any(ln.startswith("CODER_MODEL_THINKING") for ln in self.env_lines()), self.env_lines())
 
+    def test_coder_tests_live_in_both_clients(self) -> None:
+        """/carl's Tests (Phase 23.4.6): CODER_TESTS=after or off is kept; before (the default) takes the line out; both
+        clients read it at each coder task, so nothing restarts; another key with it still restarts as before."""
+        r = json.loads(self.run_set("CODER_TESTS=after").stdout)
+        self.assertIn("CODER_TESTS=after", self.env_lines())
+        self.assertEqual(self.installer_env()["CODER_TESTS"], "after")
+        self.assertEqual((r["changed"], r["restart"], r["new_terminal"]),
+                         ({"CODER_TESTS": {"from": "before", "to": "after"}}, [], False))
+        r = json.loads(self.run_set("CODER_TESTS=before").stdout)
+        self.assertFalse(any(ln.startswith("CODER_TESTS") for ln in self.env_lines()), self.env_lines())
+        self.assertNotIn("CODER_TESTS", self.installer_env())
+        self.assertEqual((r["changed"], r["restart"]), ({"CODER_TESTS": {"from": "after", "to": "before"}}, []))
+        r = json.loads(self.run_set("CODER_TESTS=off", "NO_REMINDER=1").stdout)
+        self.assertEqual(r["restart"], ["opencode", "pi"])
+        self.assertIn("CODER_TESTS takes before or after or off, not 'never'.", self.run_set("CODER_TESTS=never").stderr)
+
     def test_a_failed_installer_is_reported(self) -> None:
         open(os.path.join(self.home, "fail"), "w").close()
         p = self.run_set("NO_REMINDER=1")

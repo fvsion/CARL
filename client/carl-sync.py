@@ -45,6 +45,9 @@ Usage: carl-sync.py COMMAND
                       variant (OpenCode) of that external model; default
                       removes it (the model's own default). A new
                       CODER_MODEL removes it too.
+                    CODER_TESTS: before (the default), after or off: when
+                      CARL's test session runs for new code. OpenCode and
+                      Pi read it at each coder task (no restart).
                   It shows the result as JSON: what changed, which client
                   (OpenCode, Pi) must restart, and the server's slots (as the
                   installer read them; null when the server does not answer).
@@ -89,7 +92,7 @@ INSTALL_ENV = os.path.join(CONF, "client-install.env")
 # the install switches a sync applies again (install.sh records them)
 SWITCHES = ("CLIENTS", "CODER", "NO_CODER", "WEB_SEARCH", "NO_LSP", "LSP", "NO_BROWSER", "BROWSER_HEADED",
             "NO_SIDEBAR", "NO_SWITCHER", "NO_MODEL_CHECK", "NO_BACKGROUND_SUBAGENTS", "NO_CACHE", "LLAMA_CTX",
-            "NO_REMINDER", "CODER_THINKING", "CODER_MODEL", "CODER_MODEL_THINKING")
+            "NO_REMINDER", "CODER_THINKING", "CODER_MODEL", "CODER_MODEL_THINKING", "CODER_TESTS")
 # the switches that "set" (the /carl panel) changes, and their values: 1 = off, "on" = the line goes (the default)
 OFF_SWITCHES = ("NO_CODER", "NO_BACKGROUND_SUBAGENTS", "NO_REMINDER", "NO_BROWSER", "NO_LSP", "NO_SIDEBAR",
                 "NO_SWITCHER", "NO_CACHE", "NO_MODEL_CHECK")
@@ -97,7 +100,8 @@ SETTABLE = {**{k: ("1", "on") for k in OFF_SWITCHES}, "WEB_SEARCH": ("exa", "par
             "CODER": ("1", "auto"),    # /carl turns the coder on with CODER=1: also on a server with 1 slot
             "CODER_THINKING": (),      # MODEL:VALUE (THINKING_VALUES), per model: a map in one line
             "CODER_MODEL": (),         # PROVIDER/MODEL (CODER_MODEL_RE) or main (Phase 23.4.5)
-            "CODER_MODEL_THINKING": ()}    # a level or variant name (LEVEL_RE) or default
+            "CODER_MODEL_THINKING": (),    # a level or variant name (LEVEL_RE) or default
+            "CODER_TESTS": ("before", "after", "off")}    # the Tests setting (Phase 23.4.6)
 THINKING_VALUES = ("main", "on", "off", "low", "medium", "xhigh")
 THINKING_DEFAULT = "default"    # "set": the model's entry goes (the dashboard's Coder thinking applies again)
 MODEL_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")   # a model name (client/carl_models.py)
@@ -107,7 +111,9 @@ CODER_MODEL_MAIN = "main"       # the coder on the main session's model (the def
 LEVEL_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,39}")
 OPENCODE_ONLY = ("NO_LSP", "NO_SIDEBAR", "NO_SWITCHER", "NO_MODEL_CHECK")    # Pi has no such part
 # Pi reads the coder's thinking and model (carl.json) each time it starts the coder: no restart
-PI_LIVE = (*OPENCODE_ONLY, "CODER_THINKING", "CODER_MODEL", "CODER_MODEL_THINKING")
+PI_LIVE = (*OPENCODE_ONLY, "CODER_THINKING", "CODER_MODEL", "CODER_MODEL_THINKING", "CODER_TESTS")
+# OpenCode's carl-delegation reads the Tests setting (carl.json) at each coder task: no restart (Phase 23.4.6)
+OPENCODE_LIVE = ("CODER_TESTS",)
 OPENCODE_ENV = ("WEB_SEARCH", "NO_LSP", "NO_BACKGROUND_SUBAGENTS")   # opencode.env: read when the shell starts
 READ_TIMEOUT = 75            # the dashboard sends a comment every 25 s: silence this long = reconnect
 BACKOFF = (5, 10, 30, 60)
@@ -321,7 +327,7 @@ def thinking_text(m: Dict[str, str], keep_default: bool = False) -> str:
 
 
 DEFAULTS = {"WEB_SEARCH": "exa", "CODER_THINKING": "", "CODER_MODEL": CODER_MODEL_MAIN,
-            "CODER_MODEL_THINKING": THINKING_DEFAULT}
+            "CODER_MODEL_THINKING": THINKING_DEFAULT, "CODER_TESTS": "before"}
 
 
 def shown(key: str, env: Dict[str, str]) -> str:
@@ -360,8 +366,10 @@ def set_switches(want: Dict[str, str]) -> Json:
             merged = thinking_text({**thinking_map(before.get("CODER_THINKING", "")),
                                     **thinking_map(want["CODER_THINKING"], keep_default=True)})
             want = {**want, "CODER_THINKING": merged}     # "": no model left, the line goes
-        # the defaults have no line (main, default); a new coder model starts at its own thinking (model default)
-        want = {k: ("" if (k, v) in (("CODER_MODEL", CODER_MODEL_MAIN), ("CODER_MODEL_THINKING", THINKING_DEFAULT))
+        # the defaults have no line (main, default, before); a new coder model starts at its own thinking (model
+        # default)
+        want = {k: ("" if (k, v) in (("CODER_MODEL", CODER_MODEL_MAIN), ("CODER_MODEL_THINKING", THINKING_DEFAULT),
+                                     ("CODER_TESTS", DEFAULTS["CODER_TESTS"]))
                     else v) for k, v in want.items()}
         if "CODER_MODEL" in want and "CODER_MODEL_THINKING" not in want \
                 and shown("CODER_MODEL", before) != shown("CODER_MODEL", {"CODER_MODEL": want["CODER_MODEL"]}):
@@ -378,7 +386,8 @@ def set_switches(want: Dict[str, str]) -> Json:
         clients = after.get("CLIENTS", "both")
         apps = [c for c in ("opencode", "pi") if clients in ("both", c)]
         moved = [k for k in want if k in changed] or list(want)    # the keys whose value changed (else all)
-        restart = [c for c in apps if c == "opencode" or any(k not in PI_LIVE for k in moved)]
+        live = {"opencode": OPENCODE_LIVE, "pi": PI_LIVE}
+        restart = [c for c in apps if any(k not in live[c] for k in moved)]
         result: Json = {"set": want, "changed": changed, "ok": True, "error": None, "restart": restart,
                         "new_terminal": "opencode" in restart and any(k in OPENCODE_ENV for k in want), "slots": None}
         # the slot count the installer reads for its coder rule (/props total_slots): /carl warns when it turns the

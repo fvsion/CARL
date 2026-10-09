@@ -61,7 +61,7 @@ import { Box, Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { type AgentConfig, type AgentScope, discoverAgents } from "./agents.ts";
 import { duration, parseResult, resultBody, resultTitle } from "./result.js";
-import { coderPlan, runCoderTask } from "./carl-chain.js";
+import { TESTS_OFF, coderPlan, runCoderTask, testsFrom } from "./carl-chain.js";
 
 const MAX_PARALLEL_TASKS = 8;
 const MAX_CONCURRENCY = 4;
@@ -505,6 +505,12 @@ function chainOn(): boolean {
 	}
 }
 
+// CARL: the Tests setting (Phase 23.4.6, /carl's Tests row): carl.json "coder_tests" (before, after, off), read at each
+// coder task as the chain switch, so a change needs no restart
+function testsNow(): "before" | "after" | "off" {
+	return testsFrom(path.join(getAgentDir(), "carl.json"));
+}
+
 // CARL: the coder's thinking (Phase 23.4.4): the dashboard's Coder thinking of each model, which the installer writes
 // into carl.json as "thinking": {"coder": {"provider/model": level}}. Every coder session gets it, the chain's test
 // session too. A model without an entry (Coder thinking "same as main", not CARL's, or an older install): the
@@ -549,8 +555,8 @@ function textMessage(text: string, like: SingleResult): Message {
 
 /**
  * CARL: one task of an agent, as runSingleAgent. For CARL's coder, the brief decides (carl-chain.js): with work_mode
- * code and work_type new_feature, two fresh coder processes one after the other (the test session, then the code
- * session) and one result; with work_type follow_up or bug_fix, one process and the brief's existing_tests hashed
+ * code and work_type new_feature, two fresh coder processes one after the other (the test session and the code
+ * session, in the Tests setting's order; none with the setting off) and one result; with work_type follow_up or bug_fix, one process and the brief's existing_tests hashed
  * before and after; else one process as before. The result's usage is the sum of the sessions; its final message is the one result.
  */
 async function runAgentTask(
@@ -578,10 +584,11 @@ async function runAgentTask(
 			const failed = isFailedResult(r);
 			return { ok: !failed, output: failed ? getResultOutput(r) : getFinalOutput(r.messages) };
 		},
-		{ chain: chainOn() },
+		{ chain: chainOn(), tests: testsNow() },
 	);
 	const last = sessions[sessions.length - 1];
-	if (out.kind === "one" || !last) return last ?? run(task);
+	// one session as before; with the Tests setting off, its result gets CARL's line (Phase 23.4.6)
+	if (!last || (out.kind === "one" && !out.text.endsWith(TESTS_OFF))) return last ?? run(task);
 	const usage = { ...last.usage };
 	for (const s of sessions.slice(0, -1)) {
 		usage.input += s.usage.input;
@@ -702,10 +709,17 @@ interface BackgroundJob {
 const CODERS = new Set(["coder", "carl-coder"]); // CARL's coder ("carl-coder" next to a user's own "coder")
 
 const PARALLEL_CHAIN =
-	'A coder brief with work_mode = "code" and work_type = "new_feature" runs as two sessions, one after the other (the tests, then the code), so it cannot run next to other parallel tasks: send it alone (agent and task), and the other tasks in a separate call.';
+	'A coder brief with work_mode = "code" and work_type = "new_feature" runs as two sessions, one after the other (the tests and the code), so it cannot run next to other parallel tasks: send it alone (agent and task), and the other tasks in a separate call.';
 
-const CHAIN_STARTED =
-	"CARL runs the coder in two sessions, one after the other: first the tests, then the code. You get one result for both.";
+/** CARL: the sentence for a background start that runs the chain (in the Tests setting's order), else "". */
+function chainStarted(list: { agent: string; task: string }[]): string {
+	if (!chainOn()) return "";
+	const tests = testsNow();
+	const plan = list.map((t) => (CODERS.has(t.agent) ? coderPlan(t.task, false, tests) : undefined)).find((p) => p?.kind === "chain");
+	if (!plan || plan.kind !== "chain") return "";
+	const order = plan.order === "after" ? "first the code, then the tests" : "first the tests, then the code";
+	return `CARL runs the coder in two sessions, one after the other: ${order}. You get one result for both. `;
+}
 
 const BACKGROUND_STARTED =
 	"You get each result as a message when its subagent ends. Do not wait, poll or check on it: tell the user in a sentence what runs, then end your turn or go on with other work.";
@@ -893,7 +907,7 @@ export default function (pi: ExtensionAPI) {
 			}
 
 			// CARL: a coder brief that starts the chain runs alone, not next to other parallel tasks
-			if (hasTasks && (params.tasks?.length ?? 0) > 1 && chainOn() && (params.tasks ?? []).some((t) => CODERS.has(t.agent) && coderPlan(t.task).kind === "chain"))
+			if (hasTasks && (params.tasks?.length ?? 0) > 1 && chainOn() && (params.tasks ?? []).some((t) => CODERS.has(t.agent) && coderPlan(t.task, false, testsNow()).kind === "chain"))
 				return {
 					content: [{ type: "text", text: PARALLEL_CHAIN }],
 					details: makeDetails("parallel")([]),
@@ -931,7 +945,7 @@ export default function (pi: ExtensionAPI) {
 					content: [
 						{
 							type: "text",
-							text: `Started in the background: ${started.map((j) => `${j.id} (${j.agent})`).join(", ")}. ${list.some((t) => CODERS.has(t.agent) && chainOn() && coderPlan(t.task).kind === "chain") ? `${CHAIN_STARTED} ` : ""}${BACKGROUND_STARTED}`,
+							text: `Started in the background: ${started.map((j) => `${j.id} (${j.agent})`).join(", ")}. ${chainStarted(list)}${BACKGROUND_STARTED}`,
 						},
 					],
 					details: makeDetails(hasTasks ? "parallel" : "single")([]),

@@ -68,7 +68,7 @@ const project = () => {
 };
 
 /** A fake session runner: what each session writes and says. */
-function fakeRun(dir, { testBody = RED, tamper = false, failTest = false, failCode = false } = {}) {
+function fakeRun(dir, { testBody = RED, tamper = false, failTest = false, failCode = false, noCode = false } = {}) {
   const calls = [];
   const run = async (text, step) => {
     calls.push({ step, text });
@@ -79,7 +79,7 @@ function fakeRun(dir, { testBody = RED, tamper = false, failTest = false, failCo
       writeFileSync(join(dir, TEST_FILE), testBody);
       return { ok: true, output: REPORT_TEST };
     }
-    writeFileSync(join(dir, "src", "feature.txt"), "ok\n");
+    if (!noCode) writeFileSync(join(dir, "src", "feature.txt"), "ok\n");
     if (tamper) writeFileSync(join(dir, TEST_FILE), GREEN);
     return failCode ? { ok: false, output: "the code session crashed" } : { ok: true, output: 'task_status = "done"\noutcome_summary = "Wrote it."' };
   };
@@ -354,4 +354,105 @@ test("the chain with a JSON brief: the sessions' briefs are JSON too, with the s
   assert.equal(codeBrief.workMode, "code");
   assert.deepEqual(codeBrief.testSession.files, [TEST_FILE]);
   assert.deepEqual(B.checkBrief(codeBrief, "json"), []);
+});
+
+// ------------------------------------------------------------------ the Tests setting (Phase 23.4.6)
+
+test("the Tests setting: coderPlan's order, off, and the state file's value (before when missing or not one)", () => {
+  assert.deepEqual([C.coderPlan(BRIEF()).kind, C.coderPlan(BRIEF()).order], ["chain", "before"]);
+  assert.deepEqual([C.coderPlan(BRIEF(), false, "after").kind, C.coderPlan(BRIEF(), false, "after").order], ["chain", "after"]);
+  assert.deepEqual([C.coderPlan(BRIEF(), false, "off").kind, C.coderPlan(BRIEF(), false, "off").testsOff], ["one", true]);
+  assert.equal(C.coderPlan(BRIEF(), false, "sometimes").order, "before");          // not a value: the default
+  assert.equal(C.coderPlan(BRIEF(), true, "off").testsOff, undefined);             // continued: no test session was due
+  assert.equal(C.coderPlan(BRIEF("follow_up", RUN, TEST_FILE), false, "off").kind, "watch");   // the watch stays
+  assert.equal(C.coderPlan(BRIEF("follow_up"), false, "off").testsOff, undefined);
+  assert.deepEqual(B.TESTS_SETTINGS, ["before", "after", "off"]);
+  assert.equal(B.testsSetting("after"), "after");
+  assert.equal(B.testsSetting(undefined), "before");
+  const dir = project();
+  const file = join(dir, "carl.json");
+  assert.equal(C.testsFrom(file), "before");                                       // no file
+  writeFileSync(file, JSON.stringify({ coder_tests: "off" }));
+  assert.equal(C.testsFrom(file), "off");
+  writeFileSync(file, JSON.stringify({ coder_tests: 3 }));
+  assert.equal(C.testsFrom(file), "before");
+  writeFileSync(file, "{broken");
+  assert.equal(C.testsFrom(file), "before");
+});
+
+test("after code: the code session, then the test session; CARL runs the checks after both; one result", async () => {
+  const dir = project();
+  const { run, calls } = fakeRun(dir);
+  const ran = [];
+  const runCheck = async (cmd, cwd) => (ran.push(cmd), C.runCommand(cmd, cwd, 10_000));
+  const out = await C.runCoderTask(BRIEF(), dir, run, { runCheck, tests: "after" });
+  assert.deepEqual([out.kind, out.ok], ["chain", true]);
+  assert.deepEqual(calls.map((c) => c.step), ["code", "test"]);
+  const codeBrief = B.parseBrief(calls[0].text).brief;
+  assert.deepEqual([codeBrief.workMode, codeBrief.designNotes, codeBrief.testSession], ["code", "One file, no code.", null]);
+  const testBrief = B.parseBrief(calls[1].text).brief;
+  assert.equal(testBrief.workMode, "tests-only");
+  assert.doesNotMatch(calls[1].text, /design_notes|known_file|One file, no code/);   // tests from the behaviour
+  assert.deepEqual(ran, [RUN]);                                                    // once, after both sessions
+  assert.match(out.text, /^\[CARL\] Chain: the coder ran in two new sessions: first the code \(work_mode code\), then the tests \(work_mode tests-only\), as the Tests setting "after code" on this computer says\./);
+  assert.match(out.text, /\nCARL ran `node --test tests\/check\.test\.mjs` after both sessions: it passed\./);
+  assert.match(out.text, /The test session wrote: tests\/check\.test\.mjs\./);
+  assert.ok(out.text.indexOf("## The code session's report") < out.text.indexOf("## The test session's report"));
+  assert.doesNotMatch(out.text, /Warning|red start/i);
+});
+
+test("after code: failing new tests come back as findings; the code session's test-file change is a warning", async () => {
+  const dir = project();
+  const { run } = fakeRun(dir, { noCode: true });
+  const out = await C.runCoderTask(BRIEF(), dir, run, { tests: "after", runCheck: (cmd, cwd) => C.runCommand(cmd, cwd, 10_000) });
+  assert.match(out.text, /The new tests fail: CARL ran `node --test tests\/check\.test\.mjs` after both sessions: it failed \(exit 1\)\. Each failure is a finding \(the test session's report says why\): give the fixes to the coder \(work_type = "follow_up", the new test files in existing_tests\)\./);
+  // the code session wrote a test file (its gates refuse that in a client): a warning
+  const dir2 = project();
+  mkdirSync(join(dir2, "tests"), { recursive: true });
+  writeFileSync(join(dir2, TEST_FILE), RED);
+  const tamper = fakeRun(dir2, { tamper: true });
+  const out2 = await C.runCoderTask(BRIEF(), dir2, tamper.run, { tests: "after", runCheck: async () => ({ code: 0, timedOut: false, output: "" }) });
+  assert.match(out2.text, /\[CARL\] Warning: the code session changed these test files: tests\/check\.test\.mjs\./);
+});
+
+test("after code: a failed code session stops the chain; the test session's own failure is said", async () => {
+  const dir = project();
+  const stop = fakeRun(dir, { failCode: true });
+  const out = await C.runCoderTask(BRIEF(), dir, stop.run, { tests: "after" });
+  assert.deepEqual([out.ok, stop.calls.map((c) => c.step)], [false, ["code"]]);
+  assert.match(out.text, /^\[CARL\] Chain: the code session failed, so the test session did not run\. Its error is below\.\n\n## The code session \(work_mode code\)\n\nthe code session crashed/);
+  const crash = fakeRun(project(), { failTest: true });
+  const out2 = await C.runCoderTask(BRIEF(), project(), crash.run, { tests: "after", runCheck: async () => ({ code: 0, timedOut: false, output: "" }) });
+  assert.equal(out2.ok, false);
+  assert.match(out2.text, /The test session failed: its error is below\./);
+  assert.match(out2.text, /\[CARL\] Warning: the test session wrote no test file\./);
+});
+
+test("off: one session, and the result says that no test session ran", async () => {
+  const dir = project();
+  const { run, calls } = fakeRun(dir);
+  const out = await C.runCoderTask(BRIEF(), dir, run, { tests: "off" });
+  assert.deepEqual([out.kind, calls.map((c) => c.step)], ["one", ["one"]]);
+  assert.equal(calls[0].text, BRIEF());                                            // the task as the main agent wrote it
+  assert.ok(out.text.endsWith(`\n\n${C.TESTS_OFF}`));
+  const plain = await C.runCoderTask(BRIEF("follow_up"), dir, fakeRun(dir).run, { tests: "off" });
+  assert.doesNotMatch(plain.text, /Tests setting/);                               // no test session was due
+  const measured = await C.runCoderTask(BRIEF(), dir, fakeRun(dir).run, { tests: "off", chain: false });
+  assert.doesNotMatch(measured.text, /Tests setting/);                            // the chain off: as before
+});
+
+test("after code: the snapshot keeps the order; an interrupted or unheld chain names its sessions", () => {
+  const brief = B.parseBrief(BRIEF()).brief;
+  const c = new C.Chain(brief, project(), { order: "after" });
+  assert.deepEqual(c.steps, ["code", "test"]);
+  c.firstOutcome({ ok: true, output: "the code report" });
+  const back = C.Chain.from(JSON.parse(JSON.stringify(c.snapshot())));
+  assert.deepEqual([back.order, back.codeOutput], ["after", "the code report"]);
+  assert.equal(C.Chain.from({ brief, cwd: "/x" }).order, "before");               // a record from before 23.4.6
+  assert.match(back.interrupted("first"), /the code session did not finish, and the test session did not run/);
+  assert.match(back.interrupted("held"), /: the test session did not run\./);
+  assert.match(back.interrupted("second", "half"), /the test session did not finish[\s\S]*## The code session's report \(work_mode code\)\n\nthe code report[\s\S]*## The test session's last answer \(work_mode tests-only, unfinished\)\n\nhalf/);
+  assert.match(back.unheld("the code report"), /^\[CARL\] Chain: the code session ran in the background, where CARL cannot hold its result on this OpenCode, so the test session did not run\./);
+  const before = new C.Chain(brief, "/x");
+  assert.match(before.interrupted("first"), /the test session did not finish, and the code session did not run/);
 });

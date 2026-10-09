@@ -285,3 +285,30 @@ test("Pi: a provider failure fails the coder's task with the provider's error; n
     rmSync(st, { force: true });
   }
 });
+
+test("Pi: the Tests setting (carl.json coder_tests, read at each task): after code runs the code first; off runs one process", async () => {
+  // Phase 23.4.6: /carl's Tests row, written by the installer
+  const st = join(agentDir, "carl.json");
+  writeFileSync(st, JSON.stringify({ coder_tests: "after" }));
+  try {
+    const after = await call({ agent: "coder", task: BRIEF(), background: false });
+    const runs = after.log();
+    assert.deepEqual(runs.map((r) => r.mode), ["code", "test"]);
+    assert.doesNotMatch(runs[1].task, /design_notes|known_file/);
+    assert.match(after.text, /^\[CARL\] Chain: the coder ran in two new sessions: first the code \(work_mode code\), then the tests/);
+    assert.match(after.text, /CARL ran `node --test tests\/check\.test\.mjs` after both sessions: it passed\./);
+    sent.length = 0;
+    const done = new Promise((r) => (onSent = r));
+    const bg = await call({ agent: "coder", task: BRIEF() });
+    assert.match(bg.text, /CARL runs the coder in two sessions, one after the other: first the code, then the tests\. You get one result for both\./);
+    await done;
+    writeFileSync(st, JSON.stringify({ coder_tests: "off" }));                         // no restart: the next task reads it
+    const off = await call({ agent: "coder", task: BRIEF(), background: false });
+    assert.deepEqual(off.log().map((r) => r.mode), ["code"]);
+    assert.match(off.text, /\n\n\[CARL\] Tests: the Tests setting is off on this computer, so CARL ran no test session/);
+    const two = await call({ tasks: [{ agent: "coder", task: BRIEF() }, { agent: "scout", task: "Look." }], background: false });
+    assert.doesNotMatch(two.text, /cannot run next to other parallel tasks/);         // off: no chain, so parallel is fine
+  } finally {
+    rmSync(st);
+  }
+});

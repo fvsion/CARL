@@ -260,7 +260,7 @@ const GREEN_TEST = 'import { test } from "node:test";\ntest("R1", () => {});\n';
  * prompt to a new session is the code session: it writes src/feature.txt (and with tamper, the test too), then
  * OpenCode's session.idle event comes. A prompt to the main session ("m") is the one result.
  */
-function chainOpenCode({ tamper = false, version = "1.18.35", fail = "" } = {}) {
+function chainOpenCode({ tamper = false, version = "1.18.35", fail = "", second = null } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "carl-oc-chain-"));
   const calls = [];
   const logs = [];
@@ -280,6 +280,11 @@ function chainOpenCode({ tamper = false, version = "1.18.35", fail = "" } = {}) 
         calls.push(["promptAsync", o.path.id, o.body]);
         if (o.path.id === "m") return delivered(o.body), { data: undefined };
         setTimeout(async () => {
+          if (second) {                                       // the second session is the test session (after code)
+            answers.set(o.path.id, second(dir));
+            await hooks.event({ event: { type: "session.idle", properties: { sessionID: o.path.id } } });
+            return;
+          }
           mkdirSync(join(dir, "src"), { recursive: true });
           writeFileSync(join(dir, "src", "feature.txt"), "ok\n");
           if (tamper) writeFileSync(join(dir, "tests", "check.test.mjs"), GREEN_TEST + "// made to pass\n");
@@ -341,6 +346,46 @@ test("carl-delegation, the chain in the foreground: the task becomes the test se
   assert.equal(await before(hooks, "write", { filePath: "src/feature.txt" }, "ses_code"), "");
 });
 
+test("carl-delegation, Tests after code (the state file, read at each task): the task is the code session; the plugin starts the test session", async () => {
+  const oc = chainOpenCode({ second: (dir) => testSession(dir) });
+  const stateFile = join(oc.dir, "carl.json");
+  writeFileSync(stateFile, JSON.stringify({ coder_tests: "after" }));
+  const hooks = await delegation.server({ client: oc.client, directory: oc.dir }, { coder: "coder", stateFile });
+  oc.setHooks(hooks);
+  const args = { subagent_type: "coder", description: "Feature", prompt: CHAIN_BRIEF(), background: false };
+  await hooks["tool.execute.before"]({ tool: "task", sessionID: "m", callID: "a1" }, { args });
+  assert.match(args.prompt, /^work_mode = "code"\nwork_type = "new_feature"\n[\s\S]*design_notes = "One file, no code\."/);   // the code session's brief
+  assert.equal(args.description, "Feature: code");
+  mkdirSync(join(oc.dir, "src"), { recursive: true });
+  writeFileSync(join(oc.dir, "src", "feature.txt"), "ok\n");                // the code session's work
+  const output = { metadata: { sessionId: "ses_first" }, output: delegationMod.taskXml({ id: "ses_first", state: "completed", text: 'task_status = "done"' }) };
+  await hooks["tool.execute.after"]({ tool: "task", sessionID: "m", callID: "a1", args }, output);
+  const [create, prompt] = oc.calls;
+  assert.equal(create[1].title, "Feature: tests (@coder subagent)");
+  assert.match(prompt[2].parts[0].text, /^work_mode = "tests-only"\n/);
+  assert.doesNotMatch(prompt[2].parts[0].text, /design_notes|known_file/);
+  const res = delegationMod.parseTaskXml(output.output);
+  assert.match(res.text, /^\[CARL\] Chain: the coder ran in two new sessions: first the code \(work_mode code\), then the tests/);
+  assert.match(res.text, /CARL ran `node --test tests\/check\.test\.mjs` after both sessions: it passed\./);
+  assert.match(res.text, /The test session wrote: tests\/check\.test\.mjs\./);
+  // off, changed while OpenCode runs (no restart): one session as written, the result says no test session ran
+  writeFileSync(stateFile, JSON.stringify({ coder_tests: "off" }));
+  const off = { subagent_type: "coder", description: "Feature", prompt: CHAIN_BRIEF(), background: false };
+  await hooks["tool.execute.before"]({ tool: "task", sessionID: "m", callID: "a2" }, { args: off });
+  assert.equal(off.prompt, CHAIN_BRIEF());
+  const out2 = { metadata: { sessionId: "ses_one" }, output: delegationMod.taskXml({ id: "ses_one", state: "completed", text: "Done." }) };
+  await hooks["tool.execute.after"]({ tool: "task", sessionID: "m", callID: "a2", args: off }, out2);
+  assert.equal(delegationMod.parseTaskXml(out2.output).text, `Done.\n\n${chainMod.TESTS_OFF}`);
+  assert.equal(oc.calls.length, 2);                                   // no session started for it
+  // in the background: the completion message gets the line in place
+  const bg = { subagent_type: "coder", description: "Feature", prompt: CHAIN_BRIEF(), background: true };
+  await hooks["tool.execute.before"]({ tool: "task", sessionID: "m", callID: "a3" }, { args: bg });
+  await hooks["tool.execute.after"]({ tool: "task", sessionID: "m", callID: "a3", args: bg }, { metadata: { sessionId: "ses_bg", background: true }, output: "" });
+  const parts = [{ type: "text", synthetic: true, text: delegationMod.taskXml({ id: "ses_bg", state: "completed", summary: "s", text: "Done." }) }];
+  await hooks["chat.message"]({ sessionID: "m", agent: "build" }, { message: {}, parts });
+  assert.equal(delegationMod.parseTaskXml(parts[0].text).text, `Done.\n\n${chainMod.TESTS_OFF}`);
+});
+
 test("carl-delegation, the chain in the background: the test session's completion is held; one result comes later", async () => {
   const oc = chainOpenCode({ tamper: true });
   const hooks = await delegation.server({ client: oc.client, directory: oc.dir }, { coder: "coder" });
@@ -351,7 +396,7 @@ test("carl-delegation, the chain in the background: the test session's completio
     metadata: { sessionId: "ses_test", background: true, jobId: "ses_test" },
     output: delegationMod.taskXml({ id: "ses_test", state: "running", summary: "Background task started", text: "working" }) });
   const rec = () => JSON.parse(readFileSync(join(CHAINS, "m.json"), "utf8")).chains;
-  assert.deepEqual(rec().map((r) => [r.parent, r.test, r.stage, r.directory, r.pid]), [["m", "ses_test", "test", oc.dir, process.pid]]);
+  assert.deepEqual(rec().map((r) => [r.v, r.parent, r.first, r.stage, r.directory, r.pid]), [[2, "m", "ses_test", "first", oc.dir, process.pid]]);
   assert.equal(statSync(join(CHAINS, "m.json")).mode & 0o777, 0o600);
   const done = delegationMod.taskXml({ id: "ses_test", state: "completed", summary: "Background task completed: Feature: tests",
                                       text: testSession(oc.dir, false) });
@@ -459,7 +504,7 @@ test("carl-delegation, the chain's base: without the hold, the task runs in the 
     await new Promise((r) => setTimeout(r, 10));
     assert.deepEqual(oc.logs.map((l) => l[0]), ["log", "toast"]);     // once
     assert.equal(oc.logs[0][1].level, "warn");
-    assert.match(oc.logs[0][1].message, /^CARL runs the coder's tests-then-code chain in the foreground \(the background hold is off: OpenCode (1\.19\.0|0\.0\.0-test) is not a version/);
+    assert.match(oc.logs[0][1].message, /^CARL runs the coder's two-session chain \(tests and code\) in the foreground \(the background hold is off: OpenCode (1\.19\.0|0\.0\.0-test) is not a version/);
     const output = { metadata: { sessionId: "ses_test" }, output: delegationMod.taskXml({ id: "ses_test", state: "completed", text: testSession(oc.dir) }) };
     await hooks["tool.execute.after"]({ tool: "task", sessionID: "m", callID: "b1", args }, output);
     const res = delegationMod.parseTaskXml(output.output);
@@ -519,6 +564,36 @@ test("carl-delegation, the hold is safe: a chain that OpenCode left undelivered 
   assert.deepEqual(store.read("p1").map((r) => r.test), ["ses_t6", "ses_t7"]);   // the delivered ones are gone
   store.write("p1", []);
   assert.equal(existsSync(join(CHAINS, "p1.json")), false);
+});
+
+test("carl-delegation, the hold is safe with Tests after code: a record of v 2 (first, second) is delivered with the sessions' roles", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "carl-oc-recover2-"));
+  const dead = spawnSync(process.execPath, ["-e", ""]).pid;
+  const plan = chainMod.coderPlan(CHAIN_BRIEF(), false, "after");
+  const chain = new chainMod.Chain(plan.brief, dir, { order: plan.order });
+  chain.firstOutcome({ ok: true, output: 'task_status = "done"\noutcome_summary = "Wrote it."' });
+  const rec = (first, stage, extra = {}) => ({ v: 2, parent: "p2", first, stage, description: `Task ${first}`, agent: "build",
+                                               directory: dir, pid: dead, at: 1, chain: chain.snapshot(), ...extra });
+  const open = [{ info: { role: "user" }, parts: [{ type: "text", text: "the brief" }] },
+                { info: { role: "assistant", time: { created: 1 } }, parts: [{ type: "text", text: "two tests so far" }] }];
+  new delegationMod.ChainStore(CHAINS).write("p2", [rec("ses_f1", "second", { second: "ses_s1" }), rec("ses_f2", "held")]);
+  const sent = [];
+  let all;
+  const allP = new Promise((r) => (all = r));
+  const client = { session: {
+    messages: async ({ path }) => ({ data: path.id === "ses_s1" ? open : [] }),
+    promptAsync: async (o) => (sent.push(o), sent.length === 2 && all(), { data: undefined }),
+  } };
+  await delegation.server({ client, directory: dir }, { recoverMs: 5 });
+  await allP;
+  const by = Object.fromEntries(sent.map((o) => {
+    const t = delegationMod.parseTaskXml(o.body.parts[0].text);
+    return [t.id, t];
+  }));
+  assert.match(by.ses_s1.text, /the test session did not finish\.[\s\S]*## The code session's report \(work_mode code\)\n\ntask_status = "done"[\s\S]*## The test session's last answer \(work_mode tests-only, unfinished\)\n\ntwo tests so far/);
+  assert.match(by.ses_f2.text, /^\[CARL\] Chain: OpenCode stopped before the chain ended: the test session did not run\./);
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal(existsSync(join(CHAINS, "p2.json")), false);          // delivered: the records are gone
 });
 
 test("carl-model-check: the warning for each situation", () => {

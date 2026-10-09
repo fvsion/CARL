@@ -14,6 +14,7 @@ This page tells how CARL makes the main agent give large and stuck coding tasks 
 | The brief check | Sends an incomplete brief back to the main agent before the coder starts | `carl-delegation` | on; `"brief": false` turns it off (for measurements) |
 | The coder's gates | Keep the coder to its work_mode and away from the files to read only | `carl-delegation` | comes with the coder |
 | The chain | A brief with `work_mode = "code"` and `work_type = "new_feature"`: a test session, then a code session, each with a new context; one result. OpenCode: in the foreground; in the background only on the verified versions | OpenCode: `carl-delegation`. Pi: the `subagent` tool. Both: `client/shared/carl-chain.js` | on; `"chain": false` turns it off (for measurements) |
+| The Tests setting | When the chain's test session runs: before the code session, after it, or not at all ([The Tests setting](#the-tests-setting)) | `/carl` > Coder subagent > Tests (`CODER_TESTS`); `"coder_tests"` in both clients' `carl.json`, read at each coder task | before code |
 | The coder's thinking | Each coder session (the test session and the code session too) thinks as **Coder thinking** says, for the model that the coder runs on | The dashboard: Settings > Server, per model. OpenCode: `coderThinking` of `carl-delegation`, set on each request of the coder by its `chat.params` hook. Pi: `"thinking"` in `~/.pi/agent/carl.json`, read by the `subagent` tool | same as main; off only with a full spec ([The coder's thinking](#the-coders-thinking)) |
 | The coder's model | The model that each coder session runs on: the main session's (the default), or an external model of the client ([An external coder model](#an-external-coder-model)) | `/carl` > Coder subagent > Coder model (`CODER_MODEL`). OpenCode: the coder agent's `model`. Pi: `"coder_model"` in `~/.pi/agent/carl.json`, read by the `subagent` tool | same as main |
 | `/code` | Gives your task straight to the coder | OpenCode: `~/.config/opencode/command/code.md`. Pi: `~/.pi/agent/prompts/code.md` | comes with the coder |
@@ -72,7 +73,7 @@ The main agent writes the brief from your request and the project's files. It in
 
 The template in `client/agents/delegation.md` shows `[failed_attempt]` and `[[tried_fix]]` commented out, under one line that says they are for `work_type = "bug_fix"` only, so that a copy of the template as written (a `new_feature`) passes the check (the user, 2026-10-09: "A").
 
-**What CARL does with it.** `work_mode = "code"` and `work_type = "new_feature"`: CARL's test session, then the code session ([the chain](#the-chain-tests-first-in-a-separate-session)). `work_mode = "code"` and `"follow_up"` or `"bug_fix"`: no test session; the `existing_tests` are frozen for the coder. `work_mode = "tests-only"`: one session that writes tests. When the test session runs is one function in `carl-brief.js` (`testsSetting`, "before" for now), where Phase 23.4.6's Tests setting (before code, after code, off) plugs in.
+**What CARL does with it.** `work_mode = "code"` and `work_type = "new_feature"`: CARL's test session, then the code session ([the chain](#the-chain-tests-first-in-a-separate-session)). `work_mode = "code"` and `"follow_up"` or `"bug_fix"`: no test session; the `existing_tests` are frozen for the coder. `work_mode = "tests-only"`: one session that writes tests. When the test session runs is the Tests setting (Phase 23.4.6, [below](#the-tests-setting)): before code (the default), after code, or off.
 
 **The brief check.** Before the coder starts, `carl-delegation` reads the brief and checks it. The brief can be in a `` ```toml `` fence, with text around it. An incomplete brief goes back to the main agent: the call fails with `[CARL] Brief refused` and a list of whole sentences that name the brief's keys, for example `Requirement R2 is in no check's covers_requirements: add it to a check, or add a check for it.` A task text with no TOML at all gets one sentence that asks for the brief. The checks:
 
@@ -142,6 +143,30 @@ Run the checks yourself before you answer the user.
 - The test session failed (the session itself, not a test): the code session does not run, and the result says so.
 - The main agent then runs the checks itself before it answers you (the delegation rule).
 
+### The Tests setting
+
+`/carl` > Coder subagent > **Tests** (Phase 23.4.6; `CODER_TESTS` in `~/.config/carl/client-install.env`, for one computer). The setup writes it into both state files as `"coder_tests"` (`~/.config/opencode/carl.json`, `~/.pi/agent/carl.json`). OpenCode's `carl-delegation` (its option `stateFile`) and Pi's `subagent` tool read it at each coder task, so a change needs no restart. A missing or unknown value is `before`. It changes only a task that would get the chain (above); follow-ups and fixes are the same in each value.
+
+- **before** (the default): the chain above: the test session, then the code session.
+- **after**: the same two sessions the other way round (`Chain` with the order `after`). The code session gets the original brief (its gates refuse every test-file write; CARL hashes the test files before and after it). Then the test session gets the test brief (as above: no `design_notes`, no known files) and writes its tests against the code that is there. CARL then runs the checks once ([the allowlist](#the-checks-that-carl-runs-itself)); a failing run, or failing tests in the test session's report, is a finding. In OpenCode, the task tool runs the code session (`…: code`) and the plugin starts the test session (`…: tests`). The one result:
+
+```
+[CARL] Chain: the coder ran in two new sessions: first the code (work_mode code), then the tests (work_mode tests-only), as the Tests setting "after code" on this computer says.
+The new tests fail: CARL ran `node --test tests/check.test.mjs` after both sessions: it failed (exit 1). Each failure is a finding (the test session's report says why): give the fixes to the coder (work_type = "follow_up", the new test files in existing_tests).
+The test session wrote: tests/check.test.mjs.
+Run the checks yourself before you answer the user.
+
+## The code session's report (work_mode code)
+...
+## The test session's report (work_mode tests-only)
+...
+```
+
+  When they pass: ``CARL ran `...` after both sessions: it passed.`` A failed code session stops the chain (no test session). A test file that the code session changed is a warning.
+- **off**: one session (`work_mode = "code"`), and its result ends with `[CARL] Tests: the Tests setting is off on this computer, so CARL ran no test session, and the coder (work_mode code) wrote no tests. If the work needs tests, give the coder a tests-only task.`
+
+OpenCode's held chain (the background hold) works the same in each order. Its record names the task tool's session `first` and the plugin's `second` (stages `first`, `held`, `second`; `"v": 2`); a record from before 23.4.6 (`test`, `code`) is read the same.
+
 ### The checks that CARL runs itself
 
 The user's decision (2026-10-09): "C for checks but I would like to support ruff as well". `allowedCheck` in `carl-chain.js` reads the command itself and starts the program with no shell. It accepts:
@@ -185,14 +210,14 @@ With the hold on, the task keeps its `background` (`carl-background` sets `true`
 3. A test session that failed: its message passes, with the text that the code session did not run.
 4. A test session that ran in the background without the hold (another plugin set it after CARL): its message passes, with the text that the code session did not run.
 
-**The state file.** Each held chain has a record in `~/.config/carl/chains/MAIN-SESSION.json` (mode 0600, the folder 0700): the main session, the test session, the stage (`test`: it runs; `held`: its completion was held and the code session did not start yet; `code`: the code session runs), the code session's id once it started, the description, the main session's agent, the project folder, the OpenCode process id and the chain's state (the brief, the test files' hashes, the red start, the test session's report). The record goes when the one result was sent. When OpenCode starts again in that project, the plugin looks at the records after 2 s. For each one whose OpenCode process is gone (a `.claim` file next to it keeps two OpenCode processes from both delivering it), it sends what exists:
+**The state file.** Each held chain has a record in `~/.config/carl/chains/MAIN-SESSION.json` (mode 0600, the folder 0700): the main session, the first session (`first`: the task tool's; the test session, or with Tests `after code` the code session), the stage (`first`: it runs; `held`: its completion was held and the second session did not start yet; `second`: the second session runs), the second session's id once it started (`second`), the description, the main session's agent, the project folder, the OpenCode process id and the chain's state (the brief, the test files' hashes, the red start, the test session's report). The record goes when the one result was sent. When OpenCode starts again in that project, the plugin looks at the records after 2 s. For each one whose OpenCode process is gone (a `.claim` file next to it keeps two OpenCode processes from both delivering it), it sends what exists:
 
 - the code session finished (its messages say so): the one result, as if nothing had happened;
 - it did not finish, or did not start: `[CARL] Chain: OpenCode stopped before the chain ended: the code session did not finish.` (or `did not run`), the red start, the test session's report and the code session's last answer.
 
 Thus the main session never stays without a result. A chain in the foreground needs no record: OpenCode itself ends the tool call when it stops.
 
-Checked against the real OpenCode 1.18.35 with agent-bench's fake server (2026-10-09, a temp HOME made by `configure.py`; the model asked for the background each time): the hold in the background, and the base in the foreground (`CARL_TEST_OPENCODE_VERSION=0.0.0-test`: the task ran with `background: false`, and the log had the notice). In both, the main agent got one result with both reports; with the hold, the test session's own completion never reached it. A stop during the code session (OpenCode killed, then started again in the project): the record had the stage `code` (mode 0600); at the start, the main session got the result that the code session did not finish, with the test session's report, and the record was gone. `"chain": false` in the plugin's entry turns the chain off.
+Checked against the real OpenCode 1.18.35 with agent-bench's fake server (2026-10-09, a temp HOME made by `configure.py`; the model asked for the background each time): the hold in the background, and the base in the foreground (`CARL_TEST_OPENCODE_VERSION=0.0.0-test`: the task ran with `background: false`, and the log had the notice). In both, the main agent got one result with both reports; with the hold, the test session's own completion never reached it. A stop during the code session (OpenCode killed, then started again in the project): the record had the stage `code` (mode 0600; since 23.4.6 the stage is `second`); at the start, the main session got the result that the code session did not finish, with the test session's report, and the record was gone. `"chain": false` in the plugin's entry turns the chain off.
 
 **Pi** needs no state file for this: its chain is CARL's own code in the `subagent` tool. A background job that dies with Pi loses its result, as any background subagent of Pi does: its sessions are `pi` processes that end with it.
 

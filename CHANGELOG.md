@@ -3,6 +3,22 @@
 All notable changes to CARL. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Dates are local dates on the development Mac (M3 Pro, 36 GB).
 
+## 1.15.0 - 2026-10-09
+
+Phase 23.4.6: the test session configurable.
+
+### Added
+- **When the coder's tests are written** (/carl, Coder subagent, Tests): `before code` (the default: the test
+  session, then the code session, as before), `after code` (the code session first; then a test session writes tests
+  from the requirements against that code, CARL runs the checks once after both, and failing tests come back to the
+  main agent as findings) or `off` (one code session, no tests; the result says so). Kept per computer
+  (`CODER_TESTS`). OpenCode and Pi read it at each coder task: no restart. Follow-ups and fixes are the same in each
+  value.
+
+### Changed
+- OpenCode's record of a held background chain names its sessions `first` and `second` (either order); records
+  from before are still delivered.
+
 ## 1.14.0 - 2026-10-09
 
 Phase 23.4.5: the coder on another endpoint; a brief-reader fix.

@@ -123,7 +123,8 @@ class ConfigureTests(unittest.TestCase):
                                         ["file:" + bg, {"provider": "llamacpp"}],        # the coder in the background
                                         ["file:" + deleg, {"provider": "llamacpp", "reminder": True,  # the hand-off
                                                            "cacheApi": "http://192.168.42.1:8081",
-                                                           "coder": "coder"}]])
+                                                           "coder": "coder",
+                                                           "stateFile": self.path(".config/opencode/carl.json")}]])
         self.assertEqual(self.read_json(".pi/agent/carl.json")["cache_api"], "http://192.168.42.1:8081")
         with open(os.path.join(cache, "package.json"), encoding="utf-8") as f:
             self.assertIn("./server", json.load(f)["exports"])
@@ -300,6 +301,21 @@ class ConfigureTests(unittest.TestCase):
             self.assertEqual(self.run_configure("--coder-model", bad).returncode, 2, bad)
         self.assertEqual(self.run_configure("--coder-model", ext, "--coder-model-thinking", "a b").returncode, 2)
 
+    def test_the_tests_setting(self) -> None:
+        """Phase 23.4.6, /carl's Tests (CODER_TESTS through --coder-tests): both state files keep coder_tests (before by
+        default), which OpenCode's carl-delegation (its stateFile option) and Pi's subagent extension read at each coder
+        task; a value that is not one is refused."""
+        self.assertEqual(self.run_configure("--coder", "1").returncode, 0)
+        for f in (".config/opencode/carl.json", ".pi/agent/carl.json"):
+            self.assertEqual(self.read_json(f)["coder_tests"], "before", f)
+        self.assertEqual(self.delegation_options()["stateFile"], self.path(".config/opencode/carl.json"))
+        p = self.run_configure("--coder", "1", "--coder-tests", "after")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        for f in (".config/opencode/carl.json", ".pi/agent/carl.json"):
+            self.assertEqual(self.read_json(f)["coder_tests"], "after", f)
+        self.assertNotIn("coderTests", self.delegation_options())              # read live from the state file
+        self.assertEqual(self.run_configure("--coder-tests", "sometimes").returncode, 2)
+
     def test_a_pi_thinking_level_the_user_changed_stays(self) -> None:
         self.models = {"schema": 1, "default": "qwen3.8-27b", "models": [
             MODELS["models"][0], dict(MODELS["models"][1], thinking_main="medium")]}
@@ -391,7 +407,8 @@ class ConfigureTests(unittest.TestCase):
         deleg = "file:" + self.path(".config/opencode/plugins/carl-delegation")    # stays with the coder
         self.assertEqual(self.read_json(".config/opencode/opencode.json")["plugin"],
                          ["/home/u/mine.js", [deleg, {"provider": "carl", "reminder": True,
-                                                       "cacheApi": "http://192.168.42.1:8081", "coder": "coder"}]])
+                                                       "cacheApi": "http://192.168.42.1:8081", "coder": "coder",
+                                                       "stateFile": self.path(".config/opencode/carl.json")}]])
         self.assertFalse(os.path.exists(self.path(".config/opencode/plugins/carl-model-check")))
         self.assertIn("removed   OpenCode plugin carl-model-check", p.stdout)
         self.assertFalse(os.path.exists(self.path(".pi/agent/extensions/carl-cache")))
@@ -681,7 +698,7 @@ class ConfigureTests(unittest.TestCase):
         self.assertEqual(self.run_configure("--coder", "1").returncode, 0)
         entry = [p for p in self.read_json(".config/opencode/opencode.json")["plugin"] if "carl-delegation" in p[0]][0]
         self.assertEqual(entry[1], {"provider": "llamacpp", "reminder": True, "cacheApi": "http://192.168.42.1:8081",
-                                    "coder": "coder"})
+                                    "coder": "coder", "stateFile": self.path(".config/opencode/carl.json")})
         self.assertEqual(self.read_json(".pi/agent/carl.json")["delegation"], {"reminder": True})
         for d in (".config/opencode/plugins/carl-delegation", ".pi/agent/extensions/carl-delegation"):
             self.assertTrue(os.path.isfile(self.path(d + "/carl-delegation.js")), d)

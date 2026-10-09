@@ -13,8 +13,8 @@
 //     JSON reader whose errors name the line as the TOML reader's do; parseBrief also takes a ```json fence, or a
 //     JSON object with prose around it, with the same keys, and gives the same shape; the check's sentences then
 //     name the keys the JSON way ("work_mode": "code"); writeBriefJson writes it back.
-//   - the chain's helpers: filesByAction, requirementIds, checkIds, testsSetting, testSessionDue, testSessionBrief,
-//     writeBrief; isTestFile (what the gates call a test file), namesTests; hashFiles and changedFiles (the test-file
+//   - the chain's helpers: filesByAction, requirementIds, checkIds, testsSetting (Phase 23.4.6), testSessionDue,
+//     testSessionBrief, writeBrief; isTestFile (what the gates call a test file), namesTests; hashFiles and changedFiles (the test-file
 //     freeze); parseReport (the coder's TOML report, or the same as JSON). carl-chain.js runs the chain with them.
 //   - [test_session]: CARL's own table in the code session's brief, with two- or three-word keys as the rest
 //     (test_files: the test files of the test session before it; session_summary, session_notes and
@@ -951,23 +951,26 @@ export const requirementIds = (b) => b.requirements.map((r) => r.id).filter(Bool
 /** @param {Brief} b */
 export const checkIds = (b) => b.checks.map((c) => c.id).filter(Boolean);
 
+/** The Tests setting (Phase 23.4.6, /carl's Tests row): when CARL's test session runs. before: before the code
+ * session (the default); after: after it; off: none. */
+export const TESTS_SETTINGS = ["before", "after", "off"];
+
 /**
- * When CARL's test session runs: Phase 23.4.6's Tests setting (before code, after code, off) plugs in here. Until
- * then "before", the default: the test session before the code session.
- * @returns {"before" | "after" | "off"}
+ * The Tests setting from a value of the client's state file: one of TESTS_SETTINGS, else "before" (the default).
+ * @param {unknown} v @returns {"before" | "after" | "off"}
  */
-export function testsSetting() {
-  return "before";
+export function testsSetting(v) {
+  return TESTS_SETTINGS.includes(/** @type {string} */ (v)) ? /** @type {"before" | "after" | "off"} */ (v) : "before";
 }
 
 /**
- * Is a test session due before the code session? Only for work_mode code and work_type new_feature, with no
- * [failed_attempt] or [[tried_fix]], and not a task that continues an earlier one; never for the code session of a
- * chain (its brief has CARL's [test_session]); only while the Tests setting is "before".
+ * Is a test session due with this brief (before or after the code session, as the Tests setting says)? Only for
+ * work_mode code and work_type new_feature, with no [failed_attempt] or [[tried_fix]], and not a task that continues
+ * an earlier one; never for a session of a chain (the code session's brief has CARL's [test_session]).
  * @param {Brief} b @param {boolean} [continued]
  */
 export function testSessionDue(b, continued = false) {
-  return !continued && testsSetting() === "before" && b.workMode === "code" && b.workType === "new_feature" &&
+  return !continued && b.workMode === "code" && b.workType === "new_feature" &&
     !b.failedAttempt && !b.triedFixes.length && !b.testSession;
 }
 

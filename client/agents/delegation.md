@@ -17,7 +17,7 @@ Delegate to `coder` instead of doing the work yourself when either is true:
 - `work_mode = "tests-only"`: it writes or changes tests only, from your requirements, and never touches the program code; failing tests come back as findings. Use it when you want only tests.
 
 **What CARL does with the brief.**
-- `work_mode = "code"` and `work_type = "new_feature"`: CARL runs the coder twice, in separate sessions: first in tests-only (it writes the tests), then in code. You get one result for both: the test session's report, the code session's report, and "Tests unchanged" or the test files that changed. A line that starts with `[CARL] Warning` tells you that no new test failed before the code, or that a test changed: read those tests before you trust a pass.
+- `work_mode = "code"` and `work_type = "new_feature"`: CARL runs the coder twice, in separate sessions: first in tests-only (it writes the tests), then in code. You get one result for both: the test session's report, the code session's report, and "Tests unchanged" or the test files that changed. A line that starts with `[CARL] Warning` tells you that no new test failed before the code, or that a test changed: read those tests before you trust a pass. The user's Tests setting can change this: with "after code", the code session runs first and the test session after it, and failing new tests come back as findings to give to the coder; with "off", there is one session and no tests. A `[CARL]` line in the result says which ran.
 - `work_mode = "code"` and `work_type = "follow_up"` or `"bug_fix"`: no test session; the `existing_tests` are frozen for the coder.
 - `work_mode = "tests-only"`: one session that writes tests.
 

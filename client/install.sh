@@ -107,6 +107,7 @@ Switches (environment variables, for example NO_CACHE=1 ./install.sh):
   CODER_THINKING=MODEL:VALUE,...\tThe coder's thinking on this computer, per model, over the dashboard's Coder thinking. VALUE: main (same as main), on, off, low, medium or xhigh. /carl sets it.
   CODER_MODEL=PROVIDER/MODEL\tThe coder runs on this model of OpenCode or Pi, not on the CARL server. The coder's work goes to that provider. main (the default): the model of the main session. /carl sets it.
   CODER_MODEL_THINKING=LEVEL\tThe thinking of that external model: a variant (OpenCode) or a thinking level (Pi). Without it: the model's own default. /carl sets it.
+  CODER_TESTS=WHEN\tWhen CARL's test session runs for new code: before (the default: the tests, then the code), after (the code, then the tests) or off (no test session). /carl sets it.
   NO_BROWSER=1\tDo not install the browser tools.
   BROWSER_HEADED=1\tShow the browser on the screen.
   WEB_SEARCH=PROVIDER\texa (the default), parallel or off.
@@ -402,6 +403,7 @@ python3 "$HERE/configure.py" --bundle "$HERE" --home "$HOME" --host "$HOST" --cl
   --reminder "$([[ "${NO_REMINDER:-0}" == 1 ]] && echo 0 || echo 1)" \
   --coder-thinking "${CODER_THINKING:-}" \
   --coder-model "${CODER_MODEL:-}" --coder-model-thinking "${CODER_MODEL_THINKING:-}" \
+  --coder-tests "${CODER_TESTS:-before}" \
   --profile "$([[ "${NO_PROFILE:-0}" == 1 ]] && echo 0 || echo 1)" \
   --cache "$([[ "${NO_CACHE:-0}" == 1 || "${NO_PREFIX_CACHE:-0}" == 1 ]] && echo 0 || echo 1)" \
   --browser "$([[ "${NO_BROWSER:-0}" == 1 ]] && echo 0 || echo 1)" --browser-headed "$([[ "${BROWSER_HEADED:-0}" == 1 ]] && echo 1 || echo 0)"
@@ -464,7 +466,7 @@ if [[ "${CARL_SYNC:-0}" != 1 ]]; then
   ( umask 077; mkdir -p "$HOME/.config/carl"
     for k in CLIENTS CODER NO_CODER WEB_SEARCH NO_LSP LSP NO_BROWSER BROWSER_HEADED NO_SIDEBAR NO_SWITCHER \
              NO_MODEL_CHECK NO_BACKGROUND_SUBAGENTS NO_CACHE LLAMA_CTX NO_REMINDER CODER_THINKING CODER_MODEL \
-             CODER_MODEL_THINKING; do
+             CODER_MODEL_THINKING CODER_TESTS; do
       [[ -n "${!k:-}" ]] && printf '%s=%s\n' "$k" "${!k}"
     done > "$HOME/.config/carl/client-install.env" ) || true
   if [[ "$MODE" == local || ! -s "$HERE/remote.json" || "${NO_SYNC_SERVICE:-0}" == 1 ]]; then

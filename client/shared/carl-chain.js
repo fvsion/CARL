@@ -6,7 +6,8 @@
 //
 // Revision 4 of the brief (docs/phase-plans/phase23.4.3/brief-v4-draft.md, "What CARL does").
 // A coder task with work_mode = "code", work_type = "new_feature", no [failed_attempt] / [[tried_fix]] and not a
-// continued task (testSessionDue; Phase 23.4.6's Tests setting will plug in at testsSetting in carl-brief.js):
+// continued task (testSessionDue), with the Tests setting "before" (the default; Phase 23.4.6: /carl's Tests row, the
+// client's state file "coder_tests", read at each task):
 //   1. the test session: a fresh coder session in work_mode tests-only (testSessionBrief: without design_notes and
 //      known_file, so the tests come from the behaviour, not the implementation). It writes the tests and reports.
 //   2. the red start: at least one new test fails before any code. The test session's report decides, unless CARL
@@ -19,19 +20,29 @@
 //      [[test_session.failing_test]]). Its gates refuse every test-file write.
 //   5. one result for the main agent (chainText): the red start or the warning, "tests unchanged" or the changed
 //      test files, the test session's report, the code session's report.
+// The Tests setting "after" (Phase 23.4.6): the same two sessions the other way round (Chain with order "after"):
+//   1. the code session: a fresh coder session with the original brief (work_mode code; its gates refuse every
+//      test-file write). The project's test files are hashed before and after it.
+//   2. the test session: a fresh coder session with the test brief (testSessionBrief, as above). It writes tests from
+//      the requirements against the code that is there now; a failing test is a finding in its report.
+//   3. CARL runs the checks once more (the same rules), after both sessions: a failure is a finding for the main agent.
+//   4. one result: the checks' outcome, the code session's report, the test session's report.
+// The Tests setting "off": one session (work_mode code), and the result says that no test session ran (TESTS_OFF).
 // work_mode code with work_type follow_up or bug_fix and existing_tests (Watch): no test session; one session, and
 // the existing_tests are frozen for the coder: hashed before and after it (its gates refuse test-file writes too).
 // work_mode tests-only: one session. Else: one session, as before. I/O: the project's test files (read and hashed)
 // and the check commands (run).
 
 import { spawn } from "node:child_process";
-import { readdirSync, statSync } from "node:fs";
+import { readFileSync, readdirSync, statSync } from "node:fs";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { changedFiles, checkBrief, hashFiles, isTestFile, namesTests, parseBrief, parseReport, testSessionBrief,
-         testSessionDue, writeBrief, writeBriefJson } from "./carl-brief.js";
+         testSessionDue, testsSetting, writeBrief, writeBriefJson } from "./carl-brief.js";
 
 export const CHAIN_MARK = "[CARL] Chain";
 export const WARN_MARK = "[CARL] Warning";
+/** The line that a coder result gets when a test session was due but the Tests setting is off (Phase 23.4.6). */
+export const TESTS_OFF = "[CARL] Tests: the Tests setting is off on this computer, so CARL ran no test session, and the coder (work_mode code) wrote no tests. If the work needs tests, give the coder a tests-only task.";
 export const RUN_MS = 120_000;                               // a check command's time limit
 const OUTPUT_CAP = 4_000;                                    // the output of a check command that CARL keeps
 const REPORT_CAP = 30_000;                                   // each session's report in the one result
@@ -47,25 +58,43 @@ const SKIP_DIRS = new Set([".git", ".hg", ".svn", "node_modules", ".venv", "venv
  * @typedef {{ run: string, result: "pass" | "fail" | "not run", code: number | null, output: string,
  *             refused?: string, timedOut?: boolean }} CheckRun
  * @typedef {"toml" | "json"} Format the brief's format: the chain writes its sessions' briefs in the same one
- * @typedef {{ kind: "chain", brief: Brief, format: Format } | { kind: "watch", brief: Brief, format: Format }
- *          | { kind: "one", brief: Brief | null, format: Format }} Plan
+ * @typedef {"before" | "after"} Order when the test session runs: before the code session, or after it
+ * @typedef {{ kind: "chain", order: Order, brief: Brief, format: Format } | { kind: "watch", brief: Brief, format: Format }
+ *          | { kind: "one", brief: Brief | null, format: Format, testsOff?: boolean }} Plan
  */
 
 /**
- * What CARL does with a coder task: "chain" (a test session, then a code session), "watch" (one session; the
- * brief's existing_tests are hashed before and after: work_mode code, work_type follow_up or bug_fix), or "one" (one
- * session, as before). A text that is no complete brief is "one" (the brief check deals with it).
+ * What CARL does with a coder task: "chain" (a test session and a code session, in the order of the Tests setting),
+ * "watch" (one session; the brief's existing_tests are hashed before and after: work_mode code, work_type follow_up
+ * or bug_fix), or "one" (one session, as before; testsOff: a test session was due, but the Tests setting is off). A
+ * text that is no complete brief is "one" (the brief check deals with it).
  * @param {string} taskText @param {boolean} [continued] the task continues an earlier one (OpenCode's task_id)
+ * @param {unknown} [tests] the Tests setting (testsSetting: "before" unless "after" or "off")
  * @returns {Plan}
  */
-export function coderPlan(taskText, continued = false) {
+export function coderPlan(taskText, continued = false, tests = "before") {
   const { brief, format: f } = parseBrief(taskText);
   const format = f === "json" ? "json" : "toml";
   if (!brief || checkBrief(brief).length) return { kind: "one", brief: null, format };
-  if (testSessionDue(brief, continued)) return { kind: "chain", brief, format };
+  const setting = testsSetting(tests);
+  const due = testSessionDue(brief, continued);
+  if (due && setting !== "off") return { kind: "chain", order: setting, brief, format };
   if (!continued && brief.workMode === "code" && (brief.workType === "follow_up" || brief.workType === "bug_fix") &&
       brief.existingTests.length) return { kind: "watch", brief, format };
-  return { kind: "one", brief, format };
+  return due ? { kind: "one", brief, format, testsOff: true } : { kind: "one", brief, format };
+}
+
+/**
+ * The Tests setting in a client's state file (carl.json "coder_tests", written by CARL's client setup from /carl's
+ * Tests row): before, after or off; "before" when the file or the key is missing or not one of them. Read at each
+ * coder task, so a change needs no restart. @param {string} file @returns {"before" | "after" | "off"}
+ */
+export function testsFrom(file) {
+  try {
+    return testsSetting(JSON.parse(readFileSync(file, "utf8"))?.coder_tests);
+  } catch {
+    return "before";
+  }
 }
 
 // ------------------------------------------------------------------ the project's test files
@@ -360,18 +389,20 @@ const plain = (s) => String(s ?? "").replace(/```/g, "'''").trim();
 
 /**
  * The red start: from CARL's own runs of the checks when it ran one (a failing run before any code is the red
- * start), else from the test session's report (a failed check or a finding).
+ * start), else from the test session's report (a failed check or a finding). The same for the checks after both
+ * sessions (the Tests setting "after"; when: "after both sessions"): red is then a failure, a finding.
  * @param {import("./carl-brief.js").Report | null} report @param {CheckRun[]} runs
+ * @param {string} [when] when CARL ran the checks, in words
  * @returns {{ red: boolean, why: string }}
  */
-export function redStart(report, runs) {
+export function redStart(report, runs, when = "before the code") {
   const ran = runs.filter((r) => r.result !== "not run");
   const q = (/** @type {CheckRun[]} */ rs) => rs.map((r) => "`" + r.run + "`").join(", ");
   if (ran.length) {
     const failed = ran.filter((r) => r.result === "fail");
     return failed.length
-      ? { red: true, why: `CARL ran ${q(failed)} before the code: it failed (exit ${failed.map((r) => r.code).join(", ")}).` }
-      : { red: false, why: `CARL ran ${q(ran)} before the code: it passed.` };
+      ? { red: true, why: `CARL ran ${q(failed)} ${when}: it failed (exit ${failed.map((r) => r.code).join(", ")}).` }
+      : { red: false, why: `CARL ran ${q(ran)} ${when}: it passed.` };
   }
   const failing = report ? report.checks.filter((c) => c.result === "fail").length + report.findings.length : 0;
   if (failing) return { red: true, why: "the test session's report has failing tests." };
@@ -394,44 +425,67 @@ export function notRunLine(runs) {
 
 /** One session's outcome: ok (it ran to its end) and its final message (or the error). */
 /** @typedef {{ ok: boolean, output: string }} SessionOutcome */
+/** Where a chain stopped (OpenCode's held chain): in the first session, after it (held), in the second session. */
+/** @typedef {"first" | "held" | "second"} Stage */
 
 /**
- * One chain: build it with the brief (coderPlan's), then testTask() before the test session, afterTest() with its
- * final message (it gives the code session's task), and result() with the code session's final message. o.format:
- * the format of the main agent's brief (coderPlan's); the sessions' briefs are written in it (default TOML).
+ * One chain: build it with the brief and the order (coderPlan's), then firstTask() before the first session,
+ * afterFirst() with its final message (it gives the second session's task), and end() with the second session's
+ * final message (the one result). Order "before" (the default): the test session, then the code session; "after":
+ * the code session, then the test session. o.format: the format of the main agent's brief (coderPlan's); the
+ * sessions' briefs are written in it (default TOML).
  */
 export class Chain {
   /** @param {Brief} brief @param {string} cwd the project folder
-   *  @param {{ runCheck?: RunCheck, runMs?: number, format?: Format }} [o] */
+   *  @param {{ runCheck?: RunCheck, runMs?: number, format?: Format, order?: Order }} [o] */
   constructor(brief, cwd, o = {}) {
     this.brief = brief;
     this.cwd = cwd;
+    /** @type {Order} */
+    this.order = o.order === "after" ? "after" : "before";
     /** @type {Format} */
     this.format = o.format === "json" ? "json" : "toml";
     this.write = o.format === "json" ? writeBriefJson : writeBrief;
     this.runCheck = o.runCheck ?? runCommand;
     this.runMs = o.runMs ?? RUN_MS;
-    /** @type {Record<string, string | null>} */
+    /** @type {Record<string, string | null>} the test files before the first session */
     this.before = {};
-    /** @type {Record<string, string | null>} the test files after the test session (the freeze) */
+    /** @type {Record<string, string | null>} the test files after the test session (before: the freeze) or after
+     *  the code session (after: what the test session starts from) */
     this.frozen = {};
     /** @type {string[]} the test files that the test session wrote */
     this.written = [];
+    /** @type {string[]} order "after": the test files that the code session changed (its gates refuse that) */
+    this.codeChanged = [];
     /** @type {CheckRun[]} */
     this.runs = [];
     this.red = { red: false, why: "" };
     this.testOutput = "";
     this.testOk = true;
+    this.codeOutput = "";
+    this.codeOk = true;
   }
 
-  /** The test session's task (a brief in work_mode tests-only). Notes the project's test files first. */
-  testTask() {
+  /** The sessions in their order: the first is the one that the task tool (OpenCode) or the first run (Pi) runs. */
+  get steps() {
+    return /** @type {const} */ (this.order === "after" ? ["code", "test"] : ["test", "code"]);
+  }
+
+  /** The first session's output, kept where its role says (the test or the code session). @param {SessionOutcome} o */
+  firstOutcome(o) {
+    if (this.order === "after") [this.codeOk, this.codeOutput] = [o.ok, o.output];
+    else [this.testOk, this.testOutput] = [o.ok, o.output];
+  }
+
+  /** The first session's task. Notes the project's test files first. Order "before": the test brief (work_mode
+   * tests-only); "after": the brief as the main agent wrote it (work_mode code). */
+  firstTask() {
     this.before = hashFiles(projectTestFiles(this.cwd), this.cwd);
-    return this.write(testSessionBrief(this.brief));
+    return this.write(this.order === "after" ? this.brief : testSessionBrief(this.brief));
   }
 
-  /** The commands to run for the red start: the checks whose run names tests or a test file the session wrote;
-   * when none does, every check's run. Each command once. */
+  /** The commands to run for the red start (or after both sessions): the checks whose run names tests or a test
+   * file the test session wrote; when none does, every check's run. Each command once. */
   commands() {
     const runs = [...new Set(this.brief.checks.map((c) => c.run).filter(Boolean))];
     const tests = runs.filter((r) => namesTests(r) || this.written.some((f) => r.includes(f)));
@@ -439,18 +493,17 @@ export class Chain {
   }
 
   /**
-   * After the test session: the files it wrote, the red start (CARL runs the checks), the freeze. Gives the code
-   * session's task: the original brief and CARL's [test_session] table.
-   * @param {SessionOutcome} test @returns {Promise<string>}
+   * After the test session: the test files it wrote (against `from`, the test files before it), and CARL's run of the
+   * checks (runs, red). @param {SessionOutcome} test @param {Record<string, string | null>} from @param {string} when
+   * @returns {Promise<{ now: Record<string, string | null>, report: import("./carl-brief.js").Report | null }>}
    */
-  async afterTest(test) {
+  async checkTests(test, from, when) {
     this.testOk = test.ok;
     this.testOutput = test.output;
     const now = hashFiles(projectTestFiles(this.cwd), this.cwd);
     const report = parseReport(test.output);
     const named = (report?.files ?? []).map((f) => f.path).filter((p) => isTestFile(p) && now[p]);
-    this.written = [...new Set([...changedFiles(this.before, now).filter((p) => now[p]), ...named])].sort();
-    this.frozen = now;
+    this.written = [...new Set([...changedFiles(from, now).filter((p) => now[p]), ...named])].sort();
     this.runs = [];
     for (const run of this.commands()) {
       const ok = allowedCheck(run, this.cwd);
@@ -466,12 +519,31 @@ export class Chain {
       this.runs.push({ run, code: r.code, output: r.output, timedOut: r.timedOut,
                        result: r.timedOut ? "not run" : exitMeaning(ok.runner, r.code, r.output) });
     }
-    this.red = redStart(report, this.runs);
+    this.red = redStart(report, this.runs, when);
+    return { now, report };
+  }
+
+  /**
+   * After the first session: gives the second session's task. Order "before": the files the test session wrote, the
+   * red start (CARL runs the checks), the freeze; the code session's task is the original brief and CARL's
+   * [test_session] table. Order "after": the test files that the code session changed; the test session's task is the
+   * test brief.
+   * @param {SessionOutcome} first @returns {Promise<string>}
+   */
+  async afterFirst(first) {
+    if (this.order === "after") {
+      this.firstOutcome(first);
+      this.frozen = hashFiles(projectTestFiles(this.cwd), this.cwd);
+      this.codeChanged = changedFiles(this.before, this.frozen);
+      return this.write(testSessionBrief(this.brief));
+    }
+    const { now, report } = await this.checkTests(first, this.before, "before the code");
+    this.frozen = now;
     return this.write({
       ...this.brief,
       testSession: {
         files: this.written,
-        summary: plain(report ? report.outcomeSummary : cut(test.output, 1_500)),
+        summary: plain(report ? report.outcomeSummary : cut(first.output, 1_500)),
         failing: (report?.findings ?? []).map((f) => ({ test: plain(f.test), requirement: plain(f.requirement), why: plain(f.why) })),
         notes: (report?.openIssues ?? []).map(plain),
       },
@@ -484,10 +556,24 @@ export class Chain {
   }
 
   /**
-   * The one result for the main agent after the code session.
+   * After the second session: the one result for the main agent. Order "after": CARL runs the checks first.
+   * @param {SessionOutcome} second @returns {Promise<string>}
+   */
+  async end(second) {
+    if (this.order === "after") {
+      await this.checkTests(second, this.frozen, "after both sessions");
+      return this.afterResult();
+    }
+    return this.result(second);
+  }
+
+  /**
+   * The one result after the code session (order "before").
    * @param {SessionOutcome} code @returns {string}
    */
   result(code) {
+    this.codeOk = code.ok;
+    this.codeOutput = code.output;
     const changed = this.changed();
     const lines = [`${CHAIN_MARK}: the coder ran in two new sessions: first the tests (work_mode tests-only), then the code (work_mode code).`];
     if (!this.red.red) {
@@ -501,61 +587,108 @@ export class Chain {
       : `Tests unchanged after the code session${this.written.length ? ` (${this.written.join(", ")})` : ""}.`);
     if (!code.ok) lines.push("The code session failed: its error is below.");
     lines.push("Run the checks yourself before you answer the user.");
-    return [lines.join("\n"),
-            `## The test session's report (work_mode tests-only)\n\n${cut(this.testOutput.trim() || "(no output)", REPORT_CAP)}`,
-            `## The code session's report (work_mode code)\n\n${cut(code.output.trim() || "(no output)", REPORT_CAP)}`].join("\n\n");
+    return [lines.join("\n"), this.testSection(), this.codeSection()].join("\n\n");
+  }
+
+  /** The one result after the test session (order "after"): checkTests ran. @returns {string} */
+  afterResult() {
+    const lines = [`${CHAIN_MARK}: the coder ran in two new sessions: first the code (work_mode code), then the tests (work_mode tests-only), as the Tests setting "after code" on this computer says.`];
+    lines.push(this.red.red
+      ? `The new tests fail: ${this.red.why} Each failure is a finding (the test session's report says why): give the fixes to the coder (work_type = "follow_up", the new test files in existing_tests).`
+      : `${this.red.why[0].toUpperCase()}${this.red.why.slice(1)}`);
+    const notRun = notRunLine(this.runs);
+    if (notRun) lines.push(notRun);
+    if (!this.written.length) lines.push(`${WARN_MARK}: the test session wrote no test file.`);
+    else lines.push(`The test session wrote: ${this.written.join(", ")}.`);
+    if (this.codeChanged.length) {
+      lines.push(`${WARN_MARK}: the code session changed these test files: ${this.codeChanged.join(", ")}. Look at the change before you trust a pass.`);
+    }
+    if (!this.testOk) lines.push("The test session failed: its error is below.");
+    lines.push("Run the checks yourself before you answer the user.");
+    return [lines.join("\n"), this.codeSection(), this.testSection()].join("\n\n");
+  }
+
+  /** The test session's report, as the one result shows it. @param {string} [none] */
+  testSection(none = "(no output)") {
+    return `## The test session's report (work_mode tests-only)\n\n${cut(this.testOutput.trim() || none, REPORT_CAP)}`;
+  }
+
+  /** The code session's report, as the one result shows it. @param {string} [none] */
+  codeSection(none = "(no output)") {
+    return `## The code session's report (work_mode code)\n\n${cut(this.codeOutput.trim() || none, REPORT_CAP)}`;
   }
 
   /**
    * The one result when the client stopped before the chain ended (OpenCode's held chain, delivered at its next
-   * start): what exists. stage: where it stopped ("test": in the test session; "held": after it, before the code
-   * session; "code": in the code session). code: what the code session wrote before it stopped, when known.
-   * @param {"test" | "held" | "code"} stage @param {string} [code] @returns {string}
+   * start): what exists. stage: where it stopped ("first": in the first session; "held": after it, before the second
+   * session; "second": in the second session). text: what the second session wrote before it stopped, when known.
+   * @param {Stage} stage @param {string} [text] @returns {string}
    */
-  interrupted(stage, code = "") {
-    const where = stage === "test" ? "the test session did not finish, and the code session did not run"
-      : stage === "held" ? "the code session did not run" : "the code session did not finish";
+  interrupted(stage, text = "") {
+    const [first, second] = this.steps.map((s) => `the ${s} session`);
+    const where = stage === "first" ? `${first} did not finish, and ${second} did not run`
+      : stage === "held" ? `${second} did not run` : `${second} did not finish`;
     const parts = [`${CHAIN_MARK}: OpenCode stopped before the chain ended: ${where}. The project's files may hold part of the work: look at them and give the task to the coder again if it is not done.`];
-    if (stage !== "test" && this.red.why) parts[0] += `\n${this.red.red ? "Red start" : `${WARN_MARK}: no red start`}: ${this.red.why}`;
-    parts.push(`## The test session's report (work_mode tests-only)\n\n${cut(this.testOutput.trim() || "(no report)", REPORT_CAP)}`);
-    if (stage === "code") parts.push(`## The code session's last answer (work_mode code, unfinished)\n\n${cut(code.trim() || "(none)", REPORT_CAP)}`);
+    if (this.order === "before" && stage !== "first" && this.red.why) {
+      parts[0] += `\n${this.red.red ? "Red start" : `${WARN_MARK}: no red start`}: ${this.red.why}`;
+    }
+    if (this.order === "after") {
+      parts.push(this.codeSection("(no report)"));
+      if (stage === "second") parts.push(`## The test session's last answer (work_mode tests-only, unfinished)\n\n${cut(text.trim() || "(none)", REPORT_CAP)}`);
+    } else {
+      parts.push(this.testSection("(no report)"));
+      if (stage === "second") parts.push(`## The code session's last answer (work_mode code, unfinished)\n\n${cut(text.trim() || "(none)", REPORT_CAP)}`);
+    }
     return parts.join("\n\n");
   }
 
   /**
-   * The one result when the test session ran in the background and its completion could not be held (OpenCode
-   * without the hold): the code session did not run. @param {string} testText @returns {string}
+   * The one result when the first session ran in the background and its completion could not be held (OpenCode
+   * without the hold): the second session did not run. @param {string} firstText @returns {string}
    */
-  unheld(testText) {
-    this.testOutput = testText;
+  unheld(firstText) {
+    this.firstOutcome({ ok: true, output: firstText });
+    if (this.order === "after") {
+      return `${CHAIN_MARK}: the code session ran in the background, where CARL cannot hold its result on this OpenCode, so the test session did not run. Give the coder a tests-only task for this work if it needs tests.\n\n` +
+        this.codeSection("(no report)");
+    }
     return `${CHAIN_MARK}: the test session ran in the background, where CARL cannot hold its result on this OpenCode, so the code session did not run. Give the task to the coder again with work_type = "follow_up" and the new tests in existing_tests.\n\n` +
-      `## The test session's report (work_mode tests-only)\n\n${cut(testText.trim() || "(no report)", REPORT_CAP)}`;
+      this.testSection("(no report)");
   }
 
   /** The chain's state as plain data (OpenCode's state file of a held chain); Chain.from reads it back. */
   snapshot() {
-    return { brief: this.brief, cwd: this.cwd, format: this.format, before: this.before, frozen: this.frozen,
-             written: this.written, runs: this.runs.map(({ output: _o, ...r }) => r), red: this.red,
-             testOutput: this.testOutput, testOk: this.testOk };
+    return { brief: this.brief, cwd: this.cwd, order: this.order, format: this.format, before: this.before,
+             frozen: this.frozen, written: this.written, codeChanged: this.codeChanged,
+             runs: this.runs.map(({ output: _o, ...r }) => r), red: this.red, testOutput: this.testOutput,
+             testOk: this.testOk, codeOutput: this.codeOutput, codeOk: this.codeOk };
   }
 
-  /** A chain from its snapshot. @param {any} o @returns {Chain} */
+  /** A chain from its snapshot (a snapshot from before 23.4.6 has no order: "before"). @param {any} o @returns {Chain} */
   static from(o) {
-    const c = new Chain(o.brief, o.cwd, { format: o.format });
+    const c = new Chain(o.brief, o.cwd, { format: o.format, order: o.order });
     c.before = o.before ?? {};
     c.frozen = o.frozen ?? {};
     c.written = o.written ?? [];
+    c.codeChanged = o.codeChanged ?? [];
     c.runs = (o.runs ?? []).map((/** @type {any} */ r) => ({ output: "", ...r }));
     c.red = o.red ?? { red: false, why: "" };
     c.testOutput = String(o.testOutput ?? "");
     c.testOk = o.testOk !== false;
+    c.codeOutput = String(o.codeOutput ?? "");
+    c.codeOk = o.codeOk !== false;
     return c;
   }
 
-  /** The one result when the test session failed: the code session did not run. @returns {string} */
-  stopped() {
-    return `${CHAIN_MARK}: the test session failed, so the code session did not run. Its error is below.\n\n` +
-      `## The test session (work_mode tests-only)\n\n${cut(this.testOutput.trim() || "(no output)", REPORT_CAP)}`;
+  /** The one result when the first session failed: the second session did not run. @param {string} output its error
+   * @returns {string} */
+  stopped(output) {
+    this.firstOutcome({ ok: false, output });
+    const [first, second] = this.steps;
+    return `${CHAIN_MARK}: the ${first} session failed, so the ${second} session did not run. Its error is below.\n\n` +
+      (this.order === "after"
+        ? `## The code session (work_mode code)\n\n${cut(this.codeOutput.trim() || "(no output)", REPORT_CAP)}`
+        : `## The test session (work_mode tests-only)\n\n${cut(this.testOutput.trim() || "(no output)", REPORT_CAP)}`);
   }
 }
 
@@ -582,23 +715,24 @@ export class Watch {
 /**
  * Run a coder task as CARL does (Pi's subagent tool; the OpenCode plugin runs the same steps around the task tool).
  * run(taskText) runs one fresh coder session. The result: kind (coderPlan's), ok, and text: the one result for the
- * main agent (for "one", the session's own output).
+ * main agent (for "one", the session's own output; with the Tests setting off and a test session due, TESTS_OFF
+ * after it).
  * @param {string} taskText @param {string} cwd
  * @param {(taskText: string, step: "test" | "code" | "one") => Promise<SessionOutcome>} run
- * @param {{ runCheck?: RunCheck, runMs?: number, chain?: boolean }} [o] chain: false runs every task as one session
+ * @param {{ runCheck?: RunCheck, runMs?: number, chain?: boolean, tests?: unknown }} [o] chain: false runs every
+ *   task as one session; tests: the Tests setting (default "before")
  * @returns {Promise<{ kind: Plan["kind"], ok: boolean, text: string }>}
  */
 export async function runCoderTask(taskText, cwd, run, o = {}) {
-  const plan = coderPlan(taskText);
+  const plan = coderPlan(taskText, false, o.tests);
   if (plan.kind === "chain" && o.chain !== false) {
-    const chain = new Chain(plan.brief, cwd, { ...o, format: plan.format });
-    const test = await run(chain.testTask(), "test");
-    if (!test.ok) {
-      chain.testOutput = test.output;
-      return { kind: "chain", ok: false, text: chain.stopped() };
-    }
-    const code = await run(await chain.afterTest(test), "code");
-    return { kind: "chain", ok: code.ok, text: chain.result(code) };
+    const chain = new Chain(plan.brief, cwd, { ...o, format: plan.format, order: plan.order });
+    const [first, second] = chain.steps;
+    const one = await run(chain.firstTask(), first);
+    if (!one.ok) return { kind: "chain", ok: false, text: chain.stopped(one.output) };
+    const two = await run(await chain.afterFirst(one), second);
+    const text = await chain.end(two);
+    return { kind: "chain", ok: chain.order === "after" ? chain.codeOk && two.ok : two.ok, text };
   }
   if (plan.kind === "watch") {
     const watch = new Watch(plan.brief, cwd);
@@ -607,5 +741,5 @@ export async function runCoderTask(taskText, cwd, run, o = {}) {
     return { kind: "watch", ok: one.ok, text: note ? `${one.output}\n\n${note}` : one.output };
   }
   const one = await run(taskText, "one");
-  return { kind: "one", ok: one.ok, text: one.output };
+  return { kind: "one", ok: one.ok, text: plan.kind === "one" && plan.testsOff && o.chain !== false ? `${one.output}\n\n${TESTS_OFF}` : one.output };
 }

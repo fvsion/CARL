@@ -54,13 +54,19 @@
 // chose for it. chat.params merges that variant of the model (input.model.variants, OpenCode's own) into the options
 // of the coder's requests to that model. Without coderVariant ("model default"), the request stays as it is: CARL's
 // coderThinking table is for CARL's models only, and nothing else of CARL's is sent to the external model.
+// Phase 23.4.6 (the Tests setting, /carl's Tests row): option "stateFile" names CARL's state file of this OpenCode
+// (carl.json); its "coder_tests" (before, after, off) is read at each coder task, so a change needs no restart. before
+// (the default, also without the file): the chain as above. after: the same two sessions the other way round: the task
+// tool runs the code session, the plugin then starts the test session, and CARL runs the checks after both. off: one
+// session, and its result ends with TESTS_OFF. The held chain's record names its sessions first and second (the task
+// tool's and the plugin's); a record from before (test, code) is read the same.
 
 import { execFile } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { parseBrief, checkBrief } from "./carl-brief.js";
-import { Chain, Watch, coderPlan } from "./carl-chain.js";
+import { Chain, TESTS_OFF, Watch, coderPlan, testsFrom } from "./carl-chain.js";
 import { CoderGate, GateSetting, RULE_BEGIN, RULE_END, Turn, briefCheck, isCoderName, withReminder, withoutRule }
   from "./carl-delegation.js";
 
@@ -73,8 +79,10 @@ export const VERIFIED_VERSIONS = ["1.18.34", "1.18.35"];
 const POLL_MS = 5_000;                                       // the code session's messages, besides session.idle
 const RECOVER_MS = 2_000;                                    // after the load: the undelivered chains of this project
 
-/** @typedef {{ chain?: Chain, watch?: Watch, parent: string, description: string, hold?: boolean, test?: string,
- *              code?: string, agent?: string, model?: { providerID?: string, modelID?: string } }} Pending */
+/** A coder task call that CARL follows: a chain (first: the task tool's session; second: the one the plugin starts),
+ * a watch, or off (the Tests setting is off: the result gets TESTS_OFF).
+ * @typedef {{ chain?: Chain, watch?: Watch, off?: boolean, parent: string, description: string, hold?: boolean,
+ *              first?: string, second?: string, agent?: string, model?: { providerID?: string, modelID?: string } }} Pending */
 /** @typedef {{ ok: boolean, why: string }} Hold */
 
 /**
@@ -195,10 +203,19 @@ function alive(pid) {
 
 /**
  * The held chains, one file for each main session: DIR/<main session>.json, { chains: [record, ...] }, mode 0600
- * (the folder 0700). A record: v, parent, test (the test session), stage ("test": it runs; "held": its completion
- * was held, the code session did not start yet; "code": the code session runs), code (its id), description, agent
- * (the main session's), directory (the project), pid (the OpenCode process), at, chain (Chain.snapshot()).
+ * (the folder 0700). A record: v (2), parent, first (the task tool's session: the test session, or the code session
+ * with the Tests setting "after"), stage ("first": it runs; "held": its completion was held, the second session did
+ * not start yet; "second": the second session runs), second (its id), description, agent (the main session's),
+ * directory (the project), pid (the OpenCode process), at, chain (Chain.snapshot()). A record of v 1 (before 23.4.6)
+ * has test, code and the stages test, held, code: firstOf and stageOf read both.
  */
+/** A record's first session (v 2: first; v 1: test). @param {any} r @returns {string} */
+export const firstOf = (r) => String(r?.first ?? r?.test ?? "");
+/** A record's second session (v 2: second; v 1: code). @param {any} r @returns {string} */
+export const secondOf = (r) => String(r?.second ?? r?.code ?? "");
+/** A record's stage (v 1's test and code: first and second). @param {any} r @returns {string} */
+export const stageOf = (r) => (r?.stage === "test" ? "first" : r?.stage === "code" ? "second" : String(r?.stage ?? ""));
+
 export class ChainStore {
   /** @param {string} dir */
   constructor(dir) {
@@ -239,14 +256,14 @@ export class ChainStore {
     } catch { /* the chain still runs; only a restart could not deliver it */ }
   }
 
-  /** Add or replace a record (by its test session). @param {any} rec */
+  /** Add or replace a record (by its first session). @param {any} rec */
   put(rec) {
-    this.write(rec.parent, [...this.read(rec.parent).filter((r) => r?.test !== rec.test), rec]);
+    this.write(rec.parent, [...this.read(rec.parent).filter((r) => firstOf(r) !== firstOf(rec)), rec]);
   }
 
-  /** @param {string} parent @param {string} test */
-  drop(parent, test) {
-    this.write(parent, this.read(parent).filter((r) => r?.test !== test));
+  /** @param {string} parent @param {string} first */
+  drop(parent, first) {
+    this.write(parent, this.read(parent).filter((r) => firstOf(r) !== first));
   }
 
   /** Every record. @returns {any[]} */
@@ -260,9 +277,9 @@ export class ChainStore {
     return names.flatMap((n) => this.read(n.slice(0, -5)));
   }
 
-  /** One process delivers a record: DIR/<parent>.<test>.claim holds its pid. @param {any} rec @returns {boolean} */
+  /** One process delivers a record: DIR/<parent>.<first>.claim holds its pid. @param {any} rec @returns {boolean} */
   claim(rec) {
-    const f = join(this.dir, `${rec.parent}.${rec.test}.claim`);
+    const f = join(this.dir, `${rec.parent}.${firstOf(rec)}.claim`);
     try {
       writeFileSync(f, String(process.pid), { flag: "wx", mode: 0o600 });
       return true;
@@ -280,7 +297,7 @@ export class ChainStore {
   /** @param {any} rec */
   release(rec) {
     try {
-      rmSync(join(this.dir, `${rec.parent}.${rec.test}.claim`), { force: true });
+      rmSync(join(this.dir, `${rec.parent}.${firstOf(rec)}.claim`), { force: true });
     } catch { /* gone */ }
   }
 }
@@ -332,6 +349,9 @@ export default {
     const gateSetting = new GateSetting({ cacheApi: typeof opts.cacheApi === "string" ? opts.cacheApi : "" });
     const coder = typeof opts.coder === "string" && opts.coder ? opts.coder : "coder";
     const chains = opts.chain !== false;
+    // the Tests setting (Phase 23.4.6): read at each coder task, so /carl's change needs no restart
+    const stateFile = typeof opts.stateFile === "string" ? opts.stateFile : "";
+    const tests = () => (stateFile ? testsFrom(stateFile) : "before");
     // the brief's format in the main agent's instructions, named when a task has no brief at all (agent-bench's
     // brief_json variant sets "json"; a JSON brief is read either way)
     const briefFormat = opts.briefFormat === "json" ? "json" : "toml";
@@ -386,7 +406,7 @@ export default {
     const notice = (why) => {
       if (noticed) return;
       noticed = true;
-      const message = `CARL runs the coder's tests-then-code chain in the foreground (the background hold is off: ${why}). The main session waits for both sessions.`;
+      const message = `CARL runs the coder's two-session chain (tests and code) in the foreground (the background hold is off: ${why}). The main session waits for both sessions.`;
       try {
         void client?.app?.log?.({ body: { service: "carl-delegation", level: "warn", message } })?.catch?.(() => {});
         void client?.tui?.showToast?.({ body: { title: "CARL", message, variant: "info", duration: 12000 } })?.catch?.(() => {});
@@ -430,19 +450,21 @@ export default {
       });
       return { done: /** @type {Promise<void>} */ (done), stop };
     };
-    /** A held chain's record in the state file. @param {Pending} p @param {"test" | "held" | "code"} stage */
+    /** A held chain's record in the state file. @param {Pending} p @param {import("./carl-chain.js").Stage} stage */
     const record = (p, stage) => {
-      if (!p.chain || !p.test) return;
-      store.put({ v: 1, parent: p.parent, test: p.test, stage, ...(p.code ? { code: p.code } : {}), description: p.description,
+      if (!p.chain || !p.first) return;
+      store.put({ v: 2, parent: p.parent, first: p.first, stage, ...(p.second ? { second: p.second } : {}), description: p.description,
                   agent: p.agent ?? "", directory: cwd, pid: process.pid, at: Date.now(), chain: p.chain.snapshot() });
     };
     /**
-     * The code session: a child session of the main session, as OpenCode's task tool makes one (the coder agent; no
-     * task or todo tool; the main session's deny and external-directory rules), with the code session's brief.
+     * The chain's second session (the code session; with the Tests setting "after", the test session): a child
+     * session of the main session, as OpenCode's task tool makes one (the coder agent; no task or todo tool; the main
+     * session's deny and external-directory rules), with its brief.
      * @param {Pending} p @param {string} task
      * @returns {Promise<{ id: string, ok: boolean, output: string }>}
      */
-    const codeSession = async (p, task) => {
+    const secondSession = async (p, task) => {
+      const role = /** @type {Chain} */ (p.chain).steps[1];
       try {
         /** @type {any[]} */
         let permission = [];
@@ -452,14 +474,14 @@ export default {
             .filter((/** @type {any} */ r) => r?.permission === "external_directory" || r?.action === "deny");
         } catch { /* the main session's rules: not known */ }
         permission.push({ permission: "todowrite", pattern: "*", action: "deny" }, { permission: "task", pattern: "*", action: "deny" });
-        const made = await client.session.create({ body: { parentID: p.parent, title: `${p.description}: code (@${coder} subagent)`,
+        const made = await client.session.create({ body: { parentID: p.parent, title: `${p.description}: ${role === "code" ? "code" : "tests"} (@${coder} subagent)`,
                                                            agent: coder, permission } });
         const id = String((made?.data ?? made)?.id ?? "");
-        if (!id) return { id: "", ok: false, output: `CARL could not start the code session: ${JSON.stringify(made?.error ?? made)}` };
+        if (!id) return { id: "", ok: false, output: `CARL could not start the ${role} session: ${JSON.stringify(made?.error ?? made)}` };
         sub.set(id, true);
         if (p.hold) {
-          p.code = id;
-          record(p, "code");
+          p.second = id;
+          record(p, "second");
         }
         const wait = ended(id);
         /** @type {Record<string, unknown>} */
@@ -474,17 +496,18 @@ export default {
         }
         if (sent?.error) {
           wait.stop();
-          return { id, ok: false, output: `CARL could not start the code session: ${JSON.stringify(sent.error)}` };
+          return { id, ok: false, output: `CARL could not start the ${role} session: ${JSON.stringify(sent.error)}` };
         }
         await wait.done;
         return { id, ...(await lastAnswer(id)) };
       } catch (e) {
-        return { id: "", ok: false, output: `CARL could not run the code session: ${e instanceof Error ? e.message : String(e)}` };
+        return { id: "", ok: false, output: `CARL could not run the ${role} session: ${e instanceof Error ? e.message : String(e)}` };
       }
     };
     /**
-     * After the test session (or the watched session): the one result. For a chain: the red start, the freeze, the
-     * code session, the result text.
+     * After the chain's first session (or the watched session, or one with the Tests setting off): the one result.
+     * For a chain: the first session's follow-up (the red start and the freeze; or, after code, the test files),
+     * the second session, the result text.
      * @param {Pending} p @param {{ id: string, state: string, text: string }} res
      * @returns {Promise<{ id: string, state: string, text: string }>}
      */
@@ -493,14 +516,12 @@ export default {
         const note = p.watch.note();
         return { id: res.id, state: res.state, text: note ? `${res.text}\n\n${note}` : res.text };
       }
+      if (p.off) return { ...res, text: res.state === "completed" ? `${res.text}\n\n${TESTS_OFF}` : res.text };
       const chain = /** @type {Chain} */ (p.chain);
-      if (res.state !== "completed") {
-        chain.testOutput = res.text;
-        return { id: res.id, state: "error", text: chain.stopped() };
-      }
-      const task = await chain.afterTest({ ok: true, output: res.text });
-      const code = await codeSession(p, task);
-      return { id: code.id || res.id, state: code.ok ? "completed" : "error", text: chain.result(code) };
+      if (res.state !== "completed") return { id: res.id, state: "error", text: chain.stopped(res.text) };
+      const task = await chain.afterFirst({ ok: true, output: res.text });
+      const second = await secondSession(p, task);
+      return { id: second.id || res.id, state: second.ok ? "completed" : "error", text: await chain.end(second) };
     };
     /** A completion message to the main session, as OpenCode's own for a background task.
      * @param {string} parent @param {string} agent @param {string} description
@@ -512,49 +533,52 @@ export default {
       await client.session.promptAsync({ path: { id: parent },
                                          body: { ...(agent ? { agent } : {}), parts: [{ type: "text", synthetic: true, text }] } });
     };
-    /** A held chain: the code session, then its one result to the main session as a message; the record goes when
-     * the result was sent (else the next start delivers it).
+    /** A held chain: the second session, then its one result to the main session as a message; the record goes
+     * when the result was sent (else the next start delivers it).
      * @param {Pending} p @param {{ id: string, state: string, text: string }} res @param {string} agent */
     const deliver = async (p, res, agent) => {
       p.agent = agent;
-      /** @type {Chain} */ (p.chain).testOutput = res.text;
+      /** @type {Chain} */ (p.chain).firstOutcome({ ok: true, output: res.text });
       record(p, "held");                                       // before the first await: the throw follows
       /** @type {{ id: string, state: string, text: string }} */
       let out;
       try {
         out = await finish(p, res);
       } catch (e) {                                            // never leave the main agent without a result
-        out = { id: res.id, state: "error", text: `${res.text}\n\n[CARL] The chain stopped after the test session: ${e instanceof Error ? e.message : String(e)}` };
+        out = { id: res.id, state: "error", text: `${res.text}\n\n[CARL] The chain stopped after the ${/** @type {Chain} */ (p.chain).steps[0]} session: ${e instanceof Error ? e.message : String(e)}` };
       }
       try {
         await send(p.parent, agent, p.description, out);
-        if (p.test) store.drop(p.parent, p.test);
+        if (p.first) store.drop(p.parent, p.first);
       } catch { /* OpenCode stopped: the record stays, the next start delivers */ }
     };
     /** At load (after RECOVER_MS): the held chains of this project whose OpenCode is gone get what exists. */
     const recover = async () => {
       if (typeof client?.session?.messages !== "function" || typeof client?.session?.promptAsync !== "function") return;
       for (const r of store.all()) {
-        if (!r || r.directory !== cwd || !r.parent || !r.test || !r.chain) continue;
+        const first = firstOf(r);
+        const second = secondOf(r);
+        const stage = stageOf(r);
+        if (!r || r.directory !== cwd || !r.parent || !first || !r.chain) continue;
         if (r.pid === process.pid || alive(r.pid) || !store.claim(r)) continue;
         try {
           const chain = Chain.from(r.chain);
           /** @type {{ id: string, state: string, text: string }} */
           let out;
-          if (r.stage === "code" && r.code) {
-            const end = sessionEnd(await messages(r.code).catch(() => []));
+          if (stage === "second" && second) {
+            const end = sessionEnd(await messages(second).catch(() => []));
             out = end.finished
-              ? { id: r.code, state: end.ok ? "completed" : "error", text: chain.result(end) }
-              : { id: r.code, state: "error", text: chain.interrupted("code", end.output) };
-          } else if (r.stage === "held") {
-            out = { id: r.test, state: "error", text: chain.interrupted("held") };
+              ? { id: second, state: end.ok ? "completed" : "error", text: await chain.end(end) }
+              : { id: second, state: "error", text: chain.interrupted("second", end.output) };
+          } else if (stage === "held") {
+            out = { id: first, state: "error", text: chain.interrupted("held") };
           } else {
-            const end = sessionEnd(await messages(r.test).catch(() => []));
-            chain.testOutput = end.output;
-            out = { id: r.test, state: "error", text: chain.interrupted(end.finished && end.ok ? "held" : "test") };
+            const end = sessionEnd(await messages(first).catch(() => []));
+            chain.firstOutcome(end);
+            out = { id: first, state: "error", text: chain.interrupted(end.finished && end.ok ? "held" : "first") };
           }
           await send(r.parent, String(r.agent ?? ""), String(r.description ?? "coder task"), out);
-          store.drop(r.parent, r.test);
+          store.drop(r.parent, first);
         } catch { /* it stays for the next start */ } finally {
           store.release(r);
         }
@@ -615,25 +639,26 @@ export default {
       },
       "chat.message": async (input, output) => {
         if (!input?.sessionID) return;
-        // a background test session's completion message: held back, the code session runs, one result follows
+        // a background first session's completion message: held back, the second session runs, one result follows
         for (const part of /** @type {any[]} */ (output?.parts ?? [])) {
           if (part?.type !== "text") continue;
           const res = parseTaskXml(String(part.text ?? ""));
           const p = res ? waiting.get(res.id) : undefined;
           if (!res || !p || p.parent !== input.sessionID) continue;
           waiting.delete(res.id);
-          if (p.chain && !p.hold && res.state === "completed") {  // in the background without the hold: no code session
+          if (p.chain && !p.hold && res.state === "completed") {  // in the background without the hold: no second session
             part.text = taskXml({ ...res, text: p.chain.unheld(res.text) });
             break;
           }
-          if (p.watch || res.state !== "completed") {          // in place: the one result is this message
-            if (p.test) store.drop(p.parent, p.test);
+          if (p.watch || p.off || res.state !== "completed") {  // in place: the one result is this message
+            if (p.first) store.drop(p.parent, p.first);
             const out = await finish(p, res);
             part.text = taskXml({ ...out, summary: res.summary });
             break;
           }
           void deliver(p, res, String(input.agent ?? ""));
-          throw new Error(`${HOLD_MARK}: the test session of "${p.description}" ended; CARL runs its code session now and sends one result when it ends.`);
+          const [one, two] = /** @type {Chain} */ (p.chain).steps;
+          throw new Error(`${HOLD_MARK}: the ${one} session of "${p.description}" ended; CARL runs its ${two} session now and sends one result when it ends.`);
         }
         turns.get(input.sessionID)?.reset();
         const agent = String(input.agent || /** @type {any} */ (output)?.message?.agent || "");
@@ -659,13 +684,13 @@ export default {
         }
         const type = String(args.subagent_type ?? "");
         if (tool === "task" && (type === coder || isCoderName(type)) && input?.callID && input?.sessionID) {
-          const plan = coderPlan(String(args.prompt ?? ""), Boolean(args.task_id));
+          const plan = coderPlan(String(args.prompt ?? ""), Boolean(args.task_id), tests());
           const description = String(args.description ?? "") || "coder task";
-          if (plan.kind === "chain" && chains) {                    // the task tool runs the test session
+          if (plan.kind === "chain" && chains) {                    // the task tool runs the first session
             const hold = await holdReady;
-            const chain = new Chain(plan.brief, cwd, { format: plan.format });
-            args.prompt = chain.testTask();
-            args.description = `${description}: tests`;
+            const chain = new Chain(plan.brief, cwd, { format: plan.format, order: plan.order });
+            args.prompt = chain.firstTask();
+            args.description = `${description}: ${chain.steps[0] === "test" ? "tests" : "code"}`;
             if (!hold.ok) {                                         // the base: the foreground, on any version
               if (args.background !== false) notice(hold.why);
               args.background = false;
@@ -674,6 +699,8 @@ export default {
                                       agent: agents.get(input.sessionID) ?? "" });
           } else if (plan.kind === "watch") {
             calls.set(input.callID, { watch: new Watch(plan.brief, cwd), parent: input.sessionID, description });
+          } else if (plan.kind === "one" && plan.testsOff && chains) {
+            calls.set(input.callID, { off: true, parent: input.sessionID, description });
           }
         }
         const gate = await gateSetting.get();                     // the dashboard's setting (Connect > Setup)
@@ -695,8 +722,8 @@ export default {
           if (!id) return;
           waiting.set(id, p);
           if (p.chain && p.hold) {                                 // the held chain's record (the state file)
-            p.test = id;
-            record(p, "test");
+            p.first = id;
+            record(p, "first");
           }
           return;
         }

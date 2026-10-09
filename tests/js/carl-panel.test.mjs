@@ -107,8 +107,9 @@ function stage(allOn, models = ONE) {
 
 const OC_ROWS = ["subagent", "browser", "web", "lsp", "sidebar", "switcher", "cache", "check", "sync", "auto", "apply", "once"];
 const PI_ROWS = ["subagent", "browser", "web", "cache", "sync", "auto", "apply", "once"];
-const CODER_ROWS = ["coder", "background", "reminder", "thinking", "coder-model"];
+const CODER_ROWS = ["coder", "background", "reminder", "tests", "thinking", "coder-model"];
 const LABELS = { subagent: "Coder subagent", coder: "Coder", background: "Background coder", reminder: "Delegation reminder",
+                 tests: "Tests",
                  thinking: "Coder thinking", "coder-model": "Coder model", browser: "Browser",
                  web: "Web search", lsp: "LSP", sidebar: "Subagents side panel", switcher: "Session switcher",
                  cache: "Disk cache", check: "Model check", auto: "Apply new configs at once", sync: "Sync service",
@@ -233,7 +234,7 @@ test("router mode: the row is for the session's model, else the config's default
   assert.equal(getIn("pi", "thinking", { model: `llamacpp/${Q}` }).notes.main, "the main session's thinking (low)");
   rmSync(join(PI, "settings.json"));
   stage(true, {});                                                                      // an install before 23.4.4
-  assert.deepEqual(subIds("pi"), ["coder", "background", "reminder", "coder-model"]);
+  assert.deepEqual(subIds("pi"), ["coder", "background", "reminder", "tests", "coder-model"]);
 });
 
 test("coderModel: the session's CARL model, else the default, else the first", () => {
@@ -290,7 +291,7 @@ for (const allOn of [true, false]) {
     stage(allOn);
     for (const client of ["opencode", "pi"]) {
       for (const r of allRows(panel(client).rows)) {
-        if (["sync", "apply", "once", "subagent", "thinking", "coder-model"].includes(r.id)) continue;
+        if (["sync", "apply", "once", "subagent", "tests", "thinking", "coder-model"].includes(r.id)) continue;
         const want = r.id === "web" ? (allOn ? "exa" : "off") : r.id === "auto" ? (allOn ? "off" : "on") : allOn ? "on" : "off";
         assert.equal(r.state, want, `${client} ${r.id}`);
         if (r.id === "auto") {
@@ -700,7 +701,8 @@ test("OpenCode: Coder subagent opens its list; Coder thinking its values (● th
   assert.equal(sub.title, "Coder subagent");
   assert.equal(sub.placeholder, undefined);                               // no search line in a sub-list
   assert.deepEqual(sub.options.map((o) => [o.title, o.footer]), [["Coder", "on"], ["Background coder", "on"],
-    ["Delegation reminder", "on"], ["Coder thinking", "dashboard default ›"], ["Coder model", "same as main"]]);
+    ["Delegation reminder", "on"], ["Tests", "before code ›"], ["Coder thinking", "dashboard default ›"],
+    ["Coder model", "same as main"]]);
   const n = dialogs.length;
   sub.onSelect({ value: "coder-model" });                                 // one value: nothing opens
   assert.equal(dialogs.length, n);
@@ -898,12 +900,12 @@ test("Pi: Pi's settings list; Coder subagent opens its list in place (Esc back);
   assert.equal(screen()[2], "→ Coder subagent  on ›");
   key("\r");                                                               // opens the list in the same place
   assert.deepEqual(screen(), ["Coder subagent", "", "→ Coder  on", "  Background coder  on", "  Delegation reminder  on",
-                              "  Coder thinking  dashboard default ›", "  Coder model  same as main"]);
-  key(DOWN, DOWN, DOWN, DOWN, "\r");                                       // Coder model: one value, nothing happens
+                              "  Tests  before code ›", "  Coder thinking  dashboard default ›", "  Coder model  same as main"]);
+  key(DOWN, DOWN, DOWN, DOWN, DOWN, "\r");                                 // Coder model: one value, nothing happens
   assert.equal(screen()[0], "Coder subagent");
   assert.ok(screen().includes("→ Coder model  same as main"), screen().join("\n"));
   assert.deepEqual(calls(), []);
-  key(DOWN, DOWN, DOWN, DOWN, "\r");                                       // around to Coder thinking: its values
+  key(DOWN, DOWN, DOWN, DOWN, DOWN, "\r");                                 // around to Coder thinking: its values
   assert.equal(screen()[0], `Coder thinking with ${g}`);                  // the session's model (ctx.model)
   assert.deepEqual(screen().slice(2), ["→ dashboard default  off", "  same as main  the main session's thinking (on)",
                                        "  off", "  on"]);
@@ -1048,7 +1050,7 @@ test("Coder model: a choice runs carl-sync.py set CODER_MODEL; the toast says wh
     + "to openrouter.ai, and the model costs money. Restart OpenCode to use it." });     // 1 slot: no warning (no slot used)
   const sub = rowsAt(panel("opencode", OC_SESSION).rows, ["subagent"]);
   assert.deepEqual(sub.map((r) => [r.label, shownState(r)]), [["Coder", "on"], ["Background coder", "on"],
-    ["Delegation reminder", "on"], ["Coder thinking", "model default ›"], ["Coder model", `${OR} ›`]]);
+    ["Delegation reminder", "on"], ["Tests", "before code ›"], ["Coder thinking", "model default ›"], ["Coder model", `${OR} ›`]]);
   assert.match(panel("opencode", OC_SESSION).title, /^Restart OpenCode to use \d+ changes?\.$/);   // (1 in the TUI test)
   // back to same as main: the coder stays on (CODER=1); with 1 slot, the warning of the coder on the server
   fake({ files: { [join(OC, "opencode.json")]: ocWith() }, out: { ok: true, restart: ["opencode"], slots: 1 } });
@@ -1159,7 +1161,7 @@ test("Pi: Coder model's values come from Pi's model registry; a choice says wher
   const DOWN = "\x1b[B";
   key("\r");
   assert.equal(screen().at(-1), "  Coder model  same as main ›");
-  key(DOWN, DOWN, DOWN, DOWN, "\r");
+  key(DOWN, DOWN, DOWN, DOWN, DOWN, "\r");
   assert.equal(screen()[0], "Coder model");
   assert.deepEqual(screen().slice(2), [`→ same as main  CARL: ${Q}`, "  opencode/free-coder-1  opencode.ai, free",
                                        `  ${OR}  openrouter.ai, paid`, "  custom/no-price  10.0.0.5"]);
@@ -1172,4 +1174,43 @@ test("Pi: Coder model's values come from Pi's model registry; a choice says wher
   assert.ok(screen().includes("  Coder thinking  model default ›"), screen().join("\n"));
   key("\x1b", "\x1b");
   await ended;
+});
+
+// ------------------------------------------------------------------ Tests (Phase 23.4.6)
+
+test("Tests: before code (the default), after code, off; set CODER_TESTS; no restart in either client", async () => {
+  stage(true);
+  for (const client of ["opencode", "pi"]) {
+    const r = get(client, "tests");
+    assert.deepEqual([r.kind, r.state, r.value, r.label], ["choice", "before code", "before", "Tests"]);
+    assert.equal(shownState(r), "before code ›");
+    assert.deepEqual(r.values, ["before", "after", "off"]);
+    assert.deepEqual(r.titles, { before: "before code", after: "after code", off: "off" });
+    assert.deepEqual(r.notes, {});                                                       // no explanations
+    assert.deepEqual(Object.keys(r.actions), ["after", "off"]);
+    const a = r.actions.after;
+    assert.deepEqual([a.args, a.busy, a.row, a.want, a.live], [["set", "CODER_TESTS=after"], "switching to after code…", "tests",
+                                                                "after", ["opencode", "pi"]]);
+    assert.equal(a.did, "CARL set the coder's tests to after code on this computer.");
+  }
+  // the state file's value; a value that is not one: before
+  writeFileSync(join(OC, "carl.json"), JSON.stringify({ models: ONE, coder_tests: "off" }));
+  assert.deepEqual(Object.keys(get("opencode", "tests").actions), ["before", "after"]);
+  assert.equal(get("opencode", "tests").state, "off");
+  writeFileSync(join(OC, "carl.json"), JSON.stringify({ models: ONE, coder_tests: "never" }));
+  assert.equal(get("opencode", "tests").state, "before code");
+  // the toast as the mock-up; the title has no restart note (the chain reads it at each task)
+  for (const [client, file] of [["opencode", join(OC, "carl.json")], ["pi", join(PI, "carl.json")]]) {
+    stage(true);
+    const st = JSON.parse(readFileSync(file, "utf8"));
+    const title = panel(client).title;                                                 // earlier tests' changes
+    fake({ files: { [file]: JSON.stringify({ ...st, coder_tests: "after" }) }, out: { ok: true, restart: [] } });
+    const said = await act(get(client, "tests").actions.after, client);
+    assert.deepEqual(calls(), ["set CODER_TESTS=after"]);
+    assert.deepEqual(said, { ok: true, message: "CARL set the coder's tests to after code on this computer." });
+    assert.equal(get(client, "tests").state, "after code");
+    assert.equal(panel(client).title, title);                                          // not counted
+  }
+  stage(false);
+  assert.ok(!subIds("opencode").includes("tests"));                                    // the coder off: the row goes
 });
