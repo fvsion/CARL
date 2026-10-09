@@ -13,8 +13,8 @@ Type `/carl` in OpenCode or Pi to turn each piece on this computer on or off.
 | `carl-cache` | OpenCode, Pi | server plugin / extension | The disk cache: fast starts, sessions back after a restart | `NO_CACHE=1` |
 | `carl-model-check` | OpenCode | server plugin | A warning when the model that you select is not the model that the server runs | `NO_MODEL_CHECK=1` |
 | `carl-background` | OpenCode | server plugin | The coder runs in the background | `NO_BACKGROUND_SUBAGENTS=1` |
-| `carl-delegation` | OpenCode, Pi | server plugin / extension | The hand-off to the coder: the delegation rule for main agents only (OpenCode), the reminder, the new-file gate | comes with the coder; `NO_REMINDER=1` or `/carl`; the gate: the dashboard (Connect > Setup) |
-| `subagent` | Pi | extension | The `subagent` tool: the coder and other agents, also in the background | comes with the coder (`NO_CODER=1`) |
+| `carl-delegation` | OpenCode, Pi | server plugin / extension | The hand-off to the coder: the delegation rule for main agents only (OpenCode), the reminder, the brief check, the coder's gates, the new-file gate; in OpenCode also the chain (tests first, then the code) | comes with the coder; `NO_REMINDER=1` or `/carl`; the gate: the dashboard (Connect > Setup) |
+| `subagent` | Pi | extension | The `subagent` tool: the coder and other agents, also in the background; the chain (tests first, then the code) | comes with the coder (`NO_CODER=1`) |
 | `subagents-sidebar` | OpenCode | TUI plugin | The Subagents panel in the sidebar | `NO_SIDEBAR=1` |
 | `session-switcher` | OpenCode | TUI plugin | `‹ 2/3 ● title ›` in the prompt box, `/switch` | `NO_SWITCHER=1` |
 | `carl-panel` | OpenCode, Pi | TUI plugin / extension | The `/carl` control panel: the switches of the pieces; the config sync | always |
@@ -29,7 +29,7 @@ Put a switch in front of the setup, for example `NO_SIDEBAR=1 ./carl.sh install 
 | Pi | `~/.pi/agent/extensions/NAME/` | Pi loads every folder in `extensions/`. |
 
 - The source is in `client/opencode/plugins/` and `client/pi/extensions/`.
-- The code that more than one piece uses is in `client/shared/`: `carl-cache.js` (the disk cache), `carl-panel.js` (the /carl panel), `carl-delegation.js` (the hand-off rules) and `carl-tui.js` (the TUI helpers of the session switcher and the subagents panel). The setup copies each file into each piece that uses it.
+- The code that more than one piece uses is in `client/shared/`: `carl-cache.js` (the disk cache), `carl-panel.js` (the /carl panel), `carl-delegation.js` (the hand-off rules), `carl-brief.js` (the coder's TOML brief: the reader, the check, the report), `carl-chain.js` (the chain of a test session and a code session) and `carl-tui.js` (the TUI helpers of the session switcher and the subagents panel). The setup copies each file into each piece that uses it.
 - OpenCode and Pi load the pieces when they start. After a setup, restart OpenCode or Pi.
 - To get new versions of the pieces on another computer, unzip a new client package over the old folder and run `./setup` again.
 
@@ -45,7 +45,7 @@ The disk cache saves prompts and sessions on the server's disk, through the serv
 
 For each request, the cache does these steps:
 
-1. It puts the parts of the system prompt that change between projects and days (the folder, the date, AGENTS.md) after the shared part: a second system message with Qwen; with Gemma 4 they stay; with other templates they stay too, unless Settings > Caching > Other templates moves them to the first user message ([Caching](caching.md#before-each-request)).
+1. It puts the parts of the system prompt that change between projects and days (the folder, the date, AGENTS.md) after the shared part: the start of the first user message with Qwen (the model follows AGENTS.md more often there; measured 2026-10-08); with Gemma 4 they stay; with other templates they stay too, unless Settings > Caching > Other templates moves them to the first user message ([Caching](caching.md#before-each-request)).
 2. It claims a free slot (a `.claim+MODEL+SLOT` file) and pins the request to it (`id_slot`).
 3. It marks the slot's turn as running (a `.turn+MODEL+SLOT` file). The mark stays until the turn ends and its save or record is on disk.
 4. If the slot does not hold the session, it puts back the session's file, else the agent's prompt file. If there is no prompt file, it reads the prompt one time and saves it.
@@ -79,13 +79,15 @@ OpenCode's task tool waits for a subagent, unless the model asks for the backgro
 
 ## carl-delegation: the hand-off to the coder (OpenCode and Pi)
 
-The rules are in `client/shared/carl-delegation.js`. The details and the measurements are in [the hand-off to the coder](delegation.md).
+The rules are in `client/shared/carl-delegation.js` and `client/shared/carl-brief.js` (the setup copies both into the plugin and the extension). The OpenCode plugin also gets `client/shared/carl-chain.js`. The details and the measurements are in [the hand-off to the coder](delegation.md).
 
-- **OpenCode** (server plugin, with the options `reminder`, `cacheApi` and `coder` in its `plugin` entry):
+- **OpenCode** (server plugin, with the options `reminder`, `cacheApi` and `coder` in its `plugin` entry; `"brief": false` turns the brief check off and `"chain": false` the chain, for measurements):
   - `experimental.chat.system.transform`: in a subagent's session (a session with a parent), it takes CARL's marked delegation rule out of the system prompt. It changes OpenCode's list in place.
   - `experimental.chat.messages.transform`: it adds the reminder to the end of each user message of a main session.
-  - `tool.execute.before`: when the dashboard sets the gate (`delegation.gate`, read from `config.json` on the server Mac or the dashboard API elsewhere, every 10 s), it stops the main agent's write that makes the Nth new file of a turn (`chat.message` starts a new turn).
-- **Pi** (extension; the reminder is `"delegation"` in `~/.pi/agent/carl.json`, the gate comes from the dashboard): the `input` event adds the reminder to your messages; `tool_call` blocks with the gate. In a subagent (`CARL_AGENT` set) it does nothing.
+  - `tool.execute.before`: a task call for the coder (`subagent_type` coder or carl-coder, no `task_id`) whose TOML brief fails the check throws `[CARL] Brief refused` and the points to fix, so the coder does not start. In the coder's own session, a write outside the brief's files or against its mode throws `[CARL] Blocked`. When the dashboard sets the gate (`delegation.gate`, read from `config.json` on the server Mac or the dashboard API elsewhere, every 10 s), it stops the main agent's write that makes the Nth new file of a turn (`chat.message` starts a new turn).
+  - `chat.message`: in a session of the coder (the message's agent), the first message is the brief: the plugin keeps it for that session's gates.
+  - **The chain** ([details](delegation.md#the-chain-tests-first-in-a-separate-session)): `tool.execute.before` makes a coder task with `tests = "new"` the test session (its `prompt` becomes the test brief). When the test session ends, the plugin starts the code session through the SDK (`session.create`, `session.promptAsync`) and waits for its end (`session.idle` in the `event` hook, or its messages). The base, on every OpenCode version: the task runs in the foreground (`background: false`), and `tool.execute.after` replaces its output with the one result; when the hold is off, a warning goes to OpenCode's log and a toast to the TUI, once. The background hold, only on the verified versions (1.18.34, 1.18.35; read from the running program's npm package or its `--version`) and after a self-check at load (the SDK methods it needs): `chat.message` holds back the test session's `<task …>` message (it throws `[CARL] Held`, so OpenCode does not save it and the main agent gets no turn), and the one result comes later as the same kind of message. Each held chain has a record in `~/.config/carl/chains/` (mode 0600); at the next start, a chain that OpenCode left undelivered gets what exists. `CARL_TEST_OPENCODE_VERSION` replaces the version that the plugin reads (for tests). With `tests = "existing"`, the result also says whether the named test files changed.
+- **Pi** (extension; the reminder and `"brief"` are in `"delegation"` in `~/.pi/agent/carl.json`, the gate comes from the dashboard): the `input` event adds the reminder to your messages; `tool_call` blocks a subagent call with an incomplete coder brief, and blocks with the gate. In the coder's own process (`CARL_AGENT` is the coder's name), `before_agent_start` reads the brief from the prompt and `tool_call` blocks the writes that the gates refuse. In another subagent it does nothing.
 - The setup installs it with the coder, and removes it with `--coder off`.
 
 ## subagent: the subagent tool (Pi)
@@ -98,6 +100,7 @@ Pi has no subagents of its own. CARL installs the `subagent` extension (from Pi'
 | Parallel | `tasks: [{agent, task}, …]` | Up to 8 tasks, 4 at a time. |
 | Chain | `chain: [{agent, task}, …]` | One after the other; `{previous}` puts in the last result. |
 | Background | `background: true` (single, parallel) | The tool returns at once. Each result comes back as a message when its agent ends. |
+| The chain | a coder brief with `mode = "code"` and `tests = "new"` (single, background, a chain step) | Two coder processes, one after the other: the test session, then the code session. One result. |
 
 - **CARL's changes:**
   - The tool's description lists the installed agents and when to use each one.
@@ -105,6 +108,7 @@ Pi has no subagents of its own. CARL installs the `subagent` extension (from Pi'
   - An agent file can say `exclude-tools:`. The agent then gets every tool except those, the MCP tools included. The coder says `exclude-tools: subagent, tool_search`: it gets web search when it is installed, but it cannot start nested subagents or load the browser tools.
   - Each subagent's process gets `CARL_AGENT`, so its prompt file has its own name.
   - The coder has no browser. Its report has a "Needs a browser check" part; the main agent starts the app and does the check (OpenCode: the browser subagent; Pi: its own browser tools).
+  - **The chain** (`runAgentTask`, with `carl-chain.js` and `carl-brief.js` next to the extension): a coder task with `mode = "code"` and `tests = "new"` runs as two `pi` processes, the test session and then the code session, and gives one result ([details](delegation.md#the-chain-tests-first-in-a-separate-session)). `tests = "existing"`: one process; the result says whether the named test files changed. A parallel call with more than one task refuses such a brief. `"delegation": {"chain": false}` in `~/.pi/agent/carl.json` turns it off.
 - **Background:**
   - CARL's coder runs in the background unless the call says `background: false`.
   - `/subagents` lists the agents that run in the background, and stops one.
@@ -161,9 +165,10 @@ Type `/carl`. The panel is a control panel (user, 2026-10-08: no explanations): 
 | Model check | OpenCode | `carl-model-check` in `opencode.json` | `set NO_MODEL_CHECK=1\|on` |
 
 - **A switch** runs `client/carl-sync.py set KEY=VALUE` (in the client folder that the setup recorded). It writes the key to `~/.config/carl/client-install.env` (`1`: off; `on`: the line goes, so the default holds; the other lines stay; mode 0600), then runs `install.sh` next to it with the recorded switches and `CARL_SYNC=1`, as a sync does, but with the models that the folder has now (`installed-models.json`): it gets no new config from the dashboard. It holds the sync's lock, so it never runs beside a sync. It does not set `NO_PROFILE`: a switch can add the shell-profile line for OpenCode's tool switches, as `./setup` does. The output of the installer goes to `~/.config/carl/client-sync.log`.
-- `set` prints JSON: `changed` (each key, `from` and `to`), `ok` and `error`, `restart` (the clients that must restart: `opencode`, `pi`; the keys of LSP, the side panel, the switcher and the model check are OpenCode only) and `new_terminal` (OpenCode reads web search, LSP and the background coder from the shell, so it must start from a new terminal). An unknown key or value: exit code 2, and nothing changes.
+- `set` prints JSON: `changed` (each key, `from` and `to`), `ok` and `error`, `restart` (the clients that must restart: `opencode`, `pi`; the keys of LSP, the side panel, the switcher and the model check are OpenCode only), `new_terminal` (OpenCode reads web search, LSP and the background coder from the shell, so it must start from a new terminal) and `slots` (the server's slots that `install.sh` read for its coder rule, `/props` `total_slots`; `null` when the server did not answer). An unknown key or value: exit code 2, and nothing changes.
 - After a switch, the panel reads the rows again. A message says what changed and which program must restart ("CARL turned the subagents side panel off. Restart OpenCode to use it."); it is red when the switch failed, or when the state did not change.
 - Turning the coder on also sets `CODER=1`: it stays on with a 1-slot server.
+- When the coder goes on and the server runs 1 slot (`set`'s `slots`; not known: no warning), the message is a warning (OpenCode: a `warning` toast; Pi: a `warning` notice) that says that the coder takes the main session's slot while it works.
 - Without the coder, the Background coder and Delegation reminder rows are not in the list.
 - The new-file gate (`delegation.gate`) is not in `/carl`: it is a setting of the dashboard only.
 - Without the sync service, the panel checks the server for a new config one time when OpenCode or Pi starts.

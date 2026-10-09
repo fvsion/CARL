@@ -11,15 +11,22 @@
 //     new file of a turn is stopped with GATE_MARK and the reason, so it hands the work to the coder; edits of
 //     existing files pass. Phase 23.4 (1.12.0): the gate is a setting of the dashboard only (config.json
 //     delegation.gate, Connect > Setup); GateSetting reads it, so a change needs no setup run.
+// Phase 23.4.3: the coder's brief is TOML (carl-brief.js, installed next to this file):
+//   - the brief check: a call that hands a task to the coder with a brief that fails checkBrief (or no TOML brief
+//     at all) is refused before the coder starts (briefCheck), so the main agent fixes it and sends it again; a
+//     task that continues an earlier one (OpenCode's task_id) is not checked;
+//   - the gates in the coder's own session (CoderGate): it writes only the brief's files to create or change; in
+//     mode code no test file, in mode test only test files.
 
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { isAbsolute, join, resolve } from "node:path";
+import { isAbsolute, join, relative, resolve, sep } from "node:path";
+import { briefRefusal, filesByAction, isTestFile } from "./carl-brief.js";
 
 export const RULE_BEGIN = "<!-- carl:main-agents-only begin -->";
 export const RULE_END = "<!-- carl:main-agents-only end -->";
 export const GATE_MARK = "[CARL] Blocked";
-const CODERS = new Set(["coder", "carl-coder"]);
+const CODERS = new Set(["coder", "carl-coder"]);         // CARL's coder: "carl-coder" next to a user's own "coder"
 const WRITES = new Set(["write", "edit", "patch", "apply_patch", "multiedit"]);
 const MAKERS = new Set(["tee", "touch", "mkdir"]);           // shell commands whose arguments are new files
 const COPIERS = new Set(["cp", "mv", "install"]);            // ... whose last argument is
@@ -107,6 +114,11 @@ export function withReminder(text, client, coder = "coder") {
   return text.endsWith(r) ? text : text + r;
 }
 
+/** Is this agent name CARL's coder? @param {string} name */
+export function isCoderName(name) {
+  return CODERS.has(String(name ?? ""));
+}
+
 /** Is this call the coder? @param {string} tool @param {Record<string, unknown>} args */
 export function isCoderCall(tool, args) {
   if (tool === "task") return CODERS.has(String(args.subagent_type ?? ""));
@@ -145,12 +157,13 @@ function plainPath(p) {
 }
 
 /**
- * The files a shell command would create: redirections (> >> &> >|), tee / touch / mkdir arguments, the target of
- * cp / mv / install; only those that do not exist yet. Here-document bodies are data, not shell.
- * @param {string} command @param {string} cwd @param {(p: string) => boolean} exists @param {(p: string) => string} abs
+ * The files a shell command writes: redirections (> >> &> >|), tee / touch arguments, the target of cp / mv /
+ * install, the files of sed -i; with dirs, mkdir arguments too. Here-document bodies are data, not shell. Only
+ * plain paths (not ~, a variable, a device).
+ * @param {string} command @param {boolean} dirs
  * @returns {string[]}
  */
-export function bashNewFiles(command, cwd, exists, abs) {
+export function shellWrites(command, dirs) {
   const lines = command.split("\n");
   const kept = [];
   for (let i = 0; i < lines.length; i++) {
@@ -164,20 +177,133 @@ export function bashNewFiles(command, cwd, exists, abs) {
   const out = [];
   const add = (/** @type {string} */ p) => {
     const q = plainPath(p);
-    if (q && !exists(abs(q)) && !out.includes(q)) out.push(q);
+    if (q && !out.includes(q)) out.push(q);
   };
   for (const m of text.matchAll(/(?:^|[^<>&0-9])(?:&>>?|>>?|>\|)\s*("[^"]+"|'[^']+'|[^\s;|&()<>]+)/g)) add(m[1]);
   for (const seg of text.split(/[;|&()]+/)) {
     const words = seg.trim().split(/\s+/).filter((w) => w && !/^[<>]/.test(w));
     const cmd = (words[0] ?? "").split("/").pop() ?? "";
     const plain = words.slice(1).filter((w) => !w.startsWith("-"));
-    if (MAKERS.has(cmd)) plain.forEach(add);
+    if (MAKERS.has(cmd) && (dirs || cmd !== "mkdir")) plain.forEach(add);
     if (COPIERS.has(cmd) && plain.length >= 2) add(plain[plain.length - 1]);
+    if (cmd === "sed" && words.slice(1).some((w) => /^-[A-Za-z]*i/.test(w) || w.startsWith("--in-place"))) {
+      // the files: the plain words without quotes (a script in quotes can hold spaces), less the script itself
+      const args = words.slice(1).filter((w, k, a) => !w.startsWith("-") && !/^-[ef]$/.test(a[k - 1] ?? "") && !/['"]/.test(w));
+      const quoted = words.slice(1).some((w) => /['"]/.test(w));
+      const script = quoted || words.slice(1).some((w) => /^-[ef]$/.test(w)) ? 0 : 1;
+      args.slice(script).forEach(add);
+    }
   }
-  void cwd;
   return out;
 }
 
+/**
+ * The files a shell command would create: shellWrites (with mkdir) that do not exist yet.
+ * @param {string} command @param {string} cwd @param {(p: string) => boolean} exists @param {(p: string) => string} abs
+ * @returns {string[]}
+ */
+export function bashNewFiles(command, cwd, exists, abs) {
+  void cwd;
+  return shellWrites(command, true).filter((p) => !exists(abs(p)));
+}
+
+/**
+ * The files a call writes (as the call names them): the file tools' path, a patch's files, a shell command's
+ * shellWrites (no mkdir: a folder is not a file of the brief).
+ * @param {string} tool @param {Record<string, unknown>} args
+ * @returns {string[]}
+ */
+export function writtenFiles(tool, args) {
+  if (tool === "write" || tool === "edit" || tool === "multiedit") {
+    const p = String(args.filePath ?? args.path ?? "");
+    return p ? [p] : [];
+  }
+  if (tool === "patch" || tool === "apply_patch") {
+    const text = String(args.patchText ?? args.patch ?? args.input ?? "");
+    return [...text.matchAll(/^\*\*\* (?:Add|Update|Delete) File: (.+)$|^\*\*\* Move to: (.+)$/gm)].map((m) => (m[1] ?? m[2]).trim());
+  }
+  if (tool === "bash") return shellWrites(String(args.command ?? ""), false);
+  return [];
+}
+
+/**
+ * The coder tasks in a call (their texts): OpenCode's task tool for the coder (not one that continues an earlier
+ * task: task_id), Pi's subagent tool for the coder (single, or each coder item of tasks and chain; a chain's
+ * {previous} stands for the output of the step before).
+ * @param {string} tool @param {Record<string, unknown>} args @returns {string[]}
+ */
+export function coderTasks(tool, args) {
+  if (tool === "task") return CODERS.has(String(args.subagent_type ?? "")) && !args.task_id ? [String(args.prompt ?? "")] : [];
+  if (tool !== "subagent") return [];
+  const out = CODERS.has(String(args.agent ?? "")) ? [String(args.task ?? "")] : [];
+  for (const t of [...(Array.isArray(args.tasks) ? args.tasks : []), ...(Array.isArray(args.chain) ? args.chain : [])]) {
+    const item = /** @type {Record<string, unknown>} */ (t ?? {});
+    if (CODERS.has(String(item.agent ?? ""))) out.push(String(item.task ?? "").replace(/\{previous\}/g, "the output of the step before"));
+  }
+  return out;
+}
+
+/**
+ * The brief check before a call starts the coder: the refusal (BRIEF_MARK and what to fix), or "" to let it run.
+ * o.format: the brief's format in the main agent's instructions (briefRefusal).
+ * @param {string} tool @param {Record<string, unknown>} args @param {{ format?: "toml" | "json" }} [o]
+ */
+export function briefCheck(tool, args, o = {}) {
+  const tasks = coderTasks(tool, args);
+  for (const [n, text] of tasks.entries()) {
+    const why = briefRefusal(text, o);
+    if (why) return tasks.length > 1 ? why.replace(": ", `: coder task ${n + 1}: `) : why;
+  }
+  return "";
+}
+
+/**
+ * The gates in the coder's own session, from its brief: it writes only the files whose action is create or change;
+ * in mode code no test file, in mode test only test files (isTestFile). In mode test with no test file in the
+ * brief, any test file may be written. Paths outside the project folder are not the brief's: they pass.
+ */
+export class CoderGate {
+  /** @param {import("./carl-brief.js").Brief} brief @param {string} cwd the project folder */
+  constructor(brief, cwd) {
+    this.cwd = cwd;
+    this.mode = brief.mode === "test" ? "test" : "code";
+    const f = filesByAction(brief);
+    this.write = new Set([...f.create, ...f.change].map((p) => this.rel(p)));
+    this.read = new Set(f.read.map((p) => this.rel(p)));
+    this.anyTest = this.mode === "test" && ![...this.write].some((p) => isTestFile(p));
+  }
+
+  /** A path relative to the project folder, with "/". @param {string} p */
+  rel(p) {
+    return relative(this.cwd, isAbsolute(p) ? p : resolve(this.cwd, p)).split(sep).join("/");
+  }
+
+  /** Before a call of the coder: the block reason, or "" to let it run. @param {string} tool
+   * @param {Record<string, unknown>} args */
+  before(tool, args) {
+    for (const p of writtenFiles(tool, args)) {
+      const why = this.path(p);
+      if (why) return why;
+    }
+    return "";
+  }
+
+  /** The block reason for a write of one path, or "". @param {string} p */
+  path(p) {
+    const r = this.rel(p);
+    if (!r || r === ".." || r.startsWith("../") || isAbsolute(r)) return "";
+    const test = isTestFile(r);
+    if (this.mode === "code" && test) {
+      return `${GATE_MARK}: ${r} is a test file, and in mode code you do not change tests; if a test looks wrong, write why under open issues in your report.`;
+    }
+    if (this.mode === "test" && !test) {
+      return `${GATE_MARK}: ${r} is not a test file, and in mode test you write tests only; a test that fails because the code is wrong is a finding in your report.`;
+    }
+    if (this.write.has(r) || (this.anyTest && test)) return "";
+    if (this.read.has(r)) return `${GATE_MARK}: ${r} is in your brief to read only; write the change it needs under open issues in your report.`;
+    return `${GATE_MARK}: ${r} is not in your brief's files to create or change; keep to those files, and write what ${r} needs under open issues in your report.`;
+  }
+}
 
 /** One main session's turn, for the gate: the new files the main agent made since the user's last message. */
 export class Turn {

@@ -114,10 +114,10 @@ class RealClientsTest(unittest.TestCase):
         self.serve({"models": [sp.MODEL], "rules": [
             {"last_role": "tool", "reply": {"text": "Started."}},
             {"user_contains": "command-line tool", "has_tool": "task",
-             "reply": {"tool": "task", "arguments": {"description": "cli", "prompt": "Build the CLI.",
+             "reply": {"tool": "task", "arguments": {"description": "cli", "prompt": sp.BRIEF,
                                                      "subagent_type": "coder"}}},
             {"user_contains": "command-line tool", "has_tool": "subagent",
-             "reply": {"tool": "subagent", "arguments": {"agent": "coder", "task": "Build the CLI."}}},
+             "reply": {"tool": "subagent", "arguments": {"agent": "coder", "task": sp.BRIEF}}},
             {"reply": {"text": "In render(), at the end."}}], "default": {"text": "OK"}})
         out = os.path.join(self.tmp, "results.jsonl")
         args = ["run", "--home", self.home, "--work", os.path.join(self.tmp, "work"), "--no-server",
@@ -138,6 +138,12 @@ class RealClientsTest(unittest.TestCase):
             self.assertEqual(d["decision"], d["decision_strict"])
             self.assertEqual(d["variant"], "baseline")
             self.assertNotEqual(d["client_version"], "unknown")
+            if d["prompt"] == "large-cli":                     # the brief as the main agent wrote it, checked
+                self.assertEqual([(b["text"], b["format"], b["valid"], b["refused"]) for b in d["briefs"]],
+                                 [(sp.BRIEF, "toml", True, False)])
+                self.assertEqual(d["brief_tokens"], [None])     # --no-server: bench.py tokens counts them later
+            else:
+                self.assertEqual(d["briefs"], [])
         p = self.bench(*args)
         self.assertIn("4 done already, 0 to run", p.stdout)
         p = self.bench("report", out, "--md")

@@ -515,7 +515,12 @@ class ConfigureTests(unittest.TestCase):
         self.assertEqual(self.read_json(".pi/agent/carl.json")["delegation"], {"reminder": True})
         for d in (".config/opencode/plugins/carl-delegation", ".pi/agent/extensions/carl-delegation"):
             self.assertTrue(os.path.isfile(self.path(d + "/carl-delegation.js")), d)
+            self.assertTrue(os.path.isfile(self.path(d + "/carl-brief.js")), d)     # the TOML brief (Phase 23.4.3)
         self.assertTrue(os.path.isfile(self.path(".pi/agent/extensions/carl-delegation/index.ts")))
+        # the chain (a test session, then a code session): OpenCode's carl-delegation and Pi's subagent tool run it
+        for d in (".config/opencode/plugins/carl-delegation", ".pi/agent/extensions/subagent"):
+            for f in ("carl-brief.js", "carl-chain.js"):
+                self.assertTrue(os.path.isfile(self.path(d + "/" + f)), d + "/" + f)
         self.assertEqual(self.run_configure("--coder", "1", "--reminder", "0").returncode, 0)
         entry = [p for p in self.read_json(".config/opencode/opencode.json")["plugin"] if "carl-delegation" in p[0]][0]
         self.assertFalse(entry[1]["reminder"])
@@ -526,14 +531,15 @@ class ConfigureTests(unittest.TestCase):
         self.assertFalse(os.path.exists(self.path(".pi/agent/extensions/carl-delegation")))
 
     def test_code_command_in_both_clients(self) -> None:
-        """/code goes in with the coder (the task straight to the coder), points at its installed name, leaves a
-        code.md of the user's alone and goes again with --coder 0."""
+        """/code goes in with the coder (the task straight to the coder, as a TOML brief that the main agent writes),
+        points at its installed name, leaves a code.md of the user's alone and goes again with --coder 0."""
         self.assertEqual(self.run_configure("--coder", "1").returncode, 0)
         oc, pi = ".config/opencode/command/code.md", ".pi/agent/prompts/code.md"
         with open(self.path(oc), encoding="utf-8") as f:
             text = f.read()
-        self.assertIn("agent: coder\nsubtask: true", text)
-        self.assertIn("Mode: code\nGoal: $ARGUMENTS", text)
+        self.assertIn('subagent_type "coder"', text)                       # through the main agent: a TOML brief
+        self.assertIn('the TOML brief from your instructions, with `mode = "code"`', text)
+        self.assertNotIn("subtask: true", text)
         with open(self.path(pi), encoding="utf-8") as f:
             self.assertIn('agent "coder"', f.read())
         self.assertEqual(self.run_configure("--coder", "0").returncode, 0)

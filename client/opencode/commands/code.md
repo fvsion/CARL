@@ -1,7 +1,6 @@
 ---
-description: "CARL: give this coding task straight to the coder (Mode: code)"
-agent: coder
-subtask: true
+description: "CARL: give this coding task straight to the coder (a TOML brief, mode code)"
 ---
-Mode: code
-Goal: $ARGUMENTS
+Hand this whole task to the `coder` subagent now: the task tool with subagent_type "coder". Write the task as the TOML brief from your instructions, with `mode = "code"`, from the text below and the project's own files. Read only what the brief needs (the files, the test command, the project's rules); do not change any file yourself.
+
+The task: $ARGUMENTS

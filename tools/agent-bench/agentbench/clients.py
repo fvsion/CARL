@@ -214,9 +214,12 @@ class Limits:
 
 def finished(parser: Parser, prac: ev.Practical, now: float, limits: Limits) -> bool:
     """Can the client stop? When the practical decision is known. OpenCode: a decisive tool's step must end too
-    (its other tools and its thinking tokens come with it), or step_grace seconds pass."""
+    (its other tools and its thinking tokens come with it), or step_grace seconds pass. After a call to the coder:
+    not while CARL's brief check refused its newest call (events.brief_pending: the briefs of a run, Phase 23.4.3)."""
     if prac.decision == ev.PENDING:
         return False
+    if prac.decision == ev.DELEGATED and ev.brief_pending(parser.obs, now, limits.max_tools, limits.max_seconds):
+        return False                                # a refused brief: the main agent sends it again
     if isinstance(parser, ev.OpenCodeParser) and prac.tool is not None and prac.tool.source == "event":
         end = parser.obs.last_step_end
         return (end is not None and end >= prac.tool.at) or now - prac.tool.at >= limits.step_grace

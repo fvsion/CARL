@@ -51,6 +51,8 @@ MEASURE = "practical-v2"                                     # the results of th
 PREVIOUS_MEASURE = "practical-v1"                            # 8 tool calls / 240 s (the first baseline, 2026-10-05)
 LEGACY_MEASURE = "first-tool"                                # result lines with no "measure" field
 GATE_MARK = "[CARL] Blocked"                                # a tool result of the V5 gate: the write did not happen
+BRIEF_MARK = "[CARL] Brief refused"                         # a coder call's result: CARL's brief check refused it
+RESULT_KEEP = 2000                                           # the characters of a tool result that a ToolCall keeps
 WRITE_RESULT_WAIT = 30.0                                     # Pi: seconds to wait for a write's result (blocked?)
 MAX_TOOLS = 15                                               # tool calls before the decision is "undecided"
 MAX_SECONDS = 300.0                                          # seconds from the first model step, likewise
@@ -64,6 +66,8 @@ CLIENTS = ("opencode", "pi")
 
 _PERMISSION = re.compile(r"message=evaluated permission=(\S+) pattern=(\S+)")
 _LOG_ERROR = re.compile(r"level=ERROR\b")
+# a refusal: the result starts with the mark, after a client's own short label ("Error: ", OpenCode)
+_REFUSAL = re.compile(r"^\s*(?:[A-Za-z][A-Za-z ]{0,40}:\s*)?" + re.escape(BRIEF_MARK))
 _TEST_CMD = re.compile(r"(\bpytest\b|\bunittest\b|\bnpm (run )?test\b|\bnode --test\b|\bmake test\b|\bpython3? -m (pytest|unittest)\b)")
 
 
@@ -117,6 +121,19 @@ def is_delegation(client: str, tool: str, args: Mapping[str, Any], coders: Seque
             agents += [_dict(t).get("agent") for t in _list(args.get(key))]
         return any(isinstance(a, str) and a.strip().lower() in names for a in agents)
     raise ValueError(f"unknown client: {client}")
+
+
+def is_refusal(result: Optional[str]) -> bool:
+    """Is this tool result CARL's refusal of a coder brief (it starts with BRIEF_MARK)?"""
+    return bool(result) and bool(_REFUSAL.match(str(result)))
+
+
+def _result_text(value: Any) -> Optional[str]:
+    """A tool result as text (cut to RESULT_KEEP); None when there is none."""
+    if value is None:
+        return None
+    text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
+    return text[:RESULT_KEEP]
 
 
 def is_test_command(tool: str, args: Mapping[str, Any]) -> bool:
@@ -255,6 +272,7 @@ class ToolCall:
     source: str = "event"            # "event" (the JSON stream) or "log" (OpenCode's log line only)
     call_id: str = ""
     blocked: Optional[bool] = None   # the gate stopped it (GATE_MARK in its result); None: no result yet
+    result: Optional[str] = None     # its result (the output or the error, cut to RESULT_KEEP); None: no result yet
 
 
 @dataclass
@@ -374,6 +392,26 @@ def practical(obs: Observation, root: Optional[str] = None, now: Optional[float]
     return Practical(UNDECIDED, None, looks, None, "stopped before a decision")
 
 
+def brief_pending(obs: Observation, now: float, max_tools: int = MAX_TOOLS,
+                  max_seconds: Optional[float] = MAX_SECONDS, wait: float = WRITE_RESULT_WAIT) -> bool:
+    """A decision run after the decision to delegate: does it go on for the coder's brief? Yes while the newest call
+    to the coder was refused by CARL's brief check (the main agent then sends the brief again) or its result has not
+    come yet (Pi: at most `wait` s). No when the turn ended, after an error, after max_tools tool calls from the first
+    coder call, or max_seconds from the first model step. The decision itself stays the first coder call."""
+    coder = [i for i, c in enumerate(obs.tools) if is_delegation(obs.client, c.name, c.args)]
+    if not coder or obs.error or obs.turn_ended:
+        return False
+    if len(obs.tools) - coder[0] > max_tools:
+        return False
+    start = obs.model_start if obs.model_start is not None else 0.0
+    if max_seconds is not None and now - start > max_seconds:
+        return False
+    last = obs.tools[coder[-1]]
+    if last.result is None:
+        return now - last.at < wait
+    return is_refusal(last.result)
+
+
 def expected_ok(expect: str, decision: str) -> Optional[bool]:
     """Is the decision right? expect: delegate (large, stuck) or keep (small, question). None for an error.
     Works for the strict and the practical decisions: for a large or stuck request only "delegated" is right;
@@ -417,7 +455,9 @@ class OpenCodeParser:
             state = _dict(part.get("state"))
             blocked = state.get("status") == "error" and GATE_MARK in json.dumps(state.get("error", ""))
             call = ToolCall(str(part.get("tool", "")), dict(_dict(state.get("input"))), at, dict(ev),
-                            call_id=str(part.get("callID", "")), blocked=blocked)
+                            call_id=str(part.get("callID", "")), blocked=blocked,
+                            result=_result_text(state.get("output") if state.get("status") == "completed"
+                                                else state.get("error")))
             o.tools.append(call)
             if o.first_tool is None:
                 o.first_tool = call
@@ -506,6 +546,7 @@ class PiParser:
             for c in o.tools:
                 if c.call_id and c.call_id == cid:
                     c.blocked = GATE_MARK in text
+                    c.result = text[:RESULT_KEEP]
         if kind == "tool_execution_end" and ev.get("toolName") == "subagent":
             args = _dict(_dict(ev.get("result")).get("details"))
             results = _list(args.get("results"))
@@ -637,7 +678,9 @@ def opencode_messages_facts(messages: Sequence[Mapping[str, Any]]) -> Tuple[List
             p = _dict(p)
             if p.get("type") == "tool":
                 state = _dict(p.get("state"))
-                call = ToolCall(str(p.get("tool", "")), dict(_dict(state.get("input"))), float(i), trim(p))
+                call = ToolCall(str(p.get("tool", "")), dict(_dict(state.get("input"))), float(i), trim(p),
+                                result=_result_text(state.get("output") if state.get("status") == "completed"
+                                                    else state.get("error")))
                 tools.append(call)
                 meta = _dict(state.get("metadata"))
                 if (call.name == "task" and is_delegation("opencode", "task", call.args)

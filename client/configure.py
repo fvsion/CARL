@@ -147,6 +147,8 @@ CACHE_CORE = "shared/carl-cache.js"                     # the code both carry
 PANEL = "carl-panel"                                    # the /carl panel: OpenCode TUI plugin and Pi extension
 PANEL_CORE = "shared/carl-panel.js"
 DELEGATION_CORE = "shared/carl-delegation.js"           # the hand-off rules both clients' carl-delegation carry
+BRIEF_CORE = "shared/carl-brief.js"                     # the coder's TOML brief: reader, check (carl-delegation imports it)
+CHAIN_CORE = "shared/carl-chain.js"                     # the test session, then the code session (carl-delegation, subagent)
 TUI_CORE = "shared/carl-tui.js"                         # the helpers the sidebar and the switcher carry
 CODER = "coder"                                         # the coder subagent's name in both clients
 CODER_ALT = "carl-coder"                                # ... when the user has their own "coder"
@@ -1158,7 +1160,7 @@ class Installer:
             if merge_plugin_entry(cfg, entry, None, self.fs.isdir(dest), name, self.report):
                 self.fs.rmtree(dest)
             return
-        shared = {CACHE: (CACHE_CORE, PANEL_CORE), DELEGATION: (DELEGATION_CORE,)}.get(name, ())
+        shared = {CACHE: (CACHE_CORE, PANEL_CORE), DELEGATION: (DELEGATION_CORE, BRIEF_CORE, CHAIN_CORE)}.get(name, ())
         self.install_folder(os.path.join("opencode/plugins", name), dest, shared)
         want = [entry, {"provider": provider_id, **({"cacheApi": self.o.cache_api} if name == CACHE else {}),
                         **(extra or {})}]
@@ -1362,7 +1364,7 @@ class Installer:
         coder_on = "coder_agent" in st
         self._code_command(os.path.join(o.pi_dir, "prompts", "code.md"), "pi/prompts/code.md" if coder_on else "",
                            str(st.get("coder_agent") or CODER), "Pi")
-        self._pi_ext(DELEGATION, coder_on, (DELEGATION_CORE,), "the hand-off to the coder", st, "delegation_ext")
+        self._pi_ext(DELEGATION, coder_on, (DELEGATION_CORE, BRIEF_CORE), "the hand-off to the coder", st, "delegation_ext")
         if coder_on:
             st["delegation"] = {"reminder": o.reminder}            # the gate: the dashboard's setting (23.4)
         else:
@@ -1406,7 +1408,7 @@ class Installer:
         rule: str | None = None
         if plan.install:
             if sub_ours:
-                self.install_folder("pi/extensions/subagent", sub)
+                self.install_folder("pi/extensions/subagent", sub, (BRIEF_CORE, CHAIN_CORE))   # the chain (Phase 23.4.3)
                 st["subagent_ext"] = True
             else:
                 rep.add("kept", "Pi extensions/subagent (yours; it provides the subagent tool ours would)")

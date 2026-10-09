@@ -52,6 +52,9 @@ class Result:
     first_event: Dict[str, Any] = field(default_factory=dict)
     error: str = ""
     full: Dict[str, Any] = field(default_factory=dict)   # full runs: coder, tests, hidden tests
+    # every coder brief of the run, in order (briefs.collect): text (full), format, valid, problems, refused, ...
+    briefs: List[Dict[str, Any]] = field(default_factory=list)
+    brief_tokens: List[Optional[int]] = field(default_factory=list)   # one per brief; None: no server known
     schema: int = SCHEMA
 
     def key(self) -> Key:

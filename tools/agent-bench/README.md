@@ -56,14 +56,15 @@ A decision is right when it is `delegated` for a large or stuck request. For a s
 
 | Path | What it is |
 |---|---|
-| `bench.py` | The CLI: `prepare`, `run`, `report`, `fetch`, `drop`, `variants` |
+| `bench.py` | The CLI: `prepare`, `run`, `report`, `tokens`, `fetch`, `drop`, `variants` |
 | `prompts.json` | 16 requests, 4 for each category (large, stuck, small, question). Each has its fixture and the decision it expects. The large requests with hidden tests are also the full runs. |
 | `fixtures/` | 3 small projects: `pycli` (a notes CLI with tests), `pylib` (a text statistics library with one failing test), `webapp` (a static to-do page). Each has a README. |
 | `hidden/` | The hidden tests of the full runs. The harness copies them into the project only after the run. |
 | `variants/` | One Python file for each variant (see section 7). `baseline.py` changes nothing. |
-| `fakeserver.py` | A fake OpenAI-compatible server with scripted replies, for the tests. It needs no model. |
+| `fakeserver.py` | A fake OpenAI-compatible server with scripted replies, for the tests. It needs no model. Its `/tokenize` counts words. |
 | `agentbench/events.py` | The JSON event streams of the clients, and the decision. No I/O. |
 | `agentbench/clients.py` | The commands of OpenCode and Pi, a decision run and a full run. |
+| `agentbench/briefs.py`, `brief_check.mjs` | The coder briefs of a run: their text, CARL's check of them (node with the repo's `client/shared/carl-brief.js`: one checker), the refusals, the tokens (section 6). |
 | `agentbench/server.py` | CARL's server for one model: the launcher `./carl.sh`, `/health`, stop. |
 | `agentbench/home.py` | The harness HOME: the client package and `./setup`. |
 | `agentbench/library.py`, `models.py` | The model copies: fetch and drop, and their rules. |
@@ -156,13 +157,34 @@ The project copies of full runs stay in the work folder (`HOME-work/runs`, or `-
 - the strict decision: `decision_strict`, `correct_strict`, `tool` and `args` (the first tool call), `step_tools` (all tools of the first tool step), `tool_seconds` (from the first model step to the first tool call), `first_event` (the event of the first tool call, cut);
 - `seconds` (from the client start to the stop), `startup_seconds`, `thinking_tokens` (until the first tool call) and `thinking_tokens_decision` (until the stop) when the client reports them, `thinking_chars`, `error`, and `full` (full runs).
 
-Values in `args` are cut to 400 characters.
+Values in `args` and `decision_args` are cut to 400 characters (as before, for the older reports). The briefs are kept whole:
+
+- `briefs`: one item for each coder task of the run, in order (decision and full runs; OpenCode: each `task` call with `subagent_type` coder or carl-coder; Pi: each `subagent` call with `agent` coder, and each coder item of its `tasks` and `chain` lists):
+  - `text`: the task text, full (OpenCode `prompt`, Pi `task`);
+  - `format`: `toml` or `json` (a brief that CARL's reader finds), `kv` (two or more `Key:` lines: 1.12.1's form), or `other`;
+  - `valid`: a TOML or JSON brief that reads and passes CARL's check; `problems`: the check's sentences, or the reader's error with its line. The check is CARL's own: `agentbench/brief_check.mjs` runs `client/shared/carl-brief.js` with node (without node: format `unknown`, valid `null`);
+  - `refused`: the call's result starts with CARL's refusal mark `[CARL] Brief refused` (after OpenCode's `Error: `), so the coder did not start;
+  - `tool`, `item` (`prompt`, `task`, `tasks[N]`, `chain[N]`), and `continues: true` for an OpenCode task with `task_id` (CARL does not check it).
+- `brief_tokens`: one count for each brief, from the model server's `POST /tokenize` (the server of the batch, with the harness's API key). `null` when no server is known (`--no-server`): `bench.py tokens` fills them in afterwards.
+
+**A decision run after a refusal.** The decision is the first call to the coder, as before. When CARL's brief check refused that brief, the run goes on (the main agent sends the brief again) until a brief is taken, the turn ends, an error, 15 more tool calls or 300 s from the first model step (`--max-tools`, `--max-seconds`). Pi: the run waits up to 30 s for the call's result (a refusal comes at once). So the result has every brief until the coder started; only `seconds` and `thinking_tokens_decision` grow for such a run.
+
+**Tokens afterwards.** With a server of the same model on a port (it can be the harness's own: `bench.py` does not start one for this):
+
+```bash
+python3 tools/agent-bench/bench.py tokens results.jsonl --url http://127.0.0.1:8097 \
+    --key-file ~/carl-phase2343/bench-home-work/server/api-key --model gemma-4-e4b
+```
+
+It counts the briefs whose `brief_tokens` is `null`, only in the lines of `--model`, and writes the file again in place.
 
 **Resume and the measure.** A cell is done when the file has a line with the same model, client, thinking, variant, prompt, run, mode **and measure**. The lines of the older format have no `measure` field (the report shows them as `first-tool`, strict only); they never count as done for the practical measure.
 
 **A new measure, and the keep shares.** Only the large and stuck requests were run again at the new limits (the user's choice, 2026-10-06). A `practical-v2` group with no small requests or questions takes its keep shares from the same model, client, thinking and variant in `practical-v1`, and the table marks them `[practical-v1]`.
 
 **The report** has, for each model, client, thinking, variant and measure: the share of large and stuck requests that went to the coder (strict and practical), the share of small requests and questions that the main agent kept (strict and practical), the number of undecided runs and of errors, the median number of looks before a decisive action, the median times to the decision and to the first tool call, the median thinking tokens, and the pass mark for each measure (at least 90% and 90%). Then the practical share for each category, the wrong practical decisions (prompt, expected, got, first tool), the errors, and the full runs. `--md` gives Markdown.
+
+**The coder briefs** (the lines that have `briefs`), for each model, client, variant and mode (decision or full): the runs with a brief, the briefs sent and their formats, the share of runs whose first brief was valid (TOML and JSON only: a kv brief has no check), the share whose last brief was taken (the coder started), the refusals per run (mean and most), the median tokens of the first brief and of all briefs, and for full runs the hidden tests passed and the median minutes.
 
 ## 7. Variants
 
@@ -189,7 +211,18 @@ def apply(home: str) -> List[str]:
 
 - `run` calls `apply(home)` after each config refresh, so each variant starts from the configs of CARL's setup. With `--no-server` there is no refresh, so `apply()` must give the same result when it runs again on its own changes.
 - The variant's name is part of each result line, and of the key that makes the runs resumable.
-- `bench.py variants` lists the variants: `baseline`, the Phase 23 variants `v1`-`v7` and the combinations `c1`-`c3`.
+- Before a variant's own `apply()`, the switches that some variants change are set back to CARL's defaults: carl-cache's move on, the brief check and the chain on, TOML named in a refusal and in Pi's tool guidelines. So with `--no-server` (no refresh) no variant runs with the switches of the one before.
+- `bench.py variants` lists the variants: `baseline`, the Phase 23 variants `v1`-`v7`, the combinations `c1`-`c3`, `project_in_system` (Phase 23.1), and `brief_kv` and `brief_json` (Phase 23.4.3, below).
+
+**The brief's format (Phase 23.4.3).** Three formats of the coder's task, each with its own texts:
+
+| Variant | The texts | CARL's brief check, gates, chain |
+|---|---|---|
+| `baseline` | CARL's: the TOML brief and the TOML report (`client/agents/`) | on |
+| `brief_kv` | 1.12.1's `Mode: / Goal: / Files: ...` task: `variants/texts/brief_kv_delegation.md` and `brief_kv_coder.md` are `git show v1.12.1:client/agents/...` (the `carl:` markers cut as for CARL's rule); 1.12.1's coder lines in Pi's subagent tool guidelines | off: OpenCode `carl-delegation` options `brief: false`, `chain: false`; Pi `carl.json` `delegation.brief` and `delegation.chain` false |
+| `brief_json` | `variants/texts/brief_json_*.md`: CARL's rule and coder with the brief and the report as JSON with the same keys and structure (only the format parts converted; the examples read back to the same brief and report); Pi's guidelines name a JSON brief | on: `carl-brief.js` reads JSON too (a ```json fence, or a JSON object with prose around it), and its sentences name the keys the JSON way; the chain writes the sessions' briefs as JSON; a refusal of a task with no brief names JSON (`carl-delegation` option `briefFormat: "json"`, Pi `delegation.brief_format`) |
+
+`brief_kv` and `brief_json` need CARL's coder and `carl-delegation` in both clients (`./setup --coder on`); they stop with an error otherwise.
 
 ## 8. Tests
 
@@ -203,6 +236,8 @@ The tests need no model and no server:
 - `test_events.py`: the real event streams of OpenCode 1.18.34 and Pi 1.0.2 (in `tests/agent_bench/events/`) for each kind of decision (also: looks then the coder, looks then a write, a shell write, undecided), both measures, the limits, and the shell write rules with their negatives.
 - `test_library.py`: fetch and drop in temporary folders, with a fake catalogue and library.
 - `test_runner.py`: the prompts, the matrix and its resume, the report, the fixtures, the client commands, the variants, the fake server.
+- `test_briefs.py`: the coder briefs: the calls that give the coder a task, CARL's check through node, the refusals, a decision run that goes on after a refusal, the tokens (the fake server's `/tokenize`, `bench.py tokens`) and the report's table.
+- `test_variants.py`: each variant on a harness HOME made by `_support.make_variant_home` (CARL's rule, coder, `carl-delegation` entry, Pi's `carl.json` and subagent extension), again on its own output, and the baseline after it.
 - `test_server_flow.py`: the server start and stop with a fake launcher; the real `./carl.sh package` and `./setup --no-install` against the fake server.
 - `test_integration.py`: the real `opencode` and `pi` against the fake server: each kind of decision (both measures), the thinking switch, a full run for each client, and `bench.py run` and `report`. It needs a client HOME with both clients (`AGENT_BENCH_CLIENT_HOME`); without one, it is skipped. It copies that HOME first and changes only the copy.
 

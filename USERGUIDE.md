@@ -588,7 +588,7 @@ The coder subagent runs in the background, in OpenCode and in Pi.
 
 1. The main agent starts the coder and tells you what it does.
 2. The main session is then free. You can ask it other things while the coder works in the other slot.
-3. When the coder ends, its result comes back to the main session as a message.
+3. When the coder ends, its result comes back to the main session as a message. When CARL ran the tests first in their own session, this is one message for both sessions.
    - In Pi, the message shows as `✓ Coder finished (42 s)` with the first 3 lines of the result. Push Ctrl+O to see all of it. A coder that failed shows `✗ Coder failed (…)`.
 4. The main agent then checks the result.
 
@@ -681,20 +681,55 @@ The setup adds a specialist **coder** subagent, and a rule that tells the main a
 1. **It is stuck:** a fix for the same code failed two times. These are its own attempts, or attempts that you tell it failed.
 2. **The task is large:** 3 or more files, or ~150 or more lines. Examples: a new module, package or CLI, an implementation with tests, a multi-step feature or refactor.
 
+For a large task, the main agent can first read what the brief needs (the files to change, the test command, the project's rules), but it does not write or change files itself. Then it delegates.
+
 The main agent keeps the questions, the explanations, the code searches and the small edits.
 
 **The reminder.** Local models often forget the rule after they read some code. Thus, CARL adds one line to the end of each of your messages in the main session: `[CARL reminder] Large coding work or a fix that already failed goes to coder …`. The line is the same each time, so the caches stay valid. In the tests, it moved the most large and stuck tasks to the coder. `NO_REMINDER=1 ./setup --yes` turns it off (`./carl.sh install` on the server Mac).
 
-**`/code TASK`** gives a task straight to the coder. The main agent does not decide.
+**`/code TASK`** gives a task straight to the coder. The main agent does not decide: it writes the brief and hands it on at once.
 
-**How the main agent writes the task.** The coder sees only the task. The main agent writes it in a fixed form, from your request and the project's files: `Mode`, `Goal`, `Files`, `Requirements`, `Acceptance`, `Constraints`, and for a fix that failed, `Error` and `Tried`.
+**How the main agent writes the task.** The coder sees only the task. The main agent writes it as a brief in TOML, from your request and the project's files: `mode`, `tests`, `goal`, the scope (what is in, what to leave alone), each file with its action (create, change or read), the requirements with ids (R1, R2, ...), the checks that cover them, the project's rules, real examples, and for a fix that failed, the error and what was tried. A short example:
+
+```toml
+mode = "code"
+tests = "new"
+goal = "Add a --csv option to the report command."
+
+[scope]
+out = [{ text = "the text table", why = "keep it as it is" }]
+
+[[file]]
+path = "report/csv_export.py"
+action = "create"
+
+[[requirement]]
+id = "R1"
+text = "the first row is the header month,orders,total"
+
+[[check]]
+id = "A1"
+covers = ["R1"]
+run = "python -m pytest tests/test_csv_export.py -q"
+```
+
+**CARL checks the brief.** Before the coder starts, CARL checks that the brief is complete. For example, each requirement must be in a check, and a code task must name its files and at least one thing to leave alone. If something is missing, the coder does not start: the main agent gets the list of what to fix, and it sends the brief again. You see this as a failed call to the coder with `[CARL] Brief refused`.
+
+**Tests first, in a separate session.** For new code with new tests (`mode = "code"` and `tests = "new"`), CARL runs the coder two times, each in a new session:
+1. **The test session** (mode test) writes the tests from the requirements. It does not see the code session, so its tests do not bend to the code.
+2. At least one new test must fail before there is code (a **red start**). The test session's report says so. CARL also runs a check itself, one time, when it is a plain test runner or ruff on the project's files (`pytest`, `python -m pytest`, `node --test`, `npm test`, `go test`, `cargo test`, `ruff check`, `ruff format --check`). It never runs another command.
+3. **The code session** (mode code) writes the code. It gets the brief, the test files and the test session's report. It cannot change the tests.
+4. The main agent gets **one result**: both reports, and "Tests unchanged" or the test files that changed. A line `[CARL] Warning` says when no new test failed before the code, or when a test changed.
+5. The main agent runs the checks itself before it answers you.
+
+You see two coder sessions (in OpenCode: `…: tests` and `…: code`), but one result. In OpenCode, the two sessions run in the background only on the OpenCode versions that CARL checked (1.18.34 and 1.18.35). On other versions they run in the foreground: the main session waits for them, and a notice says so one time. Follow-ups, fixes and stuck tasks get one session, with no new tests. With `tests = "existing"`, the result says whether the coder changed the named tests. Details: [the chain](reference/delegation.md#the-chain-tests-first-in-a-separate-session).
 
 **How the coder works:**
-- It works in one of two modes in each task. **`Mode: code`:** it writes the program code and runs the tests, but it does not change the tests. **`Mode: test`:** it writes tests from the requirements and does not change the program code. For code with tests, the main agent can send the test task first, then the code task.
-- It changes only the files that the task names, and it checks each acceptance item.
+- It works in one of two modes in each task. **Mode code:** it writes the program code and runs the tests, but it does not change the tests. **Mode test:** it writes tests from the requirements (at least one for each requirement id) and does not change the program code.
+- It changes only the files that the brief gives to create or change, and it checks each check. CARL enforces this: it refuses the coder's write of another file, of a test file in mode code, and of a file that is not a test in mode test.
 - It starts with a new context, and works one step at a time. Before it fixes a failure, it reproduces the failure. It runs the tests or the build. It does not leave placeholders.
 - After three failed approaches, it stops and reports.
-- Its report gives the result, the changed files, each acceptance item, the verification, the root cause and the open issues. The main agent checks the report before it answers you.
+- Its report starts with a TOML block: the status, each requirement and each check by its id, the changed files, the findings and the open issues. The main agent checks the report before it answers you.
 - Only the main agent gets the delegation rule and the reminder. The coder and the other subagents never get them.
 
 **Tested (2026-10-05 to 2026-10-07, OpenCode / Pi, the large and stuck tasks that went to the coder):**
@@ -795,6 +830,7 @@ Check for a new config
 - **Sync service** opens the state of the config sync: the sync service, the last contact, the last config, the version of the client package, the CARL version of the server and the addresses.
 - **Check for a new config** asks the dashboard now. **Apply the waiting config** shows only when a config waits.
 - Without the coder, the **Background coder** and **Delegation reminder** rows are not in the list: they have no effect.
+- When you turn on the **Coder subagent** and the server runs 1 slot, CARL turns the coder on and shows a warning: the coder uses the slot of the main session while it works.
 - The sync rows show only when the server runs on another computer.
 
 | Row | In | Setup switch |
@@ -859,7 +895,7 @@ For the stop saves, OpenCode and Pi leave a small record of the session that eac
 - **What changes in the prompt:** some parts of the system prompt change between projects and days. The cache puts them after the part that is the same everywhere:
   - OpenCode: the environment block (folder, git, date) and the project's instructions (the AGENTS.md files in the working folder). Instructions from outside the folder stay in the system prompt.
   - Pi: the project context and the folder.
-  - With Qwen models they stay system text: a second system message after the shared part. With Gemma 4 they stay where they are (CARL saves no prompt for Gemma 4). With other models they stay where they are too, unless you set Settings > Caching > Other templates to "move to your message".
+  - With Qwen models they go to the start of your first message. The model follows AGENTS.md more often there (measured 2026-10-08). With Gemma 4 they stay where they are (CARL saves no prompt for Gemma 4). With other models they stay where they are too, unless you set Settings > Caching > Other templates to "move to your message".
   - The model gets the same information. The agent's prompt is then the same in each project, and its saved file fits each session.
 - **Router mode:** before a request for a different model, the plugin loads that model and puts the session back. A switch then costs the load (30 s to 2 min) and about a second. OpenCode's title requests go to the loaded model, so a new session does not cause two switches.
 - **Any model:** the Qwen hybrid models and normal transformer models (tested: Gemma 4 E4B, whose template puts the tools after the system prompt).
@@ -1272,10 +1308,10 @@ If a value is not available, the card shows a dash or a sentence (for example `n
 
 | Card (summary in the title) | Simple | Full adds |
 |---|---|---|
-| SLOTS (`2 × 96K   27% used`) | One row for each slot: a bar, its tokens of the context (`41.5K of 96K`) and what it does (`writing`, `reading`, `keeps a session`, `free`). For each busy slot, a block: **Request** (its tokens), **Reused** (the tokens that the server did not read again, with the %), then **Read** and **Still to read** while it reads, or **Written** while it writes. A warning when the K and V types of the context memory are different. For a Gemma model with the window cache: a **Sliding window** row. | **Context memory** (its K and V types), **Allocated** (for all slots), **In use**, **Recurrent state** and **Checkpoints** (Qwen), **Can grow to**, **Shared pool**, **Per token**, **Trained for**; the **Sliding window** row also with the full cache |
+| SLOTS (`2 × 96K   27% used`) | One row for each slot: a bar, its tokens of the context (`41.5K of 96K`) and what it does (`writing`, `reading`, `between turns` (a conversation is in the slot; its next turn continues it without reading it again), `free`). For each busy slot, a block: **Request** (its tokens), **Reused** (the tokens that the server did not read again, with the %), then **Read** and **Still to read** while it reads, or **Written** while it writes. A warning when the K and V types of the context memory are different. For a Gemma model with the window cache: a **Sliding window** row. | **Context memory** (its K and V types), **Allocated** (for all slots), **In use**, **Recurrent state** and **Checkpoints** (Qwen), **Can grow to**, **Shared pool**, **Per token**, **Trained for**; the **Sliding window** row also with the full cache |
 | SPEED (`write 42.7 tok/s`) | A table of the read and the write speed (tok/s) in three columns: **Now**, **Average** (every request since the server started) and **Last request**. Then **Guesses OK**: the % of the guesses that were correct, or `off`. | **Speculation** (`MTP + n-gram, 1 guess`), **Per step** (the tokens accepted for each step), the guesses accepted by position, **Last request** (its time), **Total read**, **Total reused**, **Total written**, **Waiting** (the queue), **Largest context** |
-| MEMORY (`server 17.9 GiB`) | **Server**: a bar and the RAM that the server uses (`17.9 of 32.0 GiB`). Then the parts: **Model**, **Drafter** (Gemma), **Context memory**, **Buffers**. While the model loads, **Model** says `loading`. | **GPU limit** (the GPU memory limit), **GPU, all apps** (the GPU memory that all apps use), **Server CPU** |
-| THIS MAC (`pressure normal`; `GPU 95%` when the GPU is 90% busy or more) | **Memory**: a bar and the RAM that this Mac uses. **Pressure**: the macOS memory pressure (`normal`, `warning`, `critical`). **Swap** (`none (no swap file)` when the Mac has no swap file). **GPU**: a bar and `38% busy`. **Power**. **Heat** (`normal`, `warm`, `hot`, `very hot`). The card shows also when no server runs. | **Wired**, **Compressed**, **Free**, **Load** (1, 5 and 15 min), **Disk free** |
+| MEMORY (`server 17.9 GiB`) | **Server**: a bar and the RAM that the server uses (`17.9 of 32.0 GiB`). This is the memory of the server process (with the GPU buffers) plus the model file and the drafter file, which the server maps from the disk. Then the parts: **Model**, **Drafter** (Gemma), **Context memory**, **Buffers** (the rest). The parts add up to the **Server** value. While the model loads, **Model** says `loading`. | **Server process** (the memory of the process without the model files: the value that Activity Monitor shows), **GPU limit** (the GPU memory limit), **GPU, all apps** (the GPU memory that all apps use), **Server CPU** |
+| THIS MAC (`pressure normal`; `GPU 95%` when the GPU is 90% busy or more) | **Memory**: a bar and the RAM that this Mac uses. It is the same value as **Memory Used** in Activity Monitor: app memory + wired + compressed. **Pressure**: the macOS memory pressure (`normal`, `warning`, `critical`). **Swap** (`none (no swap file)` when the Mac has no swap file). **GPU**: a bar and `38% busy`. **Power**. **Heat** (`normal`, `warm`, `hot`, `very hot`). The card shows also when no server runs. | **App memory**, **Wired**, **Compressed** (the three parts of **Memory**), **Cached files** (files in RAM that macOS can free when apps need the memory; not in **Memory**), **Free**, **Load** (1, 5 and 15 min), **Disk free** |
 | CONNECT (`this Mac only`) | **Address**, **Key** (masked; `k` shows it), **Connections** (and the computers they come from, when another computer is connected), **OpenCode, Pi** (if they are set up), **Disk cache** (`2.4 of 10 GB`) | **Saved** (the saved prompts and sessions), **Model name**, **From**, **Key file**, the copy buttons |
 | HEALTH (`no errors`, `N problems` or `GPU failed`) | **Log**: `✓ No errors.`, the number of errors and warnings in the log (the same lines as **Errors and warnings** in the Log tab), or `✗ The GPU failed. Restart the server (Settings > Server, a).`. **Sleep**: if the Mac stays awake while the server runs. | **Errors**, **Warnings**, **Routine notices**, **GPU errors**, **Health check** (ms), **Sleeps**, the last errors, the sleep and wake events |
 | MODEL (the quantization, for example `UD-IQ3_XXS`) | **File**, **Speculation** | **Weights**, **MTP drafter** (its file and size), **Layers**, **MTP**, **Experts**, **Thinking**, **Batch**, **Flash attention**, **Architecture**, **Process** (the PID) |

@@ -14,7 +14,12 @@
 //   back to the session as a message when it ends (/subagents lists and stops
 //   the running ones). CARL's coder runs there unless the call says false;
 // - a message renderer shows that result as "Coder finished (42 s)" and its
-//   text, collapsed (result.js); the model still reads the <subagent> text.
+//   text, collapsed (result.js); the model still reads the <subagent> text;
+// - the coder's task is a TOML brief (Phase 23.4.3): the guidelines say so;
+// - the chain (Phase 23.4.3): a coder brief with mode code and tests = "new" runs as two fresh coder processes,
+//   the test session and then the code session, with one result (runAgentTask, carl-chain.js); single, background
+//   and chain steps alike. Parallel tasks with more than one task refuse such a brief (the two sessions of each
+//   item would see the other items' test files).
 /**
  * Subagent Tool - Delegate tasks to specialized agents
  *
@@ -48,6 +53,7 @@ import { Box, Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { type AgentConfig, type AgentScope, discoverAgents } from "./agents.ts";
 import { duration, parseResult, resultBody, resultTitle } from "./result.js";
+import { coderPlan, runCoderTask } from "./carl-chain.js";
 
 const MAX_PARALLEL_TASKS = 8;
 const MAX_CONCURRENCY = 4;
@@ -473,6 +479,83 @@ async function runSingleAgent(
 	}
 }
 
+// CARL: the chain (Phase 23.4.3): on unless carl.json says "delegation": {"chain": false} (for measurements)
+function chainOn(): boolean {
+	try {
+		const st: unknown = JSON.parse(fs.readFileSync(path.join(getAgentDir(), "carl.json"), "utf-8"));
+		const d = typeof st === "object" && st !== null ? (st as Record<string, unknown>).delegation : undefined;
+		return !(typeof d === "object" && d !== null && (d as Record<string, unknown>).chain === false);
+	} catch {
+		return true;
+	}
+}
+
+/** CARL: an assistant message that holds one text (the chain's one result). */
+function textMessage(text: string, like: SingleResult): Message {
+	return {
+		role: "assistant",
+		content: [{ type: "text", text }],
+		model: like.model ?? "",
+		stopReason: "stop",
+		timestamp: Date.now(),
+	} as unknown as Message;
+}
+
+/**
+ * CARL: one task of an agent, as runSingleAgent. For CARL's coder, the brief decides (carl-chain.js): with mode code
+ * and tests = "new", two fresh coder processes one after the other (the test session, then the code session) and one
+ * result; with tests = "existing", one process and the named tests hashed before and after; else one process as
+ * before. The result's usage is the sum of the sessions; its final message is the one result.
+ */
+async function runAgentTask(
+	defaultCwd: string,
+	dispatchDefaults: DispatchDefaults,
+	agents: AgentConfig[],
+	agentName: string,
+	task: string,
+	cwd: string | undefined,
+	step: number | undefined,
+	signal: AbortSignal | undefined,
+	onUpdate: OnUpdateCallback | undefined,
+	makeDetails: (results: SingleResult[]) => SubagentDetails,
+): Promise<SingleResult> {
+	const run = (text: string) =>
+		runSingleAgent(defaultCwd, dispatchDefaults, agents, agentName, text, cwd, step, signal, onUpdate, makeDetails);
+	if (!CODERS.has(agentName) || !agents.some((a) => a.name === agentName)) return run(task);
+	const sessions: SingleResult[] = [];
+	const out = await runCoderTask(
+		task,
+		cwd ?? defaultCwd,
+		async (text) => {
+			const r = await run(text);
+			sessions.push(r);
+			const failed = isFailedResult(r);
+			return { ok: !failed, output: failed ? getResultOutput(r) : getFinalOutput(r.messages) };
+		},
+		{ chain: chainOn() },
+	);
+	const last = sessions[sessions.length - 1];
+	if (out.kind === "one" || !last) return last ?? run(task);
+	const usage = { ...last.usage };
+	for (const s of sessions.slice(0, -1)) {
+		usage.input += s.usage.input;
+		usage.output += s.usage.output;
+		usage.cacheRead += s.usage.cacheRead;
+		usage.cacheWrite += s.usage.cacheWrite;
+		usage.cost += s.usage.cost;
+		usage.turns += s.usage.turns;
+	}
+	return {
+		...last,
+		task,
+		usage,
+		messages: [...last.messages, textMessage(out.text, last)],
+		exitCode: out.ok ? 0 : last.exitCode || 1,
+		stopReason: out.ok ? "stop" : last.stopReason && last.stopReason !== "stop" ? last.stopReason : "error",
+		errorMessage: out.ok ? undefined : out.text,
+	};
+}
+
 const TaskItem = Type.Object({
 	agent: Type.String({ description: "Name of the agent to invoke" }),
 	task: Type.String({ description: "Task to delegate to the agent" }),
@@ -540,8 +623,8 @@ function delegationPrompt(agents: AgentConfig[], background: boolean): { promptS
 		promptSnippet: `subagent: hand a task to a specialist agent with its own fresh context (agents: ${names.join(", ")})`,
 		promptGuidelines: coder
 			? [
-					`Large request (3+ files, ~150+ lines, a new module/package/tool/CLI, implementation plus tests, a multi-step feature or refactor): your FIRST action is the subagent tool with agent "${coder}" and a self-contained task. Do not start writing it yourself.`,
-					`Stuck: if a fix for the same code has already failed twice (your attempts, or ones the user says failed), delegate to agent "${coder}" with the code, the exact error and what was tried, instead of a third attempt.`,
+					`Large request (3+ files, ~150+ lines, a new module/package/tool/CLI, implementation plus tests, a multi-step feature or refactor): do not write or change any file yourself. Read only what the brief needs (the files to change, the test command, the project's rules), then call the subagent tool with agent "${coder}" and a TOML brief as its task (the format is in your instructions).`,
+					`Stuck: if a fix for the same code has already failed twice (your attempts, or ones the user says failed), delegate to agent "${coder}" with a brief that has the exact error ([error]) and what was tried ([[tried]]), instead of a third attempt.`,
 					"Questions, explanations, reading or searching code, and small or single-file edits: do them yourself, no subagent.",
 					...(background ? [backgroundGuideline(coder)] : []),
 				]
@@ -571,6 +654,12 @@ interface BackgroundJob {
 }
 
 const CODERS = new Set(["coder", "carl-coder"]); // CARL's coder ("carl-coder" next to a user's own "coder")
+
+const PARALLEL_CHAIN =
+	'A coder brief with mode = "code" and tests = "new" runs as two sessions, one after the other (the tests, then the code), so it cannot run next to other parallel tasks: send it alone (agent and task), and the other tasks in a separate call.';
+
+const CHAIN_STARTED =
+	"CARL runs the coder in two sessions, one after the other: first the tests, then the code. You get one result for both.";
 
 const BACKGROUND_STARTED =
 	"You get each result as a message when its subagent ends. Do not wait, poll or check on it: tell the user in a sentence what runs, then end your turn or go on with other work.";
@@ -628,7 +717,7 @@ export default function (pi: ExtensionAPI) {
 				{ triggerTurn: true, deliverAs: "followUp" },
 			);
 		};
-		runSingleAgent(cwd, dispatchDefaults, agents, agentName, task, taskCwd, undefined, job.abort.signal, undefined, details)
+		runAgentTask(cwd, dispatchDefaults, agents, agentName, task, taskCwd, undefined, job.abort.signal, undefined, details)
 			.then((r) => finish(isFailedResult(r) ? "failed" : "done", isFailedResult(r) ? getResultOutput(r) : getFinalOutput(r.messages), [r]))
 			.catch((e: unknown) => finish(job.abort.signal.aborted ? "stopped" : "failed", e instanceof Error ? e.message : String(e), []));
 		return job;
@@ -757,6 +846,14 @@ export default function (pi: ExtensionAPI) {
 				}
 			}
 
+			// CARL: a coder brief that starts the chain runs alone, not next to other parallel tasks
+			if (hasTasks && (params.tasks?.length ?? 0) > 1 && chainOn() && (params.tasks ?? []).some((t) => CODERS.has(t.agent) && coderPlan(t.task).kind === "chain"))
+				return {
+					content: [{ type: "text", text: PARALLEL_CHAIN }],
+					details: makeDetails("parallel")([]),
+					isError: true,
+				};
+
 			// CARL: background: start each subagent and return at once. CARL's coder goes there unless the model
 			// says background: false (local models often don't ask, even when told to)
 			const askBg = (params as { background?: boolean }).background;
@@ -788,7 +885,7 @@ export default function (pi: ExtensionAPI) {
 					content: [
 						{
 							type: "text",
-							text: `Started in the background: ${started.map((j) => `${j.id} (${j.agent})`).join(", ")}. ${BACKGROUND_STARTED}`,
+							text: `Started in the background: ${started.map((j) => `${j.id} (${j.agent})`).join(", ")}. ${list.some((t) => CODERS.has(t.agent) && chainOn() && coderPlan(t.task).kind === "chain") ? `${CHAIN_STARTED} ` : ""}${BACKGROUND_STARTED}`,
 						},
 					],
 					details: makeDetails(hasTasks ? "parallel" : "single")([]),
@@ -818,7 +915,7 @@ export default function (pi: ExtensionAPI) {
 							}
 						: undefined;
 
-					const result = await runSingleAgent(
+					const result = await runAgentTask(
 						ctx.cwd,
 						dispatchDefaults,
 						agents,
@@ -891,7 +988,7 @@ export default function (pi: ExtensionAPI) {
 				};
 
 				const results = await mapWithConcurrencyLimit(params.tasks, MAX_CONCURRENCY, async (t, index) => {
-					const result = await runSingleAgent(
+					const result = await runAgentTask(
 						ctx.cwd,
 						dispatchDefaults,
 						agents,
@@ -934,7 +1031,7 @@ export default function (pi: ExtensionAPI) {
 			}
 
 			if (params.agent && params.task) {
-				const result = await runSingleAgent(
+				const result = await runAgentTask(
 					ctx.cwd,
 					dispatchDefaults,
 					agents,

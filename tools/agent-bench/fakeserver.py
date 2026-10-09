@@ -4,7 +4,8 @@ OpenCode and Pi with no model.
 
     python3 fakeserver.py --port 8197 --script script.json [--log requests.jsonl]
 
-Endpoints: GET /health, /props, /v1/models, /slots; POST /v1/chat/completions (with and without "stream").
+Endpoints: GET /health, /props, /v1/models, /slots; POST /v1/chat/completions (with and without "stream"); POST
+/tokenize (a fake count: one token for each word of "content"; the bearer key is checked when the server has one).
 It listens on 127.0.0.1 only.
 
 The script (JSON) is a list of rules; the first rule that matches a request gives the reply:
@@ -215,9 +216,12 @@ class _QuietServer(ThreadingHTTPServer):
 class FakeServer:
     """The server in a thread: start() it, use .port, stop() it. requests holds every chat request body."""
 
-    def __init__(self, script: Script, port: int = 0, log_path: str = "", ctx: int = 98304, slots: int = 2) -> None:
+    def __init__(self, script: Script, port: int = 0, log_path: str = "", ctx: int = 98304, slots: int = 2,
+                 api_key: str = "") -> None:
         self.script = script
         self.requests: List[JsonDict] = []
+        self.api_key = api_key                       # checked on /tokenize only
+        self.tokenized: List[str] = []               # the texts of /tokenize
         self.log_path = log_path
         self.ctx = ctx
         self.slots = slots
@@ -260,6 +264,13 @@ class FakeServer:
                     req = json.loads(self.rfile.read(size) or b"{}")
                 except ValueError:
                     self._json(400, {"error": {"message": "bad JSON"}})
+                    return
+                if path == "/tokenize" and isinstance(req, dict):
+                    if outer.api_key and self.headers.get("Authorization") != f"Bearer {outer.api_key}":
+                        self._json(401, {"error": {"message": "Invalid API Key", "code": 401}})
+                        return
+                    outer.tokenized.append(str(req.get("content", "")))
+                    self._json(200, {"tokens": list(range(len(str(req.get("content", "")).split())))})
                     return
                 if path not in ("/v1/chat/completions", "/chat/completions") or not isinstance(req, dict):
                     self._json(404, {"error": {"message": "not found", "code": 404}})

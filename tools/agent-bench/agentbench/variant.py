@@ -5,7 +5,8 @@
     def apply(home: str) -> list[str]:    change the harness HOME's configs or plugin files; return what changed
 
 apply() runs after each config refresh (./setup writes the configs again for every model), so a variant starts
-from the configs as CARL's setup wrote them. "baseline" changes nothing.
+from the configs as CARL's setup wrote them. "baseline" changes nothing. Before a variant's own apply(), the switches
+that some variants change are set back to CARL's defaults (with --no-server there is no refresh in between).
 """
 from __future__ import annotations
 
@@ -49,13 +50,20 @@ def load(name: str, folder: str = VARIANTS_DIR) -> Variant:
         raise ValueError(f"{path}: a variant needs DESCRIPTION (str) and apply(home) -> list of changed files")
 
     def apply(home: str) -> List[str]:
-        from . import varlib                       # every variant starts with carl-cache's move on (CARL's default)
-        cfg = varlib.carl_config(home)
-        before = varlib.read_text(cfg)
-        changed = varlib.set_move(home, True) + fn(home)
-        if varlib.read_text(cfg) == before:        # a variant that sets the move again: no change in the end
-            changed = [c for c in changed if c != cfg]
+        # every variant starts from CARL's defaults: carl-cache's move on; the brief check and the chain on, the
+        # TOML brief named in a refusal and in Pi's tool guidelines (Phase 23.4.3: brief_kv and brief_json change them)
+        from . import varlib
+        files = [varlib.carl_config(home), varlib.Paths.of(home).oc_json, varlib.pi_carl_json(home),
+                 varlib.pi_subagent_ts(home)]
+        before = {f: varlib.read_text(f) for f in files}
+        changed = (varlib.set_move(home, True) + varlib.set_brief(home) + varlib.set_pi_guidelines(home, "toml")
+                   + fn(home))
         if not isinstance(changed, list):
             raise ValueError(f"variant {name}: apply() must return a list")
-        return [str(c) for c in changed]
+        same = {f for f in files if varlib.read_text(f) == before[f]}   # set back again: no change in the end
+        out: List[str] = []
+        for c in changed:
+            if str(c) not in same and str(c) not in out:
+                out.append(str(c))
+        return out
     return Variant(name, desc, apply)

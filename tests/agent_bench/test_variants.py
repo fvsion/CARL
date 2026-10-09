@@ -9,7 +9,7 @@ import subprocess
 import tempfile
 import unittest
 
-import _support  # noqa: F401  (puts tools/agent-bench on sys.path)
+import _support as sp  # (puts tools/agent-bench on sys.path)
 from agentbench import variant, varlib
 
 
@@ -19,28 +19,8 @@ def read(path: str) -> str:
 
 
 def make_home(root: str, background: bool = True, browser: bool = True) -> str:
-    """A HOME with CARL's coder and rule as client/configure.py writes them (the parts the variants touch)."""
-    cf = varlib.configure()
-    p = varlib.Paths.of(root)
-    src = varlib.REPO
-    rule = read(os.path.join(src, "client", "agents", "delegation.md"))
-    coder = read(os.path.join(src, "client", "agents", "coder.md"))
-    body, desc = cf.split_agent(coder)
-    os.makedirs(os.path.dirname(p.oc_rule))
-    os.makedirs(p.pi_agents)
-    with open(p.oc_rule, "w") as f:
-        f.write(cf.oc_rule_text(cf.delegation_for(rule, "opencode", background, browser)))
-    with open(p.oc_coder, "w") as f:
-        f.write(body)
-    with open(p.oc_json, "w") as f:
-        json.dump({"instructions": [p.oc_rule, "/elsewhere/AGENTS.md"],
-                   "agent": {"coder": {"description": desc, "prompt": "{file:" + p.oc_coder + "}", "mode": "subagent"}}},
-                  f)
-    with open(p.pi_append, "w") as f:
-        f.write(cf.append_system_text("The user's own text.", cf.delegation_for(rule, "pi", background, browser).strip()))
-    with open(os.path.join(p.pi_agents, "coder.md"), "w") as f:
-        f.write(coder)
-    return root
+    """A HOME with CARL's coder, rule and hand-off switches as client/configure.py writes them (_support)."""
+    return sp.make_variant_home(root, background, browser)
 
 
 class VariantsTest(unittest.TestCase):
@@ -54,7 +34,8 @@ class VariantsTest(unittest.TestCase):
 
     def test_listed(self) -> None:
         for name in ("baseline", "v1_short_rule", "v2_turn_reminder", "v4_read_nudge", "v5_new_file_gate",
-                     "v7_coder_modes", "c1_v2_v5_v7", "c2_v2_v7", "c3_v2_v5n2_v7", "project_in_system"):
+                     "v7_coder_modes", "c1_v2_v5_v7", "c2_v2_v7", "c3_v2_v5n2_v7", "project_in_system", "brief_kv",
+                     "brief_json"):
             self.assertIn(name, variant.available())
             self.assertTrue(variant.load(name).description)
 
@@ -109,7 +90,8 @@ class VariantsTest(unittest.TestCase):
                 for f in (os.path.join(oc, "delegate-hooks.js"), os.path.join(pi, "delegate-hooks.js")):
                     self.assertIn("GATE_MARK", read(f))
                 plugins = json.loads(read(p.oc_json))["plugin"]
-                self.assertEqual(plugins, [["file:" + oc, {}]])
+                self.assertEqual(plugins[-1], ["file:" + oc, {}])               # CARL's own plugins stay before it
+                self.assertEqual(sum(1 for x in plugins if x[0] == "file:" + oc), 1)
                 self.assertEqual(v.apply(home), [])                     # again: no change, one entry
 
     def test_no_hooks_left_for_the_next_variant(self) -> None:
@@ -166,6 +148,147 @@ class VariantsTest(unittest.TestCase):
         variant.load("v7_coder_modes").apply(self.home)
         self.assertIn("`carl-coder`", read(self.p.oc_rule))
         self.assertTrue(os.path.isfile(os.path.join(self.p.pi_agents, "carl-coder.md")))
+
+
+def git_show(spec: str) -> str:
+    """A file of a tag (git show), or "" when git or the tag is not there."""
+    try:
+        p = subprocess.run(["git", "-C", varlib.REPO, "show", spec], capture_output=True, text=True, timeout=30)
+    except OSError:
+        return ""
+    return p.stdout if p.returncode == 0 else ""
+
+
+class BriefVariantsTest(unittest.TestCase):
+    """Phase 23.4.3's measurement of the brief's format: brief_kv (1.12.1's texts, the check, gates and chain off),
+    brief_json (the same structure as JSON), and the baseline (CARL's TOML) again after either."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.home = make_home(self.tmp.name)
+        self.p = varlib.Paths.of(self.home)
+
+    def options(self) -> dict:  # type: ignore[type-arg]
+        entry = [x for x in json.loads(read(self.p.oc_json))["plugin"] if x[0].endswith("/carl-delegation")]
+        self.assertEqual(len(entry), 1)
+        return dict(entry[0][1])
+
+    def pi_delegation(self) -> dict:  # type: ignore[type-arg]
+        return dict(json.loads(read(varlib.pi_carl_json(self.home)))["delegation"])
+
+    def assert_defaults(self) -> None:
+        self.assertEqual(self.options(), {"provider": "llamacpp", "reminder": True, "cacheApi": "http://127.0.0.1:8098",
+                                          "coder": "coder"})
+        self.assertEqual(self.pi_delegation(), {"reminder": True})
+        ts = read(varlib.pi_subagent_ts(self.home))
+        self.assertIn("a TOML brief as its task", ts)
+        self.assertEqual(ts, read(os.path.join(varlib.REPO, "client", "pi", "extensions", "subagent", "index.ts")))
+
+    def test_texts(self) -> None:
+        for fmt in varlib.BRIEF_FORMATS[1:]:
+            for part in ("delegation", "coder"):
+                t = varlib.text(f"brief_{fmt}_{part}.md")
+                self.assertNotIn("TOML", t, (fmt, part))
+        old = git_show("v1.12.1:client/agents/delegation.md")
+        if old:                                                             # the copies are 1.12.1's own files
+            self.assertEqual(varlib.text("brief_kv_delegation.md"), old)
+            self.assertEqual(varlib.text("brief_kv_coder.md"), git_show("v1.12.1:client/agents/coder.md"))
+            sub = git_show("v1.12.1:client/pi/extensions/subagent/index.ts")
+            for line in varlib.PI_GUIDELINES["kv"]:
+                self.assertIn(line, sub)
+        src = read(os.path.join(varlib.REPO, "client", "pi", "extensions", "subagent", "index.ts"))
+        for line in varlib.PI_GUIDELINES["toml"]:                          # CARL's own lines, as the source has them
+            self.assertIn(line, src)
+
+    @unittest.skipUnless(shutil.which("node"), "node is not installed")
+    def test_json_texts_hold_a_valid_brief_and_report(self) -> None:
+        from agentbench import briefs
+        rule = varlib.text("brief_json_delegation.md")
+        example = rule[rule.index("```json"):]
+        toml_rule = read(os.path.join(varlib.REPO, "client", "agents", "delegation.md"))
+        out = briefs.check_texts([example, toml_rule[toml_rule.index("```toml"):]])
+        self.assertEqual([(o["format"], o["valid"]) for o in out], [("json", True), ("toml", True)])
+        script = ("import * as B from %s; const [a, b] = JSON.parse(process.argv[1]);"
+                  "process.stdout.write(JSON.stringify([B.parseBrief(a).brief, B.parseBrief(b).brief, "
+                  "B.parseReport(process.argv[2]), B.parseReport(process.argv[3])]));"
+                  % json.dumps(os.path.join(varlib.REPO, "client", "shared", "carl-brief.js")))
+        coder = varlib.text("brief_json_coder.md")
+        toml_coder = read(os.path.join(varlib.REPO, "client", "agents", "coder.md"))
+        p = subprocess.run(["node", "--input-type=module", "-e", script, "--",
+                            json.dumps([example, toml_rule[toml_rule.index("```toml"):]]),
+                            coder[coder.index("```json"):], toml_coder[toml_coder.index("```toml"):]],
+                           capture_output=True, text=True, timeout=60)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        json_brief, toml_brief, json_report, toml_report = json.loads(p.stdout)
+        self.assertEqual(json_brief, toml_brief)                           # the example converted faithfully
+        self.assertEqual(json_report, toml_report)                         # the report's example too
+
+    def test_brief_kv(self) -> None:
+        v = variant.load("brief_kv")
+        changed = v.apply(self.home)
+        for f in (self.p.oc_rule, self.p.oc_coder, self.p.oc_json, self.p.pi_append, varlib.pi_carl_json(self.home),
+                  varlib.pi_subagent_ts(self.home)):
+            self.assertIn(f, changed)
+        for t in (read(self.p.oc_rule), read(self.p.pi_append)):
+            self.assertIn("Mode: code | test", t)                           # 1.12.1's task form
+            self.assertNotIn("TOML", t)
+            self.assertNotIn("<!-- carl:background", t)                     # the markers cut as for CARL's rule
+            self.assertIn("background: true", t)
+        self.assertIn('subagent_type "browser"', read(self.p.oc_rule))
+        self.assertIn("Start every task with the line `Mode: code`",
+                      json.loads(read(self.p.oc_json))["agent"]["coder"]["description"])
+        self.assertNotIn("TOML", read(os.path.join(self.p.pi_agents, "coder.md")))
+        self.assertEqual(self.options(), {"provider": "llamacpp", "reminder": True, "cacheApi": "http://127.0.0.1:8098",
+                                          "coder": "coder", "brief": False, "chain": False})
+        self.assertEqual(self.pi_delegation(), {"reminder": True, "brief": False, "chain": False})
+        ts = read(varlib.pi_subagent_ts(self.home))
+        self.assertNotIn("a TOML brief as its task", ts)
+        self.assertIn('and a self-contained task. Do not start writing it yourself.', ts)
+        self.assertEqual(v.apply(self.home), [])                            # again: no change
+        variant.load("baseline").apply(self.home)                          # the next variant: CARL's switches again
+        self.assert_defaults()
+
+    def test_brief_json(self) -> None:
+        v = variant.load("brief_json")
+        v.apply(self.home)
+        for t in (read(self.p.oc_rule), read(self.p.pi_append)):
+            self.assertIn("is a brief in JSON", t)
+            self.assertIn('"requirement": [', t)
+        self.assertIn("Your task is a brief in JSON.", read(self.p.oc_coder))
+        self.assertIn("Its task is a JSON brief", json.loads(read(self.p.oc_json))["agent"]["coder"]["description"])
+        opts = self.options()
+        self.assertEqual(opts["briefFormat"], "json")
+        self.assertNotIn("brief", opts)                                     # the check and the chain stay on
+        self.assertNotIn("chain", opts)
+        self.assertEqual(self.pi_delegation(), {"reminder": True, "brief_format": "json"})
+        self.assertIn("a JSON brief as its task", read(varlib.pi_subagent_ts(self.home)))
+        self.assertEqual(v.apply(self.home), [])
+        variant.load("brief_kv").apply(self.home)                          # one variant after the other
+        self.assertNotIn("briefFormat", self.options())
+        variant.load("baseline").apply(self.home)
+        self.assert_defaults()
+        self.assertEqual(variant.load("baseline").apply(self.home), [])
+
+    def test_needs_carl_delegation(self) -> None:
+        cfg = json.loads(read(self.p.oc_json))
+        cfg["plugin"] = [x for x in cfg["plugin"] if not x[0].endswith("/carl-delegation")]
+        with open(self.p.oc_json, "w") as f:
+            json.dump(cfg, f)
+        with self.assertRaises(RuntimeError):
+            variant.load("brief_kv").apply(self.home)
+        self.assertEqual(variant.load("baseline").apply(self.home), [])     # the reset needs nothing
+
+    def test_carl_coder_name(self) -> None:
+        cfg = json.loads(read(self.p.oc_json))
+        cfg["agent"] = {"coder": {"prompt": "mine"}, "carl-coder": cfg["agent"]["coder"]}
+        cfg["plugin"][-1][1]["coder"] = "carl-coder"
+        with open(self.p.oc_json, "w") as f:
+            json.dump(cfg, f)
+        os.rename(os.path.join(self.p.pi_agents, "coder.md"), os.path.join(self.p.pi_agents, "carl-coder.md"))
+        variant.load("brief_json").apply(self.home)
+        self.assertIn("`carl-coder`", read(self.p.oc_rule))
+        self.assertIn("name: carl-coder", read(os.path.join(self.p.pi_agents, "carl-coder.md")))
 
 
 if __name__ == "__main__":

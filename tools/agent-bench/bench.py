@@ -6,6 +6,7 @@
     bench.py report results.jsonl [--md]              the tables
     bench.py fetch MODEL / bench.py drop MODEL        copy a model in from the library / remove the local copy
     bench.py variants                                 the variants (tools/agent-bench/variants/)
+    bench.py tokens results.jsonl --url URL           the coder briefs' tokens, counted afterwards (POST /tokenize)
 
 See tools/agent-bench/README.md.
 """
@@ -13,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import dataclasses
+import json
 import os
 import shutil
 import signal
@@ -26,10 +28,11 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from agentbench import REPO  # noqa: E402
 from agentbench import clients as cl  # noqa: E402
 from agentbench import events as ev  # noqa: E402
+from agentbench import briefs as bf  # noqa: E402
 from agentbench import fixtures, home as hm, library, matrix, models, proc, report, variant  # noqa: E402
 from agentbench.prompts import CATEGORIES, load_prompts, select  # noqa: E402
 from agentbench.results import Result, ResultStore, read_results  # noqa: E402
-from agentbench.server import CarlServer, ServerError, ServerSetup, check_port  # noqa: E402
+from agentbench.server import CarlServer, ServerError, ServerSetup, check_port, ensure_key  # noqa: E402
 
 DEFAULT_PORT = 8097
 
@@ -96,7 +99,8 @@ def measure_name(limits: cl.Limits) -> str:
 
 
 def run_cell(cell: matrix.Cell, home: str, env: Dict[str, str], runs_dir: str, limit: float,
-             versions: Dict[str, str], keep_copy: bool, limits: cl.Limits = cl.Limits()) -> Result:
+             versions: Dict[str, str], keep_copy: bool, limits: cl.Limits = cl.Limits(),
+             count: Optional[bf.Counter] = None) -> Result:
     repo_dir = fixtures.make_fresh(cell.prompt.fixture, runs_dir)
     spec = cl.RunSpec(cell.client, cell.model, cell.thinking, cell.prompt.text, repo_dir, home, limit)
     stamp = time.strftime("%Y-%m-%dT%H:%M:%S")
@@ -120,6 +124,7 @@ def run_cell(cell: matrix.Cell, home: str, env: Dict[str, str], runs_dir: str, l
     error = o.error if ev.ERROR in (decision, strict) else ""
     if decision == ev.ERROR and cell.client == "pi" and out.stderr.strip():
         error += " | stderr: " + " / ".join(out.stderr.strip().splitlines()[-3:])[:500]   # OpenCode: log lines
+    briefs = bf.collect(cell.client, o.tools)
     result = Result(
         time=stamp, mode=cell.mode, model=cell.model, client=cell.client,
         client_version=versions.get(cell.client, "unknown"), thinking=cell.thinking,
@@ -136,7 +141,8 @@ def run_cell(cell: matrix.Cell, home: str, env: Dict[str, str], runs_dir: str, l
         startup_seconds=None if o.model_start is None else round(o.model_start, 2),
         thinking_tokens=o.thinking_tokens or None, thinking_tokens_decision=o.thinking_tokens_all or None,
         thinking_chars=o.thinking_chars,
-        first_event=ev.trim(o.first_event, 300), error=error[:2000], full=full)
+        first_event=ev.trim(o.first_event, 300), error=error[:2000], full=full,
+        briefs=briefs, brief_tokens=bf.count_all(briefs, count))
     if not keep_copy and cell.mode != "full":
         shutil.rmtree(os.path.dirname(repo_dir), ignore_errors=True)
     return result
@@ -186,6 +192,7 @@ def cmd_run(a: argparse.Namespace) -> int:
             if a.fetch:
                 library.fetch(catalog, model, a.library, models_dir(a), say=say)
             srv: Optional[CarlServer] = None
+            count: Optional[bf.Counter] = None
             try:
                 if not a.no_server:
                     s = server_setup(a, model)
@@ -193,6 +200,7 @@ def cmd_run(a: argparse.Namespace) -> int:
                     pid = srv.start()
                     say(f"server: pid {pid}, port {a.port}, log {srv.log_file}")
                     say(f"server: ready after {srv.wait_ready():.0f} s")
+                    count = bf.tokenizer(srv.url, ensure_key(s.key_file))      # the briefs' tokens
                     hm.refresh(package_source(a, s), home)
                     say("clients: configs written again for this model (./setup --no-install)")
                 changed = var.apply(home)
@@ -203,15 +211,17 @@ def cmd_run(a: argparse.Namespace) -> int:
                 say("clients: " + ", ".join(f"{k} {v}" for k, v in versions.items()))
                 for cell in mcells:
                     n += 1
-                    res = run_cell(cell, home, env, runs_dir, limit, versions, a.keep_runs, limits)
+                    res = run_cell(cell, home, env, runs_dir, limit, versions, a.keep_runs, limits, count)
                     store.append(res)
                     times.append(res.seconds)
                     eta = matrix.eta_seconds(times, len(todo) - n)
                     what = res.decision + (f" ({res.decision_tool})" if res.decision_tool else "")
                     first = res.decision_strict + (f" ({res.tool})" if res.tool else "")
                     mark = {True: "right", False: "WRONG", None: "error"}[res.correct]
+                    refused = sum(1 for b in res.briefs if b.get("refused"))
+                    brief = (f", {len(res.briefs)} brief(s), {refused} refused" if res.briefs else "")
                     say(f"[{n}/{len(todo)}] {cell.label()}: {what} after {res.looks} looks, {mark} "
-                        f"(first tool: {first}), {res.seconds:.0f} s"
+                        f"(first tool: {first}){brief}, {res.seconds:.0f} s"
                         f"; time left about {matrix.fmt_duration(eta)}")
             except ServerError as e:
                 say(f"error: {model}: {e}")
@@ -258,6 +268,38 @@ def cmd_drop(a: argparse.Namespace) -> int:
     removed = library.drop(library.load_catalog(a.catalog), a.model, a.library, models_dir(a), keep, say=say,
                            dry_run=a.dry_run)
     say(f"{len(removed)} file(s) removed.")
+    return 0
+
+
+def cmd_tokens(a: argparse.Namespace) -> int:
+    """Count the coder briefs' tokens afterwards (a run without a known server: --no-server, or an older file):
+    POST /tokenize on a server of the same model. Lines of another model (--model) and lines with every count
+    are left as they are. The file is written again in place (atomically)."""
+    key = ""
+    if a.key_file:
+        with open(os.path.expanduser(a.key_file), encoding="utf-8") as f:
+            key = f.read().strip()
+    count = bf.tokenizer(a.url, key)
+    with open(a.results, encoding="utf-8") as f:
+        lines = f.read().splitlines()
+    out: List[str] = []
+    filled = docs = 0
+    for line in lines:
+        doc = ev.parse_line(line)
+        if doc is None or (a.model and doc.get("model") != a.model) or not doc.get("briefs"):
+            out.append(line)
+            continue
+        n = bf.fill_tokens(doc, count)
+        docs += 1 if n else 0
+        filled += n
+        out.append(json.dumps(doc, ensure_ascii=False) if n else line)
+    if filled:
+        tmp = a.results + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write("\n".join(out) + "\n")
+        os.replace(tmp, a.results)
+    missing = sum(1 for line in out for t in ((ev.parse_line(line) or {}).get("brief_tokens") or []) if t is None)
+    say(f"{filled} brief(s) counted in {docs} line(s); {missing} still without a count.")
     return 0
 
 
@@ -335,6 +377,13 @@ def build_parser() -> argparse.ArgumentParser:
             sp.add_argument("--keep", default="", help="more files that are never removed")
             sp.add_argument("--dry-run", action="store_true")
         sp.set_defaults(fn=fn)
+
+    sp = sub.add_parser("tokens", help="count the coder briefs' tokens afterwards (the server's POST /tokenize)")
+    sp.add_argument("results")
+    sp.add_argument("--url", required=True, help="a server of the same model, for example http://127.0.0.1:8097")
+    sp.add_argument("--key-file", default="", help="the server's API key file (the harness's: WORK/server/api-key)")
+    sp.add_argument("--model", default="", help="only the lines of this model (the model the server runs)")
+    sp.set_defaults(fn=cmd_tokens)
 
     sp = sub.add_parser("variants", help="list the variants")
     sp.set_defaults(fn=cmd_variants)

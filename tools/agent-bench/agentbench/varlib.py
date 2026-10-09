@@ -16,7 +16,7 @@ import shutil
 import sys
 from dataclasses import dataclass
 from types import ModuleType
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from . import BENCH_DIR, REPO
 
@@ -252,3 +252,137 @@ def set_move(home: str, on: bool) -> List[str]:
 def read_text(path: str) -> Optional[str]:
     """A file's text, or None when it does not exist."""
     return _read(path)
+
+
+# ------------------------------------------------------------------------------------------------ the brief (23.4.3)
+DELEGATION = "carl-delegation"
+BRIEF_FORMATS = ("toml", "json", "kv")
+
+
+def pi_carl_json(home: str) -> str:
+    """Pi's carl.json (CARL's state file in Pi's agent folder: carl-delegation and the subagent tool read it)."""
+    return os.path.join(os.path.dirname(Paths.of(home).pi_append), "carl.json")
+
+
+def pi_subagent_ts(home: str) -> str:
+    """CARL's subagent extension for Pi (./setup installs it whole at every refresh)."""
+    return os.path.join(os.path.dirname(Paths.of(home).pi_append), "extensions", "subagent", "index.ts")
+
+
+def _is_delegation_entry(x: Any) -> bool:
+    entry = x[0] if isinstance(x, list) and x else x
+    return isinstance(entry, str) and entry.rstrip("/").split("/")[-1] == DELEGATION
+
+
+def _with(opts: Dict[str, Any], want: Dict[str, Any]) -> Dict[str, Any]:
+    """opts with the keys of want set (None: taken out)."""
+    out = dict(opts)
+    for k, v in want.items():
+        if v is None:
+            out.pop(k, None)
+        else:
+            out[k] = v
+    return out
+
+
+def set_brief(home: str, check: bool = True, chain: bool = True, fmt: str = "toml", strict: bool = False) -> List[str]:
+    """CARL's brief check, the chain (the test session before the code session) and the format that a refusal of a
+    task with no brief names: OpenCode's carl-delegation options (brief, chain, briefFormat in opencode.json's plugin
+    entry) and Pi's carl.json "delegation" (brief, chain, brief_format). CARL's defaults (on, on, TOML) take the keys
+    out: CARL's setup writes none. strict: carl-delegation must be in both clients (a variant that turns the check
+    off must never run with it on)."""
+    if fmt not in ("toml", "json"):
+        raise ValueError(f"bad brief format {fmt!r} (toml or json)")
+    p, changed = Paths.of(home), []
+    cfg = _json(p.oc_json)
+    raw = cfg.get("plugin")
+    plugins: List[Any] = raw if isinstance(raw, list) else []
+    idx = [i for i, x in enumerate(plugins) if _is_delegation_entry(x)]
+    if strict and not idx:
+        raise RuntimeError(f"no {DELEGATION} plugin in {p.oc_json}: run ./setup with the coder first")
+    want = {"brief": None if check else False, "chain": None if chain else False,
+            "briefFormat": None if fmt == "toml" else fmt}
+    edit = False
+    for i in idx:
+        x = plugins[i]
+        entry = x[0] if isinstance(x, list) else x
+        opts = x[1] if isinstance(x, list) and len(x) > 1 and isinstance(x[1], dict) else {}
+        new = _with(opts, want)
+        if not isinstance(x, list) or new != opts:
+            plugins[i] = [entry, new]
+            edit = True
+    if edit:
+        cfg["plugin"] = plugins
+        _write(p.oc_json, json.dumps(cfg, indent=2) + "\n")
+        changed.append(p.oc_json)
+    path = pi_carl_json(home)
+    st = _json(path)
+    if strict and not st:
+        raise RuntimeError(f"no {path}: run ./setup with the coder first")
+    d = st.get("delegation") if isinstance(st.get("delegation"), dict) else None
+    if d is not None or not (check and chain and fmt == "toml"):
+        new_d = _with(d or {}, {"brief": want["brief"], "chain": want["chain"], "brief_format": want["briefFormat"]})
+        if new_d != (d or {}) and st:
+            st["delegation"] = new_d
+            if _write(path, json.dumps(st, indent=2) + "\n"):
+                changed.append(path)
+    return changed
+
+
+# The coder lines of the guidelines of Pi's subagent tool (client/pi/extensions/subagent/index.ts), for each format
+# of the brief: CARL's (TOML), the same for JSON, and 1.12.1's (kv: "a self-contained task").
+_LARGE = ("Large request (3+ files, ~150+ lines, a new module/package/tool/CLI, implementation plus tests, a multi-step "
+          "feature or refactor): ")
+_STUCK = ("Stuck: if a fix for the same code has already failed twice (your attempts, or ones the user says failed), "
+          'delegate to agent "${coder}" with ')
+PI_GUIDELINES: Dict[str, Tuple[str, str]] = {
+    "toml": (_LARGE + "do not write or change any file yourself. Read only what the brief needs (the files to change, "
+             "the test command, the project's rules), then call the subagent tool with agent \"${coder}\" and a TOML "
+             "brief as its task (the format is in your instructions).",
+             _STUCK + "a brief that has the exact error ([error]) and what was tried ([[tried]]), instead of a third "
+             "attempt."),
+    "json": (_LARGE + "do not write or change any file yourself. Read only what the brief needs (the files to change, "
+             "the test command, the project's rules), then call the subagent tool with agent \"${coder}\" and a JSON "
+             "brief as its task (the format is in your instructions).",
+             _STUCK + 'a brief that has the exact error ("error") and what was tried ("tried"), instead of a third '
+             "attempt."),
+    "kv": (_LARGE + 'your FIRST action is the subagent tool with agent "${coder}" and a self-contained task. Do not '
+           "start writing it yourself.",
+           _STUCK + "the code, the exact error and what was tried, instead of a third attempt."),
+}
+
+
+def set_pi_guidelines(home: str, fmt: str, strict: bool = False) -> List[str]:
+    """The coder lines of Pi's subagent tool guidelines for one brief format (CARL's names TOML). strict: the
+    installed extension must have them (in one of the three forms)."""
+    if fmt not in PI_GUIDELINES:
+        raise ValueError(f"bad brief format {fmt!r} ({', '.join(PI_GUIDELINES)})")
+    path = pi_subagent_ts(home)
+    cur = _read(path)
+    if cur is None:
+        if strict:
+            raise RuntimeError(f"no {path}: run ./setup with the coder first")
+        return []
+    new = cur
+    for n in (0, 1):
+        for lines in PI_GUIDELINES.values():
+            new = new.replace(lines[n], PI_GUIDELINES[fmt][n])
+    if strict and not all(PI_GUIDELINES[fmt][n] in new for n in (0, 1)):
+        raise RuntimeError(f"{path}: the coder lines of the guidelines are not there (a newer extension?)")
+    return [path] if _write(path, new) else []
+
+
+def set_brief_format(home: str, fmt: str) -> List[str]:
+    """One brief format in both clients, with the texts of variants/texts/brief_{fmt}_*.md (kv: 1.12.1's rule and
+    coder; json: CARL's, with the brief and the report as JSON), the check and the chain (kv: both off; json: on, a
+    refusal names JSON) and Pi's tool guidelines. "toml" is CARL's own setup: nothing but the switches and the
+    guidelines back to their defaults."""
+    if fmt == "toml":
+        return set_brief(home) + set_pi_guidelines(home, "toml")
+    changed = (remove_hooks(home) + set_rule(home, text(f"brief_{fmt}_delegation.md"))
+               + set_coder(home, text(f"brief_{fmt}_coder.md")))
+    if fmt == "kv":
+        changed += set_brief(home, check=False, chain=False, strict=True)
+    else:
+        changed += set_brief(home, fmt=fmt, strict=True)
+    return changed + set_pi_guidelines(home, fmt, strict=True)

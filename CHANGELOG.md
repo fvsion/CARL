@@ -25,6 +25,22 @@ Phase 23.4.3 (to be tagged after the brief-format measurement).
 ### Added
 - **`/carl` warns when you turn the coder on with 1 slot**: the coder then takes the main session's slot. The setup
   passes the server's slot count to `carl-sync.py set`.
+- **The coder's brief is structured TOML** (`client/shared/carl-brief.js`): mode, tests (new, existing, none), goal,
+  scope in and out, the files with their action (create, change, read), requirements with ids, checks that cover
+  them, constraints with their source, real examples, and for a failed fix the error and what was tried. CARL checks
+  the brief before the coder starts and sends an incomplete one back with what is missing. The coder's report is a
+  TOML block by requirement and check id.
+- **The coder's gates**: it writes only the brief's create and change files; in mode test only test files, in mode
+  code no test file.
+- **Tests first, in a separate session**: for new code (`tests = "new"`), CARL runs a coder session in mode test, checks
+  that a new test fails before any code (a warning when none does; CARL runs a check itself only when it is a plain
+  test runner or ruff), freezes the tests, then runs a fresh coder session in mode code, and gives the main agent one
+  result. Pi: CARL's subagent extension. OpenCode: carl-delegation, in the foreground on any version; in the background
+  only on verified OpenCode versions, with a state file so an interrupted chain still delivers a result.
+- **The main agent may read what the brief needs** (files, the test command, the project's rules) before it delegates
+  a large task; it still writes nothing itself.
+- agent-bench: the full coder briefs in each result (format, valid, problems, refused, tokens), a "Coder briefs" report
+  table, and the variants `brief_kv` and `brief_json`.
 
 ## 1.12.1 - 2026-10-08
 

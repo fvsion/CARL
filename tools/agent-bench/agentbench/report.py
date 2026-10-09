@@ -167,6 +167,79 @@ def yn(v: Any) -> str:
     return "-" if v is None else ("yes" if v else "no")
 
 
+BriefKey = Tuple[str, str, str, str]
+
+
+@dataclass
+class BriefGroup:
+    """The coder briefs of one model, client, variant and mode (decision | full), over the runs that sent one."""
+    key: BriefKey
+    runs: int = 0                                       # runs with at least one brief
+    briefs: int = 0
+    formats: "Counter[str]" = field(default_factory=Counter)
+    first_valid: Share = field(default_factory=Share)   # the first brief valid (TOML or JSON briefs only)
+    accepted: Share = field(default_factory=Share)      # the last brief not refused: the coder started
+    refusals: List[int] = field(default_factory=list)   # refused briefs, one count per run
+    first_tokens: List[float] = field(default_factory=list)
+    tokens: List[float] = field(default_factory=list)
+    hidden: Share = field(default_factory=Share)        # full runs: the hidden tests passed
+    minutes: List[float] = field(default_factory=list)  # full runs
+
+
+def brief_groups(docs: Iterable[Mapping[str, Any]]) -> "OrderedDict[BriefKey, BriefGroup]":
+    """The runs with coder briefs (result lines with "briefs"), grouped by model, client, variant and mode."""
+    groups: "OrderedDict[BriefKey, BriefGroup]" = OrderedDict()
+    for d in docs:
+        briefs = [b for b in (d.get("briefs") or []) if isinstance(b, dict)]
+        if not briefs:
+            continue
+        k = (str(d.get("model")), str(d.get("client")), str(d.get("variant")), str(d.get("mode", "decision")))
+        g = groups.setdefault(k, BriefGroup(k))
+        g.runs += 1
+        g.briefs += len(briefs)
+        g.formats.update(str(b.get("format", "unknown")) for b in briefs)
+        if briefs[0].get("format") in ("toml", "json"):
+            g.first_valid.add(bool(briefs[0].get("valid")))
+        g.accepted.add(not briefs[-1].get("refused"))
+        g.refusals.append(sum(1 for b in briefs if b.get("refused")))
+        toks = list(d.get("brief_tokens") or [])
+        nums = [float(t) for t in toks if isinstance(t, int) and not isinstance(t, bool)]
+        g.tokens += nums
+        if toks and isinstance(toks[0], int) and not isinstance(toks[0], bool):
+            g.first_tokens.append(float(toks[0]))
+        if k[3] == "full":
+            f = d.get("full") or {}
+            if f.get("hidden_passed") is not None:
+                g.hidden.add(bool(f.get("hidden_passed")))
+            g.minutes.append(float(d.get("seconds") or 0) / 60)
+    return groups
+
+
+def brief_table(docs: Sequence[Mapping[str, Any]]) -> Optional[Table]:
+    """The coder briefs per model, client, variant and mode (None: no result line has briefs)."""
+    groups = brief_groups(docs)
+    if not groups:
+        return None
+    t = Table("Coder briefs", ["Model", "Client", "Variant", "Mode", "Runs", "Briefs sent", "Formats",
+                               "Valid at the first try", "Coder started in the end", "Refusals per run",
+                               "Median tokens: first brief", "all briefs", "Hidden tests passed",
+                               "Median minutes"], [])
+    for k, g in groups.items():
+        per_run = f"{sum(g.refusals) / len(g.refusals):.1f} (max {max(g.refusals)})" if g.refusals else "-"
+        t.rows.append([*k, str(g.runs), str(g.briefs), ", ".join(f"{f} {n}" for f, n in g.formats.most_common()),
+                       g.first_valid.text(), g.accepted.text(), per_run,
+                       _median(g.first_tokens, "{:.0f}"), _median(g.tokens, "{:.0f}"),
+                       g.hidden.text() if k[3] == "full" else "-",
+                       _median(g.minutes) if k[3] == "full" else "-"])
+    t.note = ("Runs: the runs with at least one coder brief. Valid at the first try: the run's first brief reads and "
+              "passes CARL's check (client/shared/carl-brief.js), counted for TOML and JSON briefs only (a kv brief "
+              "has no check). Coder started in the end: the run's last brief was not refused (a decision run goes on "
+              "after a refusal until a brief is taken, the turn ends or a limit). Refusals per run: the mean (and "
+              "the most) of the briefs that CARL refused. Tokens: the model's own count (the server's /tokenize; "
+              "bench.py tokens fills it in afterwards). Hidden tests and minutes: full runs only.")
+    return t
+
+
 def tables(docs: Sequence[Mapping[str, Any]]) -> List[Table]:
     groups = summarize(docs)
     head = ["Model", "Client", "Thinking", "Variant", "Measure"]
@@ -221,6 +294,9 @@ def tables(docs: Sequence[Mapping[str, Any]]) -> List[Table]:
                    "STALLED (it came back with no write and no test run: OpenCode, from its own session; Pi, no "
                    "file changed when its result came back).")
         out.append(ft)
+    bt = brief_table(docs)
+    if bt is not None:
+        out.append(bt)
     return out
 
 

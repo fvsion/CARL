@@ -81,6 +81,44 @@ def clone_home(src: str, dst: str, port: int) -> str:
     return dst
 
 
+def make_variant_home(root: str, background: bool = True, browser: bool = True) -> str:
+    """A harness HOME with the parts that the variants change, as client/configure.py writes them: CARL's coder and
+    delegation rule in both clients, carl-delegation in opencode.json's plugin list with its options, Pi's carl.json
+    and CARL's subagent extension for Pi (the repo's own file)."""
+    from agentbench import varlib
+    cf = varlib.configure()
+    p = varlib.Paths.of(root)
+
+    def text(*parts: str) -> str:
+        with open(os.path.join(REPO, *parts), encoding="utf-8") as f:
+            return f.read()
+
+    def write(path: str, body: str) -> None:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(body)
+
+    rule, coder = text("client", "agents", "delegation.md"), text("client", "agents", "coder.md")
+    body, desc = cf.split_agent(coder)
+    oc = os.path.dirname(p.oc_json)
+    write(p.oc_rule, cf.oc_rule_text(cf.delegation_for(rule, "opencode", background, browser)))
+    write(p.oc_coder, body)
+    write(p.oc_json, json.dumps({
+        "instructions": [p.oc_rule, "/elsewhere/AGENTS.md"],
+        "agent": {"coder": {"description": desc, "prompt": "{file:" + p.oc_coder + "}", "mode": "subagent"}},
+        "plugin": [["file:" + os.path.join(oc, "plugins", "carl-cache"), {"provider": "llamacpp"}],
+                   ["file:" + os.path.join(oc, "plugins", "carl-delegation"),
+                    {"provider": "llamacpp", "reminder": True, "cacheApi": "http://127.0.0.1:8098", "coder": "coder"}]],
+    }, indent=2) + "\n")
+    write(p.pi_append, cf.append_system_text("The user's own text.",
+                                             cf.delegation_for(rule, "pi", background, browser).strip()))
+    write(os.path.join(p.pi_agents, "coder.md"), coder)
+    write(varlib.pi_carl_json(root), json.dumps({"coder_agent": "coder", "delegation": {"reminder": True},
+                                                 "cache_api": "http://127.0.0.1:8098"}, indent=2) + "\n")
+    write(varlib.pi_subagent_ts(root), text("client", "pi", "extensions", "subagent", "index.ts"))
+    return root
+
+
 def read_events(name: str) -> List[Dict[str, object]]:
     """A captured event stream (tests/agent_bench/events/NAME.jsonl)."""
     out: List[Dict[str, object]] = []
@@ -114,10 +152,40 @@ def _oc_pi(n: int, oc: Mapping[str, object], pi: Mapping[str, object],
 
 
 CODER_DONE: Dict[str, object] = {"system_contains": "You are **coder**", "reply": {"text": "## Result\nDone."}}
-DELEGATE_OC: Dict[str, object] = {"tool": "task", "arguments": {"description": "Readability module",
-                                             "prompt": "Write textstats/readability.py with tests.",
+# The coder's task is a TOML brief that passes carl-delegation's check (Phase 23.4.3; client/shared/carl-brief.js).
+BRIEF = """mode = "code"
+tests = "new"
+goal = "Add a readability module to textstats."
+
+[scope]
+in = [{ text = "textstats/readability.py and its exports" }]
+out = [{ text = "the existing tests", why = "they pass now" }]
+
+[[file]]
+path = "textstats/readability.py"
+action = "create"
+
+[[file]]
+path = "textstats/__init__.py"
+action = "change"
+
+[[file]]
+path = "tests/test_readability.py"
+action = "create"
+
+[[requirement]]
+id = "R1"
+text = "syllable_count, sentence_count and flesch_reading_ease, exported from textstats"
+
+[[check]]
+id = "A1"
+covers = ["R1"]
+run = "python3 -m pytest -q tests/test_readability.py"
+expect = "all tests pass"
+"""
+DELEGATE_OC: Dict[str, object] = {"tool": "task", "arguments": {"description": "Readability module", "prompt": BRIEF,
                                              "subagent_type": "coder", "background": True}}
-DELEGATE_PI: Dict[str, object] = {"tool": "subagent", "arguments": {"agent": "coder", "task": "Write textstats/readability.py with tests.",
+DELEGATE_PI: Dict[str, object] = {"tool": "subagent", "arguments": {"agent": "coder", "task": BRIEF,
                                                  "background": True}}
 READ_OC: Dict[str, object] = {"tool": "read", "arguments": {"filePath": "README.md"}}
 READ_PI: Dict[str, object] = {"tool": "read", "arguments": {"path": "README.md"}}
