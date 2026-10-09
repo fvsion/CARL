@@ -312,6 +312,16 @@ class ConfigureTests(unittest.TestCase):
         p = self.run_configure("--running", "not-installed")                    # unknown: the saved default
         self.assertEqual(self.read_json(".config/opencode/opencode.json")["model"], "llamacpp/qwen3.6-35b-a3b")
 
+    def test_a_package_with_every_model_installs_only_the_running_one(self) -> None:
+        """1.13.1: a package lists every downloaded model when it does not know the running one; the setup on the
+        other computer keeps only the model the server runs (its /props), also when that is not the saved default."""
+        self.assertGreater(len(MODELS["models"]), 1)
+        p = self.run_configure("--running", "qwen3.8-27b")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        oc = self.read_json(".config/opencode/opencode.json")
+        self.assertEqual(list(oc["provider"]["llamacpp"]["models"]), ["qwen3.8-27b"])
+        self.assertEqual(oc["model"], "llamacpp/qwen3.8-27b")
+
     def test_a_deleted_model_goes_and_our_default_follows(self) -> None:
         self.assertEqual(self.run_configure().returncode, 0)
         self.models = {"schema": 1, "default": "qwen3.8-27b", "models": [MODELS["models"][1]]}

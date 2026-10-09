@@ -216,13 +216,9 @@ test("checkBrief: a complete brief has no problem; so has the template in delega
   assert.deepEqual(problems(FIX), []);
   const rule = readFileSync(join(REPO, "client/agents/delegation.md"), "utf8");
   const template = rule.slice(rule.indexOf("```toml"), rule.indexOf("```", rule.indexOf("```toml") + 7) + 3);
-  // the draft's template, with the bug-fix tables commented out under one line (user, 2026-10-09: "A")
-  const draft = readFileSync(join(REPO, "docs/phase-plans/phase23.4.3/brief-v4-draft.md"), "utf8");
-  const reviewed = draft.slice(draft.indexOf("```toml"), draft.indexOf("```", draft.indexOf("```toml") + 7) + 3);
-  const at = reviewed.indexOf("[failed_attempt]");
-  const commented = reviewed.slice(0, at) + '# For work_type = "bug_fix" only (a fix that already failed):\n' +
-    reviewed.slice(at, -3).split("\n").map((l) => (l ? `# ${l}` : l)).join("\n") + "```";
-  assert.equal(template, commented);
+  // the bug-fix tables are commented out under one line (user, 2026-10-09: "A"); tests never read docs/ (git-ignored)
+  assert.match(template, /^# For work_type = "bug_fix" only \(a fix that already failed\):\n# \[failed_attempt\]/m);
+  assert.match(template, /^# \[\[tried_fix\]\]/m);
   const ex = brief(template);                                                   // the template as written: valid
   assert.deepEqual(ex.unknown, []);
   assert.equal(ex.exactInterfaces.length, 3);

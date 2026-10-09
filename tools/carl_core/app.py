@@ -359,8 +359,8 @@ class Carl:
         """The installed models for the OpenCode / Pi configs (domain/clientlist.py): each with
         its window per slot from its effective settings, and the model a start loads as the
         default (none when nothing can start). Single-model mode (Phase 23.4.4 item 13): only the
-        model the server runs (running: its name or alias, from the server), else the model a start
-        loads; every downloaded model when neither is known. Router mode: every downloaded model.
+        model the server runs (running: its name or alias, from the server); every downloaded model
+        when it is not known or not downloaded (1.13.1). Router mode: every downloaded model.
         router None: config.json's llama.mode."""
         models = [self.with_thinking(m) for m in self.all_models(cfg)]
         if router is None:
@@ -379,9 +379,14 @@ class Carl:
         if not router:
             down = [m for m in models if m.get("status") == "downloaded"]
             served = [m for m in down if running and running in (m.get("name"), self.effective_tune(m, cfg)[0].get("alias"))]
-            one = served[:1] or [m for m in down if m.get("name") == default]
-            if one:
-                models, default = one, one[0].get("name")
+            # Only the running model when the server says which one; else every downloaded model (1.13.1): the
+            # model a start would load is not always the one that runs (a start with --model), so a package made
+            # with it named only that model and the client could not use the running one ("Model not found").
+            # The client side keeps only the running model (configure.py --running) when it installs.
+            if served:
+                models, default = served[:1], served[0].get("name")
+            elif down:
+                models = down
         return client_list(models, ctx_of, default, roles_of)
 
     def router_preset(self, cfg: Config, templates_dir: str) -> Tuple[Preset, Common]:

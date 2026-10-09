@@ -3,6 +3,15 @@
 All notable changes to CARL. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Dates are local dates on the development Mac (M3 Pro, 36 GB).
 
+## 1.13.1 - 2026-10-09
+
+### Fixed
+- **A client package could name a model the server does not run.** In single-model mode (1.13.0), `./carl.sh package`
+  and `push` listed the model a start would load, not the model the server ran: after a start with `--model`, the
+  other computer's OpenCode said "Model not found" and could do nothing. Now a package lists every downloaded model
+  when the running one is not known, and the setup keeps only the model the server runs (its `/props`).
+- A test read a file under `docs/`, which is not in the repository.
+
 ## 1.13.0 - 2026-10-09
 
 Phases 23.4.3 and 23.4.4: the coder's brief as structured TOML, tests first in a separate session, thinking per

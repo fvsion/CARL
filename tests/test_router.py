@@ -154,8 +154,10 @@ class ClientListTest(unittest.TestCase):
         self.assertEqual(got, {"small": ("off", "on"), "mine": ("xhigh", "medium")})
 
     def test_single_model_mode_lists_only_the_model_the_server_runs(self) -> None:
-        """Phase 23.4.4 item 13: single-model mode, only the running model (by its name or its alias), else the model
-        a start loads; router mode (config.json or the server's): every installed model."""
+        """Phase 23.4.4 item 13: single-model mode, only the running model (by its name or its alias); when it is not
+        known or not downloaded, every downloaded model (1.13.1: a package made while the server ran a model other
+        than the start's default named only the default, and the client could not use the running model); router
+        mode (config.json or the server's): every installed model."""
         files = {f"{MDIR}/Small-IQ3.gguf": 10 * GIB, f"{MDIR}/mine.gguf": GIB}
         shapes = FakeShapes(local={f"{MDIR}/Small-IQ3.gguf": shape(), f"{MDIR}/mine.gguf": shape()})
         w = World(catalog(BIG, SMALL), files=files, shapes=shapes,
@@ -164,11 +166,12 @@ class ClientListTest(unittest.TestCase):
 
         def ids(doc: JsonObject) -> List[object]:
             return [m["id"] for m in cast(List[Dict[str, JsonValue]], doc["models"])]
-        self.assertEqual((ids(w.carl.client_models(cfg)), w.carl.client_models(cfg)["default"]), (["small"], "small"))
+        everything = sorted(map(str, ids(w.carl.client_models(cfg))))
+        self.assertEqual((everything, w.carl.client_models(cfg)["default"]), (["mine", "small"], "small"))
         self.assertEqual((ids(w.carl.client_models(cfg, "mine")), w.carl.client_models(cfg, "mine")["default"]),
                          (["mine"], "mine"))
         self.assertEqual(ids(w.carl.client_models(cfg, "my-alias")), ["mine"])          # the server's alias
-        self.assertEqual(ids(w.carl.client_models(cfg, "not-here")), ["small"])         # unknown: the start's model
+        self.assertEqual(sorted(map(str, ids(w.carl.client_models(cfg, "not-here")))), ["mine", "small"])  # unknown: all
         self.assertEqual(sorted(map(str, ids(w.carl.client_models(cfg, "mine", router=True)))), ["mine", "small"])
         r = World(catalog(BIG, SMALL), files=files, shapes=shapes, config={"schema": 1, "llama": {"mode": "router"}})
         self.assertEqual(sorted(map(str, ids(r.carl.client_models(r.carl.load_config())))), ["mine", "small"])
