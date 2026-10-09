@@ -1,9 +1,9 @@
 /**
  * CARL: the /carl panel for Pi (installed by CARL's client/install.sh): a control panel (carl-panel.js) in Pi's own
  * settings list (as /settings). Each row is a CARL part's label and its state; Enter or Space changes it in place:
- * the state reads "turning off…" while the setup runs, then the new state, and a notice says what CARL did; the
- * title says when Pi must restart. Web search opens its values (with where the queries go); Sync service opens a
- * view of its state.
+ * the state reads "turning off…" while the setup runs, then the new state, and a notice says what CARL did (a warning
+ * when the coder goes on with 1 slot); the title says when Pi must restart. Web search opens its values (with where
+ * the queries go); Sync service opens a view of its state.
  * Without the sync service, a session start checks the server once for a new config.
  */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -106,7 +106,7 @@ export default function carlPanel(pi: ExtensionAPI) {
 					list?.updateValue(id, a.busy);
 					tui.requestRender();
 					void act(a, "pi").then((said) => {
-						ctx.ui.notify(said.message, said.ok ? "info" : "error");
+						ctx.ui.notify(said.message, !said.ok ? "error" : said.warn ? "warning" : "info");
 					}).finally(() => {
 						busy.delete(id);
 						running = false;

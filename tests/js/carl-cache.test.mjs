@@ -46,14 +46,12 @@ test("relocate puts the moved text in front of the first user message (text or p
   assert.equal(relocate({ messages: [{ role: "user", content: "x" }] }, splitOpenCode).messages[0].content, "x");
 });
 
-test("relocate: system2 adds a second system message; none leaves the request as it was", () => {
+test("relocate: none leaves the request as it was; no second system message (Phase 23.4.3)", () => {
   const p = { messages: [{ role: "system", content: OC_SYSTEM }, { role: "user", content: "hi" }] };
-  const two = relocate(p, splitOpenCode, "system2");
-  assert.deepEqual(two.messages.map((m) => m.role), ["system", "system", "user"]);
-  assert.ok(two.messages[1].content.includes("<env>") && two.messages[2].content === "hi");
   assert.equal(relocate(p, splitOpenCode, "none"), p);
-  const already = { messages: [{ role: "system", content: OC_SYSTEM }, { role: "system", content: "x" }, { role: "user", content: "hi" }] };
-  assert.equal(relocate(already, splitOpenCode, "system2").messages[2].content.includes("<env>"), true);  // the user message then
+  const out = relocate(p, splitOpenCode, "user");
+  assert.deepEqual(out.messages.map((m) => m.role), ["system", "user"]);
+  assert.ok(out.messages[1].content.includes("<env>") && out.messages[1].content.endsWith("hi"));
 });
 
 test("small helpers", () => {
@@ -159,16 +157,15 @@ test("a new agent prompt is read once and saved; the request is pinned to that s
   assert.ok(fill.startsWith("S:You are opencode.") && fill.endsWith("|U:"));
 });
 
-test("Phase 23.1: a Qwen-like template gets the project part as a second system message; the saved prompt ends where it starts", async () => {
+test("Phase 23.4.3: a Qwen-like template gets the project part at the start of the first user message; the saved prompt ends where it starts", async () => {
   const srv = fakeServer({ toolsFirst: true });
   const c = cache(srv.fetch);
   const { payload } = await send(c, request("hello"), { session: "s1", agent: "build" });
-  assert.deepEqual(payload.messages.map((m) => m.role), ["system", "system", "user"]);
+  assert.deepEqual(payload.messages.map((m) => m.role), ["system", "user"]);
   assert.ok(!payload.messages[0].content.includes("<env>"));
-  assert.ok(payload.messages[1].content.includes("<env>"));                 // system text again, not the user's
-  assert.equal(payload.messages[2].content, "hello");
+  assert.ok(payload.messages[1].content.includes("<env>") && payload.messages[1].content.endsWith("hello"));
   const fill = String.fromCharCode(...srv.st.calls.find((x) => x.path === "/completion").body.prompt);
-  assert.ok(fill.startsWith("T:") && fill.endsWith("|S:"), fill.slice(-40));  // the tools, the shared text, up to the 2nd
+  assert.ok(fill.startsWith("T:") && fill.endsWith("|U:"), fill.slice(-40));  // the tools, the shared text, up to the user
   // the same shared start for another project: the saved prompt is restored, not read again
   const d = cache(srv.fetch);
   const other = request("hi", { messages: [{ role: "system", content: (LONG + OC_SYSTEM).replace(/Working directory: \S+/, "Working directory: /other") }, { role: "user", content: "hi" }] });
@@ -185,7 +182,7 @@ test("Phase 23.1: Gemma 4 keeps the project part where the client put it", async
   assert.equal(payload.messages[1].content, "hello");
 });
 
-test("Phase 23.1: by default (cache.move off) an unknown template's project part stays in place; Qwen keeps the second system message", async () => {
+test("Phase 23.1: by default (cache.move off) an unknown template's project part stays in place; Qwen's still moves", async () => {
   process.env.CARL_CACHE_MOVE = "off";
   try {
     const other = await send(cache(fakeServer().fetch), request("hello"), { session: "s1", agent: "build" });
@@ -193,7 +190,8 @@ test("Phase 23.1: by default (cache.move off) an unknown template's project part
     assert.ok(other.payload.messages[0].content.includes("<env>"));
     assert.equal(other.payload.messages[1].content, "hello");
     const qwen = await send(cache(fakeServer({ toolsFirst: true }).fetch), request("hello"), { session: "s1", agent: "build" });
-    assert.deepEqual(qwen.payload.messages.map((m) => m.role), ["system", "system", "user"]);
+    assert.deepEqual(qwen.payload.messages.map((m) => m.role), ["system", "user"]);
+    assert.ok(qwen.payload.messages[1].content.includes("<env>") && qwen.payload.messages[1].content.endsWith("hello"));
   } finally {
     delete process.env.CARL_CACHE_MOVE;
   }

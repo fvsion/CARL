@@ -57,7 +57,8 @@ MOVE_HELP = {
     "off": "Leave in place (the default): for a model whose chat template CARL does not know (not Qwen, not Gemma 4), "
            "the parts of the prompt that change per project (the folder, the date, AGENTS.md) stay in the system "
            "prompt. The model reads them as standing instructions, but each new project reads the whole prompt again. "
-           "Qwen models get them as system text after the shared part; Gemma 4 models keep them in place.",
+           "Qwen models get them at the start of your first message: they follow AGENTS.md more often there (measured "
+           "2026-10-08). Gemma 4 models keep them in place.",
     "auto": "Move to your message: for a model whose chat template CARL does not know, the parts of the prompt that "
             "change per project go to the start of your first message. Then one saved prompt serves every project. "
             "Do not use it with a template that also uses a sliding-window cache: CARL cannot restore its prompts."}

@@ -248,10 +248,11 @@ export function splitPi(text) {
 
 /**
  * The request with the parts of the system text that change per project or day (split: [kept, moved]) moved out
- * of the shared system text, so one saved prompt serves every project (Phase 23.1). how: "system2" = a second
- * system message (templates that merge it after the tools and the shared text: Qwen); "user" = the start of the
- * first user message (any other template); "none" = left as the client sent it (Gemma 4: nothing is saved for it).
- * @param {Payload} payload @param {(text: string) => [string, string]} split @param {"system2" | "user" | "none"} [how]
+ * of the shared system text to the start of the first user message, so one saved prompt serves every project.
+ * how: "user" = moved (Qwen; other templates with cache.move auto); "none" = left as the client sent it (Gemma 4:
+ * nothing is saved for it). Phase 23.4.3: no second system message any more (1.9.0 to 1.12): the models followed
+ * AGENTS.md less often there (p2310, measured 2026-10-08).
+ * @param {Payload} payload @param {(text: string) => [string, string]} split @param {"user" | "none"} [how]
  * @returns {Payload}
  */
 export function relocate(payload, split, how = "user") {
@@ -265,11 +266,6 @@ export function relocate(payload, split, how = "user") {
   if (text === null || u < 0) return payload;
   const [kept, moved] = split(text);
   if (!moved) return payload;
-  if (how === "system2" && obj(msgs[1]).role !== "system") {
-    // a second system message right after the shared one: the template (Qwen) merges it into the system text
-    // after the tools and the shared text, so it stays system text and the shared start stays shared
-    return { ...payload, messages: [{ ...sys, content: kept }, { role: "system", content: moved }, ...msgs.slice(1)] };
-  }
   const user = obj(msgs[u]);
   const note = `${moved}\n\n`;
   const content = typeof user.content === "string" ? note + user.content
@@ -450,7 +446,7 @@ export class CarlCache {
     this.sessions = new Map();
     /** @type {Map<string, ModelState>} */
     this.models = new Map();
-    /** @type {Map<string, "system2" | "user" | "none">} model -> where the project part goes (placementFor) */
+    /** @type {Map<string, "user" | "other" | "none">} model -> where the project part goes (placementFor) */
     this.placements = new Map();
     /** @type {Map<string, number>} model:slot -> requests of this process about to run there */
     this.claimed = new Map();
@@ -671,37 +667,38 @@ export class CarlCache {
   }
 
   /**
-   * Where the project part of the system text goes for this model (Phase 23.1), checked once: "none" for Gemma 4
-   * (nothing is saved for it: its window cache cannot restore); "system2" when the template renders a second
-   * system message after the tools and the shared system text (Qwen: then the project part stays system text and
-   * the shared start stays shared); else "user" (the start of the first user message). Any failure: "user".
-   * @param {string} model @param {Payload} payload @returns {Promise<"system2" | "user" | "none">}
+   * Where the project part of the system text goes for this model, checked once: "none" for Gemma 4 (nothing is
+   * saved for it: its window cache cannot restore); "user" for Qwen (the start of the first user message; Phase
+   * 23.4.3: the models follow AGENTS.md more often there than in a second system message, p2310); "other" for a
+   * template CARL does not know (before() moves it only with cache.move auto). Any failure: "other".
+   * @param {string} model @param {Payload} payload @returns {Promise<"user" | "other" | "none">}
    */
   async placementFor(model, payload) {
     const have = this.placements.get(model);
     if (have) return have;
-    /** @type {"system2" | "user" | "none"} */
-    let how = "user";
+    /** @type {"user" | "other" | "none"} */
+    let how = "other";
     try {
       const router = (await this.listModels(5_000)).some((m) => typeof modelStatus(m) === "string");
       const q = router ? `?model=${encodeURIComponent(model)}` : "";
       const p = obj(await this.call("GET", `/props${q}`, undefined, 5_000));
       if (/gemma/i.test(String(p.model_path ?? model))) how = "none";
-      else if (await this.secondSystemWorks(model, router, payload)) how = "system2";
+      else if (await this.qwenTemplate(model, router, payload)) how = "user";
     } catch (e) {
-      debugLog(`the project part's place for ${model}: ${errorText(e)} (it goes to the user message)`);
+      debugLog(`the project part's place for ${model}: ${errorText(e)} (a template CARL does not know)`);
     }
     this.placements.set(model, how);
-    this.log(`the project part for ${model}: ${how === "system2" ? "a second system message" : how === "user" ? "the first user message" : "left in place"}`);
+    this.log(`the project part for ${model}: ${how === "user" ? "the first user message" : how === "none" ? "left in place" : "a template CARL does not know"}`);
     return how;
   }
 
   /**
-   * Does the template put a second system message after the tools and the first system text, the first part
-   * the same whatever the second says? (Qwen merges it into the system text; Gemma 4 takes one system message.)
+   * Is it Qwen's template (Qwen 3.6 and 3.8, also a fine-tune whose file name does not say Qwen)? Known by its
+   * shape: the tools first, then the system text, and a second system message merged after it, the first part the
+   * same whatever the second says (Gemma 4 takes one system message).
    * @param {string} model @param {boolean} router @param {Payload} payload @returns {Promise<boolean>}
    */
-  async secondSystemWorks(model, router, payload) {
+  async qwenTemplate(model, router, payload) {
     const shared = "CARL-SHARED-PROBE", fields = templateFields(payload);
     const render = async (/** @type {string} */ project) => String(obj(await this.call("POST", "/apply-template", {
       messages: [{ role: "system", content: shared }, { role: "system", content: project }, { role: "user", content: "u" }],
@@ -761,9 +758,9 @@ export class CarlCache {
     const none = { payload, release: () => {} };
     const set = await this.loadSettings();
     if (!set.enabled || !Array.isArray(payload?.messages)) return none;
-    let how = set.prefix && this.split ? await this.placementFor(String(payload.model ?? ""), payload) : "none";
+    const place = set.prefix && this.split ? await this.placementFor(String(payload.model ?? ""), payload) : "none";
     // a template CARL does not know: left in place unless cache.move is auto (Settings > Caching > Other templates)
-    if (how === "user" && set.move !== "auto") how = "none";
+    const how = place === "other" ? (set.move === "auto" ? "user" : "none") : place;
     const out = how === "none" ? payload : relocate(payload, /** @type {(t: string) => [string, string]} */ (this.split), how);
     const moved = { payload: out, release: () => {} };
     if (NO_PIN_AGENTS.has(meta.agent)) return { ...moved, payload: await this.loadedInstead(quick(out)) };
@@ -969,15 +966,11 @@ export class CarlCache {
   async prefix(payload, model, router, m, agent) {
     const sys = obj(arr(payload.messages)[0]);
     if (sys.role !== "system") return undefined;
-    // the project part as a second system message (Phase 23.1): the saved prompt ends where it starts, exactly (the
-    // hybrid Qwen models' state goes back only to a checkpoint, so a cut past it would be read again)
-    const second = obj(arr(payload.messages)[1]).role === "system";
     const fields = templateFields(payload);
-    const id = shortHash(JSON.stringify([sys.content, fields, second]), 16);
+    const id = shortHash(JSON.stringify([sys.content, fields]), 16);
     if (m.prefixes.has(id)) return m.prefixes.get(id) ?? undefined;
     const render = async (/** @type {string} */ text) => {
-      const messages = second ? [sys, { role: "system", content: text }, { role: "user", content: "u" }]
-        : [sys, { role: "user", content: text }];
+      const messages = [sys, { role: "user", content: text }];
       const r = await this.call("POST", "/apply-template", { messages, ...fields, ...this.withModel(model, router) });
       return this.tokens(String(obj(r).prompt ?? ""), model, router);
     };

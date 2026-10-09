@@ -85,14 +85,16 @@ class ScreensTest(unittest.TestCase):
     def server(kind: str = "idle") -> ServerData:
         s0 = SlotInfo(0, False, 812, 98304, 41210, 40990, 220, 1310)
         s1 = SlotInfo(1, False, 799, 98304, 10437, 10437, 0, 695)
-        d = ServerData(up=True, pid=4242, target_pid=4242, rss=int(17.9 * GIB), etime="01:12:09", awake=True,
-                       cmd=CMD, shape=shape(), health_ms=3.0, slots=True, slot_list=[s0, s1], n_ctx=98304,
+        d = ServerData(up=True, pid=4242, target_pid=4242, rss=int(1.1 * GIB), footprint=int(17.9 * GIB),
+                       etime="01:12:09", awake=True, cmd=CMD, shape=shape(), health_ms=3.0, slots=True,
+                       slot_list=[s0, s1], n_ctx=98304,
                        metrics={"prompt_tokens_total": 182340, "prompt_seconds_total": 341.2,
                                 "tokens_predicted_total": 21877, "tokens_predicted_seconds_total": 512.0,
                                 "spec_decode_num_draft_tokens_total": 9120,
                                 "spec_decode_num_accepted_tokens_total": 6981, "spec_decode_num_drafts_total": 8410},
                        props={"model_alias": "big"},
-                       system=SystemStats(wired=19 * GIB, active=6 * GIB, comp=2 * GIB, free=3 * GIB,
+                       system=SystemStats(wired=19 * GIB, active=6 * GIB, comp=2 * GIB, free=3 * GIB, anon=5 * GIB,
+                                          purgeable=GIB // 2, files=4 * GIB,
                                           pressure="normal", swap=(0.4 * GIB, 2 * GIB), gpu=38, power="AC power"))
         if kind == "writing":
             s0.busy, s0.prompt, s0.cached, s0.processed, s0.decoded = True, 52310, 41210, 11100, 412
@@ -209,6 +211,9 @@ class ScreensTest(unittest.TestCase):
         self.assertEqual(uiprefs.load_levels(prefs)["thismac"], 2)
         text = "\n".join(self.frame(self.server(), 140))
         self.assertRegex(text, r"Wired +\d")                                # THIS MAC's full rows
+        tall = "\n".join(self.frame(self.server(), 140, 60))
+        self.assertRegex(tall, r"App memory +4\.5 GiB")                     # anonymous less purgeable
+        self.assertRegex(tall, r"Cached files +4\.5 GiB")                   # file-backed + purgeable
         self.assertIn("THIS MAC ●●", text)
         self.assertIn("detail: full (D)", self.frame(self.server(), 140)[1])
         self.ctl.handle_input("D")

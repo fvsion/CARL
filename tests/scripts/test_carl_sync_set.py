@@ -17,9 +17,11 @@ import unittest
 
 CLIENT = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "client")
 
-# the fake installer: its environment (one KEY=value per line) and a count of its runs; it fails when HOME/fail is there
+# the fake installer: its environment (one KEY=value per line) and a count of its runs; it fails when HOME/fail is there;
+# the server's slot count it "read" from HOME/slots goes to CARL_SLOTS_OUT, as install.sh writes it
 FAKE_INSTALL = """env > "$HOME/installer.env"
 echo run >> "$HOME/installs"
+if [ -f "$HOME/slots" ] && [ -n "$CARL_SLOTS_OUT" ]; then cp "$HOME/slots" "$CARL_SLOTS_OUT"; fi
 [ -f "$HOME/fail" ] && exit 3
 exit 0
 """
@@ -146,6 +148,17 @@ class SetTest(unittest.TestCase):
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertEqual(self.env_lines(), ["NO_MODEL_CHECK=1", "NO_BACKGROUND_SUBAGENTS=1"])
         self.assertEqual(stat.S_IMODE(os.stat(self.env_path).st_mode), 0o600)
+
+    def test_the_result_has_the_slot_count_the_installer_read(self) -> None:
+        # /carl warns when it turns the coder on with 1 slot (Phase 23.4.3)
+        r = json.loads(self.run_set("NO_CODER=on", "CODER=1").stdout)
+        self.assertIsNone(r["slots"])                            # no server answer: not known
+        for text, want in (("1\n", 1), ("2\n", 2), ("x\n", None)):
+            with open(os.path.join(self.home, "slots"), "w") as f:
+                f.write(text)
+            r = json.loads(self.run_set("NO_CODER=on", "CODER=1").stdout)
+            self.assertEqual(r["slots"], want)
+        self.assertEqual([n for n in os.listdir(self.conf) if n.startswith(".set-slots")], [])   # the file goes
 
     def test_set_waits_for_a_sync_that_holds_the_lock(self) -> None:
         with open(os.path.join(self.conf, "client-sync.lock"), "w") as lock:

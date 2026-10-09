@@ -199,10 +199,10 @@ def kv_info(d: ServerData) -> Optional[KVInfo]:
 
 
 def slot_state(x: SlotInfo) -> str:
-    """What a slot does, in words: writing, reading, free (keeps a session), free."""
+    """What a slot does, in words: writing, reading, free (between turns), free."""
     if x.busy:
         return f"{CYN}writing{R}" if x.decoded else f"{YEL}reading{R}"
-    return "free (keeps a session)" if x.prompt + x.decoded else "free"
+    return "free (between turns)" if x.prompt + x.decoded else "free"
 
 
 def swa_line(d: ServerData) -> str:
@@ -228,10 +228,10 @@ def request_line(d: ServerData) -> str:
 
 
 def slot_word(x: SlotInfo) -> str:
-    """What a slot does: writing, reading, keeps a session, free."""
+    """What a slot does: writing, reading, between turns, free."""
     if x.busy:
         return f"{CYN}writing{R}" if x.decoded else f"{YEL}reading{R}"
-    return f"{DIM}keeps a session{R}" if x.prompt + x.decoded else f"{DIM}free{R}"
+    return f"{DIM}between turns{R}" if x.prompt + x.decoded else f"{DIM}free{R}"
 
 
 def pool_fill(d: ServerData) -> float:
@@ -247,7 +247,7 @@ def card_slots(v: View, d: ServerData, w: int = 66) -> Card:
     cmd, sl, n_ctx = d.cmd, d.slot_list, d.n_ctx
     nslots = len(sl) or flag_int(cmd, "--parallel", "-np", default=1)
     narrow = w - 4 < 56                        # the title has the size: a narrow card shows only the fill
-    bw = max(min(w - 4 - (34 if narrow else 42), 24), 6)   # "slot 0  " bar "  41.5K of 96K   keeps a session"
+    bw = max(min(w - 4 - (34 if narrow else 42), 24), 6)   # "slot 0  " bar "  41.5K of 96K   between turns"
     L: List[CardLine] = []
     for i in range(nslots):
         x = sl[i] if i < len(sl) else None
@@ -367,18 +367,29 @@ def card_speed(v: View, d: ServerData, w: int = 66) -> Card:
     return Card("SPEED", f"write {speed(tg_avg)}" if tg_avg else "", L)
 
 
+def server_memory(v: View, d: ServerData) -> Tuple[int, int]:
+    """(total, own) bytes of the server. own: its physical footprint (the Metal buffers are in it), its RSS when the
+    footprint can't be read. total: own + the mapped model and drafter files (not in the footprint) once a model is
+    loaded. With --no-mmap the weights are in the footprint already."""
+    own = d.footprint or d.rss or 0
+    loaded = d.up and not (d.router is not None and not d.alias)
+    mapped = (v.model_size or 0) + v.drafter_size if own and loaded and "--no-mmap" not in d.cmd.split() else 0
+    return own + mapped, own
+
+
 def card_memory(v: View, d: ServerData, w: int = 66) -> Card:
-    """The server's memory: the total with a bar, then its parts; at full the GPU memory limit, the GPU memory
-    of all apps and the server's CPU."""
+    """The server's memory: the total with a bar, then its parts (they add up to the total); at full the server
+    process alone, the GPU memory limit, the GPU memory of all apps and the server's CPU."""
     kv = kv_info(d)
     s = d.system
-    rss = d.rss or 0
+    total, own = server_memory(v, d)
     weights = v.model_size or 0
     ctx = (kv.kv + kv.rs) if kv else 0
     L: List[CardLine] = []
-    if rss:
+    if total:
         bw = max(min(w - 38, 30), 8)
-        L.append(row("server", f"{bar(rss / v.total_mem if v.total_mem else 0, bw)}  {memory_pair(rss, v.total_mem)}"))
+        share = total / v.total_mem if v.total_mem else 0
+        L.append(row("server", f"{bar(share, bw)}  {memory_pair(total, v.total_mem)}"))
         if not d.up:                                     # the model loads: no parts yet (not "model 0 KiB")
             L.append(row("model", f"{YEL}loading{R}"))
         elif d.router is not None and not d.alias:       # a router with no model loaded
@@ -388,26 +399,29 @@ def card_memory(v: View, d: ServerData, w: int = 66) -> Card:
             if v.drafter_size:
                 L.append(row("drafter", f"{memory(v.drafter_size):>9}"))
             L.append(row("context memory", f"{memory(ctx):>9}"))
-            L.append(row("buffers", f"{memory(max(rss - weights - v.drafter_size - ctx, 0)):>9}"))
+            L.append(row("buffers", f"{memory(max(total - weights - v.drafter_size - ctx, 0)):>9}"))
     else:
         L.append(f"{DIM}No server process.{R}")
     if v.full:
         L.append("")
+        if d.footprint and total != own:                 # the process without the mapped files (Activity Monitor's)
+            L.append(row("server process", memory(own)))
         if v.gpu_limit:
             L.append(row("GPU limit", memory(v.gpu_limit[0]) + ("" if "Metal" in v.gpu_limit[1] else
                                                                   f"   {DIM}{v.gpu_limit[1]}{R}")))
         if s.gpumem:
             L.append(row("GPU, all apps", memory(s.gpumem)))
         L.append(row("server CPU", f"{d.cpu:.0f}%"))
-    return Card("MEMORY", f"server {memory(rss)}" if rss else "", L)
+    return Card("MEMORY", f"server {memory(total)}" if total else "", L)
 
 
 HEAT = {"nominal": "normal", "fair": "warm", "serious": "hot", "critical": "very hot"}
 
 
 def card_thismac(v: View, d: ServerData, w: int = 66) -> Card:
-    """This Mac: its memory with a bar, the memory pressure, swap, the GPU with a bar, power and heat; at full
-    the parts of the memory, the load and the free disk. Shown with or without a server."""
+    """This Mac: its memory with a bar (as Activity Monitor's Memory Used), the memory pressure, swap, the GPU with a
+    bar, power and heat; at full the parts of the memory, the cached files, the load and the free disk. Shown with or
+    without a server."""
     s = d.system
     bw = max(min(w - 38, 30), 8)
     pc = GRN if s.pressure == "normal" else YEL if s.pressure == "WARNING" else RED
@@ -428,8 +442,10 @@ def card_thismac(v: View, d: ServerData, w: int = 66) -> Card:
     L.append(row("heat", f"{hc}{HEAT.get(th, th or '–')}{R}" if th else "–"))
     if v.full:
         L.append("")
+        L.append(row("app memory", f"{memory(s.app):>9}"))           # the three parts of the memory row
         L.append(row("wired", f"{memory(s.wired):>9}"))
         L.append(row("compressed", f"{memory(s.comp):>9}"))
+        L.append(row("cached files", f"{memory(s.cached):>9}"))       # not in the memory row: macOS frees them
         L.append(row("free", f"{memory(s.free):>9}"))
         L.append(row("load", f"{s.load[0]:.1f}   {s.load[1]:.1f}   {s.load[2]:.1f}   {DIM}(1, 5, 15 min){R}"))
         if v.slow.disk:

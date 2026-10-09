@@ -3,6 +3,29 @@
 All notable changes to CARL. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Dates are local dates on the development Mac (M3 Pro, 36 GB).
 
+## Unreleased
+
+Phase 23.4.3 (to be tagged after the brief-format measurement).
+
+### Changed
+- **The project part of the prompt goes back to the first user message for Qwen** (as in 1.8.0). A measurement
+  (2026-10-08) showed that the second system message of 1.9.0 is followed less: the AGENTS.md rules held in 11 of 32
+  runs on the Qwen3.6 35B-A3B, against 20 of 32 in the first message. CARL still finds a Qwen template by its chat
+  template, so fine-tunes with other file names are covered. Gemma 4 is unchanged.
+- **The SLOTS card says `between turns`** for a slot that holds a conversation and does nothing now (was "keeps a
+  session").
+
+### Fixed
+- **The MEMORY card's server bar** showed the process's RSS, which on Apple Silicon leaves out the Metal buffers and
+  the mapped model file (for example 0.7 GiB for a Gemma 4 E4B server that uses about 8.2 GiB). It now shows the
+  process footprint plus the mapped model and drafter files, and the rows below add up to it.
+- **The This Mac card's used memory** now follows Activity Monitor (app memory + wired + compressed); cached files
+  have their own row at full detail.
+
+### Added
+- **`/carl` warns when you turn the coder on with 1 slot**: the coder then takes the main session's slot. The setup
+  passes the server's slot count to `carl-sync.py set`.
+
 ## 1.12.1 - 2026-10-08
 
 Phase 23.4, reopened: `/carl` rebuilt from mock-ups as a real control panel.

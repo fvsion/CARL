@@ -1,8 +1,10 @@
 """This Mac and its processes, through macOS commands (ps, netstat, sysctl, vm_stat, pmset,
-ioreg, ifconfig, pbcopy). Every command runs from an argument list, never a shell. The
-parse_* functions are pure and take the commands' text output."""
+ioreg, ifconfig, pbcopy) and one libproc call (a process's footprint). Every command runs
+from an argument list, never a shell. The parse_* functions are pure and take the commands'
+text output."""
 from __future__ import annotations
 
+import ctypes
 import os
 import re
 import shutil
@@ -10,6 +12,7 @@ import signal
 import subprocess
 import threading
 import time
+import sys
 from typing import Callable, List, NamedTuple, Optional, Sequence, Tuple
 
 from carl_core.adapters.system import NETSTAT
@@ -107,8 +110,58 @@ def parse_ps(text: str) -> Optional[ProcInfo]:
 
 
 def process_info(pid: int) -> Optional[ProcInfo]:
-    """Memory, CPU, run time and command line of pid."""
-    return parse_ps(sh(["ps", "-o", "rss=,%cpu=,etime=,command=", "-p", str(pid)]))
+    """Memory (RSS and footprint), CPU, run time and command line of pid."""
+    info = parse_ps(sh(["ps", "-o", "rss=,%cpu=,etime=,command=", "-p", str(pid)]))
+    if info:
+        info.footprint = phys_footprint(pid)
+    return info
+
+
+RUSAGE_INFO_V2 = 2                  # <sys/resource.h>: the first flavor with ri_phys_footprint
+
+
+class RusageInfoV2(ctypes.Structure):
+    """struct rusage_info_v2 of <sys/resource.h>."""
+    _fields_ = [("ri_uuid", ctypes.c_uint8 * 16)] + [(n, ctypes.c_uint64) for n in (
+        "ri_user_time", "ri_system_time", "ri_pkg_idle_wkups", "ri_interrupt_wkups", "ri_pageins", "ri_wired_size",
+        "ri_resident_size", "ri_phys_footprint", "ri_proc_start_abstime", "ri_proc_exit_abstime",
+        "ri_child_user_time", "ri_child_system_time", "ri_child_pkg_idle_wkups", "ri_child_interrupt_wkups",
+        "ri_child_pageins", "ri_child_elapsed_abstime", "ri_diskio_bytesread", "ri_diskio_byteswritten")]
+
+
+RusageCall = Callable[[int, int, int], int]         # proc_pid_rusage(pid, flavor, buffer address) -> 0 or -1
+_rusage_fn: List[Optional[RusageCall]] = []         # libproc's proc_pid_rusage, looked up once (None: not available)
+
+
+def _proc_pid_rusage() -> Optional[RusageCall]:
+    """libproc's proc_pid_rusage, or None (not macOS, or no libproc)."""
+    if not _rusage_fn:
+        fn: Optional[RusageCall] = None
+        if sys.platform == "darwin":
+            try:
+                c = ctypes.CDLL("/usr/lib/libproc.dylib", use_errno=True).proc_pid_rusage
+                c.argtypes, c.restype = [ctypes.c_int, ctypes.c_int, ctypes.c_void_p], ctypes.c_int
+                fn = c
+            except (OSError, AttributeError):
+                fn = None
+        _rusage_fn.append(fn)
+    return _rusage_fn[0]
+
+
+def phys_footprint(pid: int, call: Optional[RusageCall] = None) -> Optional[int]:
+    """pid's physical footprint in bytes (what Activity Monitor shows as its memory; with the Metal buffers,
+    without mapped files), or None when it can't be read: another user's process, not macOS. One libproc call,
+    no `footprint` process. call: proc_pid_rusage (a test gives its own)."""
+    fn = call or _proc_pid_rusage()
+    if fn is None:
+        return None
+    buf = RusageInfoV2()
+    try:
+        if fn(pid, RUSAGE_INFO_V2, ctypes.addressof(buf)) != 0:
+            return None
+    except (OSError, ctypes.ArgumentError):
+        return None
+    return int(buf.ri_phys_footprint) or None
 
 
 def pid_alive(pid: Optional[int]) -> bool:
@@ -213,6 +266,8 @@ def read_system(page: int) -> SystemStats:
     return SystemStats(
         wired=vm.get("Pages wired down", 0), active=vm.get("Pages active", 0),
         comp=vm.get("Pages occupied by compressor", 0), free=vm.get("Pages free", 0),
+        anon=vm.get("Anonymous pages", 0), purgeable=vm.get("Pages purgeable", 0),
+        files=vm.get("File-backed pages", 0),
         pressure=pressure_name(sh(["sysctl", "-n", "kern.memorystatus_vm_pressure_level"]).strip()),
         swap=parse_swap(sh(["sysctl", "-n", "vm.swapusage"])), gpu=gpu, gpumem=gpumem,
         power=parse_power(sh(["pmset", "-g", "batt"])), load=os.getloadavg())

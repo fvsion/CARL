@@ -306,6 +306,36 @@ test("a switch that did not change the part, and a setup that failed, say so", a
   assert.match(said.message, /cannot find carl-sync\.py/);
 });
 
+test("the coder turned on with 1 slot: it is on, and the message is a warning (user, 2026-10-09)", async () => {
+  stage(false);
+  const coderOn = { [join(OC, "opencode.json")]: JSON.stringify({ agent: { coder: {} } }) };
+  fake({ files: coderOn, out: { ok: true, restart: ["opencode"], slots: 1 } });
+  let said = await act(get("opencode", "coder").actions.on, "opencode");
+  assert.deepEqual(calls(), ["set NO_CODER=on CODER=1"]);
+  assert.deepEqual(said, { ok: true, warn: true, message: "CARL turned the coder subagent on. This server runs 1 slot: "
+    + "the coder takes the main session's slot while it works. Restart OpenCode to use it." });
+  assert.equal(get("opencode", "coder").state, "on");
+  // Pi: the same warning
+  fake({ files: { [join(PI, "agents", "coder.md")]: "x" }, out: { ok: true, restart: ["pi"], slots: 1 } });
+  said = await act(get("pi", "coder").actions.on, "pi");
+  assert.equal(said.warn, true);
+  assert.match(said.message, /^CARL turned the coder subagent on\. This server runs 1 slot: .* Restart Pi to use it\.$/);
+  // 2 slots, or a slot count that is not known (no server answer): a plain success
+  for (const slots of [2, null, undefined]) {
+    stage(false);
+    fake({ files: coderOn, out: { ok: true, restart: ["opencode"], slots } });
+    said = await act(get("opencode", "coder").actions.on, "opencode");
+    assert.deepEqual(said, { ok: true, message: "CARL turned the coder subagent on. Restart OpenCode to use it." });
+  }
+  // the coder turned off with 1 slot, or another part: no warning
+  stage(true);
+  fake({ files: { [join(OC, "opencode.json")]: JSON.stringify({}) }, out: { ok: true, restart: ["opencode"], slots: 1 } });
+  said = await act(get("opencode", "coder").actions.off, "opencode");
+  assert.deepEqual(said, { ok: true, message: "CARL turned the coder subagent off. Restart OpenCode to use it." });
+  // the panel itself: no explanation in the list
+  assert.ok(panel("opencode").rows.every((r) => !/slot/.test(`${r.label} ${r.state}`)));
+});
+
 // ------------------------------------------------------------------ the front ends
 
 /** A copy of a client's panel folder with carl-panel.js next to it (as the setup installs it), and a small solid-js
@@ -365,6 +395,29 @@ test("OpenCode: one list of labels and states; Enter changes a row in place; a t
   assert.equal(view.kind, "alert");
   assert.equal(view.props.title, "Config sync");
   assert.match(view.props.message, /^Sync service {4}connected$/m);
+});
+
+test("OpenCode: the coder turned on with 1 slot gives a warning toast", async () => {
+  stage(false);
+  fake({ files: { [join(OC, "opencode.json")]: JSON.stringify({ agent: { coder: {} } }) }, out: { ok: true, restart: ["opencode"], slots: 1 } });
+  const plugin = (await import(copyPanel("client/opencode/plugins/carl-panel", "tui.js"))).default;
+  const dialogs = [];
+  const toasts = [];
+  const commands = [];
+  await plugin.tui({
+    ui: { DialogSelect: (props) => ({ kind: "select", props }), DialogAlert: (props) => ({ kind: "alert", props }),
+          dialog: { replace: (f) => { dialogs.push(f()); } }, toast: (t) => toasts.push(t) },
+    command: { register: (f) => { commands.push(...f()); return () => {}; } },
+    lifecycle: { onDispose: () => {} },
+  });
+  commands[0].onSelect();
+  const main = dialogs.at(-1).props;
+  main.onSelect({ value: "coder" });
+  for (let i = 0; i < 200 && !toasts.length; i++) await new Promise((r) => setTimeout(r, 25));
+  assert.equal(toasts.length, 1);
+  assert.equal(toasts[0].variant, "warning");
+  assert.match(toasts[0].message, /^CARL turned the coder subagent on\. This server runs 1 slot: /);
+  assert.equal(main.options.find((o) => o.value === "coder").footer, "on");
 });
 
 test("Pi: Pi's settings list; Space changes a row in place; a notice says what CARL did", async (t) => {

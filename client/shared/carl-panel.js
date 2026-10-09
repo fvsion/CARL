@@ -200,6 +200,8 @@ export function when(stamp, now = new Date()) {
  * @property {string} [viewTitle] the view's title
  * @typedef {{ title: string, rows: Row[] }} Panel
  *   title: "CARL", or "CARL" and the restart note
+ * @typedef {{ message: string, ok: boolean, warn?: boolean }} Said
+ *   what the toast or the notice says; ok false: an error; warn: a warning (the change is done)
  */
 
 /** One reading on one line: the label column, then the value. @param {string} label @param {string} value @param {number} [width] */
@@ -392,12 +394,13 @@ function parsed(out) {
 
 /**
  * What a toast or a notice says after an action ran (exit code from run(); -1: no carl-sync.py). A switch's
- * action also reads the row again, and `result` (what `carl-sync.py set` printed) says who must restart.
+ * action also reads the row again, and `result` (what `carl-sync.py set` printed) says who must restart and the
+ * server's slots. warn: a warning, not a plain success (the coder turned on with 1 slot).
  * @param {Action} action
  * @param {number} code
  * @param {Client} client
  * @param {JsonObject} [result]
- * @returns {{ message: string, ok: boolean }}
+ * @returns {Said}
  */
 export function outcome(action, code, client, result = {}) {
   if (code === -1) return { ok: false, message: "CARL cannot find carl-sync.py. Run the setup again." };
@@ -416,7 +419,12 @@ export function outcome(action, code, client, result = {}) {
   return { ok: true, message: "There is no new config." };
 }
 
-/** After `carl-sync.py set`. @param {Action} action @param {number} code @param {Client} client @param {JsonObject} result */
+/**
+ * After `carl-sync.py set`. The coder turned on while the server runs 1 slot (the slot count the setup reads for
+ * its coder rule; not known: no warning) is a warning (user, 2026-10-09: it turns the coder on, and says that this
+ * system has only one slot).
+ * @param {Action} action @param {number} code @param {Client} client @param {JsonObject} result @returns {Said}
+ */
 function switchOutcome(action, code, client, result) {
   if (code !== 0) {
     const why = typeof result.error === "string" && result.error ? result.error
@@ -433,7 +441,10 @@ function switchOutcome(action, code, client, result) {
     : `CARL set ${name} to ${action.want}.`;
   const apps = /** @type {Client[]} */ ((Array.isArray(result.restart) ? result.restart : [client])
     .filter((c) => c === "opencode" || c === "pi"));
-  return { ok: true, message: restartNotice(client, did, apps, result.new_terminal === true) };
+  const oneSlot = action.row === "coder" && action.want === "on" && result.slots === 1;
+  const said = oneSlot ? `${did} This server runs 1 slot: the coder takes the main session's slot while it works.` : did;
+  const message = restartNotice(client, said, apps, result.new_terminal === true);
+  return oneSlot ? { ok: true, warn: true, message } : { ok: true, message };
 }
 
 /**
@@ -470,7 +481,7 @@ export function run(args) {
  * opened row can say that OpenCode or Pi must restart.
  * @param {Action} action
  * @param {Client} client
- * @returns {Promise<{ message: string, ok: boolean }>}
+ * @returns {Promise<Said>}
  */
 export async function act(action, client) {
   if (action.row && !BEFORE.has(action.row)) {

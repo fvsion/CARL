@@ -63,7 +63,7 @@ The RAM cache is lost when the server stops or when router mode changes the mode
    - Pi: the `<project_context>` and `<cwd>` blocks.
 
    The client takes them out of the shared system text, so that the system text and the tools are the same in each project and on each day, and one saved prompt serves every project. Where they go depends on the model's chat template (the client checks it once per model with `/apply-template`):
-   - **A second system message** (Qwen 3.6 and 3.8): the template puts the tools first, then the system text, and merges a second system message into it. The blocks stay system text, after the shared part. The saved prompt ends exactly where they start.
+   - **The start of the first user message** (Qwen 3.6 and 3.8, known by the template's shape: the tools first, then the system text): the saved prompt ends where the first user message starts. The models follow AGENTS.md more often there than in a second system message (measured 2026-10-08; CARL 1.9.0 to 1.12 used a second system message).
    - **Left where they are** (Gemma 4): CARL saves no prompt for Gemma 4 (its sliding-window cache cannot restore one), so nothing moves.
    - **Any other template:** left where they are by default (`cache.move off`): they stay system text, but each new project reads the whole prompt again. Settings > Caching > Other templates > "move to your message" (`cache.move auto`; `CARL_CACHE_MOVE=auto` for the clients on another computer) puts them at the start of the first user message, so one saved prompt serves every project. Do not use it with a template that also uses a sliding-window cache. Qwen and Gemma 4 do not change with it.
 
@@ -204,7 +204,7 @@ llama.cpp keeps a session as one sequence of tokens. A saved state is that seque
 | Order | Part | What it holds | Who makes it |
 |---|---|---|---|
 | 1 | The agent's prompt | The system text and the tool definitions | OpenCode or Pi, for each agent |
-| 2 | The project part, then the first user message | The environment block and the project's instructions (a second system message with Qwen; the start of the user message with other templates), then your first message | OpenCode or Pi; CARL puts the project part here |
+| 2 | The project part, then the first user message | The environment block and the project's instructions (the start of the user message with Qwen, and with other templates when Settings > Caching > Other templates moves it), then your first message | OpenCode or Pi; CARL puts the project part here |
 | 3 | The rest of the session | The replies, the tool calls, the tool results, your next messages | The model and the client |
 
 - The chat template sets the order inside part 1. Qwen puts the tools first and the system text after them. Gemma 4 puts the system text first and the tools after it. Both orders are in part 1.

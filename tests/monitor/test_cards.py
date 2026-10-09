@@ -6,12 +6,13 @@ import unittest
 from dataclasses import replace
 from typing import Any
 
+from carl_core.domain.units import memory
 from mon_support import GIB, shape
-from monitor.cards import (View, card_connect, card_health, card_memory, card_requests, card_slots, card_speed, column,
-                           kv_info, live_sentence, log_view, req_row, status_of)
+from monitor.cards import (View, card_connect, card_health, card_memory, card_requests, card_slots, card_speed,
+                           card_thismac, column, kv_info, live_sentence, log_view, req_row, server_memory, status_of)
 from monitor.fmt import ANSI, Ln, aligned, vlen
 from monitor.logbook import LogBook, RequestRecord
-from monitor.model import ServerData, SlotInfo, SlowStats
+from monitor.model import RouterInfo, ServerData, SlotInfo, SlowStats, SystemStats
 
 CMD = "llama-server -m /m/a.gguf -c 196608 --parallel 2 -ctk q4_0 -ctv q8_0 --cache-ram 4096"
 
@@ -88,12 +89,70 @@ class CardsTest(unittest.TestCase):
         self.assertRegex(text(card_slots(view(detail="full"), d).lines), r"Context memory +q4_0 K, q8_0 V")
 
     def test_memory_in_gib(self) -> None:
-        d = ServerData(up=True, slots=True, rss=int(17.9 * GIB), shape=shape(), n_ctx=98304, cmd=CMD)
-        body = text(card_memory(view(), d).lines)
-        self.assertRegex(body, r"Server .*17\.9 of 32\.0 GiB")
+        d = ServerData(up=True, slots=True, rss=int(0.7 * GIB), footprint=int(4.9 * GIB), shape=shape(), n_ctx=98304,
+                       cmd=CMD)
+        card = card_memory(view(), d)
+        body = text(card.lines)
+        self.assertRegex(body, r"Server .*17\.9 of 32\.0 GiB")           # footprint 4.9 + model file 13.0
+        self.assertEqual(card.summary, "server 17.9 GiB")
         self.assertRegex(body, r"Model +13\.0 GiB")
         self.assertNotIn("1.07 GB", body)                             # no unit lesson in the main panels
         self.assertRegex(text(card_memory(view(), replace(d, up=False)).lines), r"Model +loading")
+
+    def test_server_total_is_footprint_plus_mapped_files(self) -> None:
+        """The footprint leaves out the mapped model and drafter files: the total adds them, and the rows below
+        (model, drafter, context memory, buffers) add up to it."""
+        d = ServerData(up=True, slots=True, rss=int(0.7 * GIB), footprint=4 * GIB, shape=shape(), n_ctx=98304, cmd=CMD)
+        v = view(drafter_size=GIB // 2)
+        self.assertEqual(server_memory(v, d), (4 * GIB + 13 * GIB + GIB // 2, 4 * GIB))
+        kv = kv_info(d)
+        assert kv is not None
+        ctx = kv.kv + kv.rs
+        body = text(card_memory(v, d).lines)
+        self.assertRegex(body, r"Server .*17\.5 of 32\.0 GiB")
+        self.assertRegex(body, r"Drafter +512 MiB")
+        self.assertRegex(body, r"Buffers +" + re.escape(memory(4 * GIB - ctx)))   # total - model - drafter - context
+        self.assertNotIn("Server process", body)
+        self.assertRegex(text(card_memory(replace(v, detail="full"), d).lines), r"Server process +4\.0 GiB")
+
+    def test_buffers_never_below_zero(self) -> None:
+        d = ServerData(up=True, slots=True, rss=GIB // 8, footprint=GIB // 8, shape=shape(), n_ctx=98304, cmd=CMD)
+        kv = kv_info(d)
+        assert kv is not None and kv.kv + kv.rs > GIB // 8
+        self.assertRegex(text(card_memory(view(), d).lines), r"Buffers +0 KiB")
+
+    def test_server_memory_falls_back_to_rss(self) -> None:
+        d = ServerData(up=True, slots=True, rss=2 * GIB, footprint=None, cmd=CMD)
+        self.assertEqual(server_memory(view(), d), (15 * GIB, 2 * GIB))
+        full = text(card_memory(view(detail="full"), d).lines)
+        self.assertRegex(full, r"Server .*15\.0 of 32\.0 GiB")
+        self.assertNotIn("Server process", full)                     # RSS is not the footprint: no row
+
+    def test_no_mapped_files_without_a_loaded_model(self) -> None:
+        """While it loads, with a router that has no model, and with --no-mmap (the weights are in the footprint):
+        the total is the process alone."""
+        d = ServerData(up=False, rss=GIB, footprint=3 * GIB, cmd=CMD)
+        self.assertEqual(server_memory(view(), d), (3 * GIB, 3 * GIB))
+        router = ServerData(up=True, rss=GIB, footprint=GIB, router=RouterInfo())
+        self.assertEqual(server_memory(view(), router), (GIB, GIB))
+        no_mmap = ServerData(up=True, rss=GIB, footprint=16 * GIB, cmd=CMD + " --no-mmap")
+        self.assertEqual(server_memory(view(), no_mmap), (16 * GIB, 16 * GIB))
+        self.assertEqual(server_memory(view(), ServerData(up=True)), (0, 0))
+        self.assertIn("No server process.", text(card_memory(view(), ServerData(up=True)).lines))
+
+    def test_this_mac_memory_as_activity_monitor_counts_it(self) -> None:
+        st = SystemStats(wired=4 * GIB, active=9 * GIB, comp=2 * GIB, free=GIB, anon=11 * GIB, purgeable=GIB,
+                         files=6 * GIB, pressure="normal")
+        d = ServerData(system=st)
+        simple = text(card_thismac(view(), d).lines)
+        self.assertRegex(simple, r"Memory .*16\.0 of 32\.0 GiB")            # (11 - 1) + 4 + 2
+        self.assertNotIn("Cached files", simple)
+        full = text(card_thismac(view(detail="full"), d).lines)
+        self.assertRegex(full, r"App memory +10\.0 GiB")
+        self.assertRegex(full, r"Wired +4\.0 GiB")
+        self.assertRegex(full, r"Compressed +2\.0 GiB")
+        self.assertRegex(full, r"Cached files +7\.0 GiB")                   # file-backed + purgeable
+        self.assertNotIn(" · ", full)
 
     def test_speed_while_reading(self) -> None:
         d = ServerData(up=True, slots=True, busy=True, prompt=10000, cached=0, processed=4000, pp_rate=200.0)

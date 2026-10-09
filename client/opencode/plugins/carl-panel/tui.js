@@ -2,8 +2,9 @@
 // The /carl panel for OpenCode (TUI plugin, installed by CARL's client/install.sh): a control panel (carl-panel.js).
 // One list: each row is a CARL part's label and its state at the right ("Coder subagent   on"). Enter changes it
 // in place: the state reads "turning off…" while the setup runs, then the new state, and a toast says what CARL did
-// (red on an error); the title says when OpenCode must restart. Web search opens its values; Sync service opens a
-// view of its state. The list is a signal, so a change keeps the cursor where it is.
+// (red on an error; a warning when the coder goes on with 1 slot); the title says when OpenCode must restart. Web
+// search opens its values; Sync service opens a view of its state. The list is a signal, so a change keeps the
+// cursor where it is.
 import { createSignal } from "solid-js";
 import { act, panel, viewText } from "./carl-panel.js";
 
@@ -28,7 +29,7 @@ function controlPanel(api) {
     refresh();
     try {
       const said = await act(a, "opencode");
-      api.ui.toast({ message: said.message, variant: said.ok ? "success" : "error" });
+      api.ui.toast({ message: said.message, variant: !said.ok ? "error" : said.warn ? "warning" : "success" });
     } finally {
       busy.delete(r.id);
       running = false;

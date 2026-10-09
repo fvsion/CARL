@@ -31,9 +31,11 @@ Usage: carl-sync.py COMMAND
                     CODER: 1 (the coder also with 1 slot) or auto (with 2
                       slots or more). /carl sets CODER=1 when you turn the
                       coder on.
-                  It shows the result as JSON: what changed, and which client
-                  (OpenCode, Pi) must restart. Exit code 2: a key or a value
-                  that it does not know (it then changes nothing).
+                  It shows the result as JSON: what changed, which client
+                  (OpenCode, Pi) must restart, and the server's slots (as the
+                  installer read them; null when the server does not answer).
+                  Exit code 2: a key or a value that it does not know (it then
+                  changes nothing).
 
 The server's address comes from remote.json next to this file. The server writes
 it at every start. The API key comes from api-key next to this file, or from
@@ -292,7 +294,11 @@ def set_switches(want: Dict[str, str]) -> Json:
         apps = [c for c in ("opencode", "pi") if clients in ("both", c)]
         restart = [c for c in apps if c == "opencode" or any(k not in OPENCODE_ONLY for k in want)]
         result: Json = {"set": want, "changed": changed, "ok": True, "error": None, "restart": restart,
-                        "new_terminal": "opencode" in restart and any(k in OPENCODE_ENV for k in want)}
+                        "new_terminal": "opencode" in restart and any(k in OPENCODE_ENV for k in want), "slots": None}
+        # the slot count the installer reads for its coder rule (/props total_slots): /carl warns when it turns the
+        # coder on and the server runs 1 slot
+        slots_out = os.path.join(CONF, f".set-slots-{os.getpid()}")
+        env["CARL_SLOTS_OUT"] = slots_out
         try:
             with open(LOG, "w", encoding="utf-8") as log:
                 log.write(f"== {time.strftime('%Y-%m-%d %H:%M:%S')}: set "
@@ -304,7 +310,19 @@ def set_switches(want: Dict[str, str]) -> Json:
                 raise RuntimeError(f"The installer stopped with an error (exit code {rc}). Its output is in {LOG}.")
         except (OSError, RuntimeError, subprocess.SubprocessError) as e:
             result.update(ok=False, error=describe(e), restart=[], new_terminal=False)
+        result["slots"] = read_slots(slots_out)
         return result
+
+
+def read_slots(path: str) -> Optional[int]:
+    """The slot count the installer wrote to `path` (the file goes); None when it wrote none."""
+    try:
+        with open(path, encoding="utf-8") as f:
+            text = f.read(32).strip()
+        os.remove(path)
+    except OSError:
+        return None
+    return int(text) if text.isdigit() and 0 < int(text) < 1000 else None
 
 
 def once(apply_waiting: bool = False) -> Json:

@@ -167,7 +167,7 @@ class Collector:
         if pid:
             info = system.process_info(pid)
             if info:
-                d.rss, d.cpu, d.etime, d.cmd = info.rss, info.cpu, info.etime, info.cmd
+                d.rss, d.footprint, d.cpu, d.etime, d.cmd = info.rss, info.footprint, info.cpu, info.etime, info.cmd
             d.awake = system.kept_awake(pid)
             d.conns = system.connections(tcp(), self.endpoint.port, pid)
         if self.server_pid and not system.pid_alive(self.server_pid):
@@ -188,7 +188,8 @@ class Collector:
         pid = system.listen_pid(tcp(), int(port)) if port and port.isdigit() else None
         info = system.process_info(pid) if pid else None
         if d.router is not None:
-            d.cmd, d.rss, d.cpu = (info.cmd, info.rss, info.cpu) if info else ("", None, 0.0)
+            d.cmd, d.rss, d.footprint, d.cpu = ((info.cmd, info.rss, info.footprint, info.cpu) if info
+                                                else ("", None, None, 0.0))
 
     def _http(self, d: ServerData) -> None:
         """Fill d from the server's API (a router: from its loaded model, see the module doc)."""

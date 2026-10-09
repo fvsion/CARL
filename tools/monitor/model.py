@@ -173,15 +173,19 @@ class ProcInfo:
     cpu: float      # percent
     etime: str      # [[dd-]hh:]mm:ss
     cmd: str
+    footprint: Optional[int] = None     # bytes: the physical footprint (libproc), None if it can't be read
 
 
 @dataclass
 class SystemStats:
-    """This Mac's memory, swap, GPU and power."""
+    """This Mac's memory, swap, GPU and power. Memory in bytes, from vm_stat."""
     wired: int = 0
     active: int = 0
-    comp: int = 0
+    comp: int = 0                                 # occupied by the compressor
     free: int = 0
+    anon: int = 0                                 # anonymous pages
+    purgeable: int = 0
+    files: int = 0                                # file-backed pages
     pressure: str = "?"
     swap: Tuple[float, float] = (0.0, 0.0)        # (used, total) bytes
     gpu: Optional[int] = None                     # utilisation, percent
@@ -190,8 +194,19 @@ class SystemStats:
     load: Tuple[float, float, float] = (0.0, 0.0, 0.0)
 
     @property
+    def app(self) -> int:
+        """App memory, as Activity Monitor counts it: anonymous pages less the purgeable ones."""
+        return max(self.anon - self.purgeable, 0)
+
+    @property
     def used(self) -> int:
-        return self.wired + self.active + self.comp
+        """Memory used, as Activity Monitor counts it: app memory + wired + compressed (not the cached files)."""
+        return self.app + self.wired + self.comp
+
+    @property
+    def cached(self) -> int:
+        """Cached files, as Activity Monitor counts them: file-backed pages + purgeable pages."""
+        return self.files + self.purgeable
 
 
 SleepEvent = Tuple[str, str, str]   # (HH:MM:SS, Sleep|Wake|DarkWake, reason)
@@ -247,6 +262,7 @@ class ServerData:
     target_pid: Optional[int] = None    # the server to stop: the launcher's, else the one on the port
     exited: bool = False                # the launcher's server process has exited
     rss: Optional[int] = None
+    footprint: Optional[int] = None     # the physical footprint (with the Metal buffers, without mapped files)
     cpu: float = 0.0
     etime: Optional[str] = None
     awake: bool = False                 # caffeinate keeps the Mac awake for it

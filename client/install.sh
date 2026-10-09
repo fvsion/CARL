@@ -301,6 +301,8 @@ else
   else coder_src="No server answers, so the script uses the default."; fi
 fi
 say "Coder subagent: $([[ $CODER == 1 ]] && echo on || echo off). $coder_src"
+# carl-sync.py set (the /carl panel) asks for the slot count it read: /carl warns when it turns the coder on with 1 slot
+if [[ -n "${CARL_SLOTS_OUT:-}" && -n "$slots" ]]; then printf '%s\n' "$slots" > "$CARL_SLOTS_OUT" 2>/dev/null || true; fi
 
 # --- The installed models: one OpenCode / Pi entry each (client/carl_models.py) ---
 # On the server Mac CARL lists them (tools/carl.py client-models) into

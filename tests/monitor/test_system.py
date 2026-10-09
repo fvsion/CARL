@@ -1,10 +1,13 @@
 """Parsing macOS command output (real samples from an M-series Mac), and sh() itself."""
 from __future__ import annotations
 
+import ctypes
 import os
 import sys
 import time
 import unittest
+from typing import Sequence
+from unittest import mock
 
 sys.dont_write_bytecode = True                                  # keep tools/ free of __pycache__
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "tools"))
@@ -68,6 +71,56 @@ class ProcessTest(unittest.TestCase):
         self.assertEqual(vm["Pages free"], 3885 * 16384)
         self.assertEqual(vm["Pages occupied by compressor"], 1000 * 16384)
         self.assertNotIn("Mach Virtual Memory Statistics", vm)
+
+    def test_used_and_cached_as_activity_monitor_counts_them(self) -> None:
+        """Memory used = app memory (anonymous less purgeable) + wired + compressed; the cached files
+        (file-backed + purgeable) are apart. Made-up vm_stat text, 16 KiB pages."""
+        vm_text = ("Mach Virtual Memory Statistics: (page size of 16384 bytes)\nPages free:  1000.\n"
+                   "Pages active:  50000.\nPages wired down:  20000.\nPages purgeable:  300.\n"
+                   "File-backed pages:  40000.\nAnonymous pages:  60000.\nPages occupied by compressor:  5000.\n")
+
+        def fake_sh(cmd: Sequence[str], timeout: float = 3) -> str:
+            return vm_text if list(cmd) == ["vm_stat"] else ""
+
+        with mock.patch.object(system, "sh", fake_sh):
+            st = system.read_system(16384)
+        page = 16384
+        self.assertEqual((st.anon, st.purgeable, st.files), (60000 * page, 300 * page, 40000 * page))
+        self.assertEqual(st.app, (60000 - 300) * page)
+        self.assertEqual(st.used, (60000 - 300 + 20000 + 5000) * page)       # not wired + active + compressed
+        self.assertEqual(st.cached, (40000 + 300) * page)
+        self.assertEqual(system.SystemStats(anon=1, purgeable=5).app, 0)        # never below 0
+
+    def test_footprint_through_libproc(self) -> None:
+        """phys_footprint reads ri_phys_footprint of rusage_info_v2; None when the call fails (another user's
+        process, not macOS). A made-up value through a fake proc_pid_rusage."""
+        self.assertEqual(system.RusageInfoV2.ri_phys_footprint.offset, 72)       # <sys/resource.h>
+        self.assertEqual(ctypes.sizeof(system.RusageInfoV2), 160)
+        calls = []
+
+        def fake(pid: int, flavor: int, addr: int) -> int:
+            calls.append((pid, flavor))
+            system.RusageInfoV2.from_address(addr).ri_phys_footprint = 4 * 2**30 + 123
+            return 0
+
+        self.assertEqual(system.phys_footprint(4242, fake), 4 * 2**30 + 123)
+        self.assertEqual(calls, [(4242, system.RUSAGE_INFO_V2)])
+        self.assertIsNone(system.phys_footprint(4242, lambda pid, flavor, addr: -1))      # EPERM, ESRCH
+        with mock.patch.object(system, "_proc_pid_rusage", return_value=None):           # not macOS
+            self.assertIsNone(system.phys_footprint(4242))
+
+    def test_process_info_has_the_footprint(self) -> None:
+        ps = "  2528   12.5 01:02 /opt/llama-server -m /m/a.gguf\n"
+        with mock.patch.object(system, "sh", return_value=ps), \
+                mock.patch.object(system, "phys_footprint", return_value=3 * 2**30):
+            info = system.process_info(4242)
+        assert info is not None
+        self.assertEqual((info.rss, info.footprint), (2528 * 1024, 3 * 2**30))
+        with mock.patch.object(system, "sh", return_value=ps), \
+                mock.patch.object(system, "phys_footprint", return_value=None):
+            info = system.process_info(4242)
+        assert info is not None
+        self.assertIsNone(info.footprint)                                       # the card then uses the RSS
 
     def test_swap_gpu_power_pressure(self) -> None:
         self.assertEqual(system.parse_swap("total = 4096.00M  used = 3307.19M  free = 788.81M  (encrypted)"),
