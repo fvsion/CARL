@@ -2,7 +2,9 @@
 // The /carl panel's content (client/shared/carl-panel.js: OpenCode's carl-panel plugin and Pi's carl-panel
 // extension each carry a copy): a control panel. One row for each CARL part on this computer: its label and its
 // state (read from the config files the setup wrote and ~/.config/carl/client-install.env); Enter changes it in
-// place. No explanations (user, 2026-10-08: "a control panel, not the readme").
+// place. No explanations (user, 2026-10-08: "a control panel, not the readme"). Row labels are titles (user,
+// 2026-10-10): every word capitalized but the small ones ("Coder Subagent", "Apply the Waiting Config"); values stay
+// lower case.
 //
 // panel(client) -> { title, rows }: each row is { id, label, state, kind } with its actions: a switch (on / off), a
 // choice (web search: exa, parallel, off), a list (Coder subagent: its own rows), a view (the sync service: label
@@ -10,7 +12,7 @@
 // then the config step again), so /carl, ./setup and the dashboard's sync use the same switches. act() runs an
 // action and says what happened (the toast). The words follow reference/glossary.md and the 23.2 writing rules.
 //
-// Phase 23.4.4: the coder's settings are a sub-list under one top-level row "Coder subagent" (its state: the coder's
+// Phase 23.4.4: the coder's settings are a sub-list under one top-level row "Coder Subagent" (its state: the coder's
 // on / off, and a "›": it opens a list): Coder, Background coder, Delegation reminder (these two only while the coder
 // is on), Coder thinking and Coder model. Coder thinking overrides the dashboard's Coder thinking on this computer
 // only, per model (CODER_THINKING=MODEL:VALUE in client-install.env, through `carl-sync.py set`; the setup merges it;
@@ -300,28 +302,28 @@ function syncRows() {
   const pkg = packageVersions(bundle, remote, st);
   /** @type {[string, string][]} */
   const view = [
-    ["Sync service", !st.service ? "not installed" : live ? "connected" : "not connected"],
-    ...(st.service && alive ? [/** @type {[string, string]} */ (["Last contact", ago(alive)])] : []),
-    ["Last config", st.applied ? when(st.applied_at) : "none yet"],
-    ...(st.pending ? [/** @type {[string, string]} */ (["Waiting config", String(st.pending)])] : []),
-    ...(st.error ? [/** @type {[string, string]} */ (["Last check", `failed: ${String(st.error)}`])] : []),
-    ...(pkg.client ? [/** @type {[string, string]} */ (["Client package", pkg.client])] : []),
+    ["Sync Service", !st.service ? "not installed" : live ? "connected" : "not connected"],
+    ...(st.service && alive ? [/** @type {[string, string]} */ (["Last Contact", ago(alive)])] : []),
+    ["Last Config", st.applied ? when(st.applied_at) : "none yet"],
+    ...(st.pending ? [/** @type {[string, string]} */ (["Waiting Config", String(st.pending)])] : []),
+    ...(st.error ? [/** @type {[string, string]} */ (["Last Check", `failed: ${String(st.error)}`])] : []),
+    ...(pkg.client ? [/** @type {[string, string]} */ (["Client Package", pkg.client])] : []),
     ...(pkg.server ? [/** @type {[string, string]} */ (["Server", `CARL ${pkg.server}`])] : []),
-    ["Server address", `${remote.host}:${remote.port}`],
+    ["Server Address", `${remote.host}:${remote.port}`],
     ["Dashboard API", String(remote.cache_api ?? "").replace(/^https?:\/\//, "")],
   ];
   /** @type {Row[]} */
   const out = [
-    { id: "sync", label: "Sync service", state: service, kind: "view", viewTitle: "Config sync", view },
-    { id: "auto", label: "Apply new configs at once", state: auto ? "on" : "off", kind: "switch", actions: {
+    { id: "sync", label: "Sync Service", state: service, kind: "view", viewTitle: "Config Sync", view },
+    { id: "auto", label: "Apply New Configs at Once", state: auto ? "on" : "off", kind: "switch", actions: {
       [auto ? "off" : "on"]: { id: auto ? "auto-off" : "auto-on", args: ["auto", auto ? "off" : "on"],
                                busy: `turning ${auto ? "off" : "on"}…` } } },
   ];
   if (st.pending) {
-    out.push({ id: "apply", label: "Apply the waiting config", state: "", kind: "action",
+    out.push({ id: "apply", label: "Apply the Waiting Config", state: "", kind: "action",
                action: { id: "apply", args: ["apply"], busy: "applying…" } });
   }
-  out.push({ id: "once", label: "Check for a new config", state: "", kind: "action",
+  out.push({ id: "once", label: "Check for a New Config", state: "", kind: "action",
              action: { id: "check", args: ["once"], busy: "checking…" } });
   return out;
 }
@@ -338,7 +340,7 @@ function webRow(provider) {
   }
   // the notes stay (user, 2026-10-08): they say where the queries go
   const notes = { exa: "Queries go to exa.ai.", parallel: "Queries go to parallel.ai." };
-  return { id: "web", label: "Web search", state, kind: "choice", values, notes, actions };
+  return { id: "web", label: "Web Search", state, kind: "choice", values, notes, actions };
 }
 
 /** The plugin entry of OpenCode's opencode.json whose path has `name`: its options, or undefined. @param {unknown} plugins @param {string} name */
@@ -555,9 +557,9 @@ function thinkingRow(m, from) {
   /** @type {Record<string, string>} */
   const notes = { main: `${from === "session" ? "the main session's" : "the default model's"} thinking (${main})` };
   if (m.dashboard) notes.default = dashText(m);
-  return { id: "thinking", label: "Coder thinking", state: thinkingWord(cur), value: cur, kind: "choice", values,
+  return { id: "thinking", label: "Coder Thinking", state: thinkingWord(cur), value: cur, kind: "choice", values,
            titles: { main: thinkingWord("main"), default: thinkingWord("default") }, notes, actions,
-           choiceTitle: `Coder thinking with ${m.id}` };
+           choiceTitle: `Coder Thinking with ${m.id}` };
 }
 
 /** What "dashboard default" gives for this model, in words: "medium", "same as main (low)". @param {StateModel} m */
@@ -595,8 +597,8 @@ function externalThinkingRow(ref, levels, cur) {
                    name, did: `CARL set ${name} to ${modelThinkingWord(v)} on this computer.${v === "off" ? ` ${FULL_SPEC}` : ""}`,
                    live: ["pi"] };
   }
-  return { id: "thinking", label: "Coder thinking", state: modelThinkingWord(cur), value: cur, kind: "choice", values,
-           titles: { default: modelThinkingWord("default") }, notes: {}, actions, choiceTitle: `Coder thinking with ${ref}` };
+  return { id: "thinking", label: "Coder Thinking", state: modelThinkingWord(cur), value: cur, kind: "choice", values,
+           titles: { default: modelThinkingWord("default") }, notes: {}, actions, choiceTitle: `Coder Thinking with ${ref}` };
 }
 
 /**
@@ -629,7 +631,7 @@ function coderModelRow(cur, carl, external, client) {
                    did: `CARL set ${name} to ${v === "main" ? thinkingWord("main") : v} on this computer.${where}`,
                    live: ["pi"] };
   }
-  return { id: "coder-model", label: "Coder model", state: cur === "main" ? thinkingWord("main") : cur, value: cur,
+  return { id: "coder-model", label: "Coder Model", state: cur === "main" ? thinkingWord("main") : cur, value: cur,
            kind: "choice", values, titles: { main: thinkingWord("main") }, notes, actions };
 }
 
@@ -697,10 +699,10 @@ function parts(client, session) {
     const variant = deleg?.coderVariant;
     if (coderRef !== "main" && typeof variant === "string" && LEVEL_RE.test(variant)) refThinking = variant;
     lsp = [switchRow("lsp", "LSP", "LSP", "NO_LSP", cfg.lsp === true && /OPENCODE_EXPERIMENTAL_LSP_TOOL=1/.test(oc))];
-    panels = [switchRow("sidebar", "Subagents side panel", "the subagents side panel", "NO_SIDEBAR", tui.includes("subagents-sidebar")),
-              switchRow("switcher", "Session switcher", "the session switcher", "NO_SWITCHER", tui.includes("session-switcher"))];
-    server = [switchRow("cache", "Disk cache", "the disk cache", "NO_CACHE", plugins.includes("carl-cache")),
-              switchRow("check", "Model check", "the model check", "NO_MODEL_CHECK", plugins.includes("carl-model-check"))];
+    panels = [switchRow("sidebar", "Subagents Side Panel", "the subagents side panel", "NO_SIDEBAR", tui.includes("subagents-sidebar")),
+              switchRow("switcher", "Session Switcher", "the session switcher", "NO_SWITCHER", tui.includes("session-switcher"))];
+    server = [switchRow("cache", "Disk Cache", "the disk cache", "NO_CACHE", plugins.includes("carl-cache")),
+              switchRow("check", "Model Check", "the model check", "NO_MODEL_CHECK", plugins.includes("carl-model-check"))];
   } else {
     const mcp = obj(json(join(PI, "mcp.json")));
     const servers = obj(mcp.mcpServers ?? mcp.servers);
@@ -719,7 +721,7 @@ function parts(client, session) {
       ? `${sett.defaultProvider}/${sett.defaultModel}` : "";
     browser = Boolean(servers["carl-browser"]);
     search = piSearch(servers["carl-web-search"]);
-    server = [switchRow("cache", "Disk cache", "the disk cache", "NO_CACHE", exists(join(PI, "extensions", "carl-cache", "index.ts")))];
+    server = [switchRow("cache", "Disk Cache", "the disk cache", "NO_CACHE", exists(join(PI, "extensions", "carl-cache", "index.ts")))];
   }
   // the coder's rows: a sub-list (user, 2026-10-09); without the coder only its switch (user, 2026-10-08: the
   // others do nothing then, and they disappear)
@@ -730,12 +732,12 @@ function parts(client, session) {
     : [externalThinkingRow(coderRef, external.find((x) => x.ref === coderRef)?.levels ?? [], refThinking)];
   const coder = [
     switchRow("coder", "Coder", "the coder subagent", "NO_CODER", coderOn),
-    ...(coderOn ? [switchRow("background", "Background coder", "the background coder", "NO_BACKGROUND_SUBAGENTS", bg),
-                   switchRow("reminder", "Delegation reminder", "the delegation reminder", "NO_REMINDER", reminder),
+    ...(coderOn ? [switchRow("background", "Background Coder", "the background coder", "NO_BACKGROUND_SUBAGENTS", bg),
+                   switchRow("reminder", "Delegation Reminder", "the delegation reminder", "NO_REMINDER", reminder),
                    testsRow(tests), ...thinking, coderModelRow(coderRef, carl?.m.id ?? "", external, client)] : []),
   ];
   return [
-    { id: "subagent", label: "Coder subagent", state: coderOn ? "on" : "off", kind: "list", listTitle: "Coder subagent",
+    { id: "subagent", label: "Coder Subagent", state: coderOn ? "on" : "off", kind: "list", listTitle: "Coder Subagent",
       arrow: true, rows: coder },
     switchRow("browser", "Browser", "the browser", "NO_BROWSER", browser),
     webRow(search),

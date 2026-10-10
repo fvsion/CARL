@@ -253,7 +253,7 @@ Use this procedure for clients that are not on the server Mac and not in the VMw
 | `setup`, `setup.command` | The setup, and its double-click form for macOS |
 | `remote.json`, `api-key` | The server's address and key, from its last start (mode 0600) |
 | `installed-models.json` | The installed models, for the model lists of OpenCode and Pi |
-| `VERSION` | The CARL version. `/carl` shows it under **Sync service** |
+| `VERSION` | The CARL version. `/carl` shows it under **Sync Service** |
 
 - CAUTION: **The zip holds the API key of the server.** Its mode is 0600. Keep it secret. After the copy, delete it on both computers (`rm` with the path that CARL shows). `unzip` keeps the mode 0600 of the key file, and the setup sets it again.
 - **When the server serves only this Mac** (network local, 127.0.0.1), other computers cannot reach it. CARL then makes no package, changes nothing, and tells you how to change the network: Settings > Server > Network, or `./carl.sh config set llama.net vm`. Then start the server again, so that `remote.json` has the new address. `--anyway` makes the package also in this case (for example for a test).
@@ -267,7 +267,7 @@ Use this procedure for clients that are not on the server Mac and not in the VMw
   ```bash
   unzip -o carl-client-VERSION-HOST.zip && cd carl-client && ./setup
   ```
-  The setup keeps your settings and your choices, and makes backups. `/carl` shows the version of the client package (**Sync service**). It also tells you when the server Mac runs a newer CARL version than the package: the sync service learns the server's version at each contact.
+  The setup keeps your settings and your choices, and makes backups. `/carl` shows the version of the client package (**Sync Service**). It also tells you when the server Mac runs a newer CARL version than the package: the sync service learns the server's version at each contact.
 - NOTE: the client folder does not learn about a later CARL update on the server Mac. After you update CARL there, make a new package for each client computer.
 
 ### Sharing with a friend
@@ -516,7 +516,7 @@ Each model has two thinking settings in the dashboard (Settings > Agents, [Agent
 - **On is good for a coder.** A coder solves problems, and thinking helps it. On a 27B build, "on" for the coder is `medium`. Turn its thinking off only when you give it a full spec (spec-kit or a similar tool): a coder without thinking does well only when every requirement is written down. The dashboard shows this note when the coder thinks off (Coder thinking off, or same as main with Main thinking off).
 - The coder's setting applies to each coder session, also to the test session before the code ([The chain](reference/delegation.md)). It follows the model that the coder runs on.
 - **The clients get the settings at the next update:** the Connect tab, `u` (this Mac), or `P` (other computers that sync). The dashboard saves a change at once; the server does not restart.
-- **One computer can have its own Coder thinking:** `/carl` > **Coder subagent** > **Coder thinking** ([The /carl panel](#carls-plugins-and-extensions)). That choice is stronger than the dashboard's value on that computer, for that model: the model of the session that you open `/carl` in. The setup and the sync keep it (`CODER_THINKING` in `~/.config/carl/client-install.env`). Its value `dashboard default` removes it again.
+- **One computer can have its own Coder Thinking:** `/carl` > **Coder Subagent** > **Coder Thinking** ([The /carl panel](#carls-plugins-and-extensions)). That choice is stronger than the dashboard's value on that computer, for that model: the model of the session that you open `/carl` in. The setup and the sync keep it (`CODER_THINKING` in `~/.config/carl/client-install.env`). Its value `dashboard default` removes it again.
 - **OpenCode:** Main thinking is the default of each model entry (`options.reasoningEffort`). A variant that you select (`/variants`, ctrl+t) is stronger than it. For Coder thinking, CARL's `carl-delegation` plugin sets the thinking on each request of the coder, for the model of the request. With "same as main", it does not change the request: the model's own setting (Main thinking) applies.
 - **Pi:** Main thinking that is not the default goes into `modelThinkingLevels` in `settings.json` (one level for each model). If you change a level there yourself, the setup keeps your level. Coder thinking goes into `~/.pi/agent/carl.json`. The subagent extension uses the value for the model of the coder when it starts the coder. With "same as main", the coder gets the thinking level of the session.
 - **Off** turns thinking off only. The sampling settings stay those of the server.
@@ -743,7 +743,7 @@ expected_result = "all tests pass"
 4. The main agent gets **one result**: both reports, and "Tests unchanged" or the test files that changed. A line `[CARL] Warning` says when no new test failed before the code, or when a test changed.
 5. The main agent runs the checks itself before it answers you.
 
-**Tests after the code, or no tests.** `/carl` > **Coder subagent** > **Tests** changes this for your computer. `before code` (the default) is the order above. `after code`: the code session runs first, then the test session writes the tests from the requirements against that code; CARL runs the checks after both, and failing new tests come back to the main agent as findings to give to the coder. `off`: one code session, no tests; the result says so, and the main agent or you ask the coder for tests (`tests-only`) when the work needs them.
+**Tests after the code, or no tests.** `/carl` > **Coder Subagent** > **Tests** changes this for your computer. `before code` (the default) is the order above. `after code`: the code session runs first, then the test session writes the tests from the requirements against that code; CARL runs the checks after both, and failing new tests come back to the main agent as findings to give to the coder. `off`: one code session, no tests; the result says so, and the main agent or you ask the coder for tests (`tests-only`) when the work needs them.
 
 You see two coder sessions (in OpenCode: `…: tests` and `…: code`), but one result. In OpenCode, the two sessions run in the background only on the OpenCode versions that CARL checked (1.18.34 and 1.18.35). On other versions they run in the foreground: the main session waits for them, and a notice says so one time. Follow-ups and fixes (`follow_up`, `bug_fix`, also a stuck task) get one session, with no new tests. The tests in `existing_tests` are frozen for the coder: the result says whether it changed them. Details: [the chain](reference/delegation.md#the-chain-tests-first-in-a-separate-session).
 
@@ -795,7 +795,7 @@ Delegation depends on the judgment of the model. Thus, it occurs "usually", not 
 
 **Same model.** The coder uses the loaded model. Thus, the gain is a new, focused context and more reasoning (its own thinking setting: Coder thinking, same as the main session by default), not a stronger model. With 2 slots, the main session keeps its cache while the coder works.
 
-**Another model (an external coder).** You can let the coder run on a model of another provider that OpenCode or Pi can use, free or paid: `/carl` > **Coder subagent** > **Coder model** ([The /carl panel](#carls-plugins-and-extensions)). Then:
+**Another model (an external coder).** You can let the coder run on a model of another provider that OpenCode or Pi can use, free or paid: `/carl` > **Coder Subagent** > **Coder Model** ([The /carl panel](#carls-plugins-and-extensions)). Then:
 
 - The coder uses no slot of the CARL server. The setup turns the coder on also when the server runs 1 slot, and `/carl` shows no 1-slot warning.
 - **The data boundary.** The brief, the files that the coder reads and the results of its tools go to that provider, not to your server. `/carl` tells you where (`The coder's work goes to openrouter.ai.`). A paid model costs money. CARL does not show the cost.
@@ -828,13 +828,13 @@ The setup (`./carl.sh install`, `./setup`) adds these to OpenCode and Pi. Each o
 
 | Plugin | In | What you get | Off |
 |---|---|---|---|
-| **Disk cache** (`carl-cache`) | OpenCode, Pi | Fast starts: each agent's prompt and each session saved on the server's disk ([Fast starts](#7-fast-starts-the-disk-cache)) | `NO_CACHE=1` |
-| **Model check** (`carl-model-check`) | OpenCode | A warning when the model that you select is not the model that the server runs, is not installed, or loads now | `NO_MODEL_CHECK=1` |
+| **Disk Cache** (`carl-cache`) | OpenCode, Pi | Fast starts: each agent's prompt and each session saved on the server's disk ([Fast starts](#7-fast-starts-the-disk-cache)) | `NO_CACHE=1` |
+| **Model Check** (`carl-model-check`) | OpenCode | A warning when the model that you select is not the model that the server runs, is not installed, or loads now | `NO_MODEL_CHECK=1` |
 | **Coder in the background** (`carl-background`) | OpenCode | The coder subagent runs in the background, so the main session stays free | `NO_BACKGROUND_SUBAGENTS=1` |
 | **Hand-off** (`carl-delegation`) | OpenCode, Pi | The delegation rule for the main agent only, and the reminder at the end of your messages ([The coder subagent](#the-coder-subagent-opencode-and-pi)) | `NO_REMINDER=1` (the reminder); `NO_CODER=1` (all) |
 | **Subagent tool** (`subagent`) | Pi | The `subagent` tool: the coder and other agents, one, several at the same time, a chain, or in the background; `/subagents` | `NO_CODER=1` |
 | **Subagents panel** (`subagents-sidebar`) | OpenCode | The running and finished subagents in the sidebar ([The Subagents panel](#the-subagents-panel-opencode)) | `NO_SIDEBAR=1` |
-| **Session switcher** (`session-switcher`) | OpenCode | `‹ 2/3 ● title ›` in the prompt box, `/switch` ([Switching sessions](#switching-sessions-opencode)) | `NO_SWITCHER=1` |
+| **Session Switcher** (`session-switcher`) | OpenCode | `‹ 2/3 ● title ›` in the prompt box, `/switch` ([Switching sessions](#switching-sessions-opencode)) | `NO_SWITCHER=1` |
 | **The /carl panel** (`carl-panel`) | OpenCode, Pi | A control panel: every CARL piece on this computer with its state, changed in place, and the config sync | (always on) |
 
 - Put a switch in front of the setup, for example `NO_SIDEBAR=1 ./carl.sh install --config-only`. The setup then removes the plugin, and keeps it off the next time. `NO_SIDEBAR=0` puts it back.
@@ -844,67 +844,67 @@ The setup (`./carl.sh install`, `./setup`) adds these to OpenCode and Pi. Each o
 **The /carl panel.** Type `/carl` in OpenCode or Pi. The panel is a control panel: one list, one row for each CARL piece, with its label and its state. For example (OpenCode):
 
 ```
-Coder subagent                    on ›
+Coder Subagent                    on ›
 Browser                             on
-Web search                         exa
+Web Search                         exa
 LSP                                off
-Subagents side panel                on
-Session switcher                    on
-Disk cache                          on
-Model check                         on
-Sync service                 connected
-Apply new configs at once           on
-Check for a new config
+Subagents Side Panel                on
+Session Switcher                    on
+Disk Cache                          on
+Model Check                         on
+Sync Service                 connected
+Apply New Configs at Once           on
+Check for a New Config
 ```
 
 - **Enter** changes the selected row in place (in Pi, also **Space**). While the setup runs, the state reads `turning off…`, then the new state. A message says what CARL did (red when it failed). The title says when OpenCode or Pi must restart to use the changes (`Restart OpenCode to use 1 change.`).
-- **Web search** opens its values: `exa`, `parallel` or `off`. Each provider says where the queries go (`Queries go to exa.ai.`).
-- **Coder subagent** opens the coder's own list (the `›` after its state says so). Its state is the state of the coder:
+- **Web Search** opens its values: `exa`, `parallel` or `off`. Each provider says where the queries go (`Queries go to exa.ai.`).
+- **Coder Subagent** opens the coder's own list (the `›` after its state says so). Its state is the state of the coder:
 
   ```
   Coder                               on
-  Background coder                    on
-  Delegation reminder                 on
+  Background Coder                    on
+  Delegation Reminder                 on
   Tests                     before code ›
-  Coder thinking     dashboard default ›
-  Coder model             same as main ›
+  Coder Thinking     dashboard default ›
+  Coder Model             same as main ›
   ```
 
   - **Coder** turns the coder on or off.
   - **Tests** opens its values: `before code` (the default: the test session, then the code session), `after code` (the code session, then the test session) and `off` (no test session). See [Tests first, in a separate session](#the-coder-subagent-opencode-and-pi). The choice is for this computer (`CODER_TESTS`). OpenCode and Pi use it at the next coder task: no restart.
-  - **Coder thinking** is for the model that the coder runs on: with Coder model `same as main`, the model of the session that you open `/carl` in (in router mode, the model that you chose for that session). Without a session (OpenCode's home screen, before the first message), or when the session's model is not a CARL model, it is the default model of your config. The title of its values names the model (`Coder thinking with qwen3.8-27b`). The values: `dashboard default` (with the dashboard's value in grey, for example `same as main (low)`), `same as main` (with the main session's thinking in grey, for example `the main session's thinking (low)`; without a session: `the default model's thinking (low)`), then `off` and `on`, or `off`, `low`, `medium` and `xhigh` for a model with effort levels. ● marks the current value (OpenCode). A value other than `dashboard default` changes the dashboard's Coder thinking ([Settings > Agents](#agents-panel)) **on this computer only**, for that model. `dashboard default` removes this computer's value: the dashboard's value applies again. When the coder will not think (`off`, or a value that gives off), the message tells you to use the coder only with a full spec (spec-kit or a similar tool). OpenCode must restart to use the change; Pi uses it the next time that it starts the coder.
-  - **Coder model** opens its values. `same as main` (the default; in grey the CARL model, for example `CARL: qwen3.6-35b-a3b`): the coder runs on the model of the main session, on the CARL server. Then come the models of other providers that this OpenCode or Pi can use (OpenCode: its connected providers; Pi: the models that it has a key for), each with a note in grey: where its requests go and whether it is free or paid (`openrouter.ai, paid`; only the host when the client knows no price). CARL's own models are not in the list. When you select a model, the message says where the coder's work goes and that a paid model costs money, for example `CARL set the coder's model to openrouter/example-coder-32b on this computer. The coder's work goes to openrouter.ai, and the model costs money. Restart OpenCode to use it.` Coder thinking then shows `model default`, and its values are the levels that the client knows for that model (OpenCode: the model's variants; Pi: its thinking levels). The choice is for this computer: OpenCode and Pi on it both use it, and the setup and the sync keep it (`CODER_MODEL` in `~/.config/carl/client-install.env`). If the other client does not know that model, its coder fails with that error, and its `/carl` shows the model with the note `Pi does not list this model.` (or OpenCode). `same as main` turns the coder back to the CARL server (and keeps the coder on). OpenCode must restart to use the change; Pi uses it the next time that it starts the coder. Read [Another model](#the-coder-subagent-opencode-and-pi) before you select one: the coder's work then leaves your computers.
-  - **Esc** goes back one list (from the values to the Coder subagent list, then to the first list); on the first list it closes `/carl`. In OpenCode, ctrl+c and a click outside the panel close `/carl` from any list, as they close OpenCode's own dialogs.
-- **Sync service** opens the state of the config sync: the sync service, the last contact, the last config, the version of the client package, the CARL version of the server and the addresses.
-- **Check for a new config** asks the dashboard now. **Apply the waiting config** shows only when a config waits.
+  - **Coder Thinking** is for the model that the coder runs on: with Coder Model `same as main`, the model of the session that you open `/carl` in (in router mode, the model that you chose for that session). Without a session (OpenCode's home screen, before the first message), or when the session's model is not a CARL model, it is the default model of your config. The title of its values names the model (`Coder Thinking with qwen3.8-27b`). The values: `dashboard default` (with the dashboard's value in grey, for example `same as main (low)`), `same as main` (with the main session's thinking in grey, for example `the main session's thinking (low)`; without a session: `the default model's thinking (low)`), then `off` and `on`, or `off`, `low`, `medium` and `xhigh` for a model with effort levels. ● marks the current value (OpenCode). A value other than `dashboard default` changes the dashboard's Coder thinking ([Settings > Agents](#agents-panel)) **on this computer only**, for that model. `dashboard default` removes this computer's value: the dashboard's value applies again. When the coder will not think (`off`, or a value that gives off), the message tells you to use the coder only with a full spec (spec-kit or a similar tool). OpenCode must restart to use the change; Pi uses it the next time that it starts the coder.
+  - **Coder Model** opens its values. `same as main` (the default; in grey the CARL model, for example `CARL: qwen3.6-35b-a3b`): the coder runs on the model of the main session, on the CARL server. Then come the models of other providers that this OpenCode or Pi can use (OpenCode: its connected providers; Pi: the models that it has a key for), each with a note in grey: where its requests go and whether it is free or paid (`openrouter.ai, paid`; only the host when the client knows no price). CARL's own models are not in the list. When you select a model, the message says where the coder's work goes and that a paid model costs money, for example `CARL set the coder's model to openrouter/example-coder-32b on this computer. The coder's work goes to openrouter.ai, and the model costs money. Restart OpenCode to use it.` Coder Thinking then shows `model default`, and its values are the levels that the client knows for that model (OpenCode: the model's variants; Pi: its thinking levels). The choice is for this computer: OpenCode and Pi on it both use it, and the setup and the sync keep it (`CODER_MODEL` in `~/.config/carl/client-install.env`). If the other client does not know that model, its coder fails with that error, and its `/carl` shows the model with the note `Pi does not list this model.` (or OpenCode). `same as main` turns the coder back to the CARL server (and keeps the coder on). OpenCode must restart to use the change; Pi uses it the next time that it starts the coder. Read [Another model](#the-coder-subagent-opencode-and-pi) before you select one: the coder's work then leaves your computers.
+  - **Esc** goes back one list (from the values to the Coder Subagent list, then to the first list); on the first list it closes `/carl`. In OpenCode, ctrl+c and a click outside the panel close `/carl` from any list, as they close OpenCode's own dialogs.
+- **Sync Service** opens the state of the config sync: the sync service, the last contact, the last config, the version of the client package, the CARL version of the server and the addresses.
+- **Check for a New Config** asks the dashboard now. **Apply the Waiting Config** shows only when a config waits.
 - Without the coder, the coder's list has only the **Coder** row: the other rows have no effect.
 - When you turn on the **Coder** and the server runs 1 slot, CARL turns the coder on and shows a warning: the coder uses the slot of the main session while it works. With an external coder model, there is no warning: that coder uses no slot.
 - The sync rows show only when the server runs on another computer.
 
 | Row | In | Setup switch |
 |---|---|---|
-| Coder subagent > Coder | OpenCode, Pi | `NO_CODER` |
-| Coder subagent > Background coder | OpenCode, Pi (with the coder) | `NO_BACKGROUND_SUBAGENTS` |
-| Coder subagent > Delegation reminder | OpenCode, Pi (with the coder) | `NO_REMINDER` |
-| Coder subagent > Tests | OpenCode, Pi (with the coder) | `CODER_TESTS` (`before`, `after` or `off`) |
-| Coder subagent > Coder thinking | OpenCode, Pi (with the coder) | `CODER_THINKING` (`MODEL:VALUE`, one entry for each model, separated by commas) |
-| Coder subagent > Coder model | OpenCode, Pi (with the coder) | `CODER_MODEL` (`PROVIDER/MODEL`, or `main`) and `CODER_MODEL_THINKING` (the thinking of that model) |
+| Coder Subagent > Coder | OpenCode, Pi | `NO_CODER` |
+| Coder Subagent > Background Coder | OpenCode, Pi (with the coder) | `NO_BACKGROUND_SUBAGENTS` |
+| Coder Subagent > Delegation Reminder | OpenCode, Pi (with the coder) | `NO_REMINDER` |
+| Coder Subagent > Tests | OpenCode, Pi (with the coder) | `CODER_TESTS` (`before`, `after` or `off`) |
+| Coder Subagent > Coder Thinking | OpenCode, Pi (with the coder) | `CODER_THINKING` (`MODEL:VALUE`, one entry for each model, separated by commas) |
+| Coder Subagent > Coder Model | OpenCode, Pi (with the coder) | `CODER_MODEL` (`PROVIDER/MODEL`, or `main`) and `CODER_MODEL_THINKING` (the thinking of that model) |
 | Browser | OpenCode, Pi | `NO_BROWSER` |
-| Web search | OpenCode, Pi | `WEB_SEARCH` (exa, parallel or off) |
+| Web Search | OpenCode, Pi | `WEB_SEARCH` (exa, parallel or off) |
 | LSP | OpenCode | `NO_LSP` |
-| Subagents side panel | OpenCode | `NO_SIDEBAR` |
-| Session switcher | OpenCode | `NO_SWITCHER` |
-| Disk cache | OpenCode, Pi | `NO_CACHE` |
-| Model check | OpenCode | `NO_MODEL_CHECK` |
-| Sync service | OpenCode, Pi (a server on another computer) | — |
-| Apply new configs at once | OpenCode, Pi (a server on another computer) | `carl-sync.py auto on\|off` |
+| Subagents Side Panel | OpenCode | `NO_SIDEBAR` |
+| Session Switcher | OpenCode | `NO_SWITCHER` |
+| Disk Cache | OpenCode, Pi | `NO_CACHE` |
+| Model Check | OpenCode | `NO_MODEL_CHECK` |
+| Sync Service | OpenCode, Pi (a server on another computer) | — |
+| Apply New Configs at Once | OpenCode, Pi (a server on another computer) | `carl-sync.py auto on\|off` |
 
 - **A change** writes the setup switch to `~/.config/carl/client-install.env` and writes the configs of OpenCode and Pi again (`carl-sync.py set`, the same config step as the setup). It uses the models that this computer has now: it does not get a new config from the dashboard. This takes a few seconds.
 - **The setup, the sync and /carl use the same switches.** A piece that you turn off in `/carl` stays off after the next `./setup` and the next config from the dashboard. A switch in front of the setup (`NO_SIDEBAR=1 ./setup`) shows in `/carl` too.
 - OpenCode reads its tool switches (web search, LSP, the background coder) from the shell. After you change one of them, start OpenCode from a new terminal.
 - The coder that you turn on in `/carl` stays on, also with a 1-slot server: a subagent then takes the slot of the main session.
 - The new-file gate (the hand-off to the coder at the Nth new file) is a setting of the dashboard only. It is not in `/carl`.
-- A config that the dashboard sends is applied at once. To keep it waiting, turn **Apply new configs at once** off.
+- A config that the dashboard sends is applied at once. To keep it waiting, turn **Apply New Configs at Once** off.
 - OpenCode and Pi read their configs when they start. After a config is applied, OpenCode shows a message and Pi shows a notice: restart it to use the new config.
 - More: [Clients on other computers](reference/client-sync.md).
 
@@ -1412,7 +1412,7 @@ The buttons of the Setup sub-tab:
   | **Last seen** | `● connected`, or `○` and how long ago, for example `○ 3 days ago` |
   | **User** | The user on that computer |
   | **Syncs** | `always` (the sync service), or `at start` (a check when OpenCode or Pi starts) |
-  | **Config** | `up to date`, `at next sync` (it applies the new config at its next sync), `on hold` (it waits for you: open `/carl` on that computer, then **Apply the waiting config**), `out of date` (this Mac: push `u` in Setup), or `nothing sent` |
+  | **Config** | `up to date`, `at next sync` (it applies the new config at its next sync), `on hold` (it waits for you: open `/carl` on that computer, then **Apply the Waiting Config**), `out of date` (this Mac: push `u` in Setup), or `nothing sent` |
   | **OS**, **Address** | The system and the address of the computer |
 
 - The full level adds the **Version** row (the version of the last config sent) and the **Version** column (the version that each computer has).
@@ -1932,7 +1932,7 @@ Both still work alone, for scripts and for the instructions of earlier versions.
 | `error: a server runs on port 8080. Stop it first: two models do not fit in the memory.` from `./carl.sh tune` | Auto-tune needs the GPU for itself. | Stop the server first, or run Auto-tune from the dashboard (Settings, **Auto-tune** panel): it stops and starts the server for you. |
 | `error: another large process (possibly a model) is in memory: …` from `./carl.sh tune` | A different model server, or another process larger than 8 GiB (`BIG_GB`), runs. | Stop it first. If the process is not a model, run with `ALLOW_SECOND_MODEL=1`. |
 | `error: …opencode.json is not plain JSON (comments?)` from the setup | The setup cannot merge a config file with comments (JSONC). | Remove the comments, or move the file. Then run the setup again. It changed nothing. |
-| A config that you send does not arrive on a client computer | The sync service is not running, the dashboard is not running, or new configs wait for you (`/carl`: **Apply new configs at once** is `off`). | Look at the Clients sub-tab of the Connect tab, and at `/carl` on the client. When a new config waits, select **Apply the waiting config** in `/carl`. |
+| A config that you send does not arrive on a client computer | The sync service is not running, the dashboard is not running, or new configs wait for you (`/carl`: **Apply New Configs at Once** is `off`). | Look at the Clients sub-tab of the Connect tab, and at `/carl` on the client. When a new config waits, select **Apply the Waiting Config** in `/carl`. |
 
 **To see exactly what a client sends** (thinking settings, tool counts): see [Verifying behaviour](reference/verifying.md).
 

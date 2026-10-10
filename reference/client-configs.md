@@ -70,7 +70,7 @@ The dashboard has two thinking settings for each model (Settings > Agents): **Ma
 
 #### /carl's Coder thinking on one computer
 
-`/carl` > **Coder subagent** > **Coder thinking** overrides the dashboard's Coder thinking on one computer, for one model (user, 2026-10-09: "/carl overrides the dashboards default for that computer only"; stored per model).
+`/carl` > **Coder Subagent** > **Coder Thinking** overrides the dashboard's Coder thinking on one computer, for one model (user, 2026-10-09: "/carl overrides the dashboards default for that computer only"; stored per model).
 
 - It is a setup switch: `CODER_THINKING=MODEL:VALUE,MODEL:VALUE` in `~/.config/carl/client-install.env` (VALUE: `main`, `on`, `off`, `low`, `medium`, `xhigh`). `carl-sync.py set CODER_THINKING=MODEL:VALUE` changes one model's entry and keeps the others; `set CODER_THINKING=MODEL:default` (`/carl`'s `dashboard default`) removes the model's entry, so the dashboard's value applies again (no entry left: the line goes). `./setup` and each sync apply it again, as the other switches. `CODER_THINKING=… ./setup` also works.
 - `install.sh` passes it to `configure.py` (`--coder-thinking`). `configure.py` puts each entry over the dashboard's `thinking_coder` of that model (from `installed-models.json`) before it writes `coderThinking` (OpenCode) and `"thinking": {"coder": …}` (Pi). A model that the entry does not name keeps the dashboard's value. An entry that is not a model name and a value is left out. A level on an on / off model is `on` there, as in the dashboard.
