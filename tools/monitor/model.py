@@ -286,6 +286,7 @@ class ServerData:
     tg_rate: Optional[float] = None     # tokens generated per second, live
     system: SystemStats = field(default_factory=SystemStats)
     log_path: Optional[str] = None
+    log_filter_stopped: bool = False    # the server runs at -lv 4, and CARL's log filter for it stopped (23.4.4)
     router: Optional[RouterInfo] = None # a llama.cpp router: its models (props, slots, cmd: the loaded one's)
 
     @property

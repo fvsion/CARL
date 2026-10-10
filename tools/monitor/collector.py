@@ -16,6 +16,8 @@ import urllib.parse
 from dataclasses import dataclass
 from typing import Callable, Dict, List, Optional, Tuple
 
+from carl_core.domain.serverlog import counts_cache
+
 from . import fsio, gguf, system
 from .api import FETCH_ERRORS, Endpoint
 from .logtail import LogTail
@@ -71,10 +73,21 @@ def live_rates(d: ServerData, last: Optional[Sample]) -> Tuple[Optional[float], 
     return None, None
 
 
-def choose_log(cmd: str, log_arg: Optional[str], console: str, home: str) -> Optional[str]:
-    """The log to show: the server's --log-file (cmd: its command line; or --log), else its
-    console output, else the latest llama.cpp log."""
-    path = flag(cmd, "--log-file") or log_arg
+def log_pointer(home: str, port: int) -> Dict[str, object]:
+    """What CARL's log filter wrote for a server's port (~/models/logs/.log-PORT.json: the log and the filter's pid;
+    Phase 23.4.4 item 12), or {}."""
+    try:
+        with open(os.path.join(home, "models", "logs", f".log-{port}.json"), encoding="utf-8") as f:
+            doc = json.load(f)
+        return doc if isinstance(doc, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def choose_log(cmd: str, log_arg: Optional[str], console: str, home: str, filtered: str = "") -> Optional[str]:
+    """The log to show: the server's --log-file (cmd: its command line; or --log; or filtered: the log CARL's filter
+    writes for a server at -lv 4), else its console output, else the latest llama.cpp log."""
+    path = flag(cmd, "--log-file") or log_arg or filtered
     if not path or not os.path.exists(path) or os.path.getsize(path) == 0:
         return console if os.path.exists(console) else (path or os.path.join(home, "models/logs/llama-server-latest.log"))
     return path
@@ -157,7 +170,12 @@ class Collector:
             self.last = Sample(d.task, d.t, d.processed, d.decoded)
         d.system = system.read_system(self.page)
         console = self.console or os.path.join(self.home, f"models/logs/.console-{ep.port}.out")
-        d.log_path = choose_log(server_cmd, self.log_arg, console, self.home)
+        pointer = log_pointer(self.home, ep.port) if counts_cache(server_cmd) else {}
+        filtered = str(pointer.get("log") or "")
+        d.log_path = choose_log(server_cmd, self.log_arg, console, self.home, filtered)
+        # the server at -lv 4 runs, and its log filter does not (it writes the log): the HEALTH card says so
+        fpid = pointer.get("pid")
+        d.log_filter_stopped = bool(d.pid and isinstance(fpid, int) and not system.pid_alive(fpid))
         self.tail.update(d.log_path)
         return d
 

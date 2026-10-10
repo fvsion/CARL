@@ -14,7 +14,7 @@ import json
 from typing import Dict, List
 
 from monitor.api import Endpoint
-from monitor.collector import Collector, Sample, choose_log, live_rates, parse_metrics
+from monitor.collector import Collector, Sample, choose_log, live_rates, log_pointer, parse_metrics
 from monitor.model import RouterInfo, ServerData, SlotInfo, clean, clean_json, flag, flag_int
 
 METRICS = """# HELP llamacpp:prompt_tokens_total Number of prompt tokens processed.
@@ -130,6 +130,21 @@ class LogChoiceTest(unittest.TestCase):
             with open(log, "w") as f:
                 f.write("0.00.000.001 I x\n")
             self.assertEqual(choose_log(d.cmd, None, console, home), log)
+
+
+    def test_the_log_of_a_server_at_lv4_comes_from_the_filters_pointer(self) -> None:
+        """Phase 23.4.4 item 12: the server has no --log-file; CARL's log filter wrote ~/models/logs/.log-PORT.json."""
+        with tempfile.TemporaryDirectory() as home:
+            log = os.path.join(home, "models", "logs", "llama-server-1.log")
+            os.makedirs(os.path.dirname(log))
+            with open(log, "w") as f:
+                f.write("0.00.000.001 I x\n")
+            with open(os.path.join(home, "models", "logs", ".log-8080.json"), "w") as f:
+                json.dump({"log": log, "pid": os.getpid()}, f)
+            self.assertEqual(log_pointer(home, 8080), {"log": log, "pid": os.getpid()})
+            self.assertEqual(log_pointer(home, 8081), {})
+            console = os.path.join(home, ".console-8080.out")
+            self.assertEqual(choose_log("llama-server -lv 4", None, console, home, log), log)
 
 
 class UntrustedTextTest(unittest.TestCase):

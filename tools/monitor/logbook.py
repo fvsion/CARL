@@ -16,6 +16,8 @@ import time
 from dataclasses import dataclass
 from typing import Counter, Deque, Dict, Optional, Tuple
 
+from carl_core.domain.serverlog import CacheState, cache_state
+
 
 TS = re.compile(r"^(\d+)\.(\d+)\.(\d+)\.(\d+) ([IWED]) ")
 _TASK = re.compile(r"task (\d+)")
@@ -110,6 +112,7 @@ class LogBook:
         self.current: Dict[int, RequestRecord] = {}     # in-flight requests by task id
         self.spawned: Dict[int, float] = {}             # a router's model servers: port -> spawn time
         self.switches: Deque[Tuple[Optional[float], str]] = collections.deque(maxlen=8)   # a router's loads
+        self.cache: Optional[CacheState] = None         # the RAM cache, from the last "cache state" line (-lv 4)
 
     def reset(self) -> None:
         """Forget everything read so far (a new or truncated log); start is kept."""
@@ -120,6 +123,7 @@ class LogBook:
         self.current = {}
         self.spawned = {}
         self.switches = collections.deque(maxlen=8)
+        self.cache = None
 
     def add(self, line: str) -> None:
         """Take in one log line (without its newline)."""
@@ -136,6 +140,9 @@ class LogBook:
             self.counts[lvl] += 1
             if lvl == "E":
                 self.errors.append(line)
+        cs = cache_state(line)
+        if cs:
+            self.cache = cs
         sw = _SWITCH.search(line)
         if sw:
             self.switches.append((offset(line), sw.group(1).rstrip(".")))

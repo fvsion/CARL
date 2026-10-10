@@ -12,6 +12,7 @@ import struct
 import subprocess
 import tempfile
 import textwrap
+import time
 import unittest
 
 from _paths import HOST, REPO
@@ -284,6 +285,7 @@ class ServeLlama(unittest.TestCase):
                         '  echo "built with a fake for tests" >&2; exit 0\n'
                         'fi\n'
                         f'printf "%s\\n" "$@" > {argv_file!r}\n'
+                        '[[ -n "${FAKE_LLAMA_OUTPUT:-}" ]] && cat "$FAKE_LLAMA_OUTPUT"\n'
                         'prev=""; for a in "$@"; do\n'
                         f'  [[ "$prev" == --models-preset ]] && cp "$a" {preset_copy!r}\n'
                         '  prev="$a"; done\n')
@@ -318,6 +320,47 @@ class ServeLlama(unittest.TestCase):
 
 class ServeLlamaArgs(ServeLlama):
     """The flags, the settings and the key file."""
+
+    def test_a_single_model_logs_at_lv4_through_the_filter(self) -> None:
+        """Phase 23.4.4 item 12: -lv 4 and no --log-file; the server's output goes through tools/llama-log-filter.py,
+        which writes the log without the per-request detail of -lv 4 (the RAM cache's lines stay) and says where the
+        log is in ~/models/logs/.log-PORT.json."""
+        sample = ("0.01.000.001 I srv  llama_server: listening on http://127.0.0.1:8098\n"
+                  "0.02.000.001 I srv  update_slots: all slots are idle\n"
+                  "0.02.000.002 I slot launch_slot_: id  0 | task -1 | sampler params: \n"
+                  "n = 64, repeat_penalty = 1.000\n"
+                  "0.02.000.003 I slot launch_slot_: id  0 | task 0 | processing task, is_child = 0\n"
+                  "0.02.000.004 I srv   prompt_save:  - saving prompt with length 43, total state size = 2.353 MiB\n"
+                  "0.02.000.005 I srv        update:  - cache state: 1 prompts, 3.409 MiB (limits: 2048.000 MiB, "
+                  "8192 tokens, 25831 est)\n"
+                  "0.02.000.006 W srv  something: a warning\n")
+        with tempfile.TemporaryDirectory() as home:
+            out = os.path.join(home, "sample.txt")
+            with open(out, "w", encoding="utf-8") as f:
+                f.write(sample)
+            log = os.path.join(home, "models", "logs", "llama-server-test.log")
+            port = free_port()
+            p, argv, _ = self.run_serve(env={"LOG_FILE": log, "HOME": home, "FAKE_LLAMA_OUTPUT": out,
+                                             "PORT": str(port)})
+            self.assertEqual(p.returncode, 0, p.stderr)
+            self.assertEqual(argv[argv.index("-lv") + 1], "4")
+            self.assertNotIn("--log-file", argv)
+            pointer = os.path.join(home, "models", "logs", f".log-{port}.json")
+            for _ in range(100):                                  # the filter ends a moment after the server
+                if os.path.exists(pointer) and os.path.exists(log) and "a warning" in open(log, encoding="utf-8").read():
+                    break
+                time.sleep(0.05)
+            with open(log, encoding="utf-8") as f:
+                text = f.read()
+            self.assertIn("listening on", text.splitlines()[0])
+            self.assertNotIn("all slots are idle", text)
+            self.assertNotIn("sampler params", text)
+            self.assertNotIn("repeat_penalty", text)            # its continuation line goes with it
+            for kept in ("processing task", "prompt_save", "cache state: 1 prompts", "a warning"):
+                self.assertIn(kept, text)
+            self.assertIn("cache state: 1 prompts", p.stdout)    # the terminal gets the same lines
+            with open(pointer, encoding="utf-8") as f:
+                self.assertEqual(json.load(f)["log"], log)
 
     def test_extra_args_split_into_words_before_command_line_extras(self) -> None:
         p, argv, key_mode = self.run_serve("--ctx", "16k", "--foo", "a b",

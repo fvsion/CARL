@@ -233,11 +233,14 @@ make_template() {
 # line when it is older ("" otherwise; a check that cannot run says nothing).
 LLAMA_NOTE="$(python3 "$HERE/../tools/carl.py" llama-version 2>/dev/null)" || LLAMA_NOTE=""
 
-log_args=()
+log_args=(); lv_args=(); log_filter=0
 if [[ "$LOG_FILE" != "none" ]]; then
   mkdir -p "$(dirname "$LOG_FILE")"
   ln -sfn "$LOG_FILE" "$(dirname "$LOG_FILE")/llama-server-latest.log"
   log_args=(--log-file "$LOG_FILE" --log-timestamps --log-prefix)   # colours kept; tools/llama-log.sh strips them
+  # A single model: -lv 4 for the RAM cache's lines (the dashboard's count), its output through CARL's log filter,
+  # which keeps the log about its size at the default level (Phase 23.4.4 item 12; host/common.sh run_server).
+  lv_args=(-lv 4 --log-timestamps --log-prefix); log_filter=1
 fi
 
 # Router mode: the presets for every downloaded model that fits (each with its own
@@ -400,7 +403,7 @@ echo "Log file: $log_text. Batch: -ub $UB. Your settings: ./carl.sh config show.
 # Starts the server and the live monitor in this terminal (host/common.sh);
 # also keeps the Mac awake while it runs: a sleeping Mac freezes requests
 # mid-prompt (10:13-10:46 on 2026-09-25, sleep = 1 min on battery).
-run_server "$PORT" "$LOG_FILE" llama-server \
+CARL_LOG_FILTER="$log_filter" run_server "$PORT" "$LOG_FILE" llama-server \
   -m "$MODEL" --alias "$ALIAS" \
   --host "$HOST" --port "$PORT" --api-key-file "$API_KEY_FILE" \
   --jinja --reasoning-format deepseek \
@@ -411,7 +414,7 @@ run_server "$PORT" "$LOG_FILE" llama-server \
   -b "$BATCH" -ub "$UB" --parallel "$SLOTS" ${slot_args[@]+"${slot_args[@]}"} --no-mmproj \
   --ctx-checkpoints "$CKPT" --checkpoint-min-step "$CKPT_STEP" --cache-ram "$CACHE_RAM" \
   --metrics --slot-save-path "$SLOT_DIR" \
-  ${log_args[@]+"${log_args[@]}"} \
+  ${lv_args[@]+"${lv_args[@]}"} \
   ${tmpl_args[@]+"${tmpl_args[@]}"} \
   ${spec_args[@]+"${spec_args[@]}"} ${draft_args[@]+"${draft_args[@]}"} \
   ${swa_args[@]+"${swa_args[@]}"} \

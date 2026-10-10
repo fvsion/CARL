@@ -190,6 +190,44 @@ class ScreensTest(unittest.TestCase):
                         self.assertTrue(any(re.search(r"Coder model +zen/free-coder-1", x) for x in lines))
                         self.assertTrue(any(re.search(r"Coder model +openrouter/example-coder-32b", x) for x in lines))
 
+    def test_the_ram_cache_row_with_a_server_at_lv4(self) -> None:
+        """Phase 23.4.4 item 12 (as the mock-up): a server at -lv 4 with a RAM cache: a RAM cache row under the slots
+        (its fill, its memory, its sessions; empty before the first state line); at full also among the memory rows;
+        none without -lv 4. Every line fits each width."""
+        from carl_core.domain.serverlog import CacheState
+        book = self.app.collector.tail.book
+        d = self.server()
+        d.cmd = CMD + " -lv 4 --log-timestamps --log-prefix"
+        for detail in ("simple", "full"):
+            self.set_detail(detail)
+            self.ui.tab = 0
+            for cache, want in ((None, "empty"), (CacheState(3, int(1.5 * GIB), int(2.5 * GIB), 65536), "3 sessions")):
+                book.cache = cache
+                for cols, rows in SIZES:
+                    lines = self.frame(d, cols, rows)
+                    with self.subTest(detail=detail, cache=want, cols=cols):
+                        self.assertFalse([x for x in lines if len(x) > cols])
+                        row = [x for x in lines if "RAM cache " in x and "│" in x and "slot" not in x]
+                        self.assertTrue(any(want in x for x in row), row)
+                        if want != "empty":
+                            self.assertTrue(any("1.5 GiB" in x for x in row), row)
+                        if detail == "full" and want != "empty":
+                            full = [x for x in lines if re.search(r"RAM cache\s+3 sessions, 1\.5 GiB", x)]
+                            self.assertEqual(len(full), 1, row)
+                            at = lines.index(full[0])                # never wrapped: the next line is another row
+                            self.assertNotIn("2.5 GiB", lines[at + 1].split("│")[1])
+                            self.assertEqual("of 2.5 GiB" in full[0], cols >= 130, full[0])
+        book.cache = None
+        self.set_detail("simple")
+        self.assertFalse([x for x in self.frame(self.server(), 130) if "RAM cache " in x and "sessions" in x])
+
+    def test_a_stopped_log_filter_is_a_health_warning(self) -> None:
+        d = self.server()
+        d.log_filter_stopped = True
+        self.ui.tab = 0
+        text = "\n".join(self.frame(d, 200, 60))
+        self.assertIn("CARL's log filter stopped", text)
+
     def test_the_header_says_the_state(self) -> None:
         self.assertIn("○ STOPPED", self.frame(ServerData(), 140)[0])
         self.assertIn("● IDLE", self.frame(self.server(), 140)[0])

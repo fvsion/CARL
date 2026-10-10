@@ -249,6 +249,9 @@ guard_other_models() {
 #   - the monitor takes over this tab; quitting it asks: stop the server, or
 #     detach and leave it running (./host/serve.sh monitor re-attaches)
 # Otherwise (scripts, nohup, MONITOR=0): exec the server in the foreground.
+# CARL_LOG_FILTER=1 (a single model at -lv 4, Phase 23.4.4 item 12): the server's output goes through
+# tools/llama-log-filter.py, which writes LOG_FILE (the lines CARL keeps) and passes them on to the console or the
+# terminal; the server then has no --log-file.
 # Either way caffeinate keeps the Mac awake while the server lives (KEEP_AWAKE=0 = off).
 run_server() {
   local port="$1" log="$2"; shift 2
@@ -257,7 +260,11 @@ run_server() {
     local console="$HOME/models/logs/.console-$port.out"
     mkdir -p "$(dirname "$console")"
     set -m                                   # job control: background jobs get their own process group
-    nohup "$@" >"$console" 2>&1 &
+    if [[ "${CARL_LOG_FILTER:-0}" == 1 && "$log" != none ]]; then
+      nohup "$@" > >(python3 "$here/../tools/llama-log-filter.py" --port "$port" "$log" >"$console" 2>&1) 2>&1 &
+    else
+      nohup "$@" >"$console" 2>&1 &
+    fi
     local spid=$!
     [[ "${KEEP_AWAKE:-1}" != 0 ]] && { nohup caffeinate -i -w "$spid" >/dev/null 2>&1 & }
     set +m
@@ -266,5 +273,8 @@ run_server() {
     exec python3 "$here/../tools/llama-monitor.py" "${margs[@]}"
   fi
   [[ "${KEEP_AWAKE:-1}" != 0 ]] && { caffeinate -i -w $$ & }
+  if [[ "${CARL_LOG_FILTER:-0}" == 1 && "$log" != none ]]; then
+    exec "$@" > >(python3 "$here/../tools/llama-log-filter.py" --port "$port" "$log") 2>&1
+  fi
   exec "$@"
 }

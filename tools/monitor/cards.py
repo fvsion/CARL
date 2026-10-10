@@ -11,6 +11,7 @@ from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
 from carl_core.domain.gguf import KV_BPE, kv_bytes_per_token
 from carl_core.domain.llamacpp import VersionCheck, health_rows
+from carl_core.domain.serverlog import CacheState, counts_cache
 from carl_core.domain.units import duration, file_size, memory, memory_pair, percent, speed, tokens
 
 from .cacheapi import Client
@@ -232,6 +233,12 @@ def request_line(d: ServerData) -> str:
             f"{plural(d.decoded, 'token')} written so far.")
 
 
+def cache_words(c: CacheState) -> str:
+    """The RAM cache's sessions in words: empty, 1 session, 3 sessions (llama.cpp's "prompts": each a session or a
+    saved prompt that left a slot)."""
+    return "empty" if not c.prompts else plural(c.prompts, "session")
+
+
 def slot_word(x: SlotInfo) -> str:
     """What a slot does: writing, reading, between turns, free."""
     if x.busy:
@@ -245,21 +252,40 @@ def pool_fill(d: ServerData) -> float:
     return sum(x.prompt + x.decoded for x in d.slot_list) / total if total else 0.0
 
 
+def ram_cache(v: View, d: ServerData, kv: Optional[KVInfo]) -> Optional[CacheState]:
+    """The RAM cache to show (Phase 23.4.4 item 12): its last state in the log (empty before the first one), when the
+    server runs with a RAM cache and at the log level that reports it (CARL's start: -lv 4 through its log filter);
+    None when the dashboard cannot know it (no row)."""
+    if not kv or not kv.cache_ram or not counts_cache(d.cmd):
+        return None
+    return v.log.cache or CacheState(prompts=0, bytes=0, limit_bytes=kv.cache_ram, limit_tokens=0)
+
+
 def card_slots(v: View, d: ServerData, w: int = 66) -> Card:
-    """Each slot's fill and what it does; the busy request; at full the context memory, the recurrent state,
-    the checkpoints, how far it can grow and the trained length."""
+    """Each slot's fill and what it does, and the RAM cache's (its sessions and memory, when the log says them); the
+    busy request; at full the context memory, the recurrent state, the checkpoints, the RAM cache, how far it can grow
+    and the trained length."""
     kv = kv_info(d)
     cmd, sl, n_ctx = d.cmd, d.slot_list, d.n_ctx
     nslots = len(sl) or flag_int(cmd, "--parallel", "-np", default=1)
+    cache = ram_cache(v, d, kv) if (d.slots or sl) else None
     narrow = w - 4 < 56                        # the title has the size: a narrow card shows only the fill
-    bw = max(min(w - 4 - (34 if narrow else 42), 24), 6)   # "slot 0  " bar "  41.5K of 96K   between turns"
+    lab = 9 if cache else 6                    # "RAM cache" or "slot 0": the slot rows' labels line up with it
+    bw = max(min(w - 4 - (lab - 6) - (34 if narrow else 42), 24), 6)   # "slot 0  " bar "  41.5K of 96K   between turns"
     L: List[CardLine] = []
     for i in range(nslots):
         x = sl[i] if i < len(sl) else None
         u = (x.prompt + x.decoded) if x else 0
         cap = x.n_ctx if x else n_ctx
         size = f"{tokens(u):>6}" if narrow else f"{tokens(u):>6} of {tokens(cap) if cap else '–'}"
-        L.append(f"slot {x.id if x else i}  {bar(u / cap if cap else 0, bw)}  {size}   {slot_word(x) if x else ''}")
+        name = f"slot {x.id if x else i}"
+        L.append(f"{name.ljust(lab)}  {bar(u / cap if cap else 0, bw)}  {size}   {slot_word(x) if x else ''}")
+    if cache:
+        limit = cache.limit_bytes or (kv.cache_ram if kv else 0)
+        used = memory(cache.bytes) if cache.bytes else "0"
+        size = used if narrow else f"{used} of {memory(limit)}"
+        L.append(f"{'RAM cache'.ljust(lab)}  {bar(cache.bytes / limit if limit else 0, bw)}  {size}   "
+                 f"{DIM}{cache_words(cache)}{R}")
     if not d.slots and not sl:
         L = [f"{DIM}No model is loaded.{R}"]
     busy = [x for x in sl if x.busy] or ([SlotInfo(0, True, d.task, n_ctx, d.prompt, d.cached, d.processed, d.decoded)]
@@ -296,6 +322,11 @@ def card_slots(v: View, d: ServerData, w: int = 66) -> Card:
         if kv.rs:
             L.append(row("recurrent state", memory(kv.rs)))
             L.append(row("checkpoints", f"Up to {memory(kv.ckpt_max)} ({kv.ckpt_n} per slot)"))
+        if cache:
+            limit = cache.limit_bytes or kv.cache_ram
+            # narrow: no limit (the bar above shows the fill against it), so the row never wraps
+            L.append(row("RAM cache", "empty" if not cache.prompts else
+                         f"{cache_words(cache)}, {memory(cache.bytes)}" + ("" if narrow else f" of {memory(limit)}")))
         L.append(row("can grow to", memory(kv.kv + kv.rs + kv.ckpt_max + kv.cache_ram)))
         if n_ctx and pool_tokens and pool_tokens != n_ctx * nslots:
             L.append(row("shared pool", f"{tokens(pool_tokens)} tokens, up to {tokens(n_ctx)} per slot"))
@@ -509,6 +540,9 @@ def card_health(v: View, d: ServerData) -> Card:
         first = f"{GRN}✓{R} No errors."
     L: List[CardLine] = [row("log", first),
                          row("sleep", "The Mac stays awake." if d.awake else f"{YEL}The Mac can sleep.{R}")]
+    if d.log_filter_stopped:                   # Phase 23.4.4 item 12: the server writes its log through the filter
+        L.insert(1, row("log filter", f"{YEL}⚠ CARL's log filter stopped: the log is not written. Restart the server "
+                                      f"(Settings > Server, a).{R}"))
     old_llama = v.llama is not None and v.llama.state == "older"
     for label, text, warn in health_rows(v.llama, v.full) if v.llama else ():
         L.append(row(label, f"{YEL}⚠ {text}{R}" if warn else text))
