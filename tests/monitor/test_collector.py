@@ -146,6 +146,51 @@ class LogChoiceTest(unittest.TestCase):
             console = os.path.join(home, ".console-8080.out")
             self.assertEqual(choose_log("llama-server -lv 4", None, console, home, log), log)
 
+    def test_the_filters_log_comes_before_an_older_starts_log(self) -> None:
+        """Phase 23.5 (the missing speeds): a dashboard started with --log OLD restarts the server (Apply); the new
+        start's log is the one the filter's pointer names, not --log."""
+        with tempfile.TemporaryDirectory() as home:
+            old, new = (os.path.join(home, f"llama-server-{i}.log") for i in (1, 2))
+            for path in (old, new):
+                with open(path, "w") as f:
+                    f.write("0.00.000.001 I x\n")
+            self.assertEqual(choose_log("llama-server -lv 4", old, os.path.join(home, "c.out"), home, new), new)
+            self.assertEqual(choose_log("llama-server", old, os.path.join(home, "c.out"), home, ""), old)
+
+
+class StaleTest(unittest.TestCase):
+    """Phase 23.5 (the missing speeds): /slots and /metrics wait for a batch to end; a long prompt's batch takes longer
+    than the poll waits. The last answer stands in, with a request running."""
+
+    def test_the_last_answer_stands_in_while_health_answers(self) -> None:
+        ep = FakeEndpoint({"/health": "{}", "/props": json.dumps({"model_alias": "m"}),
+                           "/slots": json.dumps([{"id": 0, "n_ctx": 8192, "is_processing": True, "id_task": 7,
+                                                  "n_prompt_tokens": 9000}, {"id": 1, "n_ctx": 8192}]),
+                           "/metrics": "llamacpp:prompt_tokens_total 10\n"})
+        c = Collector(ep, True, "/nokey", None, None, None, "/tmp", 16384)
+        c._http(ServerData())
+        del ep.answers["/slots"], ep.answers["/metrics"]                # mid-batch: no answer
+        d = ServerData()
+        c._http(d)
+        self.assertTrue(d.slots and d.busy)
+        self.assertEqual((d.n_ctx, d.task, len(d.slot_list), d.metrics), (8192, 7, 2, {"prompt_tokens_total": 10.0}))
+        self.assertIsNotNone(d.stale_s)
+
+    def test_not_when_too_old_or_down(self) -> None:
+        ep = FakeEndpoint({"/health": "{}", "/props": json.dumps({"model_alias": "m"}),
+                           "/slots": json.dumps([{"id": 0, "n_ctx": 8192}]), "/metrics": ""})
+        c = Collector(ep, True, "/nokey", None, None, None, "/tmp", 16384)
+        c._http(ServerData())
+        del ep.answers["/slots"]
+        c.good_slots = (c.good_slots[0] - 60, c.good_slots[1])
+        d = ServerData()
+        c._http(d)
+        self.assertFalse(d.slots)
+        del ep.answers["/health"]
+        d = ServerData()
+        c._http(d)
+        self.assertFalse(d.up or d.slots)
+
 
 class UntrustedTextTest(unittest.TestCase):
     def test_clean_drops_control_characters_but_keeps_tabs_and_newlines(self) -> None:

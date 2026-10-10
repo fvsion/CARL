@@ -1,7 +1,8 @@
 // @ts-check
-// What the CARL server runs against what OpenCode asks for (used by index.js). Pure, except
-// serverModels(), which asks the server. Kept out of index.js: older OpenCode versions call
-// every export of a plugin's entry module as a plugin function.
+// What the CARL server runs against what the client asks for: OpenCode's carl-model-check plugin and Pi's carl-cache
+// extension (Phase 23.5) each carry a copy (client/configure.py). Pure, except serverModels(), which asks the server.
+// Kept out of the plugin's index.js: older OpenCode versions call every export of a plugin's entry module as a plugin
+// function.
 //
 // The server's /v1/models tells the two modes apart: a single-model server lists the one
 // model it runs (and answers every request with it, whatever name is sent); a router lists
@@ -39,9 +40,10 @@ export function parseModels(body) {
  * The key is the same while the situation is, so each one is said once.
  * @param {string} wanted
  * @param {ServerState} s
+ * @param {"OpenCode" | "Pi"} [client]
  * @returns {Notice | undefined}
  */
-export function verdict(wanted, s) {
+export function verdict(wanted, s, client = "OpenCode") {
   if (!s.router) {
     const running = s.models[0]?.id;
     if (!running || running === wanted) return undefined;
@@ -50,7 +52,7 @@ export function verdict(wanted, s) {
       variant: "warning",
       message: `The server runs ${running}, not ${wanted}. The answers come from ${running}. ` +
         `Change the model in the CARL dashboard (Settings > Server). ` +
-        `To switch models from OpenCode, turn on router mode (Settings > Router).`,
+        `To switch models from ${client}, turn on router mode (Settings > Router).`,
     };
   }
   const m = s.models.find((x) => x.id === wanted);
@@ -60,7 +62,7 @@ export function verdict(wanted, s) {
       key: `missing:${wanted}`,
       variant: "error",
       message: `The server does not have ${wanted}. It has ${have}. ` +
-        `To update the model list of OpenCode, use the Connect tab of the dashboard, ` +
+        `To update the model list of ${client}, use the Connect tab of the dashboard, ` +
         `or run ./carl.sh install --config-only.`,
     };
   }

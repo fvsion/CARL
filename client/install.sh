@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Wires OpenCode and Pi to the model server (llama.cpp, port 8080).
+# Wires OpenCode and Pi to the model server (llama.cpp, port 9275 by default).
 # Runs in the VMware VM (Linux) or directly on a Mac. Existing configs are
 # merged without overwriting what you own (client/configure.py): our providers,
 # defaults and agents are tracked in carl.json next to each config; a
@@ -16,7 +16,7 @@
 #                                    dashboard: Connect tab, k shows the key)
 #   --key KEY                        the API key itself (it stays in your shell history
 #                                    and shows in the process list: use --key-file or the prompt)
-#   --port N                         the llama.cpp server's port (default 8080)
+#   --port N                         the llama.cpp server's port (default 9275)
 #   ./install.sh HOST                same as --host HOST
 #   (the pre-1.2.0 form HOST MTPLX_PORT LLAMA_PORT still works; the second value
 #   is ignored: MTPLX support was removed)
@@ -87,7 +87,7 @@ Where the server is:
   --vm [HOST]\tThe server runs on the host of this VM. The default HOST is 192.168.42.1.
   --host ADDRESS\tThe server is at ADDRESS, for example the LAN address of the Mac.
   ADDRESS\tThe same as --host ADDRESS.
-  --port N\tThe port of the server. The default is 8080.
+  --port N\tThe port of the server. The default is 9275.
   -h, --help\tShow this help.
 
 The API key:
@@ -98,7 +98,7 @@ The API key:
 Switches (environment variables, for example NO_CACHE=1 ./install.sh):
   CLIENTS=WHICH	The configs to write: both (the default), opencode or pi.
   NO_CACHE=1\tDo not install the disk cache.
-  NO_MODEL_CHECK=1\tDo not install the model check of OpenCode.
+  NO_MODEL_CHECK=1\tDo not install the model check (OpenCode and Pi).
   NO_SWITCHER=1\tDo not install the session switcher of OpenCode.
   NO_SIDEBAR=1\tDo not install the subagents sidebar of OpenCode.
   CODER=1, NO_CODER=1\tAlways install the coder subagent, or never. Without them, the script installs the coder when the server runs 2 or more slots, or when the coder runs on an external model (CODER_MODEL).
@@ -153,6 +153,13 @@ if (( ${#pos[@]} >= 2 )); then
 fi
 # remote.json (written next to this script at every server start: host/serve-llama.sh): the
 # server's address and port, for a copy of this folder on another computer given no address.
+CACHE_API=""; CARL_ID=""
+if [[ -s "$HERE/remote.json" ]]; then      # the dashboard API's real address and CARL's ID (Phase 23.5), for any mode
+  CACHE_API="$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(d.get("cache_api") or "")' "$HERE/remote.json" 2>/dev/null)" || CACHE_API=""
+  CARL_ID="$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(d.get("id") or "")' "$HERE/remote.json" 2>/dev/null)" || CARL_ID=""
+  [[ "$CACHE_API" =~ ^https?://[A-Za-z0-9.:\[\]-]+:[0-9]{1,5}$ ]] || CACHE_API=""
+  [[ "$CARL_ID" =~ ^[0-9a-f]{32}$ ]] || CARL_ID=""
+fi
 if [[ -z "$MODE" && -s "$HERE/remote.json" ]]; then
   if remote=$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(d["host"], int(d["port"]))' \
                 "$HERE/remote.json" 2>/dev/null); then
@@ -167,7 +174,7 @@ if [[ -z "$MODE" && -s "$HERE/remote.json" ]]; then
     echo "Server address from remote.json: $HOST:$LLAMA_PORT"
   fi
 fi
-LLAMA_PORT="${LLAMA_PORT:-8080}"
+LLAMA_PORT="${LLAMA_PORT:-9275}"     # CARL's default port (tools/carl_core/domain/runtime.py DEFAULT_PORT)
 if [[ -z "$MODE" ]]; then
   if [[ "$OS" == Darwin ]]; then MODE=local; else MODE=vm; fi
 fi
@@ -392,6 +399,11 @@ if [[ "${NO_BROWSER:-0}" != 1 ]]; then
   fi
 fi
 
+# remote.json's API address and ID belong to its server only (another --host or --port: port + 1, no ID)
+if [[ -n "$CACHE_API$CARL_ID" ]] && ! python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); sys.exit(0 if (d.get("host"), int(d.get("port", 0))) == (sys.argv[2], int(sys.argv[3])) else 1)' "$HERE/remote.json" "$HOST" "$LLAMA_PORT" 2>/dev/null; then
+  CACHE_API=""; CARL_ID=""
+fi
+
 # --- OpenCode + Pi configs (client/configure.py) --------------------------------
 # Merges our providers, defaults, coder agent, sidebar and extensions into the
 # existing configs without overwriting anything the user owns: a provider of
@@ -399,7 +411,7 @@ fi
 # default model, agents and extensions are kept. Our MTPLX pieces from before
 # 1.2.0 are removed, and the pieces named llm-deploy get CARL's names. Backups: FILE.before-carl and FILE.bak.
 python3 "$HERE/configure.py" --bundle "$HERE" --home "$HOME" --host "$HOST" --clients "$clients" \
-  --llama-port "$LLAMA_PORT" --ctx "$ctx" --models "$models_arg" ${running:+--running "$running"} --coder "$CODER" --sidebar "$([[ "${NO_SIDEBAR:-0}" == 1 ]] && echo 0 || echo 1)" \
+  --llama-port "$LLAMA_PORT" ${CACHE_API:+--cache-api "$CACHE_API"} ${CARL_ID:+--carl-id "$CARL_ID"} --ctx "$ctx" --models "$models_arg" ${running:+--running "$running"} --coder "$CODER" --sidebar "$([[ "${NO_SIDEBAR:-0}" == 1 ]] && echo 0 || echo 1)" \
   --switcher "$([[ "${NO_SWITCHER:-0}" == 1 ]] && echo 0 || echo 1)" \
   --model-check "$([[ "${NO_MODEL_CHECK:-0}" == 1 ]] && echo 0 || echo 1)" \
   --web-search "$web_search" --lsp "$([[ "${NO_LSP:-0}" == 1 || "${LSP:-1}" == 0 ]] && echo 0 || echo 1)" \

@@ -8,7 +8,7 @@ At each server start, the launcher writes two files into `client/` (`host/common
 
 | File | Contents | Mode |
 |---|---|---|
-| `remote.json` | The server's address and port, the dashboard API (`http://ADDRESS:PORT+1`) and the CARL version | 0600 |
+| `remote.json` | The server's address and port, the dashboard API (`http://ADDRESS:PORT+1`; the dashboard writes its real port when it takes another), CARL's ID (`id`) and the CARL version | 0600 |
 | `api-key` | The server's API key | 0600 |
 
 - Git ignores both files.
@@ -21,11 +21,20 @@ At each server start, the launcher writes two files into `client/` (`host/common
 
 ## The dashboard's API
 
-The dashboard serves a small API while it runs (`tools/monitor/cacheapi.py`). It listens on the server's address, on the server's port + 1. It wants the server's API key.
+The dashboard serves a small API while it runs (`tools/monitor/cacheapi.py`). It listens on the server's address. When the server serves only this Mac, it listens on 127.0.0.1 and on ::1. It wants the server's API key, except for `/carl/ping`.
+
+**Its port** (Settings > Server, **API port**; `llama.api_port`): `auto` (the default) is the server's port + 1, else the next free port. A typed port (1024–65535) is used as it is. The **Running now** column shows the port that the API took, and why when it is not the server's port + 1, for example `9277: 9276 is in use (ssh)`. The dashboard writes the real port into `remote.json` and the server file (`~/.config/carl/server-PORT.json`). While the API does not run, the dashboard tries again every 30 s.
+
+**CARL's ID.** Each CARL has an ID: `~/.config/carl/carl-id`, made at the first use (`tools/carl.py carl-id`). It is not a secret. `remote.json` of the client package has it (`"id"`). Before a client sends its key, it asks `GET /carl/ping` (no key). It sends the key only to an API that answers with the ID that it knows (`client/shared/carl-api.js`, `client/carl-sync.py`). Thus, another program on the port (for example an ssh SOCKS proxy) never gets the key. A client that was set up before this change knows no ID: it accepts any CARL dashboard API.
+
+**When the API or the server moves.** The sync asks `/carl/ping` on the ports after the server's port and after CARL's default port. It writes the place that it finds into `remote.json`. When `/carl/client/server` gives a new server port, the sync writes it into `remote.json` and runs the setup again, so OpenCode and Pi use the new address.
 
 | Request | Use |
 |---|---|
-| `GET /carl/cache/settings` | The Caching settings |
+| `GET /carl/ping` | No key. `{carl: ID, version}`: a client checks the ID before it sends its key |
+| `GET /carl/client/server` | `{port}`: the server's port now (the sync follows a move) |
+| `GET /carl/status` | The speeds: `state` (`writing`, `reading`, `idle`), `read`, `write`, `progress`, `last` (the last turn), `ram_cache`. OpenCode's sidebar and Pi's status line show them. |
+| `GET /carl/cache/settings` | The Caching settings. With `?port=N`: also `server`, the mode and each model's cache from the server file of port N |
 | `POST /carl/cache/claim`, `/release` | Take a slot for a request, or give it back |
 | `POST /carl/cache/record`, `/unrecord`, `GET /carl/cache/record` | Which session a slot holds |
 | `POST /carl/cache/save-recorded` | Save the recorded sessions of a model that stops (a router switch) |

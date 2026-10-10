@@ -28,6 +28,17 @@ _listen() { is_port "$1" || return 0; /usr/sbin/netstat -anv -p tcp 2>/dev/null 
     print a, pid; exit }'; }
 port_pid() { _listen "$1" | awk '{print $2}'; }
 port_host() { _listen "$1" | awk '{print ($1 == "*" ? "127.0.0.1" : $1)}'; }
+# is_llama_server PID: the process is a llama-server (CARL's server, or one started by hand).
+is_llama_server() { [[ "$(ps -o comm= -p "$1" 2>/dev/null)" == *llama-server* ]]; }
+# next_free_port PORT: the first port after PORT that nothing listens on (Phase 23.5: the start offers it).
+next_free_port() {
+  local p=$(( 10#$1 + 1 ))
+  while (( p <= 65535 && p <= 10#$1 + 100 )); do
+    [[ -z "$(port_pid "$p")" ]] && { echo "$p"; return 0; }
+    p=$(( p + 1 ))
+  done
+  return 1
+}
 
 has_addr() { ifconfig 2>/dev/null | grep -qF "inet $1 "; }
 
@@ -100,6 +111,9 @@ resolve_host() {
 # when set, like tools/carl.py (domain/confdir.py), so a run with a test folder never writes
 # the real one. The server's key stays in the default folder (HOME_CONF), as carl.py reads it.
 HOME_CONF="$HOME/.config/carl"
+# CARL's server port when none is set (PORT, --port; tools/carl_core/domain/runtime.py DEFAULT_PORT): a port no
+# common software uses (8080 is everyone's).
+CARL_DEFAULT_PORT=9275
 CARL_CONF="${CARL_CONF_DIR:-$HOME_CONF}"
 OLD_CONF="$HOME/.config/llm-deploy"        # its name before 1.2.0 (CARL was called LLM-Deploy)
 
@@ -167,16 +181,19 @@ carl_version() {
 
 # write_client_package HOST PORT KEY_FILE: the client folder's connection file, so a copy of
 # client/ (./carl.sh package zips it for another computer) needs nothing else: client/remote.json
-# (the server's address and port, the dashboard API at port + 1, the CARL version) and
+# (the server's address and port, the dashboard API at port + 1 (the dashboard writes its real port when it
+# takes another: Phase 23.5), CARL's ID (the API's /carl/ping answers it), the CARL version) and
 # client/api-key (the key), both readable by the owner only and git-ignored. Written at every
 # server start (the address can change between --local and --vm). client/setup and
 # client/install.sh use them when they are given no address.
 write_client_package() {
   local host="$1" port="$2" key="$3" dir="$CARL_CLIENT_DIR"
   [[ -d "$dir" && -s "$key" ]] || return 0
+  local id; id="$(python3 "$(dirname "${BASH_SOURCE[0]}")/../tools/carl.py" carl-id 2>/dev/null)" || id=""
+  [[ "$id" =~ ^[0-9a-f]{32}$ ]] || id=""
   ( umask 077
-    printf '{\n  "host": "%s",\n  "port": %s,\n  "cache_api": "http://%s:%s",\n  "version": "%s",\n  "written": "%s"\n}\n' \
-      "$host" "$port" "$host" "$(( port + 1 ))" "$(carl_version)" "$(date +%Y-%m-%dT%H:%M:%S)" > "$dir/remote.json.tmp" \
+    printf '{\n  "host": "%s",\n  "port": %s,\n  "cache_api": "http://%s:%s",\n  "id": "%s",\n  "version": "%s",\n  "written": "%s"\n}\n' \
+      "$host" "$port" "$host" "$(( port + 1 ))" "$id" "$(carl_version)" "$(date +%Y-%m-%dT%H:%M:%S)" > "$dir/remote.json.tmp" \
       && mv "$dir/remote.json.tmp" "$dir/remote.json"
     cp "$key" "$dir/api-key.tmp" && mv "$dir/api-key.tmp" "$dir/api-key" ) || return 0
   chmod 600 "$dir/remote.json" "$dir/api-key" 2>/dev/null || true

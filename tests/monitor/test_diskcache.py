@@ -79,5 +79,29 @@ class NamesTest(unittest.TestCase):
                                                            "carl-session-m-s0.bin", "carl-sessions.json"])
 
 
+
+class ReconcileTest(unittest.TestCase):
+    """Phase 23.5 (research-2 suggestion 9): what clients that went away leave, removed; nothing else."""
+
+    def test_stale_marks_half_files_and_lone_pieces(self) -> None:
+        import time as _t
+        from monitor.diskcache import reconcile
+        with tempfile.TemporaryDirectory() as d:
+            now = _t.time()
+            old = {".claim+m+0": 200, ".turn+m+1": 700, "carl-session+m+k+s1.bin.tmp": 4000, ".resident+m+0.json.tmp": 4000,
+                   "carl-session+m+k+s2.bin.json": 0, "carl-session+m+k+s3.bin.zst": 0}
+            keep = {".claim+m+1": 10, ".turn+m+0": 100, "carl-session+m+k+s4.bin.tmp": 60, ".resident+m+0.json": 9999,
+                    "carl-session+m+k+s5.bin": 0, "carl-session+m+k+s5.bin.json": 0,
+                    "carl-session+m+k+s6.bin.zst": 0, "carl-session+m+k+s6.bin.json": 0, "carl-prefix+m+build+a.bin": 9999}
+            for name, ago in {**old, **keep}.items():
+                p = os.path.join(d, name)
+                with open(p, "w") as f:
+                    f.write("x")
+                os.utime(p, (now - ago, now - ago))
+            self.assertEqual(sorted(reconcile(d, now)), sorted(old))
+            self.assertEqual(sorted(os.listdir(d)), sorted(keep))
+            self.assertEqual(reconcile(os.path.join(d, "none"), now), [])
+
+
 if __name__ == "__main__":
     unittest.main()

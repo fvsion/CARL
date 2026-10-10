@@ -49,7 +49,7 @@ from carl_core.domain.tuning import AutoTuner, TunePlan, blocking_processes  # n
 from carl_core.domain.types import ModelInfo, TuneRecord  # noqa: E402
 from carl_help import render  # noqa: E402
 
-GUARDED_PORTS = (8080,)                        # the llama.cpp server CARL starts
+GUARDED_PORTS = (9275, 8080)                   # the llama.cpp server CARL starts (8080 before 23.5)
 DEFAULT_BIG_GB = 8
 
 

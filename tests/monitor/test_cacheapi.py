@@ -34,6 +34,24 @@ class HandleTest(unittest.TestCase):
                          (200, {"prefix": True, "sessions": True, "save": "switch", "auto_s": 120, "disk_gb": 10,
                                 "move": "off", "gate": 0}))
 
+    def test_status_is_the_dashboards_snapshot(self) -> None:
+        snap = {"state": "writing", "read": 652.0, "write": 18.4, "progress": None, "last": None, "ram_cache": None}
+        self.assertEqual(handle(self.state, lambda: CONF, "GET", "/carl/status", {}, {}, status=snap), (200, snap))
+        self.assertEqual(handle(self.state, lambda: CONF, "GET", "/carl/client/server", {}, {}, server_port=9275),
+                         (200, {"port": 9275}))
+
+    def test_settings_carry_the_servers_cache_for_its_port(self) -> None:
+        """Phase 23.5: a client on another computer learns the server's cache (the window cache: nothing to restore)."""
+        from carl_core.domain import runtime
+        with tempfile.TemporaryDirectory() as conf_dir:
+            runtime.write(conf_dir, 8080, "single", {"m": runtime.model_entry("window")})
+            code, body = handle(self.state, lambda: CONF, "GET", "/carl/cache/settings", {"port": "8080"}, {},
+                                carl_dir=conf_dir)
+            self.assertEqual((code, body["server"]), (200, {"mode": "single", "models": {"m": {"swa": "window"}}}))
+            for q in ({"port": "9999"}, {"port": "x"}, {}):
+                self.assertNotIn("server", handle(self.state, lambda: CONF, "GET", "/carl/cache/settings", q, {},
+                                                  carl_dir=conf_dir)[1])
+
     def test_settings_carry_the_new_file_gate(self) -> None:
         """config.json delegation.gate goes to carl-delegation on other computers (Phase 23.4)."""
         from monitor.diskcache import config_of
@@ -104,6 +122,65 @@ class HttpTest(unittest.TestCase):
                 self.assertIn("port", CacheApi("127.0.0.1", port, lambda: "", d, lambda: CONF).start() or "")
             finally:
                 api.stop()
+
+
+
+def free_port() -> int:
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return int(s.getsockname()[1])
+
+
+class PingAndPortsTest(unittest.TestCase):
+    """Phase 23.5 item 7: /carl/ping answers without a key (a client checks it first); the API holds its port on
+    127.0.0.1 and ::1."""
+
+    def test_ping_without_a_key_and_both_addresses(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            port = free_port()
+            api = CacheApi("127.0.0.1", port, lambda: "k3y", d, lambda: CONF, carl_dir=d, carl_version="9.9.9",
+                           carl_id="ab" * 16)
+            self.assertIsNone(api.start())
+            try:
+                with urllib.request.urlopen(f"http://127.0.0.1:{port}/carl/ping", timeout=5) as r:
+                    self.assertEqual(json.loads(r.read()), {"carl": "ab" * 16, "version": "9.9.9"})
+                with self.assertRaises(urllib.error.HTTPError) as e:              # everything else needs the key
+                    urllib.request.urlopen(f"http://127.0.0.1:{port}/carl/cache/settings", timeout=5)
+                self.assertEqual(e.exception.code, 401)
+                if api.server6:                                                  # ::1 too (when the Mac has IPv6)
+                    with urllib.request.urlopen(f"http://[::1]:{port}/carl/ping", timeout=5) as r:
+                        self.assertEqual(json.loads(r.read())["carl"], "ab" * 16)
+            finally:
+                api.stop()
+
+    def test_a_port_held_on_ipv6_is_taken(self) -> None:
+        import socket as so
+        port = free_port()
+        try:
+            other = so.socket(so.AF_INET6, so.SOCK_STREAM)
+            other.bind(("::1", port))
+            other.listen(1)
+        except OSError:
+            self.skipTest("no IPv6 on this Mac")
+        try:
+            with tempfile.TemporaryDirectory() as d:
+                api = CacheApi("127.0.0.1", port, lambda: "k", d, lambda: CONF)
+                err = api.start()
+                self.assertIsNotNone(err)
+                self.assertIn("::1", err or "")
+                self.assertIsNone(api.server)
+        finally:
+            other.close()
+
+    def test_carl_id_and_the_api_port_in_the_server_file(self) -> None:
+        from carl_core.domain import runtime
+        with tempfile.TemporaryDirectory() as d:
+            a = runtime.carl_id(d)
+            self.assertEqual((len(a), runtime.carl_id(d)), (32, a))           # made once, then the same
+            self.assertFalse(runtime.set_api_port(d, 9275, 9277))              # no server file yet
+            runtime.write(d, 9275, "single", {"m": runtime.model_entry("none")})
+            self.assertTrue(runtime.set_api_port(d, 9275, 9277))
+            self.assertEqual(runtime.read(d, 9275)["api_port"], 9277)
 
 
 if __name__ == "__main__":

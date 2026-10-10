@@ -125,10 +125,13 @@ class Drift:
     removed: List[str]          # in the config, not in the list (OpenCode would get HTTP 400 in router mode)
     window: Optional[str] = None    # "MODEL: 96K in the config, 128K on the server"
     server: str = ""            # single-model mode: the model the server runs (the configs list only it)
+    moved: Optional[Tuple[int, int]] = None   # the config's port, the server's (Phase 23.5: the server moved)
 
     def line(self, installed: int) -> str:
         """The drift in sentences: what an update changes, and the key."""
         parts: List[str] = []
+        if self.moved:
+            parts.append(f"{self.client} uses port {self.moved[0]}. The server runs on port {self.moved[1]}.")
         if self.added or self.removed:
             change = " and ".join(x for x in (f"adds {', '.join(self.added)}" if self.added else "",
                                               f"removes {', '.join(self.removed)}" if self.removed else "") if x)
@@ -146,10 +149,11 @@ def single_mode(server: str) -> str:
 
 
 def drift(listed: Dict[str, Optional[Dict[str, int]]], installed: Sequence[str],
-          running: Optional[Tuple[str, int]] = None, server: str = "") -> List[Drift]:
+          running: Optional[Tuple[str, int]] = None, server: str = "",
+          moved: Optional[Dict[str, Tuple[int, int]]] = None) -> List[Drift]:
     """The clients (configured for this server) whose config is out of date; a config that
     can't be read is left out. installed: the models the configs get (single-model mode: the model the server runs,
-    named in server). running: the served model and its window per slot."""
+    named in server). running: the served model and its window per slot. moved: client -> (its port, the server's)."""
     out = []
     for client, ids in listed.items():
         if ids is None:
@@ -159,6 +163,7 @@ def drift(listed: Dict[str, Optional[Dict[str, int]]], installed: Sequence[str],
         window = None
         if running and running[1] and ids.get(running[0]) not in (None, 0, running[1]):
             window = f"{running[0]} is {ids[running[0]] // 1024}K in the config, {running[1] // 1024}K on the server"
-        if added or removed or window:
-            out.append(Drift(client, len(ids), added, removed, window, server))
+        mv = (moved or {}).get(client)
+        if added or removed or window or mv:
+            out.append(Drift(client, len(ids), added, removed, window, server, mv))
     return out

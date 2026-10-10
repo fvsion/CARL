@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+import urllib.parse
 from typing import Dict, List, Optional, Tuple
 
 
@@ -117,12 +118,42 @@ def listed_models(home: str, client: str, provider: str) -> Optional[Dict[str, i
         return None
 
 
+LOCAL_HOSTS = ("127.0.0.1", "localhost", "::1")
+
+
+def moved_port(client_base: str, base: str) -> Optional[int]:
+    """The port of a client config set up for this server before it moved to another port (Phase 23.5: 8080 before,
+    9275 now; or a start on the next free port): the same Mac's address, /v1, another port. None otherwise."""
+    try:
+        u, b = urllib.parse.urlsplit(client_base), urllib.parse.urlsplit(base)
+        up, bp = u.port, b.port
+    except ValueError:
+        return None
+    if u.path.rstrip("/") != "/v1" or up is None or bp is None or up == bp:
+        return None
+    same = u.hostname == b.hostname or (u.hostname in LOCAL_HOSTS and b.hostname in LOCAL_HOSTS)
+    return up if same else None
+
+
+def moved_here(base: str, home: str) -> Dict[str, int]:
+    """The clients on this Mac set up for this server at another port: client -> that port."""
+    out = {}
+    for client, folder in (("OpenCode", ".config/opencode"), ("Pi", ".pi/agent")):
+        st = client_state(os.path.join(home, folder))
+        port = moved_port(str(st.get("base_url") or ""), base) if isinstance(st, dict) else None
+        if port:
+            out[client] = port
+    return out
+
+
 def installed_here(base: str, home: str) -> List[Tuple[str, str]]:
-    """(client, provider id) pairs that install.sh on THIS Mac already pointed at base."""
+    """(client, provider id) pairs that install.sh on THIS Mac already pointed at base (or at its port before it
+    moved: moved_here)."""
     out = []
     for client, folder in (("OpenCode", ".config/opencode"), ("Pi", ".pi/agent")):
         st = client_state(os.path.join(home, folder))
-        if isinstance(st, dict) and st.get("base_url") == f"{base}/v1":
+        if isinstance(st, dict) and (st.get("base_url") == f"{base}/v1"
+                                     or moved_port(str(st.get("base_url") or ""), base)):
             prov = st.get("providers")
             out.append((client, str(prov.get("llamacpp", "llamacpp") if isinstance(prov, dict) else "llamacpp")))
     return out

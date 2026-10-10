@@ -397,7 +397,8 @@ class Carl:
         cache = ll["cache_ram"]
         common = Common(batch=int(str(ll["batch"])), ubatch=int(str(ll["ub"])), ckpt=int(str(ll["ckpt"])),
                         ckpt_step=int(str(ll["ckpt_step"])), cache_ram=cache if isinstance(cache, int) else None,
-                        slot_dir=os.path.join(self.home, ".config", "carl", "slots"),
+                        # the settings folder's slots, as a single start (serve-llama.sh SLOT_DIR): CARL_CONF_DIR too
+                        slot_dir=os.path.join(os.path.dirname(self.stores.local_path), "slots"),
                         swa_mode=str(cfg.cache.get("swa") or "auto"))
         limit = self.gpu.limit()[0]
         ram, vm = self.host.ram_bytes(), self.host.vm_network_up()

@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import Mapping, Optional, Sequence
 
 from carl_core.adapters.api_key import key_file
+from carl_core.domain.runtime import DEFAULT_PORT
 
 
 @dataclass
@@ -39,7 +40,7 @@ def parse(argv: Optional[Sequence[str]], description: str, env: Mapping[str, str
     """Options from argv (None: sys.argv) and env; --help prints description."""
     ap = argparse.ArgumentParser(description=description, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--host", default=None, help="server address (default: wherever the server on --port listens)")
-    ap.add_argument("--port", type=int, default=_env_int(env, "PORT", 8080), help="server port (default 8080)")
+    ap.add_argument("--port", type=int, default=_env_int(env, "PORT", DEFAULT_PORT), help=f"server port (default {DEFAULT_PORT})")
     ap.add_argument("--lines", type=int, default=0, help="log lines on the Live tab (default: by the screen's height)")
     ap.add_argument("--interval", type=float, default=2.0, help="seconds between refreshes (default 2)")
     ap.add_argument("--log", default=None, help="log file (default: the running server's --log-file)")

@@ -49,7 +49,7 @@ The RAM cache is lost when the server stops or when router mode changes the mode
 
 | Part | What it does |
 |---|---|
-| `--slot-save-path ~/.config/carl/slots` | The folder of the saved states. The launcher and the router presets set it. |
+| `--slot-save-path ~/.config/carl/slots` | The folder of the saved states: `slots/` in the settings folder (`CARL_CONF_DIR/slots` when `CARL_CONF_DIR` is set). The launcher and the router presets set it: single-model mode and router mode use the same folder. |
 | `POST /slots/N?action=save\|restore` with `{"filename"}` | Saves or restores the state of slot N. In router mode, the body also holds `"model"`. A `?model=` query gives HTTP 400. |
 | `client/shared/carl-cache.js` | The client code. It uses only the server's API, so it also works from a VM or another computer. |
 | OpenCode plugin `carl-cache` | Wraps `fetch` (the AI SDK calls the global one). `chat.headers` marks the requests of CARL's provider with the session, the agent, and whether it is a subagent. |
@@ -64,7 +64,7 @@ The RAM cache is lost when the server stops or when router mode changes the mode
 
    The client takes them out of the shared system text, so that the system text and the tools are the same in each project and on each day, and one saved prompt serves every project. Where they go depends on the model's chat template (the client checks it once per model with `/apply-template`):
    - **The start of the first user message** (Qwen 3.6 and 3.8, known by the template's shape: the tools first, then the system text): the saved prompt ends where the first user message starts. The models follow AGENTS.md more often there than in a second system message (measured 2026-10-08; CARL 1.9.0 to 1.12 used a second system message).
-   - **Left where they are** (Gemma 4): CARL saves no prompt for Gemma 4 (its sliding-window cache cannot restore one), so nothing moves.
+   - **Left where they are** (Gemma 4): with the full cache, each project gets its own saved prompt. With the window cache, nothing is saved ([Sliding-window models](#sliding-window-models)).
    - **Any other template:** left where they are by default (`cache.move off`): they stay system text, but each new project reads the whole prompt again. Settings > Caching > Other templates > "move to your message" (`cache.move auto`; `CARL_CACHE_MOVE=auto` for the clients on another computer) puts them at the start of the first user message, so one saved prompt serves every project. Do not use it with a template that also uses a sliding-window cache. Qwen and Gemma 4 do not change with it.
 
    Two saved prompts cannot be joined: each token's state depends on all the tokens before it. Thus, the parts that change must come after the shared part, not between.
@@ -78,8 +78,13 @@ The RAM cache is lost when the server stops or when router mode changes the mode
    - The session's file (`carl-session+MODEL+KEY+SESSION.bin`), when the session is new to this process or server. Also when a different session took its slot after its last save.
    - Else, the prompt file of the agent (`carl-prefix+MODEL+AGENT+HASH.bin`).
    - Else, the client reads the agent's prompt one time (`/completion` with exactly its tokens, `n_predict 0`) and saves it. A prompt of less than 1,024 tokens gets no file.
+   - Before that, a session that a client recorded in the slot (another OpenCode or Pi process, or this one before a restart; its `.resident+MODEL+SLOT.json`) is saved first, while the slot still holds it.
+   - A fork (Pi `/fork` or a clone, an OpenCode fork), or any session with history and no file of its own: the longest saved session on this Mac whose tokens start the request (the token list in the file's header). Then the prompt file, as above.
+   - A file that the server cannot restore is removed (retired). A saved prompt that restores a different number of tokens than its prompt has is retired, and the prompt is read and saved again. A file that is not on this Mac (the server saves elsewhere) is not asked for again for 60 s.
    - A slot that holds a different session first goes to the RAM cache. The client sends a 1-token task: llama.cpp saves the old prompt when a new task arrives.
    - The agent's prompt is the common token prefix of the system text and the tools. The client finds it with two different user messages (`/apply-template`, `/tokenize` with `add_special`).
+   - **Single-model mode:** the files, the claims and the records go under the model that the server runs (its alias from `/props`), whatever model name the client sends. The server answers with its own model in any case.
+   - **The window cache:** nothing goes in, and nothing is saved after the turn ([Sliding-window models](#sliding-window-models)). The client still pins each session to its own slot.
 4. **Router mode:** the client loads a model that is not loaded (`POST /models/load`). It asks again while the router is busy with a different switch. Thus, the state can go in before the request. A title or summary request for a model that is not loaded goes to the loaded model. A switch for it would unload the session's model, and then load it again.
 5. **Title and summary requests** run with thinking off (`reasoning_effort: none`) and are not pinned. With thinking on, an OpenCode title on the 35B held a slot for 35 s, and `opencode run` waited for it.
 6. **A slot that a different session of the same process needs:** the client first sets the session in it back to the end of its last prompt and saves it. The session comes back from its file when it returns.
@@ -107,6 +112,7 @@ The client saves after a reply that is not a tool call. It saves before the clie
   - Each save occurs only while the slot's task id is unchanged.
 - With `auto`, `turn` and `switch`, a slot that a different session of the same process needs is saved first.
 - KEY is a hash of the model file and the llama.cpp build (`/props`).
+- **Pi** keeps one cache for each Pi process. Pi loads its extensions again at each session switch (`/new`, `/resume`, a fork). Thus, the cache still knows which session of this process is in which slot.
 
 ### Whether a state fits
 
@@ -134,6 +140,9 @@ A state saved directly after a reply fits when the template renders the reply ag
 | `window` | Only the window (the window cache). Less memory. Restores do not work. |
 
 - The router presets do the same for each model (`swa-full = true`).
+- **The clients and the window cache.** With the window cache, OpenCode and Pi restore and save nothing: a saved state cannot be used, so a restore and a save only cost time and disk. They still keep each session in its own slot. With the full cache, Gemma 4 prompts and sessions are saved and restored as for any other model. `cache.swa = auto` (full when it fits) stays the default.
+- The clients learn the cache of each model from the server file `~/.config/carl/server-PORT.json` (`tools/carl_core/domain/runtime.py`). The launcher writes it at each start: each model's `swa` (`full`, `window` or `none`), `kv`, `ctx` and `slots`. A client on another computer gets the same from the dashboard API (`GET /carl/cache/settings?port=N`). `carl-cache` writes one line in its log for a model with the window cache.
+- The Caching panel shows a **Window cache** row when the running model has the window cache.
 - The memory estimate reads these GGUF keys:
   - `attention.sliding_window_pattern`: 35 of the 42 layers of Gemma 4 E4B
   - `shared_kv_layers`: the last 18 layers use the KV of earlier layers
@@ -165,6 +174,7 @@ The table gives the wait before the answer starts: with the cache, and without i
 - The older prompt files of the same agent go at once.
 - The dashboard checks the limit each minute. The launcher checks it at each start (for files written from a VM).
 - The client does not save when the disk has less than 10 GB free.
+- Each minute, the dashboard also removes what clients leave behind: claim files older than 2 min, turn marks older than 10 min, half-written `.tmp` files older than 1 h, and a part of a stored session whose other part is gone (a lone `.json` or `.zst`).
 - The dashboard removes the files of Phase 11 (its pre-read and per-slot saves, with dashes in the names).
 
 ### The cache settings
@@ -184,7 +194,7 @@ The `cache` section of `config.json` (the Caching panel of the dashboard: **Disk
 - With `prefix` and `sessions` both false, the cache does nothing.
 - In the environment of OpenCode or Pi, `CARL_CACHE=0` turns the cache off, and `CARL_CACHE_SAVE=MODE` overrides `save`.
 - `NO_CACHE=1 ./carl.sh install --config-only` (`NO_CACHE=1 ./setup` on other computers) leaves the OpenCode plugin and the Pi extension out.
-- `./carl.sh cache show` lists the saved prompts and the saved sessions (sizes in GB and MB; `*` marks a session stored as the changes to its saved prompt). `./carl.sh cache trim` applies the limit. `./carl.sh cache clear` removes each file.
+- `./carl.sh cache show` lists the saved prompts and the saved sessions (sizes in GB and MB; `*` marks a session stored as the changes to its saved prompt). Each saved session shows its name next to its ID: the OpenCode title, or the Pi `/name` (else its first message). The Caching panel's file list shows the name too, with the ID in grey. `./carl.sh cache trim` applies the limit. `./carl.sh cache clear` removes each file.
 
 ### When an agent's prompt changes
 

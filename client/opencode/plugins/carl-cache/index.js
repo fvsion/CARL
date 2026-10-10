@@ -8,7 +8,7 @@
 // subagent; a wrapper around fetch (the AI SDK calls the global fetch) reads those marks, takes them off
 // and lets carl-cache.js prepare the request body; when a reply that ends the turn has streamed, the
 // session is saved before OpenCode sees the end.
-// Options: { provider: "<our provider id>", cacheApi: "<the dashboard API>" } (configure.py).
+// Options: { provider: "<our provider id>", cacheApi: "<the dashboard API>", carlId: "<CARL's ID>" } (configure.py).
 // Export nothing else from this file: older OpenCode versions call every export of the entry module as
 // a plugin function.
 import { CarlCache, debugLog, errorText, obj, splitOpenCode } from "./carl-cache.js";
@@ -18,7 +18,7 @@ import { checkOnce, restartNotice, watchApplied } from "./carl-panel.js";
 /**
  * One per OpenCode process (the plugin can load more than once): the fetch before the wrapper, a cache
  * for each server, the dashboard API.
- * @typedef {{ original: typeof fetch, caches: Map<string, CarlCache>, cacheApi?: string }} Shared
+ * @typedef {{ original: typeof fetch, caches: Map<string, CarlCache>, cacheApi?: string, carlId?: string }} Shared
  */
 
 const MARK = "x-carl-cache";
@@ -84,6 +84,7 @@ export default {
     /** @type {Shared} */
     const g = global[STATE] ?? { original: globalThis.fetch, caches: new Map() };
     if (typeof options?.cacheApi === "string") g.cacheApi = options.cacheApi;
+    if (typeof options?.carlId === "string") g.carlId = options.carlId;
     if (!global[STATE]) {
       global[STATE] = g;
       globalThis.fetch = /** @type {typeof fetch} */ (async (input, init) => {
@@ -109,7 +110,7 @@ export default {
           if (meta && !cache) {
             const key = (headers.get("authorization") ?? "").replace(/^Bearer\s+/i, "") || undefined;
             cache = new CarlCache({ baseURL: base, apiKey: key, fetch: g.original, split: splitOpenCode, log,
-                                    cacheApi: g.cacheApi });
+                                    cacheApi: g.cacheApi, carlId: g.carlId });
             g.caches.set(base, cache);
           }
           if (meta && cache) {

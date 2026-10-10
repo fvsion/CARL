@@ -81,6 +81,7 @@ class Schema:
             SettingRow("swa", "Sliding window", ["auto", "full", "window"], "cache:swa", "auto"),
             SettingRow("cache", "RAM cache", ["auto", 1024, 2560, 4096, 6144, 8192], "llama:cache_ram", "auto"),
             SettingRow("net", "Network", list(self.net_choices), "llama:net", "local"),
+            SettingRow("api", "API port", ["auto"], "llama:api_port", "auto"),     # the dashboard API (Phase 23.5)
             SettingRow("temp", "Temperature", ["1.0", "0.6"], "m:temp", "1.0"),
             SettingRow("presence", "Presence", ["0", "1.5"], "m:presence", "0"),
         ]
@@ -102,8 +103,8 @@ def net_choices(addrs: Sequence[str]) -> Tuple[str, ...]:
 # row key -> key of the model's profile (config.json models.<name>, Auto-tune, catalogue)
 MODEL_ROW_KEYS = {r.key: r.loc[2:] for r in Schema(()).llama + LLAMA_ADV if r.loc and r.loc.startswith("m:")}
 NUMERIC = {"ctx", "temp", "presence", "top_k", "top_p", "min_p", "repeat", "specn", "ub", "ckpt", "ckstep",
-           "cache"}       # Enter types a value
-INT_KEYS = {"ctx", "cache", "top_k", "specn", "ub", "ckpt", "ckstep"}
+           "cache", "api"}       # Enter types a value
+INT_KEYS = {"ctx", "cache", "top_k", "specn", "ub", "ckpt", "ckstep", "api"}
 FROM_RUNNING = {"kv", "ctx", "temp", "presence", "spec", "specn", "top_k", "top_p", "min_p", "repeat", "ckpt", "ckstep",
                 "ub", "slots"}
 # Phase 23.4.4: the clients' thinking of each role, per model: the Agents panel (saved at once, no restart)
@@ -145,6 +146,8 @@ SET_HELP = {
     "cache": "The RAM cache: the server keeps sessions that leave a slot in RAM while it runs. When a session comes "
              "back, the server does not read it all again. auto: CARL sizes it from the free memory at each start.",
     "net": _NET_HELP,
+    "api": "The port of the dashboard API: OpenCode and Pi on other computers sync and share the disk cache through it. "
+           "auto: the server's port + 1, else the next free port. The Connect tab and the sync tell the clients.",
     "temp": "How random the answers are. The recommended value comes from the model card (Qwen in thinking mode and "
             "Gemma 4: 1.0). 0.6 gives more exact code on some models.",
     "presence": "0 is the default. 1.5 gives fewer repeat loops (the Qwen card, for general use).",
@@ -256,11 +259,12 @@ def parse_typed(key: str, text: str) -> Tuple[Optional[Value], str]:
         whole = int(num)
     except (ValueError, OverflowError):
         return None, f"That is not a number: {v}."
-    if num < 0 or (key == "ctx" and not 4096 <= num <= 262144) or (key in ("top_p", "min_p") and num > 1):
+    if num < 0 or (key == "ctx" and not 4096 <= num <= 262144) or (key in ("top_p", "min_p") and num > 1) \
+            or (key == "api" and not 1024 <= num <= 65535):
         label = next((r.label for r in Schema(()).llama + LLAMA_ADV if r.key == key), key)
         return None, f"{v} is out of range for {label}."
     if key in INT_KEYS:
-        return (whole if key in ("ctx", "cache") else str(whole)), ""
+        return (whole if key in ("ctx", "cache", "api") else str(whole)), ""
     return (f"{num:g}" if num != whole else f"{num:.1f}" if key in ("temp", "repeat") else f"{whole}"), ""
 
 

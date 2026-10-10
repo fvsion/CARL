@@ -1,6 +1,7 @@
 // client/shared/carl-delegation.js: the hand-off rules both clients' carl-delegation use (Phase 23).
 // Run: node --test tests/js (tests/scripts/test_js.py runs it with the other suites).
 import assert from "node:assert/strict";
+import { forgetPings } from "../../client/shared/carl-api.js";
 import { test } from "node:test";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -73,7 +74,9 @@ test("the gate comes from the dashboard: config.json on the server Mac, the API 
   const home = mkdtempSync(join(tmpdir(), "gate-"));
   assert.equal(await new D.GateSetting({ home }).get(), 0);                     // nothing: off
   const asked = [];
+  forgetPings();
   const fetch = async (url, init) => {
+    if (String(url).endsWith("/carl/ping")) return { ok: true, json: async () => ({ carl: "c".repeat(32) }) };   // no key
     asked.push([url, init?.headers?.Authorization ?? ""]);
     return { ok: true, json: async () => ({ gate: 3, move: "off" }) };
   };
@@ -89,6 +92,14 @@ test("the gate comes from the dashboard: config.json on the server Mac, the API 
   const down = new D.GateSetting({ home: mkdtempSync(join(tmpdir(), "gate-")), cacheApi: "http://x:1",
                                    fetch: async () => { throw new Error("down"); } });
   assert.equal(await down.get(), 0);                                            // no answer: off
+  // Phase 23.5: an API that answers another CARL's ID (or is not CARL's) never gets the key
+  const other = new D.GateSetting({ home: mkdtempSync(join(tmpdir(), "gate-")), cacheApi: "http://10.0.0.3:8081",
+                                    carlId: "d".repeat(32), fetch });
+  mkdirSync(join(other.home, ".config", "carl"), { recursive: true });
+  writeFileSync(join(other.home, ".config", "carl", "api-key"), "k3y\n");
+  asked.length = 0;
+  assert.equal(await other.get(), 0);
+  assert.deepEqual(asked, []);
 });
 
 // ------------------------------------------------------------------ Phase 23.4.3: the brief check and the gates

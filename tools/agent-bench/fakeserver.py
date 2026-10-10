@@ -339,8 +339,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     ap.add_argument("--script", help="the rules (JSON); default: every request gets the text OK")
     ap.add_argument("--log", default="", help="append each request and its reply to this JSONL file")
     a = ap.parse_args(argv)
-    if a.port == 8080:
-        ap.error("port 8080 is the user's CARL server: use another port")
+    if a.port in (8080, 9275):
+        ap.error(f"port {a.port} is (or was) the user's CARL server port: use another port")
     script = Script()
     if a.script:
         with open(a.script, encoding="utf-8") as f:

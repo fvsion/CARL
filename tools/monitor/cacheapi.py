@@ -2,13 +2,19 @@
 computer (a VM) need to use the disk cache as the clients on this Mac do through the slots folder,
 and the client config they sync (clientsync.py; client/carl-sync.py):
 
+  GET  /carl/ping                            no key: {carl: this CARL's ID, version} (a client checks it before it
+                                              sends the key, Phase 23.5)
+  GET  /carl/client/server                    {port}: the server's port now (a client's sync follows a move)
+  GET  /carl/status                           {state, read, write, progress, last, ram_cache}: the speeds that
+                                              OpenCode's sidebar and Pi's status line show (Phase 23.5)
   GET  /carl/client/config                    the published client config (ETag / If-None-Match: 304)
   GET  /carl/client/events                    server-sent events: "config" with the version when a
                                               new config is published (the client connects out: no
                                               port opens on the client), a comment every 25 s
 
-  GET  /carl/cache/settings                   the Caching settings (prefix, sessions, save, auto_s, disk_gb, move) and
-                                              the new-file gate of carl-delegation (gate)
+  GET  /carl/cache/settings[?port=N]         the Caching settings (prefix, sessions, save, auto_s, disk_gb, move) and
+                                              the new-file gate of carl-delegation (gate); ?port=N: also "server", the
+                                              mode and each model's cache of the server on port N (Phase 23.5)
   POST /carl/cache/claim    {model, slot}     take a slot for a request (409: another client has it)
   POST /carl/cache/release  {model, slot}
   POST /carl/cache/record   {model, slot, file, task, base}   the session a slot holds
@@ -33,6 +39,7 @@ written 0600, each through a temporary file of its own (fsio.write_private).
 """
 from __future__ import annotations
 
+import errno
 import hmac
 import json
 import os
@@ -45,6 +52,8 @@ import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from dataclasses import dataclass
 from typing import Callable, Dict, List, Optional, Tuple
+
+from carl_core.domain import runtime
 
 from . import clientsync, fsio, slotpack
 from .diskcache import CacheConfig
@@ -296,10 +305,16 @@ def check_slot(doc: JSONDict) -> Tuple[str, int]:
 
 def handle(state: CacheState, conf: Callable[[], CacheConfig], method: str, path: str, query: Dict[str, str],
            body: JSONDict, save_recorded: Callable[[str], int] = lambda model: 0, carl_dir: str = "",
-           etag: str = "") -> Reply:
+           etag: str = "", server_port: int = 0, status: Optional[JSONDict] = None) -> Reply:
     """One API call (pure, except the files and save_recorded): (status, JSON). etag: the client's
     If-None-Match (the config version it has)."""
     try:
+        if method == "GET" and path == "/carl/status":
+            # the speeds for OpenCode's sidebar and Pi's status line (Phase 23.5 item 9): the dashboard's last snapshot
+            return 200, dict(status or {"state": "idle"})
+        if method == "GET" and path == "/carl/client/server":
+            # the server's port now (Phase 23.5): a client's sync whose remote.json names another sets itself up again
+            return (200, {"port": server_port}) if server_port else (404, {"error": "no server port"})
         if method == "GET" and path == "/carl/client/config":
             doc = clientsync.published(carl_dir) if carl_dir else None
             if doc is None:
@@ -317,8 +332,14 @@ def handle(state: CacheState, conf: Callable[[], CacheConfig], method: str, path
             return 200, {"saved": save_recorded(model)}
         if method == "GET" and path == "/carl/cache/settings":
             c = conf()
-            return 200, {"prefix": c.prefix, "sessions": c.sessions, "save": c.save, "auto_s": c.auto_s,
-                         "disk_gb": c.disk_gb, "move": c.move, "gate": c.gate}
+            doc: JSONDict = {"prefix": c.prefix, "sessions": c.sessions, "save": c.save, "auto_s": c.auto_s,
+                             "disk_gb": c.disk_gb, "move": c.move, "gate": c.gate}
+            port = query.get("port", "")
+            if carl_dir and port.isdigit() and 0 < int(port) < 65536:     # the server's file (Phase 23.5): its cache
+                server = runtime.read(carl_dir, int(port))
+                if server:
+                    doc["server"] = {"mode": server.get("mode"), "models": server.get("models")}
+            return 200, doc
         if method == "GET" and path == "/carl/cache/turns":
             tmodel = query.get("model", "")
             if not tmodel or len(tmodel) > MAX_NAME:
@@ -381,13 +402,22 @@ class QuietServer(ThreadingHTTPServer):
         pass
 
 
+class QuietServer6(QuietServer):
+    address_family = socket.AF_INET6
+
+
 class CacheApi:
     """The HTTP server (a thread); start() returns why it couldn't start, else None."""
 
     def __init__(self, host: str, port: int, key: Callable[[], str], folder: str, conf: Callable[[], CacheConfig],
                  save_recorded: Callable[[str], int] = lambda model: 0, carl_dir: str = "",
-                 carl_version: str = "") -> None:
+                 carl_version: str = "", carl_id: str = "", server_port: Callable[[], int] = lambda: 0,
+                 status: Callable[[], JSONDict] = dict) -> None:
         self.host, self.port, self.key, self.conf, self.save_recorded = host, port, key, conf, save_recorded
+        self.carl_id = carl_id                   # /carl/ping (no key): this CARL's ID (runtime.carl_id)
+        self.server_port = server_port           # /carl/client/server: the server's port now
+        self.status = status                     # /carl/status: the speeds (the dashboard's last snapshot)
+        self.server6: Optional[QuietServer] = None
         self.carl_dir = carl_dir
         self.carl_version = carl_version         # sent as X-Carl-Version: /carl on a client compares its package
         self.listeners = 0                       # clients holding /carl/client/events
@@ -458,6 +488,11 @@ class CacheApi:
                         api.registry.gone(who.id)
 
             def _call(self, method: str) -> None:
+                if method == "GET" and urllib.parse.urlsplit(self.path).path == "/carl/ping":
+                    # no key (Phase 23.5): a client asks first whether this port is CARL's (the ID it knows), and
+                    # sends its key only then
+                    self._reply(200, {"carl": api.carl_id, "version": api.carl_version})
+                    return
                 if not authorized(api.key(), self.headers.get("Authorization", "")):
                     self._reply(401, {"error": "unauthorized"})
                     return
@@ -484,7 +519,7 @@ class CacheApi:
                         self._reply(400, {"error": "not JSON"})
                         return
                 self._reply(*handle(api.state, api.conf, method, url.path, query, body, api.save_recorded, api.carl_dir,
-                                    self.headers.get("If-None-Match", "")))
+                                    self.headers.get("If-None-Match", ""), api.server_port(), api.status()))
 
             def do_GET(self) -> None:
                 self._call("GET")
@@ -496,11 +531,24 @@ class CacheApi:
             self.server = QuietServer((self.host, self.port), Handler)
         except OSError as e:
             return f"dashboard API: port {self.port} on {self.host}: {e.strerror or e}"
-        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+        if self.host == "127.0.0.1":
+            # this Mac only: the same port on ::1 too, so a client that reaches "localhost" over IPv6 does not find
+            # another program there (Phase 23.5: an ssh SOCKS proxy held [::1]:8081); no IPv6: v4 only
+            try:
+                self.server6 = QuietServer6(("::1", self.port), Handler)
+            except OSError as e:
+                if e.errno in (errno.EADDRINUSE, errno.EACCES):
+                    self.server.server_close()
+                    self.server = None
+                    return f"dashboard API: port {self.port} on ::1: {e.strerror or e}"
+        for srv in (self.server, self.server6):
+            if srv:
+                threading.Thread(target=srv.serve_forever, daemon=True).start()
         return None
 
     def stop(self) -> None:
-        if self.server:
-            self.server.shutdown()
-            self.server.server_close()
-            self.server = None
+        for srv in (self.server, self.server6):
+            if srv:
+                srv.shutdown()
+                srv.server_close()
+        self.server = self.server6 = None

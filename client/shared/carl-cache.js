@@ -24,6 +24,7 @@ import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { isCarl } from "./carl-api.js";
 
 export const MIN_PREFIX_TOKENS = 1024;   // a shorter prompt is quick to read: no file
 export const MIN_SESSION_TOKENS = 4096;  // a shorter conversation is quick to read again
@@ -41,6 +42,7 @@ export const NO_PIN_AGENTS = new Set(["title", "summary"]);            // small 
 export const NO_SAVE_AGENTS = new Set(["title", "summary", "compaction"]);
 const LOAD_WAIT_MS = 180_000;        // a switch takes 30 s to 2 min
 const LOAD_RETRY_MS = 5_000;
+const MISSING_MS = 60_000;           // a file the server did not have: not asked for again this long
 const SETTINGS_MS = 5_000;
 const OFF = new Set(["none", "minimal", "off", "disable", "disabled"]);
 const STATE_MODE = 0o600;            // the claim, turn and record files and the log: only this user
@@ -250,7 +252,7 @@ export function splitPi(text) {
  * The request with the parts of the system text that change per project or day (split: [kept, moved]) moved out
  * of the shared system text to the start of the first user message, so one saved prompt serves every project.
  * how: "user" = moved (Qwen; other templates with cache.move auto); "none" = left as the client sent it (Gemma 4:
- * nothing is saved for it). Phase 23.4.3: no second system message any more (1.9.0 to 1.12): the models followed
+ * with the full cache its prompt is saved once per project; Phase 23.5 kept that, unmeasured). Phase 23.4.3: no second system message any more (1.9.0 to 1.12): the models followed
  * AGENTS.md less often there (p2310, measured 2026-10-08).
  * @param {Payload} payload @param {(text: string) => [string, string]} split @param {"user" | "none"} [how]
  * @returns {Payload}
@@ -359,6 +361,33 @@ function listing(dir) {
   return [...found.values()];
 }
 
+const SEQ_MAGIC = 0x67677371;        // "ggsq": a llama_state_seq file (tools/monitor/slotpack.py tokens())
+const MAX_HEAD_TOKENS = 1 << 20;
+
+/**
+ * The tokens a saved state holds (its header: magic, version, a count, -1, 1, N, then N tokens); undefined when the
+ * file is not one in the known form.
+ * @param {string} path @returns {number[] | undefined}
+ */
+export function headerTokens(path) {
+  let fd;
+  try {
+    fd = fs.openSync(path, "r");
+    const head = Buffer.alloc(24);
+    if (fs.readSync(fd, head, 0, 24, 0) !== 24) return undefined;
+    if (head.readUInt32LE(0) !== SEQ_MAGIC || head.readUInt32LE(12) !== 0xFFFFFFFF || head.readUInt32LE(16) !== 1) return undefined;
+    const n = head.readUInt32LE(20);
+    if (n > MAX_HEAD_TOKENS) return undefined;
+    const body = Buffer.alloc(4 * n);
+    if (fs.readSync(fd, body, 0, 4 * n, 24) !== 4 * n) return undefined;
+    return Array.from({ length: n }, (_, i) => body.readInt32LE(4 * i));
+  } catch {
+    return undefined;
+  } finally {
+    if (fd !== undefined) fs.closeSync(fd);
+  }
+}
+
 /** A saved state in every form. @param {string} dir @param {string} name */
 function removeState(dir, name) {
   for (const p of [name, `${name}.zst`, `${name}.json`]) {
@@ -409,7 +438,7 @@ function residentOf(r) {
 /**
  * A session of this process as the cache last saw it.
  * @typedef {{ slot: number, epoch: number, model: string, router: boolean, payload: Payload,
- *             at: number, saved?: string, sub?: boolean, base?: number, savedN?: number }} SessionState
+ *             at: number, saved?: string, sub?: boolean, base?: number, savedN?: number, savedAt?: number }} SessionState
  */
 /**
  * @typedef {{ epoch: number, maxTask: number, key?: string, stable: Map<string, boolean>,
@@ -419,13 +448,15 @@ function residentOf(r) {
 export class CarlCache {
   /**
    * @param {{ baseURL: string, apiKey?: string, fetch?: typeof fetch, split?: (text: string) => [string, string],
-   *           log?: (msg: string) => void, home?: string, sendsReasoning?: boolean, cacheApi?: string }} o
+   *           log?: (msg: string) => void, home?: string, sendsReasoning?: boolean, cacheApi?: string,
+   *           carlId?: string }} o
    *   cacheApi: the dashboard's cache API (monitor/cacheapi.py), for a client whose slots folder is on
    *   another computer: the Caching settings, slot claims and records go through it
    */
   constructor(o) {
     this.base = String(o.baseURL).replace(/\/+$/, "").replace(/\/v1$/, "");
     this.cacheApi = o.cacheApi ? String(o.cacheApi).replace(/\/+$/, "") : "";
+    this.carlId = o.carlId ?? "";          // the API must answer this ID before the key goes there (carl-api.js)
     this.apiAt = 0;
     /** @type {JsonObject | undefined} the cache API's settings (a remote client) */
     this.fromApi = undefined;
@@ -453,6 +484,13 @@ export class CarlCache {
     /** @type {Map<string, string>} model:slot -> the session of this process that ran there last */
     this.owner = new Map();
     this.settingsAt = 0;
+    /** @type {Map<string, number>} saved states the server could not restore (not there for it): not asked for
+     * again for MISSING_MS, or until a save writes them */
+    this.missing = new Map();
+    /** @type {{ at: number, alias: string }} the model a single-model server runs (/props model_alias) */
+    this.aliasCache = { at: 0, alias: "" };
+    /** @type {Set<string>} models whose window cache was reported once */
+    this.windowSaid = new Set();
     /** @type {Settings} */
     this.settingsCache = { enabled: true, prefix: true, sessions: true, diskGb: DEFAULT_GB, save: "auto", autoS: AUTO_S,
                            move: "off" };
@@ -477,6 +515,10 @@ export class CarlCache {
    * @returns {Promise<{ status: number, json: unknown }>}
    */
   async api(method, path, body) {
+    if (!(await isCarl(this.cacheApi, this.carlId, this.fetch))) {
+      debugLog(`cache API ${method} ${path.split("?")[0]}: ${this.cacheApi} is not CARL's dashboard API (no key sent)`);
+      return { status: 0, json: {} };
+    }
     try {
       const r = await this.fetch(this.cacheApi + path, { method, headers: this.headers(),
                                                          body: body ? JSON.stringify(body) : undefined,
@@ -493,7 +535,7 @@ export class CarlCache {
   async loadSettings() {
     if (this.remote() && Date.now() - this.apiAt >= SETTINGS_MS) {
       this.apiAt = Date.now();
-      const r = await this.api("GET", "/carl/cache/settings");
+      const r = await this.api("GET", `/carl/cache/settings?port=${this.port()}`);
       if (r.status === 200) this.fromApi = obj(r.json);
       this.settingsAt = 0;
     }
@@ -667,8 +709,51 @@ export class CarlCache {
   }
 
   /**
-   * Where the project part of the system text goes for this model, checked once: "none" for Gemma 4 (nothing is
-   * saved for it: its window cache cannot restore); "user" for Qwen (the start of the first user message; Phase
+   * The model a single-model server runs (its /props model_alias, checked every 30 s): the name its saved states,
+   * claims and records go under, whatever model the client asks for (the server answers with its own anyway).
+   * @returns {Promise<string>}
+   */
+  async alias() {
+    if (Date.now() - this.aliasCache.at > 30_000) {
+      const p = obj(await this.call("GET", "/props", undefined, 5_000));
+      this.aliasCache = { at: Date.now(), alias: typeof p.model_alias === "string" ? p.model_alias : "" };
+    }
+    return this.aliasCache.alias;
+  }
+
+  /**
+   * How the model's cache is set up, from the launcher's file on this Mac (~/.config/carl/server-PORT.json,
+   * tools/carl_core/domain/runtime.py): "full", "window" (a sliding-window model without --swa-full: a saved state
+   * cannot be reused) or "none" (no sliding window); undefined when not known (another computer, an older CARL).
+   * @param {string} model @returns {"full" | "window" | "none" | undefined}
+   */
+  cacheMode(model) {
+    const doc = this.local ? obj(json(join(this.home, ".config", "carl", `server-${this.port()}.json`))) : {};
+    // another computer: the dashboard's API serves the same (the Caching settings' "server")
+    const models = doc.models ?? obj(this.fromApi?.server).models;
+    const swa = obj(obj(models)[model]).swa;
+    return swa === "full" || swa === "window" || swa === "none" ? swa : undefined;
+  }
+
+  /** The server's port (its base URL's; 80 when it names none). */
+  port() {
+    return (this.base.match(/:(\d+)$/) ?? [])[1] ?? "80";
+  }
+
+  /** The window cache: restores and saves are of no use (said once per model). @param {string} model */
+  windowCache(model) {
+    if (this.cacheMode(model) !== "window") return false;
+    if (!this.windowSaid.has(model)) {
+      this.windowSaid.add(model);
+      this.log(`${model} runs with the window cache: no saved state can be reused, so nothing is restored or saved`);
+    }
+    return true;
+  }
+
+  /**
+   * Where the project part of the system text goes for this model, checked once: "none" for Gemma 4 (left in place:
+   * with the full cache its prompt is saved once per project, with the window cache nothing is saved: windowCache());
+   * "user" for Qwen (the start of the first user message; Phase
    * 23.4.3: the models follow AGENTS.md more often there than in a second system message, p2310); "other" for a
    * template CARL does not know (before() moves it only with cache.move auto). Any failure: "other".
    * @param {string} model @param {Payload} payload @returns {Promise<"user" | "other" | "none">}
@@ -765,9 +850,12 @@ export class CarlCache {
     const moved = { payload: out, release: () => {} };
     if (NO_PIN_AGENTS.has(meta.agent)) return { ...moved, payload: await this.loadedInstead(quick(out)) };
     try {
-      const model = String(out.model ?? "");
-      const srv = await this.server(model);
+      const asked = String(out.model ?? "");
+      const srv = await this.server(asked);
       if (!srv) return moved;
+      // single mode: the server's own model (it answers with it whatever the request names); router: the request's
+      const model = srv.router ? asked : (await this.alias()) || asked;
+      const windowed = this.windowCache(model);
       const slots = await this.slots(model, srv.router);
       const m = this.model(model, slots);
       const id = `${model}\n${meta.session ?? ""}\n${meta.agent}`;
@@ -779,7 +867,8 @@ export class CarlCache {
       let base = known?.base;
       if (known && known.epoch === m.epoch) {      // its own slot, unless another session of ours ran there since
         const s = slots.find((x) => x.id === known.slot);
-        if (s && !s.busy && this.owner.get(`${model}:${s.id}`) === id && (release = await this.tryClaim(model, s.id))) slot = s.id;
+        if (s && !s.busy && this.owner.get(`${model}:${s.id}`) === id && !(await this.savedSince(model, srv.router, m, meta, known))
+            && (release = await this.tryClaim(model, s.id))) slot = s.id;
       } else if (meta.session && !meta.sub) {         // new to this process: still in a slot, says a record on this Mac?
         const file = sessionFile(model, await this.serverKey(model, srv.router, m), meta.session);
         const rec = await this.recorded(model, file);
@@ -802,7 +891,9 @@ export class CarlCache {
         slot = pick.id;
         // from the disk: a session new to this process (or to this server), or one whose slot another
         // session took since its last save; else llama.cpp finds it in its RAM cache
-        if (!(known && known.epoch === m.epoch) || known.saved) {
+        if (windowed) {
+          how = "pinned; the window cache";
+        } else if (!(known && known.epoch === m.epoch) || known.saved || await this.savedSince(model, srv.router, m, meta, known)) {
           try {
             base = await this.fill(out, model, srv.router, m, pick, meta, set);
           } catch (e) {
@@ -829,6 +920,43 @@ export class CarlCache {
   }
 
   /**
+   * Was the session's file saved by someone else since this process last used it (another OpenCode or Pi took its
+   * slot and saved it first, from the slot's record)? Then its slot holds another session now.
+   * @param {string} model @param {boolean} router @param {ModelState} m @param {Meta} meta
+   * @param {SessionState | undefined} known
+   */
+  async savedSince(model, router, m, meta, known) {
+    if (!known || !meta.session || meta.sub || !this.local || !this.dirExists()) return false;
+    try {
+      const st = fs.statSync(join(this.dir, sessionFile(model, await this.serverKey(model, router, m), meta.session)));
+      return st.mtimeMs > Math.max(known.at, known.savedAt ?? 0);       // its own saves set savedAt
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * The session a client recorded in this slot (its record on this Mac: any OpenCode or Pi process, another one
+   * or this one before a restart), saved before another session takes the slot, while the slot still holds it.
+   * @param {string} model @param {boolean} router @param {Slot} pick @param {Settings} set
+   */
+  async saveResident(model, router, pick, set) {
+    const path = this.recordPath(model, pick.id);
+    if (!path || !set.sessions || set.save === "stop" || pick.busy || pick.n < MIN_SESSION_TOKENS) return;
+    const r = obj(json(path));
+    if (r.model !== model || int(r.task) !== pick.task || !isStateName(r.file) || !String(r.file).startsWith("carl-session+")) return;
+    try {
+      await this.call("POST", `/slots/${pick.id}?action=save`, { filename: r.file, ...this.withModel(model, router) });
+      fs.unlinkSync(path);
+      this.missing.delete(String(r.file));
+      this.log(`${r.file}: saved from slot ${pick.id} before another session takes it (its record)`);
+      this.wrote(String(r.file), "");
+    } catch (e) {
+      debugLog(`save from the record of slot ${pick.id}: ${errorText(e)}`);
+    }
+  }
+
+  /**
    * Put the best saved state into the slot: the session's file, else the agent's prompt file (read once
    * and saved when there is none).
    * @param {Payload} payload @param {string} model @param {boolean} router @param {ModelState} m
@@ -844,6 +972,8 @@ export class CarlCache {
       // next prompt continues it), then put back from its file when it returns
       const [, session, agent] = before.split("\n");
       if (session && !other.sub && !NO_SAVE_AGENTS.has(agent)) await this.save(other, session, pick, m, true);
+    } else {
+      await this.saveResident(model, router, pick, set);
     }
     if (pick.n > 0) {          // the slot's conversation goes to the RAM cache first (llama.cpp does that for a new task)
       await this.call("POST", "/completion", { prompt: [0], n_predict: 0, cache_prompt: true, id_slot: pick.id,
@@ -855,18 +985,28 @@ export class CarlCache {
       this.log(`session ${meta.session}: restored into slot ${pick.id}`);
       return got;
     }
+    if (set.sessions && meta.session && !meta.sub) {
+      const from = await this.startedBy(payload, model, router, key);
+      if (from && await this.restore(model, router, pick.id, from.file) === from.n) {
+        this.log(`session ${meta.session}: ${from.n} tokens of ${from.file} (its start) restored into slot ${pick.id}`);
+        return from.n;
+      }
+    }
     if (!set.prefix) return undefined;
     const pf = await this.prefix(payload, model, router, m, meta.agent);
     if (!pf) return undefined;
-    if (await this.restore(model, router, pick.id, pf.file) !== undefined) {
+    const got2 = await this.restore(model, router, pick.id, pf.file);
+    if (got2 === pf.tokens.length) {
       this.log(`${meta.agent}'s prompt (${pf.tokens.length} tokens) restored into slot ${pick.id}`);
       return pf.tokens.length;
     }
+    if (got2 !== undefined) this.retire(pf.file, `${got2} tokens restored, ${pf.tokens.length} expected`);
     if (this.diskFull()) return undefined;
     const t0 = Date.now();
     await this.call("POST", "/completion", { prompt: pf.tokens, n_predict: 0, cache_prompt: true, id_slot: pick.id,
                                              ...this.withModel(model, router) }, 3_600_000);
     await this.call("POST", `/slots/${pick.id}?action=save`, { filename: pf.file, ...this.withModel(model, router) });
+    this.missing.delete(pf.file);
     const secs = (Date.now() - t0) / 1000;
     m.speed = pf.tokens.length / Math.max(secs, 0.1);       // this model's read speed (the auto save rule)
     this.log(`${meta.agent}'s prompt (${pf.tokens.length} tokens) read in ${secs.toFixed(1)} s and saved`);
@@ -880,16 +1020,58 @@ export class CarlCache {
    * @returns {Promise<number | undefined>}
    */
   async restore(model, router, slot, file) {
-    if (this.local && !this.exists(file)) return undefined;
+    if (Date.now() - (this.missing.get(file) ?? 0) < MISSING_MS || (this.local && !this.exists(file))) return undefined;
     if (!(await this.whole(file))) return undefined;
     try {
       const r = await this.call("POST", `/slots/${slot}?action=restore`, { filename: file, ...this.withModel(model, router) },
                                 120_000);
       return Number(obj(r).n_restored) || 0;
     } catch (e) {
-      debugLog(`restore ${file} into slot ${slot}: ${errorText(e)}`);
+      // a file here that the server cannot restore is damaged or of another set-up: it goes; one that is not here
+      // (the server saves elsewhere) is not asked for again by this process
+      if (this.local && this.dirExists() && fs.existsSync(join(this.dir, file))) this.retire(file, errorText(e));
+      else {
+        this.missing.set(file, Date.now());
+        debugLog(`restore ${file} into slot ${slot}: ${errorText(e)} (not asked for again)`);
+      }
       return undefined;
     }
+  }
+
+  /** A saved state that cannot be used: removed (this Mac), or not asked for again. @param {string} file @param {string} why */
+  retire(file, why) {
+    this.missing.set(file, Date.now());
+    if (this.local && this.dirExists() && isStateName(file)) removeState(this.dir, file);
+    this.log(`${file} retired: ${why}`);
+  }
+
+  /**
+   * A conversation with history but no saved state of its own (a fork, a copy, a session that came back under a new
+   * ID): the longest saved session on this Mac whose tokens start this request (research-2 suggestion 6).
+   * @param {Payload} payload @param {string} model @param {boolean} router @param {string} key
+   * @returns {Promise<{ file: string, n: number } | undefined>}
+   */
+  async startedBy(payload, model, router, key) {
+    if (!this.local || !this.dirExists()) return undefined;
+    if (arr(payload.messages).filter((x) => obj(x).role === "user").length < 2) return undefined;   // a new session
+    const head = `carl-session+${safeName(model, 60)}+${key}+`;
+    let names;
+    try {
+      names = fs.readdirSync(this.dir).filter((n) => n.startsWith(head) && n.endsWith(".bin"));
+    } catch {
+      return undefined;
+    }
+    if (!names.length) return undefined;
+    const r = await this.call("POST", "/apply-template", { messages: payload.messages, ...templateFields(payload),
+                                                          ...this.withModel(model, router) });
+    const want = await this.tokens(String(obj(r).prompt ?? ""), model, router);
+    let best;
+    for (const n of names) {
+      const toks = headerTokens(join(this.dir, n));
+      if (toks && toks.length >= MIN_SESSION_TOKENS && toks.length < want.length && commonPrefix(toks, want) === toks.length
+          && (!best || toks.length > best.n)) best = { file: n, n: toks.length };
+    }
+    return best;
   }
 
   /** @param {string} file */
@@ -1040,6 +1222,7 @@ export class CarlCache {
       this.log(`after: no request of session ${meta.session} seen`);
       return;
     }
+    if (this.windowCache(e.model)) return;
     try {
       const { model, router } = e;
       let slots = await this.slots(model, router);
@@ -1270,6 +1453,8 @@ export class CarlCache {
     const r = await this.call("POST", `/slots/${e.slot}?action=save`, { filename: file, ...this.withModel(model, router) });
     e.saved = `${now.task}:${now.n}`;
     e.savedN = Number(obj(r).n_saved) || now.n;
+    e.savedAt = Date.now();
+    this.missing.delete(file);
     this.log(`session ${session}: ${e.savedN} tokens saved from slot ${e.slot}${settle ? " (its slot is needed)" : ""}`);
     this.wrote(file, "");
   }

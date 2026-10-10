@@ -6,13 +6,14 @@ files' ages)."""
 from __future__ import annotations
 
 import time
-from typing import List, Sequence, Tuple
+from typing import List, Mapping, Optional, Sequence, Tuple
 
 from carl_core.domain.units import duration, file_size
 
 from ..cards import sections as register
 from ..diskcache import PROMPT, CacheConfig, CacheFile, describe, gb as gb_text, shared_saving, used
 from ..fmt import CYN, DIM, GRN, R, YEL, CardLine, Row, bar, buttons, home_short, row
+from ..sessionnames import session_id
 from ..state import UIState
 from ..words import plural
 from .page import Part, body_height, help_part, layout, scrolled, section, side_width
@@ -73,15 +74,18 @@ def save_text(conf: CacheConfig) -> Tuple[Tuple[str, str], ...]:
 SWA_TEXT = (("auto", "auto (full when it fits)"), ("full", "full cache"), ("window", "window cache"))
 
 
-def file_rows(files: Sequence[CacheFile], shown: int, full: bool) -> List[CardLine]:
+def file_rows(files: Sequence[CacheFile], shown: int, full: bool,
+              names: Optional[Mapping[str, str]] = None) -> List[CardLine]:
     """The saved files, newest first, as a table (shown rows, then how many more); full: "(shared)" on a
-    session stored as changes."""
+    session stored as changes. names: a session's current name by its ID (Phase 23.5 item 4): the name, the ID grey
+    after it, cut."""
     if not files:
         return [f"{DIM}The disk cache is empty. OpenCode and Pi save here while they work.{R}"]
     rows = []
     for f in sorted(files, key=lambda f: -f.mtime):
         model, _, who = describe(f.name).partition(" · ")
-        rows.append((f, model, who))
+        name = (names or {}).get(session_id(f.name), "")
+        rows.append((f, model, f"{name}  {who[:12]}…" if name and len(who) > 12 else f"{name}  {who}" if name else who))
     mw = max(len(m) for _, m, _ in rows) + 2
     ww = max(len(x) for _, _, x in rows) + 2
     now = time.time()
@@ -89,7 +93,9 @@ def file_rows(files: Sequence[CacheFile], shown: int, full: bool) -> List[CardLi
     out: List[CardLine] = [f"{DIM}{'Saved':<9}{'Model':<{mw}}{'Agent or session':<{ww}}{'Size':>7}  Age{R}"]
     for f, model, who in rows[:shown]:
         what = "prompt" if f.kind == PROMPT else "shared" if f.packed and full else "session"
-        out.append(f"{DIM}{what:<9}{R}{model:<{mw}}{who:<{ww}}{file_size(f.bytes):>7}  "
+        name, sep, sid = who.partition("  ")          # a named session: its name, then its ID in grey
+        shown_who = f"{name}{sep}{DIM}{sid}{R}" if sep else who
+        out.append(f"{DIM}{what:<9}{R}{model:<{mw}}{shown_who}{' ' * (ww - len(who))}{file_size(f.bytes):>7}  "
                    f"{DIM}{duration(now - f.mtime):<{aw}}{R}")
     if len(rows) > shown:
         out.append(f"{DIM}{plural(len(rows) - shown, 'more file')} {'is' if len(rows) - shown == 1 else 'are'} "
@@ -100,7 +106,8 @@ def file_rows(files: Sequence[CacheFile], shown: int, full: bool) -> List[CardLi
 
 
 def caching_panel(ui: UIState, conf: CacheConfig, files: Sequence[CacheFile], folder: str, cols: int,
-                  home: str, api: str = "", height: int = 0) -> List[Row]:
+                  home: str, api: str = "", height: int = 0, names: Optional[Mapping[str, str]] = None,
+                  window: str = "") -> List[Row]:
     """The sections: CACHING (the settings), ON THE DISK (what it holds, Clear, the files); the Quick tip and
     the help beside them or under them. The page scrolls."""
     use = used(files)
@@ -144,7 +151,10 @@ def caching_panel(ui: UIState, conf: CacheConfig, files: Sequence[CacheFile], fo
                                    f"as changes. This saves {gb_text(shared_saving(files))} on the disk."))
         L.append(row("other computers", f"{GRN}They use these settings through the dashboard API ({api}).{R}" if api
                      else f"{YEL}Not now. The dashboard API is not running.{R}"))
-        L += ["", buttons("", [("Clear the disk cache (c)", "cache:clear")]), "", *file_rows(files, shown, full)]
+        if window:              # the running model's cache can't reuse a saved state (Phase 23.5)
+            L.append(row("window cache", f"{window} runs with the window cache: OpenCode and Pi save and restore "
+                                         f"nothing for it."))
+        L += ["", buttons("", [("Clear the disk cache (c)", "cache:clear")]), "", *file_rows(files, shown, full, names)]
         return section(ui, "cachedisk", "ON THE DISK", plural(n, "file"), L, w, 3)
 
     about = SAVE_HELP[conf.save].replace("AUTO", duration(conf.auto_s)) if key in ("save", "auto") else \

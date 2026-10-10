@@ -4,7 +4,7 @@ drop-downs and the questions. The Agents panel: settings_panels.agents. Draws fr
 SettingsService (the ModelStore port)."""
 from __future__ import annotations
 
-from typing import List, Optional, Sequence, Tuple
+from typing import List, Mapping, Optional, Sequence, Tuple
 
 from .diskcache import CacheConfig, CacheFile
 from .fmt import Row
@@ -64,9 +64,10 @@ class SettingsView:
         return router_panel(ui, d, saved, switches, stale, cols, here, height)
 
     def caching(self, ui: UIState, conf: CacheConfig, files: Sequence[CacheFile], folder: str, cols: int,
-                api: str = "", height: int = 0) -> List[Row]:
+                api: str = "", height: int = 0, names: Optional[Mapping[str, str]] = None,
+                window: str = "") -> List[Row]:
         """Panel 6: the disk cache (settings_panels.caching)."""
-        return caching_panel(ui, conf, files, folder, cols, self.home, api, height)
+        return caching_panel(ui, conf, files, folder, cols, self.home, api, height, names, window)
 
     def picker(self, pk: Picker, cols: int, height: int, ui: Optional[UIState] = None) -> List[Row]:
         """An open drop-down (it sets the footer's keys in ui)."""

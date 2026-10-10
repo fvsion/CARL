@@ -3,6 +3,7 @@ preset section is what a single start of it would run, a model that doesn't fit 
 with the reason, the start model loads first; the clients list only the installed models."""
 from __future__ import annotations
 
+import dataclasses
 import unittest
 from typing import Dict, List, cast
 
@@ -103,6 +104,14 @@ class AppRouterTest(unittest.TestCase):
         preset, common = w.carl.router_preset(w.carl.load_config(), "/home/u/models/templates")
         p = preset.models[0]
         self.assertEqual((p.ctx, p.slots, p.template, p.cache_mib, common.ubatch), (65536, 1, None, 3072, 1024))
+
+    def test_the_saves_go_to_the_settings_folders_slots(self) -> None:
+        """Phase 23.5: as a single start (serve-llama.sh SLOT_DIR), CARL_CONF_DIR's slots, not ~/.config/carl's (the
+        cache matrix's router start failed: "--slot-save-path: not a directory")."""
+        w = self.world()
+        w.carl.stores = dataclasses.replace(w.carl.stores, local_path="/elsewhere/conf/models.json")
+        _, common = w.carl.router_preset(w.carl.load_config(), "/home/u/models/templates")
+        self.assertEqual(common.slot_dir, "/elsewhere/conf/slots")
 
     def test_mode_setting(self) -> None:
         self.assertEqual((LLAMA_KEYS["mode"].default, LLAMA_KEYS["mode"].choices), ("single", ("single", "router")))

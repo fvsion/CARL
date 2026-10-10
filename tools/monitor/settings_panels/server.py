@@ -5,7 +5,7 @@ MODEL card. Full detail adds the More settings rows, the flags and config keys, 
 where the settings come from."""
 from __future__ import annotations
 
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from carl_core.domain.units import MIB, file_size, memory
 
@@ -40,8 +40,10 @@ SIDE_AT = 150                                           # the side column (About
 SECTIONS = ["srv", "srvmem", "srvfit", "modelinfo", "srvabout", "srvlist"]
 
 
-def confirm_restart(run: bool, port: int, changes: List[str], w: int) -> List[Row]:
-    """Apply's question: restart (or start) the server with these settings? It lists the changes."""
+def confirm_restart(run: bool, port: int, changes: List[str], w: int, new_port: Optional[int] = None,
+                    taken: str = "") -> List[Row]:
+    """Apply's question: restart (or start) the server with these settings? It lists the changes. new_port: the port is
+    taken by another program (`taken`): the start offers this free one (Phase 23.5), never a silent change."""
     if run:
         first = (["You changed:", *[f"  {c}" for c in changes]] if changes else
                  ["Nothing changed. Restart the server anyway?"])
@@ -49,6 +51,10 @@ def confirm_restart(run: bool, port: int, changes: List[str], w: int) -> List[Ro
                              "Requests in progress stop. The model loads again (30 s to 2 min).",
                              "If the new server does not start, CARL starts the old server again.", "",
                              buttons("  ", [("Restart (y)", "setyes"), ("Cancel (n)", "setno")])]
+    elif new_port:
+        L = ["", f"Port {port} is in use by another program ({taken}).",
+             f"This starts the server on port {new_port}. The model loads (30 s to 2 min).", "",
+             buttons("  ", [(f"Start on port {new_port} (y)", "setyes"), ("Cancel (n)", "setno")])]
     else:
         L = ["", f"This starts the server on port {port}. The model loads (30 s to 2 min).", "",
              buttons("  ", [("Start (y)", "setyes"), ("Cancel (n)", "setno")])]
@@ -64,6 +70,8 @@ class ServerPanel:
         self.card = card
         self.config_file = config_file
         self.home = home
+        self.api_port: Optional[int] = None      # the dashboard API's port now (draw(): from ui)
+        self.api_note = ""                       # why it is not the server's port + 1 ("8081 is in use (ssh)")
 
     # ------------------------------------------------------------ values
     def same(self, key: str, p: Pending, run: Pending, f: FitInfo) -> bool:
@@ -85,6 +93,10 @@ class ServerPanel:
             return str(rv) == (("full" if f.full else "window") if p[key] == "auto" else str(p[key]))
         return str(fmt_val(key, rv)) == str(p[key])
 
+    def api_same(self, p: Pending) -> bool:
+        """The API Port row: the choice is what the API runs on (auto: wherever auto put it)."""
+        return p.get("api") == "auto" or str(p.get("api")) == str(self.api_port)
+
     def choice_text(self, key: str, p: Pending, run: Pending, f: FitInfo) -> str:
         """Your choice, in words: 'auto' always with what it chose."""
         v = p[key]
@@ -100,9 +112,17 @@ class ServerPanel:
             return spec_name(p.get("spec"), p.get("specn"))
         if key == "swa" and v == "auto" and f.full is not None:
             return f"auto ({'full cache' if f.full else 'window cache'})"
+        if key == "api" and v == "auto":
+            return f"auto ({self.api_port})" if self.api_port else "auto"
         return shown_value(key, v, long=True)
 
     def running_text(self, key: str, p: Pending, run: Pending, f: FitInfo) -> str:
+        if key == "api":
+            if not self.api_port:
+                return f"{YEL}not running{': ' + self.api_note if self.api_note else ''}{R}"
+            if self.api_note:
+                return f"{YEL}{self.api_port}: {self.api_note}{R}"
+            return f"{DIM}the same{R}" if self.api_same(p) else f"{YEL}{self.api_port}{R}"
         if not run or key in NOT_RUNNING:
             return f"{DIM}–{R}"
         if self.same(key, p, run, f):
@@ -148,6 +168,7 @@ class ServerPanel:
         full = ui.levels.get("srv", 1) == 2
         svc.full = full
         run = svc.running(d)
+        self.api_port, self.api_note = ui.api_port, ui.api_note
         rws = svc.rows(p)
         ui.set_row = min(ui.set_row, len(rws) - 1)
         key = rws[ui.set_row].key
@@ -155,7 +176,8 @@ class ServerPanel:
         w = cols - 1
         side_w = 60 if w >= SIDE_AT else 0
         main_w = w - side_w - 1 if side_w else w
-        changed = [r for r in rws if r.key not in NOT_RUNNING and run and not self.same(r.key, p, run, f)]
+        changed = [r for r in rws if r.key not in NOT_RUNNING and run
+                   and not (self.api_same(p) if r.key == "api" else self.same(r.key, p, run, f))]
 
         L = self.intro(p, d, run, f, changed, port, main_w - 4)
         L += self.table(ui, p, run, f, rws, main_w - 4, full and main_w - 4 >= 140)
@@ -187,7 +209,8 @@ class ServerPanel:
         if ui.confirm:
             ch = [f"{r.label}: {self.running_plain(r.key, p, run, f)} → {self.choice_plain(r.key, p, run, f)}"
                   for r in changed]
-            rows = indent(confirm_restart(bool(run), port, ch, min(w, 84))) + rows
+            rows = indent(confirm_restart(bool(run) and not ui.confirm_port, port, ch, min(w, 84), ui.confirm_port,
+                                          ui.confirm_taken)) + rows
         self.set_keys(ui, key)
         reveal(ui, rows, "set_scroll", height)
         ui.set_scroll = max(0, min(ui.set_scroll, len(rows) - height))
@@ -210,6 +233,8 @@ class ServerPanel:
         return L
 
     def running_plain(self, key: str, p: Pending, run: Pending, f: FitInfo) -> str:
+        if key == "api":
+            return str(self.api_port or "–")
         if key == "spec":
             return spec_name(run.get("spec"), run.get("specn"))
         return shown_value(key, run.get(key, "–"))

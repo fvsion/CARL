@@ -62,7 +62,11 @@ Usage: carl-sync.py COMMAND
                   changes nothing).
 
 The server's address comes from remote.json next to this file. The server writes
-it at every start. The API key comes from api-key next to this file, or from
+it at every start. Before the key goes out, the dashboard API must answer
+/carl/ping (no key) with the ID in remote.json; when it moved (its port was
+taken, or the server's port changed), the next ports are asked the same way,
+and remote.json takes the place found. A server that moved to another port: the
+installer runs again, so OpenCode and Pi use the new address. The API key comes from api-key next to this file, or from
 ~/.config/carl/api-key. A sync applies again the switches of the last install
 (the clients, the coder, web search, LSP, browser and the others, in
 ~/.config/carl/client-install.env: ./setup and "set" write them).
@@ -121,7 +125,7 @@ MODEL_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")   # a model name (client
 CODER_MODEL_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._:/@+-]*")
 CODER_MODEL_MAIN = "main"       # the coder on the main session's model (the default: no line)
 LEVEL_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,39}")
-OPENCODE_ONLY = ("NO_LSP", "NO_SIDEBAR", "NO_SWITCHER", "NO_MODEL_CHECK")    # Pi has no such part
+OPENCODE_ONLY = ("NO_LSP", "NO_SIDEBAR", "NO_SWITCHER")    # Pi has no such part (NO_MODEL_CHECK: both, Phase 23.5)
 # Pi reads the coder's thinking and model (carl.json) each time it starts the coder: no restart
 PI_LIVE = (*OPENCODE_ONLY, "CODER_THINKING", "CODER_MODEL", "CODER_MODEL_THINKING", "CODER_TESTS", "CODER_REQUEST_CHECK",
            "CODER_RUN_GATE", "CODER_FIX_ROUNDS", "CODER_FREE_FORM")
@@ -170,8 +174,84 @@ def update(**kv: Any) -> Json:
     return doc
 
 
+DEFAULT_PORT = 9275          # CARL's server port when none is set (tools/carl_core/domain/runtime.py DEFAULT_PORT)
+FIND_SPAN = 20               # a moved API is looked for on this many ports after the server's (and the default's)
+CARL_ID_RE = re.compile(r"[0-9a-f]{32}")
+
+
+def ping(api: str, timeout: float = 2.0) -> Optional[str]:
+    """What answers /carl/ping (no key: Phase 23.5): CARL's ID; "" for an older CARL dashboard (no ping, but CARL's
+    X-Carl-Version on its 401); None for anything else (another program, nothing)."""
+    try:
+        with urllib.request.urlopen(urllib.request.Request(api + "/carl/ping"), timeout=timeout) as r:
+            doc = json.loads(r.read(4096))
+        cid = doc.get("carl") if isinstance(doc, dict) else None
+        return cid if isinstance(cid, str) else None
+    except urllib.error.HTTPError as e:
+        return "" if e.code == 401 and (e.headers.get("X-Carl-Version") or "").strip() else None
+    except (OSError, ValueError, http.client.HTTPException):
+        return None
+
+
+def is_ours(api: str, want: str, timeout: float = 2.0) -> bool:
+    """The key goes there: it answers the ID this folder knows (remote.json "id"); a folder that knows none (a package
+    from before Phase 23.5) takes any CARL dashboard."""
+    got = ping(api, timeout)
+    return got is not None and (got == want if want else True)
+
+
+def find_api(api: str, remote: Json) -> str:
+    """The dashboard API: where remote.json says, else (it moved: its port was taken, or the server's default port
+    changed) on the next ports after the server's and after CARL's default, asked without the key for the ID this
+    folder knows; the place found goes into remote.json. Without a known ID nothing is looked for."""
+    want = remote.get("id") if isinstance(remote.get("id"), str) and CARL_ID_RE.fullmatch(remote["id"]) else ""
+    if is_ours(api, want):
+        return api
+    url = urllib.parse.urlsplit(api)
+    port = remote.get("port") if isinstance(remote.get("port"), int) else DEFAULT_PORT
+    if want and url.hostname:
+        host = f"[{url.hostname}]" if ":" in url.hostname else url.hostname
+        tried = {url.port}
+        for p in [*range(port + 1, port + 1 + FIND_SPAN), *range(DEFAULT_PORT + 1, DEFAULT_PORT + 1 + FIND_SPAN)]:
+            if p in tried or not 0 < p < 65536:
+                continue
+            tried.add(p)
+            cand = f"{url.scheme}://{host}:{p}"
+            if is_ours(cand, want, timeout=1.0):
+                write_remote(cache_api=cand)
+                return cand
+    raise urllib.error.URLError(f"no CARL dashboard API answers at {api}")
+
+
+def write_remote(**kv: Any) -> None:
+    """Change remote.json next to this file (the dashboard API or the server's port moved)."""
+    path = os.path.join(HERE, "remote.json")
+    doc = {**load(path), **kv}
+    with open(path + ".tmp", "w", encoding="utf-8") as f:
+        json.dump(doc, f, indent=2)
+    os.chmod(path + ".tmp", 0o600)
+    os.replace(path + ".tmp", path)
+
+
+def server_moved(api: str, key: str) -> bool:
+    """The server's port now (the dashboard's /carl/client/server) against remote.json's; when it moved, remote.json
+    takes the new one (the installer then writes the clients' address again). False when the dashboard is older."""
+    try:
+        with urllib.request.urlopen(request(api + "/carl/client/server", key), timeout=10) as r:
+            doc = json.loads(r.read(4096))
+    except urllib.error.HTTPError:
+        return False
+    port = doc.get("port") if isinstance(doc, dict) else None
+    remote = load(os.path.join(HERE, "remote.json"))
+    if not isinstance(port, int) or isinstance(port, bool) or not 0 < port < 65536 or port == remote.get("port"):
+        return False
+    write_remote(port=port)
+    return True
+
+
 def server() -> Tuple[str, str]:
-    """(the dashboard's API, the key); ValueError when this folder has no remote.json."""
+    """(the dashboard's API, the key); ValueError when this folder has no remote.json; URLError when no CARL dashboard
+    answers there (the key is never sent to another program: find_api)."""
     r = load(os.path.join(HERE, "remote.json"))
     api = r.get("cache_api")
     if not isinstance(api, str) or (url := urllib.parse.urlsplit(api)).scheme not in ("http", "https") \
@@ -182,10 +262,10 @@ def server() -> Tuple[str, str]:
         try:
             with open(f, encoding="utf-8") as fh:
                 key = fh.read().strip()
-            if key:
-                return api.rstrip("/"), key
         except OSError:
             continue
+        if key:
+            return find_api(api.rstrip("/"), r), key     # outside the try: its URLError is an OSError too
     raise ValueError("There is no API key next to carl-sync.py or in ~/.config/carl/api-key. Make a new client "
                      "package on the server Mac (./carl.sh package), unzip it over this folder and run ./setup.")
 
@@ -452,14 +532,15 @@ def once(apply_waiting: bool = False) -> Json:
         st = state()
         try:
             api, key = server()
-            doc = fetch_config(api, key, "" if apply_waiting else str(st.get("applied") or ""))
+            moved = server_moved(api, key)           # the server's port changed: the clients' address too
+            doc = fetch_config(api, key, "" if apply_waiting or moved else str(st.get("applied") or ""))
         except NET_ERRORS as e:
             return update(checked=time.time(), error=describe(e))
         if SERVER_VERSION.get("v"):                  # /carl compares the client package with it
             st = update(server_version=SERVER_VERSION["v"])
-        if doc is None or doc["version"] == st.get("applied"):
+        if doc is None or (doc["version"] == st.get("applied") and not moved):
             return update(checked=time.time(), error=None, pending=None)
-        if not (st.get("auto_apply", True) or apply_waiting):
+        if not (st.get("auto_apply", True) or apply_waiting or moved):
             return update(checked=time.time(), error=None, pending=doc["version"])
         try:
             apply(doc)

@@ -24,6 +24,7 @@
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
+import { isCarl } from "./carl-api.js";
 import { BRIEF_MARK, briefRefusal, filesByAction, isTestFile, missingLiterals, parseBrief, requestLiterals } from "./carl-brief.js";
 
 export const RULE_BEGIN = "<!-- carl:main-agents-only begin -->";
@@ -60,10 +61,11 @@ const GATE_MS = 10_000;                                       // the dashboard's
  * when neither answers. Read again every GATE_MS.
  */
 export class GateSetting {
-  /** @param {{ home?: string, cacheApi?: string, fetch?: typeof fetch }} [o] */
+  /** @param {{ home?: string, cacheApi?: string, carlId?: string, fetch?: typeof fetch }} [o] */
   constructor(o = {}) {
     this.home = o.home ?? homedir();
     this.cacheApi = o.cacheApi ?? "";
+    this.carlId = o.carlId ?? "";
     this.fetch = o.fetch ?? globalThis.fetch;
     this.value = 0;
     this.at = -GATE_MS;
@@ -80,6 +82,7 @@ export class GateSetting {
       return this.value;
     } catch { /* no config.json here: ask the dashboard */ }
     if (!this.cacheApi) return (this.value = 0);
+    if (!(await isCarl(this.cacheApi, this.carlId, this.fetch))) return this.value;   // never the key to another program
     try {
       const key = readFileSync(join(conf, "api-key"), "utf8").trim();
       const r = await this.fetch(this.cacheApi + "/carl/cache/settings", {

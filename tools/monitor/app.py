@@ -9,14 +9,15 @@ import signal
 import threading
 import time
 from dataclasses import dataclass
-from typing import Callable, List, Optional, Sequence, Tuple
+from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
-from carl_core.adapters.client_package import carl_version
+from carl_core.adapters.client_package import carl_version, publish_api_port
 from carl_core.adapters.system import llama_server_version
+from carl_core.domain import runtime
 from carl_core.domain.llamacpp import VersionCheck, check_version
 from carl_core.domain.units import duration, tokens
 
-from . import cli, clientsync, diskcache, fsio, system, uiprefs
+from . import cli, clientsync, diskcache, fsio, sessionnames, system, uiprefs
 from .cacheapi import CacheApi, Registry
 from .api import Endpoint
 from .card_view import FORM_KEYS, TYPING_KEYS, draw_form
@@ -43,6 +44,7 @@ REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 LOGO_FILE = os.path.join(REPO, "assets", "carl-icon.png")
 QUIT_LABEL = "[ Quit ]"
 TAIL: List[Key] = [("D", "detail"), ("?", "all keys"), ("q", "quit")]      # the footer's keys on every screen
+API_RETRY_S = 30.0      # the dashboard API tries again this often while it does not run (Phase 23.5)
 
 
 @dataclass
@@ -74,7 +76,11 @@ class App:
         self.prefs = uiprefs.path_for(jobs.paths.config_file)
         self.ctl = Controller(ui, svc, jobs, view, collector.endpoint, collector.tail, REPO, opts.home, self.prefs)
         self._api: Optional[CacheApi] = None              # the cache API for clients on other computers
-        self._api_where: Optional[Tuple[str, int]] = None
+        self._api_where: Optional[Tuple[str, int, object]] = None
+        self._api_tried = 0.0
+        self._api_conf: Tuple[float, object] = (0.0, "auto")
+        self._names: Tuple[float, Tuple[str, ...], Dict[str, str]] = (0.0, (), {})
+        self._status: JSONDict = {"state": "idle"}     # /carl/status: made in the loop, read by the API's thread
         self._clients_file = os.path.join(os.path.dirname(jobs.paths.config_file), "clients.json")
         self._errors: Tuple[str, float, List[str]] = ("", 0.0, [])    # the launcher's output: (path, mtime, error lines)
         # The installed llama.cpp (HEALTH): read at the dashboard's start (Machine) and again when the server process
@@ -198,25 +204,77 @@ class App:
         return self._errors[2]
 
     def cache_api(self) -> None:
-        """The cache API (cacheapi.py) next to the server: its address, port + 1; moved when the
-        server moves. A port that is taken is said once."""
-        ep = self.endpoint
-        where = (ep.host, ep.port + 1)
-        if self._api_where == where:
+        """The dashboard API (cacheapi.py) next to the server (Phase 23.5 item 7): llama.api_port, or auto = the
+        server's port + 1, else the next free port; never a port another CARL holds. Moved when the server moves or
+        the setting changes; tried again every API_RETRY_S while it does not run. The port it took goes into the
+        server's file (~/.config/carl/server-PORT.json) and client/remote.json, where the clients look."""
+        ep, ui = self.endpoint, self.ui
+        want = self.api_setting()
+        where = (ep.host, ep.port, want)
+        if self._api_where == where and (self._api or time.time() - self._api_tried < API_RETRY_S):
             return
+        new_place = self._api_where != where
         if self._api:
             self._api.stop()
-        self._api, self._api_where = None, where
-        api = CacheApi(ep.host, ep.port + 1, lambda: self.endpoint.key, self.jobs.paths.slots, self.jobs.cache_conf,
-                       lambda model: self.jobs.save_recorded(model, self.ctl.data.router is not None),
-                       os.path.dirname(self.jobs.paths.config_file), carl_version(self.jobs.paths.repo))
-        err = api.start()
-        if err:
-            self.ui.toast(f"The dashboard API cannot start: {err}. Other computers cannot sync now (the Caching panel "
-                          f"says so too).", 12, error=True)
-        else:
-            self._api = api
-            self.jobs.registry = api.registry
+        self._api, self._api_where, self._api_tried = None, where, time.time()
+        first = ep.port + 1
+        tries = [want] if isinstance(want, int) else [first]
+        if not isinstance(want, int):
+            rows = system.netstat_tcp()
+            free = first
+            while len(tries) < 10 and free is not None:
+                free = system.next_free_port(rows, free)
+                if free is not None and free != ep.port:
+                    tries.append(free)
+        err = ""
+        conf_dir = os.path.dirname(self.jobs.paths.config_file)
+        for port in tries:
+            api = CacheApi(ep.host, port, lambda: self.endpoint.key, self.jobs.paths.slots, self.jobs.cache_conf,
+                           lambda model: self.jobs.save_recorded(model, self.ctl.data.router is not None),
+                           conf_dir, carl_version(self.jobs.paths.repo), runtime.carl_id(conf_dir),
+                           lambda: self.endpoint.port, lambda: self._status)
+            err = api.start() or ""
+            if not err:
+                self._api = api
+                self.jobs.registry = api.registry
+                ui.api_port, ui.api_note = port, ("" if port == first or isinstance(want, int)
+                                                  else f"{first} is in use{self.port_user(first)}")
+                runtime.set_api_port(conf_dir, ep.port, port)
+                publish_api_port(self.jobs.paths.repo, ep.port, f"http://{ep.host}:{port}")
+                return
+        ui.api_port, ui.api_note = None, err.removeprefix("dashboard API: ")
+        if new_place:
+            ui.toast(f"The dashboard API cannot start: {ui.api_note}. Other computers cannot sync now (the Caching "
+                     f"panel says so too).", 12, error=True)
+
+    def session_names(self, files: Sequence[diskcache.CacheFile]) -> Dict[str, str]:
+        """The saved sessions' current names (OpenCode's and Pi's stores on this Mac; read again every 10 s)."""
+        ids = tuple(sorted(sessionnames.session_id(f.name) for f in files if f.name.startswith("carl-session+")))
+        if ids != self._names[1] or time.time() - self._names[0] > 10:
+            self._names = (time.time(), ids, sessionnames.names(self.opts.home, ids))
+        return self._names[2]
+
+    def window_model(self, d: ServerData) -> str:
+        """The running model when it has the window cache (the launcher's server file), else ""."""
+        doc = runtime.read(os.path.dirname(self.jobs.paths.config_file), self.endpoint.port)
+        models = jdict(doc.get("models"))
+        name = d.alias or (next(iter(models)) if len(models) == 1 else "")
+        return name if jdict(models.get(name)).get("swa") == "window" else ""
+
+    def api_setting(self) -> object:
+        """llama.api_port: "auto" or a port (read again every few seconds)."""
+        if time.time() - self._api_conf[0] > 5:
+            v = jdict(self.store.load_config().get("llama")).get("api_port", "auto")
+            self._api_conf = (time.time(), v if isinstance(v, int) and 1024 <= v <= 65535 else "auto")
+        return self._api_conf[1]
+
+    @staticmethod
+    def port_user(port: int) -> str:
+        """" (ssh)": what listens on port, for the API Port row."""
+        pid = system.listen_pid(system.netstat_tcp(), port)
+        info = system.process_info(pid) if pid else None
+        name = os.path.basename(info.cmd.split()[0]) if info and info.cmd.split() else ""
+        return f" ({name})" if name else ""
 
     def cache_line(self) -> str:
         """The CONNECT card's disk cache line: what OpenCode and Pi have saved, of the limit."""
@@ -382,7 +440,9 @@ class App:
             want = [m["name"] for m in self.svc.models.downloaded()]
         server = want[0] if not router and len(want) == 1 else ""
         running = (d.alias, d.n_ctx) if d.up and d.alias and d.n_ctx else None
-        return (drift({c: fsio.listed_models(self.opts.home, c, pid) for c, pid in here}, want, running, server),
+        port = self.endpoint.port
+        moved = {c: (p, port) for c, p in fsio.moved_here(self.endpoint.base, self.opts.home).items()}
+        return (drift({c: fsio.listed_models(self.opts.home, c, pid) for c, pid in here}, want, running, server, moved),
                 len(want))
 
     def client_doc(self, d: ServerData) -> Optional[JSONDict]:
@@ -459,8 +519,9 @@ class App:
             elif ui.sp == SP_CACHE:
                 folder = self.jobs.paths.slots
                 api = f"{self._api.host}:{self._api.port}" if self._api else ""
-                body = self.view.caching(ui, self.jobs.cache_conf(), diskcache.listing(folder), folder, cols,
-                                         api, height - 2)
+                files = diskcache.listing(folder)
+                body = self.view.caching(ui, self.jobs.cache_conf(), files, folder, cols, api, height - 2,
+                                         self.session_names(files), self.window_model(d))
             elif ui.sp == SP_MODELS:
                 mdir = self.store.models_dir()
                 body = self.view.models(ui, cols, height - 2, ModelsDir(mdir, disk_free(mdir)), d.alias)
@@ -535,6 +596,7 @@ class App:
                     next_fetch = time.time() + (0.5 if ui.stopping else self.opts.interval)
                 self.jobs.poll()
                 self.jobs.drain_tick(self.ctl.data)
+                self._status = {**c.tail.book.status(), "up": self.ctl.data.up}   # a new dict: the API reads it whole
                 self.cache_api()
                 if ui.stopping:
                     pid, deadline = ui.stopping

@@ -12,6 +12,7 @@ from typing import Callable, Dict, List, Optional, Sequence, Tuple
 from carl_core.domain.gguf import KV_BPE, kv_bytes_per_token
 from carl_core.domain.llamacpp import VersionCheck, health_rows
 from carl_core.domain.serverlog import CacheState, counts_cache
+from carl_core.domain.known_warnings import known
 from carl_core.domain.units import duration, file_size, memory, memory_pair, percent, speed, tokens
 
 from .cacheapi import Client
@@ -361,7 +362,10 @@ def card_speed(v: View, d: ServerData, w: int = 66) -> Card:
     pp_avg, tg_avg = averages(d)
     writing = d.busy and d.decoded > 0
     reading = d.busy and d.decoded == 0
-    r = v.log.requests[-1] if v.log.requests else None
+    r = v.log.last_answer()
+    live_pp, live_tg = v.log.live()         # the log's progress lines: every slot, whether or not a poll answered
+    pp_now = live_pp or (d.pp_rate if reading else 0)
+    tg_now = live_tg or (d.tg_rate if writing else 0)
     # the table's label column lines up with the rows below it (aligned(): the longest label + 2)
     lw = len("largest context" if v.full else "guesses OK") + 2
     last = "Last" if w - 4 < 50 else "Last request"            # a narrow card: the short header
@@ -369,8 +373,8 @@ def card_speed(v: View, d: ServerData, w: int = 66) -> Card:
     head = f"{DIM}{'Tok/s':<{lw}}{'Now':>7}{'Average':>10}{last:>{lc}}{R}"
     L: List[CardLine] = [
         head,
-        f"{DIM}{'Read':<{lw}}{R}{_num(d.pp_rate if reading else 0):>7}{_num(pp_avg):>10}{_num(r.pp if r else 0):>{lc}}",
-        f"{DIM}{'Write':<{lw}}{R}{_num(d.tg_rate if writing else 0, 1):>7}{_num(tg_avg, 1):>10}"
+        f"{DIM}{'Read':<{lw}}{R}{_num(pp_now or 0):>7}{_num(pp_avg):>10}{_num(r.pp if r else 0):>{lc}}",
+        f"{DIM}{'Write':<{lw}}{R}{_num(tg_now or 0, 1):>7}{_num(tg_avg, 1):>10}"
         f"{_num(r.tg if r else 0, 1):>{lc}}"]
     drafted = m.get("spec_decode_num_draft_tokens_total", 0)
     acc = m.get("spec_decode_num_accepted_tokens_total", 0)
@@ -676,6 +680,9 @@ def routine(line: str) -> bool:
     return any(r in line for r in ROUTINE)
 
 
+KNOWN_INDENT = len("12:00:00 W ")      # the reason under a known line starts under its text
+
+
 def log_line(book: LogBook, line: str, ms: bool = False) -> str:
     """A log line with its clock time (the log's own clock is minutes since the server started; ms: with
     milliseconds)."""
@@ -701,5 +708,8 @@ def log_view(v: View, n: int, width: int) -> List[CardLine]:
             out.append(col + text)
         else:
             out += [col + part for part in wrap(text, width)]
+        why = known(line) if lvl in ("W", "E") else None
+        if why:                         # a known warning: grey, with its reason under it (Phase 23.5 item 8)
+            out.append(f"{DIM}{' ' * KNOWN_INDENT}↳ known: {why}{R}")
     return out[-n:] or [f"{DIM}(no log lines){R}"]
 

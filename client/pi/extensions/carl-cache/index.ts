@@ -14,13 +14,14 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { CarlCache, debugLog, errorText, obj, splitPi } from "./carl-cache.js";
 
 /** CARL's state for Pi (carl.json in Pi's agent folder): our provider ids and the dashboard API. */
-function carlState(): { providers: Set<string>; cacheApi?: string } {
+function carlState(): { providers: Set<string>; cacheApi?: string; carlId?: string } {
 	try {
 		const dir = process.env.PI_CODING_AGENT_DIR || join(homedir(), ".pi", "agent");
 		const st = obj(JSON.parse(readFileSync(join(dir, "carl.json"), "utf8")) as unknown);
 		return {
 			providers: new Set(Object.values(obj(st.providers)).filter((v): v is string => typeof v === "string")),
 			cacheApi: typeof st.cache_api === "string" ? st.cache_api : undefined,
+			carlId: typeof st.carl_id === "string" ? st.carl_id : undefined,
 		};
 	} catch {
 		return { providers: new Set(["llamacpp"]) };
@@ -30,7 +31,10 @@ function carlState(): { providers: Set<string>; cacheApi?: string } {
 export default function carlCache(pi: ExtensionAPI) {
 	const state = carlState();
 	const ours = state.providers;
-	const caches = new Map<string, CarlCache>();
+	// one cache per server for the whole Pi process: Pi loads its extensions again at each session switch (/new,
+	// /resume, a fork), and the cache must still know which of this process's sessions sit in which slot (Phase 23.5)
+	const g = globalThis as { __carlCaches?: Map<string, CarlCache> };
+	const caches = (g.__carlCaches ??= new Map<string, CarlCache>());
 	const agent = process.env.CARL_AGENT ? `pi-${process.env.CARL_AGENT}` : "pi";
 	let release = () => {};
 	let last: CarlCache | undefined;
@@ -43,7 +47,7 @@ export default function carlCache(pi: ExtensionAPI) {
 			let cache = caches.get(base);
 			if (!cache) {
 				const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
-				cache = new CarlCache({ baseURL: base, apiKey: auth.ok ? auth.apiKey : undefined, split: splitPi, cacheApi: state.cacheApi });
+				cache = new CarlCache({ baseURL: base, apiKey: auth.ok ? auth.apiKey : undefined, split: splitPi, cacheApi: state.cacheApi, carlId: state.carlId });
 				caches.set(base, cache);
 			}
 			last = cache;

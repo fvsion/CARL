@@ -3,12 +3,13 @@ Models, Agents, Auto fit, Auto-tune, Router, Caching). Keys come one at a time (
 a text being typed takes a whole read (keys()). The card edit form: card_actions.py."""
 from __future__ import annotations
 
+import os
 from typing import Callable, Dict, List, Optional
 
 from carl_core.domain.tuning import DEPTHS, as_depth
 from carl_core.domain.units import file_size, memory
 
-from . import diskcache, fsio
+from . import diskcache, fsio, system
 from .api import Endpoint
 from .arrange import FILTERS, SORTS
 from .card_actions import CardActions
@@ -298,15 +299,23 @@ class SettingsActions:
             if why:
                 ui.toast(why, 8)
                 return
-            if d.cmd and "llama-server" not in d.cmd:
-                ui.toast("Another server (not llama.cpp) uses this port. Stop it first.", 8)
-                return
+            ui.confirm_port, ui.confirm_taken = None, ""
+            if d.cmd and "llama-server" not in d.cmd:      # another program has the port: offer the next free one
+                rows = system.netstat_tcp()
+                free = system.next_free_port(rows, self.jobs.collector.endpoint.port)
+                if free is None:
+                    ui.toast("Another program uses this port, and no port after it is free. Stop it first.", 8)
+                    return
+                pid = system.listen_pid(rows, self.jobs.collector.endpoint.port)
+                name = os.path.basename(d.cmd.split()[0]) if d.cmd.split() else "a program"
+                ui.confirm_port, ui.confirm_taken = free, f"{name}, pid {pid}" if pid else name
             ui.confirm = True
         elif act == "setno":
-            ui.confirm = False
+            ui.confirm, ui.confirm_port = False, None
         elif act == "setyes":
             ui.confirm = False
-            self.jobs.restart(p, d)
+            self.jobs.restart(p, d, port=ui.confirm_port)
+            ui.confirm_port = None
 
     # ------------------------------------------------------------ the Agents panel (Phase 23.4.4)
     def agents_model(self) -> str:

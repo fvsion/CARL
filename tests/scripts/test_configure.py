@@ -105,6 +105,25 @@ class ConfigureTests(unittest.TestCase):
                  if isinstance(x, list) and x[0].endswith("/carl-cache")]
         self.assertEqual(len(cache), 1, cache)
 
+    def test_the_apis_address_and_carls_id_reach_the_clients(self) -> None:
+        """Phase 23.5 item 7: remote.json's real API address and CARL's ID (install.sh passes them): the plugins and Pi
+        send their key only to an API that answers the ID; the /carl panel's speeds read the address."""
+        cid = "ab" * 16
+        p = self.run_configure("--coder", "1", "--cache-api", "http://192.168.42.1:9278", "--carl-id", cid)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        plugins = {e[0].rsplit("/", 1)[-1]: e[1] for e in self.read_json(".config/opencode/opencode.json")["plugin"]
+                   if isinstance(e, list)}
+        for name in ("carl-cache", "carl-delegation"):
+            self.assertEqual((plugins[name]["cacheApi"], plugins[name]["carlId"]), ("http://192.168.42.1:9278", cid))
+        self.assertEqual((self.read_json(".config/opencode/carl.json")["cache_api"],
+                          self.read_json(".config/opencode/carl.json")["carl_id"]), ("http://192.168.42.1:9278", cid))
+        pi = self.read_json(".pi/agent/carl.json")
+        self.assertEqual((pi["cache_api"], pi["carl_id"]), ("http://192.168.42.1:9278", cid))
+        self.assertEqual(self.run_configure("--coder", "1", "--cache", "0", "--cache-api", "http://192.168.42.1:9278").returncode, 0)
+        self.assertEqual(self.read_json(".pi/agent/carl.json")["cache_api"], "http://192.168.42.1:9278")   # speeds, the gate
+        self.assertNotEqual(self.run_configure("--carl-id", "not-hex").returncode, 0)
+        self.assertNotEqual(self.run_configure("--cache-api", "ftp://x").returncode, 0)
+
     def test_fresh_install(self) -> None:
         p = self.run_configure("--coder", "1", ctx="65536")
         self.assertEqual(p.returncode, 0, p.stderr)
@@ -135,7 +154,9 @@ class ConfigureTests(unittest.TestCase):
         self.assertIn("file:" + panel, self.read_json(".config/opencode/tui.json")["plugin"])
         for d in (panel, self.path(".pi/agent/extensions/carl-panel")):
             self.assertTrue(os.path.isfile(os.path.join(d, "carl-panel.js")), d)
-        self.assertTrue(os.path.isfile(os.path.join(check, "check.js")))
+        self.assertTrue(os.path.isfile(os.path.join(check, "carl-model-check.js")))
+        for f in ("index.ts", "carl-model-check.js"):                                 # Pi's check: its own extension
+            self.assertTrue(os.path.isfile(self.path(f".pi/agent/extensions/carl-model-check/{f}")))
         with open(os.path.join(check, "package.json"), encoding="utf-8") as f:     # OpenCode 1.18 loads exports["./server"]
             self.assertIn("./server", json.load(f)["exports"])
         self.assertEqual({k: m["limit"]["context"] for k, m in prov["models"].items()},
@@ -439,6 +460,8 @@ class ConfigureTests(unittest.TestCase):
                                                        "stateFile": self.path(".config/opencode/carl.json")}]])
         self.assertFalse(os.path.exists(self.path(".config/opencode/plugins/carl-model-check")))
         self.assertIn("removed   OpenCode plugin carl-model-check", p.stdout)
+        self.assertFalse(os.path.exists(self.path(".pi/agent/extensions/carl-model-check")))    # Pi's too (Phase 23.5)
+        self.assertIn("removed   Pi extension carl-model-check", p.stdout)
         self.assertFalse(os.path.exists(self.path(".pi/agent/extensions/carl-cache")))
         self.assertIn("removed   Pi extension carl-cache", p.stdout)
 

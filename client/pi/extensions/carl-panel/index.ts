@@ -10,25 +10,38 @@
  * Phase 23.4.5: Coder model's values are "same as main" and the models this Pi can use, asked from Pi itself: the
  * model registry's available models (ctx.modelRegistry.getAvailable()) with the thinking levels pi-ai knows for each
  * (getSupportedThinkingLevels); carl-panel.js piModels reads only their ids, base URLs and costs, never a key.
+ * Phase 23.5 item 9: the speeds in Pi's status line ("CARL write 18.4 tok/s · read 652 tok/s"), from the dashboard
+ * API's /carl/status, asked each second while a turn runs (carl-panel.js SpeedPoller); the last turn's after it.
  */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { getSelectListTheme, getSettingsListTheme } from "@earendil-works/pi-coding-agent";
 import { Container, Key, matchesKey, type SettingItem, SelectList, SettingsList, Spacer, Text } from "@earendil-works/pi-tui";
 import { getSupportedThinkingLevels } from "@earendil-works/pi-ai";
-import { act, appliedSinceStart, checkOnce, panel, piModels, restartNotice, rowsAt, shownState, viewText } from "./carl-panel.js";
+import { act, appliedSinceStart, checkOnce, panel, piModels, restartNotice, rowsAt, shownState, SpeedPoller, statusSource,
+	viewText } from "./carl-panel.js";
 import type { Action, Row, Session } from "./carl-panel.js";
 
 /** The most rows the list shows before it scrolls. */
 const MAX_ROWS = 15;
 
 export default function carlPanel(pi: ExtensionAPI) {
-	pi.on("session_start", async () => {
+	// the speeds: shown through the newest ctx (Pi's status line), cleared when there is nothing to say
+	let ui: { setStatus: (key: string, text: string | undefined) => void } | undefined;
+	const speeds = new SpeedPoller(() => statusSource("pi"), (line) => ui?.setStatus("carl", line ? `CARL ${line}` : undefined));
+	pi.on("session_start", async (_event, ctx) => {
+		ui = ctx.ui;
 		checkOnce();
+	});
+	pi.on("agent_start", async (_event, ctx) => {
+		ui = ctx.ui;
+		speeds.running(true);
 	});
 
 	// Pi reads its models when it starts: say once when a config from the dashboard was applied since
 	let told = false;
 	pi.on("agent_end", async (_event, ctx) => {
+		ui = ctx.ui;
+		speeds.running(false);
 		if (appliedSinceStart() && !told) {
 			told = true;
 			ctx.ui.notify(restartNotice("pi"), "info");

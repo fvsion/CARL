@@ -134,7 +134,7 @@ set -- ${extra_args[@]+"${extra_args[@]}"} "$@"
 # --host wins over everything
 [[ -n "$NET_FLAG" && -z "$HOST_FLAG" ]] && HOST=""
 resolve_host "$NET_FLAG"
-PORT="${PORT:-8080}"
+PORT="${PORT:-$CARL_DEFAULT_PORT}"
 is_port "$PORT" || { echo "error: PORT must be a TCP port from 1 to 65535, not '$PORT'." >&2; exit 2; }
 API_KEY_FILE="${API_KEY_FILE:-$CARL_KEY_FILE}"
 CTX="${CTX_FLAG:-${CTX:-98304}}"   # per slot: --ctx flag > CTX env > 96K. Measured on the 35B (q4_0 KV, 2026-10-01):
@@ -202,10 +202,25 @@ for v in UB BATCH CKPT CKPT_STEP SPEC_N; do require_int "$v" "${!v}"; done
 
 # One server per port, and in practice one model at a time (two don't fit in
 # 36 GB). Fail before touching the log symlink or loading anything.
+# Another program on the port (Phase 23.5): the start offers the next free port, never a silent change (other
+# computers reach the server by its port); a llama-server there is a server already: one model at a time.
 if pid=$(port_pid "$PORT") && [[ -n "$pid" ]]; then
-  echo "error: port $PORT is in use by process $pid ($(ps -o command= -p "${pid%%$'\n'*}" | cut -c1-60)). Stop it first: press Ctrl-C in its terminal, or run kill $pid." >&2
-  echo "       If it is a CARL server, ./carl.sh monitor opens its dashboard." >&2
-  exit 1
+  pid="${pid%%$'\n'*}"
+  what="$(ps -o comm= -p "$pid" 2>/dev/null | sed 's#.*/##' | cut -c1-30)"
+  if is_llama_server "$pid"; then
+    echo "error: a server runs on port $PORT already (process $pid). One model at a time: stop it first (press Ctrl-C in its terminal, or run kill $pid)." >&2
+    echo "       ./carl.sh monitor opens its dashboard." >&2
+    exit 1
+  fi
+  free="$(next_free_port "$PORT")" || { echo "error: port $PORT is in use by another program ($what, process $pid), and no port after it is free." >&2; exit 1; }
+  if [[ -t 0 && -t 1 ]]; then
+    read -r -p "Port $PORT is in use by another program ($what, process $pid). Start the server on port $free? [Y/n] " a
+    [[ "$a" =~ ^[Nn] ]] && { echo "The server did not start. PORT=N ./carl.sh llama starts it on port N."; exit 1; }
+    PORT="$free"
+  else
+    echo "error: port $PORT is in use by another program ($what, process $pid). Port $free is free: PORT=$free ./carl.sh llama starts the server there." >&2
+    exit 1
+  fi
 fi
 guard_other_models               # a second model can crash the Mac (host/common.sh)
 
@@ -254,7 +269,7 @@ if [[ "$LLAMA_MODE" == router ]]; then
     done < <(python3 "$HERE/../tools/carl.py" downloaded)
   fi
   PRESET="$CARL_CONF/router-presets.ini"
-  presets="$(python3 "$HERE/../tools/carl.py" router-preset --out "$PRESET" --templates "$TMPL_DIR")" || exit 1
+  presets="$(python3 "$HERE/../tools/carl.py" router-preset --out "$PRESET" --templates "$TMPL_DIR" --port "$PORT")" || exit 1
   grep -q '^model ' <<< "$presets" || { echo "error: router mode cannot start: no downloaded model fits this Mac. ./carl.sh fit shows what fits." >&2; exit 1; }
   first="$(sed -n 's/^start //p' <<< "$presets")"
   echo "CARL starts the server in router mode at http://$HOST:$PORT. $NET_NOTE"
@@ -403,6 +418,10 @@ echo "Log file: $log_text. Batch: -ub $UB. Your settings: ./carl.sh config show.
 # Starts the server and the live monitor in this terminal (host/common.sh);
 # also keeps the Mac awake while it runs: a sleeping Mac freezes requests
 # mid-prompt (10:13-10:46 on 2026-09-25, sleep = 1 min on battery).
+# What this Mac's clients need to know about this start: its cache (carl-cache restores and saves nothing with the
+# window cache). $CARL_CONF/server-PORT.json (tools/carl_core/domain/runtime.py); never in the way of a start.
+python3 "$HERE/../tools/carl.py" server-file --port "$PORT" --model "$ALIAS" --swa "$SWA" --kv "$KV_K" --ctx "$CTX" \
+  --slots "$SLOTS" >/dev/null 2>&1 || true
 CARL_LOG_FILTER="$log_filter" run_server "$PORT" "$LOG_FILE" llama-server \
   -m "$MODEL" --alias "$ALIAS" \
   --host "$HOST" --port "$PORT" --api-key-file "$API_KEY_FILE" \

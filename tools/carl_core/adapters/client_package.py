@@ -146,3 +146,25 @@ def make_package(repo: str, client_dir: str, out_dir: str, models: object, cfg: 
     out = os.path.join(os.path.abspath(out_dir), pk.zip_name(version, host_name() or remote.host))
     size = write_zip(out, entries)
     return pk.Outcome(out, "", pk.done_notes(out, remote, cfg, cmd), len(entries), size)
+
+
+def publish_api_port(repo: str, port: int, cache_api: str, env: Optional[Mapping[str, str]] = None) -> bool:
+    """The dashboard API's real address into client/remote.json (Phase 23.5 item 7): the launcher writes the server's
+    port + 1 at each start; when the API took another port, the file (and the next package) says so. Only for the
+    file of this server (its "port"); False when nothing was changed."""
+    client = (env if env is not None else os.environ).get("CARL_CLIENT_DIR") or os.path.join(repo, "client")
+    path = os.path.join(client, "remote.json")
+    doc = _load_json(path)
+    if not isinstance(doc, dict) or doc.get("port") != port or doc.get("cache_api") == cache_api:
+        return False
+    doc["cache_api"] = cache_api
+    tmp = f"{path}.{os.getpid()}.tmp"
+    try:
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(doc, f, indent=2)
+            f.write("\n")
+        os.replace(tmp, path)
+    except OSError:
+        return False
+    return True

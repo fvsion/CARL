@@ -75,7 +75,7 @@ class ValuesTest(unittest.TestCase):
 
     def test_rows(self) -> None:
         llama = rows({}, SCHEMA, lambda: ["auto", "big"])
-        self.assertEqual([r.key for r in llama], ["model", "ctx", "slots", "spec", "kv", "swa", "cache", "net", "temp"])
+        self.assertEqual([r.key for r in llama], ["model", "ctx", "slots", "spec", "kv", "swa", "cache", "net", "api", "temp"])
         # Phase 23.4.4: Main thinking and Coder thinking moved to the Agents panel
         svc = service(FakeStore())                                    # the Sliding window row: Gemma models only
         self.assertNotIn("swa", [r.key for r in svc.rows(dict(SCHEMA.defaults(), model="big"))])
@@ -394,6 +394,24 @@ class AutoFitTest(unittest.TestCase):
         for key, text in SET_HELP.items():
             with self.subTest(key=key):
                 self.assertNotIn("Enter:", text)
+
+
+
+class StartQuestionTest(unittest.TestCase):
+    """Phase 23.5: the start question when another program has the port offers the next free one."""
+
+    def test_the_free_port_is_offered(self) -> None:
+        from monitor.fmt import ANSI
+
+        def plain(x: object) -> str:
+            return ANSI.sub("", x if isinstance(x, str) else str(x))
+        from monitor.settings_panels.server import confirm_restart
+        text = "\n".join(plain(r if isinstance(r, str) else str(r)) for r in confirm_restart(False, 9275, [], 84, 9277, "ssh, pid 4242"))
+        self.assertIn("Port 9275 is in use by another program (ssh, pid 4242).", text)
+        self.assertIn("This starts the server on port 9277.", text)
+        self.assertIn("Start on port 9277 (y)", text)
+        plain_start = "\n".join(plain(str(r)) for r in confirm_restart(False, 9275, [], 84))
+        self.assertIn("This starts the server on port 9275.", plain_start)
 
 
 if __name__ == "__main__":

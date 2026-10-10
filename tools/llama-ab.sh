@@ -28,7 +28,7 @@ cd "$(dirname "$0")/.." || exit 1
 source host/common.sh   # port_pid (netstat-based)
 MODE="${1:-all}"
 case "$MODE" in kv|ub|all) ;; *) echo "usage: $0 [kv|ub|all]" >&2; exit 2 ;; esac
-PORT=8080
+PORT=9275
 LOGDIR="${LOGDIR:-$HOME/models/logs}"; mkdir -p "$LOGDIR"
 KV_CONFIGS="${KV_CONFIGS:-q8_0:q8_0 q8_0:q4_0 q4_0:q4_0}"
 UB_CONFIGS="${UB_CONFIGS:-512 1024 2048}"

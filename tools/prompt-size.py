@@ -2,7 +2,7 @@
 """How many tokens a client's request costs before the user's own words: the system prompt
 and the tool definitions, measured with the model's own chat template and tokenizer.
 
-  python3 tools/prompt-size.py BODY.json [--server http://127.0.0.1:8080] [--per-tool]
+  python3 tools/prompt-size.py BODY.json [--server http://127.0.0.1:9275] [--per-tool]
 
 BODY.json: a chat request as the client sent it (tools/req-capture-proxy.py --bodies DIR).
 The server renders it with /apply-template (the chat template llama-server uses, tools

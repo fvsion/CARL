@@ -18,8 +18,10 @@
 // one shows the parent list again from its onClose, after OpenCode's Esc is done (a timer), and only when the key was
 // Esc (read from the renderer's key input: ctrl+c and a click outside close /carl, as they close OpenCode's own
 // dialogs) and nothing else was opened since.
+import { createElement, insert, setProp } from "@opentui/solid";
 import { createSignal } from "solid-js";
-import { act, openCodeModels, panel, rowsAt, shownState, viewText } from "./carl-panel.js";
+import { act, openCodeModels, panel, rowsAt, shownState, SpeedPoller, statusSource, viewText } from "./carl-panel.js";
+import { asElement, nodes } from "./carl-tui.js";
 
 /** @typedef {import("@opencode-ai/plugin/tui").TuiPluginApi} TuiPluginApi */
 /** @typedef {import("@opencode-ai/plugin/tui").TuiPluginModule} TuiPluginModule */
@@ -177,10 +179,53 @@ function controlPanel(api) {
   };
 }
 
+/**
+ * Phase 23.5 item 9 (the user's choice, option A): the speeds in the sidebar's footer. OpenCode gives a plugin that
+ * registers sidebar_footer the whole footer (measured 2026-10-10: its own folder and version are not drawn then), so
+ * this draws them again, with CARL's line between them: "CARL write 18.4 tok/s · read 652 tok/s" while a turn runs,
+ * "CARL last turn: …" after it; no line without the dashboard. Asked each second while any session is busy.
+ * @param {TuiPluginApi} api
+ */
+function speedsFooter(api) {
+  const { box, text } = nodes({ createElement, insert, setProp });
+  const [line, setLine] = createSignal("");
+  const poller = new SpeedPoller(() => statusSource("opencode"), setLine);
+  /** @type {Set<string>} */
+  const busy = new Set();
+  const off = api.event.on("session.status", (e) => {
+    const p = /** @type {{ sessionID?: string, status?: { type?: string } }} */ (e.properties ?? {});
+    if (!p.sessionID) return;
+    if (p.status?.type === "idle") busy.delete(p.sessionID);
+    else busy.add(p.sessionID);
+    poller.running(busy.size > 0);
+  });
+  api.lifecycle.onDispose(() => { off?.(); poller.running(false); });
+  api.slots.register({
+    order: 50,
+    slots: {
+      sidebar_footer: () => {
+        const theme = api.theme.current;
+        const dir = String(api.state?.path?.directory ?? "");
+        const cut = dir.lastIndexOf("/") + 1;
+        const speeds = line();
+        return asElement(box({ width: "100%", flexDirection: "column" }, [
+          box({ flexDirection: "row", flexWrap: "wrap" }, [text(theme.textMuted, dir.slice(0, cut)), text(theme.text, dir.slice(cut))]),
+          speeds ? box({ flexDirection: "row" }, [text(theme.text, "CARL "), text(theme.textMuted, speeds)]) : null,
+          box({ flexDirection: "row" }, [text(theme.success ?? theme.text, "• "), text(theme.text, "OpenCode "),
+                                         text(theme.textMuted, String(api.app?.version ?? ""))]),
+        ]));
+      },
+    },
+  });
+}
+
 /** @type {TuiPluginModule & { id: string }} */
 const plugin = {
   id: "carl-panel:tui",
   tui: async (api) => {
+    try {
+      speedsFooter(api);
+    } catch { /* an older OpenCode without the slot: no speeds, the panel works */ }
     const open = controlPanel(api);
     const unreg = api.command?.register?.(() => [{
       title: "CARL", value: "carl.panel", category: "CARL",

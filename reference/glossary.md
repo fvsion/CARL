@@ -44,7 +44,7 @@
 | **reused tokens** | Tokens of a request that the server did not have to read again. | cached (Live tab) | the count and the %. |
 | **reused from** | Where the reused tokens of a request came from: the slot, the RAM cache or the disk cache. `–` until a later CARL version fills it. | source, restored from | the column in the Requests tab and RECENT REQUESTS |
 | **Caching** | The Settings panel for the RAM cache, the disk cache and the sliding-window cache. | — | — |
-| **dashboard API** | The port (server port + 1) that clients on other computers use for the disk cache and the config. | cache API, API (alone) | the address |
+| **dashboard API** | The port (server port + 1 by default; Settings > Server, **API port**) that clients on other computers use for the disk cache and the config, and that OpenCode and Pi read the speeds from. | cache API, API (alone) | the address |
 
 "Prompt cache" and "cache" alone are not used. "Prompt" alone means the text of a request (the Live tab).
 

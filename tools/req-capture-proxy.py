@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Logging pass-through proxy for debugging what clients actually send.
 
-Listens on LISTEN (default 192.168.42.1:8080), forwards every request verbatim
+Listens on LISTEN (default 192.168.42.1:9275), forwards every request verbatim
 to UPSTREAM (default 127.0.0.1:8081), streams the response back, and appends
 one JSON line per request to LOG with the request's non-message fields
 (model, reasoning_effort, chat_template_kwargs, stream, max_tokens, ...), the
@@ -175,8 +175,8 @@ class Server(socketserver.ThreadingMixIn, http.server.HTTPServer):
 
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(description="Logging pass-through proxy: what clients send to the server.")
-    ap.add_argument("listen", nargs="?", default="192.168.42.1:8080", type=Endpoint.parse,
-                    help="HOST:PORT to listen on (default 192.168.42.1:8080; never a wildcard address)")
+    ap.add_argument("listen", nargs="?", default="192.168.42.1:9275", type=Endpoint.parse,
+                    help="HOST:PORT to listen on (default 192.168.42.1:9275; never a wildcard address)")
     ap.add_argument("upstream", nargs="?", default="127.0.0.1:8081", type=Endpoint.parse,
                     help="HOST:PORT of the real server (default 127.0.0.1:8081)")
     ap.add_argument("log", nargs="?", default="/tmp/req-capture.jsonl", help="JSON-lines log (default /tmp/req-capture.jsonl)")

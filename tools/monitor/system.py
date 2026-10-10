@@ -87,6 +87,12 @@ def listen_pid(rows: Sequence[TcpRow], port: int) -> Optional[int]:
     return next((r.pid for r in rows if r.local_port == port and r.state == "LISTEN" and r.pid), None)
 
 
+def next_free_port(rows: Sequence[TcpRow], port: int, span: int = 100) -> Optional[int]:
+    """The first port after `port` that nothing listens on (Phase 23.5: the start offers it), or None."""
+    taken = {r.local_port for r in rows if r.state == "LISTEN"}
+    return next((p for p in range(port + 1, min(port + span, 65535) + 1) if p not in taken), None)
+
+
 def connections(rows: Sequence[TcpRow], port: int, pid: int) -> List[Tuple[str, str]]:
     """(client address, client port) of each connection to pid's port."""
     out = []

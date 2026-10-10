@@ -23,6 +23,8 @@ class FakeApi:
         self.carl_version = "1.7.0"
         self.keepalive = 0.0                 # > 0: the event stream sends a keep-alive comment this often (for 6 s)
         self.who: list = []                  # every request's X-Carl-Client (the client's report)
+        self.carl_id = "c" * 32              # /carl/ping's answer (Phase 23.5)
+        self.server_port = 0                 # /carl/client/server's port (0: an older dashboard, 404)
         api = self
 
         class H(BaseHTTPRequestHandler):
@@ -30,11 +32,25 @@ class FakeApi:
                 pass
 
             def do_GET(self) -> None:
+                if self.path == "/carl/ping":            # no key
+                    data = json.dumps({"carl": api.carl_id, "version": api.carl_version}).encode()
+                    self.send_response(200)
+                    self.send_header("Content-Length", str(len(data)))
+                    self.end_headers()
+                    self.wfile.write(data)
+                    return
                 if self.headers.get("Authorization") != "Bearer k":
                     self.send_response(401)
                     self.end_headers()
                     return
                 api.who.append((self.path, json.loads(self.headers.get("X-Carl-Client") or "{}")))
+                if self.path == "/carl/client/server":
+                    data = json.dumps({"port": api.server_port}).encode()
+                    self.send_response(200 if api.server_port else 404)
+                    self.send_header("Content-Length", str(len(data)))
+                    self.end_headers()
+                    self.wfile.write(data)
+                    return
                 if self.path == "/carl/client/events" and api.keepalive:
                     self.send_response(200)
                     self.end_headers()
@@ -78,7 +94,7 @@ class SyncTest(unittest.TestCase):
         shutil.copy(os.path.join(CLIENT, "carl-sync.py"), self.bundle)
         self.api = FakeApi()
         with open(os.path.join(self.bundle, "remote.json"), "w") as f:
-            json.dump({"host": "127.0.0.1", "port": 8080, "cache_api": self.api.url}, f)
+            json.dump({"host": "127.0.0.1", "port": 8080, "cache_api": self.api.url, "id": "c" * 32}, f)
         with open(os.path.join(self.bundle, "api-key"), "w") as f:
             f.write("k\n")
         with open(os.path.join(self.bundle, "install.sh"), "w") as f:   # the stub installer: counts its runs
@@ -190,6 +206,49 @@ class SyncTest(unittest.TestCase):
         os.remove(os.path.join(self.bundle, "remote.json"))
         self.assertIn("remote.json", self.sync("once")["error"])
 
+
+class FindTest(SyncTest):
+    """Phase 23.5 item 7: the key goes only to an API that answers the ID the package knows; a moved API is found; a
+    server that moved to another port makes the installer run again."""
+
+    def remote(self) -> dict:
+        with open(os.path.join(self.bundle, "remote.json")) as f:
+            return json.load(f)
+
+    def set_remote(self, **kv: object) -> None:
+        doc = {**self.remote(), **kv}
+        with open(os.path.join(self.bundle, "remote.json"), "w") as f:
+            json.dump(doc, f)
+
+    def test_the_key_never_goes_to_another_id(self) -> None:
+        self.api.carl_id = "d" * 32                     # another CARL (or a program that copies the answer)
+        st = self.sync("once")
+        self.assertIn("does not answer", st["error"])
+        self.assertEqual(self.api.who, [])              # no request with the key
+
+    def test_a_moved_api_is_found_and_written_down(self) -> None:
+        import socket
+        with socket.socket() as s:
+            s.bind(("127.0.0.1", 0))
+            dead = s.getsockname()[1]                   # nothing listens there now
+        port = int(self.api.url.rsplit(":", 1)[1])
+        self.set_remote(cache_api=f"http://127.0.0.1:{dead}", port=port - 3)   # the API is 3 ports after the server
+        st = self.sync("once")
+        self.assertEqual((st.get("applied"), st.get("error")), ("v1", None))
+        self.assertEqual(self.remote()["cache_api"], self.api.url)
+
+    def test_a_server_on_another_port_sets_the_clients_up_again(self) -> None:
+        self.assertEqual(self.sync("once")["applied"], "v1")
+        self.assertEqual(len([x for x in self.installs() if x == "run"]), 1)
+        self.api.server_port = 9275                     # the server moved (8080 before)
+        self.assertEqual(self.sync("once")["applied"], "v1")
+        self.assertEqual(self.remote()["port"], 9275)
+        self.assertEqual(len([x for x in self.installs() if x == "run"]), 2)   # the installer ran again
+
+
+
+for _name in [n for n in vars(SyncTest) if n.startswith("test_")]:
+    setattr(FindTest, _name, None)                      # SyncTest's own tests run once, not again here
 
 if __name__ == "__main__":
     unittest.main()

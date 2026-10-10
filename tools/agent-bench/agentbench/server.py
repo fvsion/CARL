@@ -14,7 +14,7 @@ from typing import Dict, List, Mapping, Optional
 
 from .proc import stop_group, tail
 
-FORBIDDEN_PORTS = (8080,)          # the user's own CARL server
+FORBIDDEN_PORTS = (8080, 9275)    # the user's own CARL server (9275 since 23.5, 8080 before)
 
 
 class ServerError(Exception):
@@ -23,7 +23,7 @@ class ServerError(Exception):
 
 def check_port(port: int) -> None:
     if port in FORBIDDEN_PORTS:
-        raise ServerError(f"port {port} is the user's CARL server; the harness never uses it")
+        raise ServerError(f"port {port} is (or was) the user's CARL server port; the harness never uses it")
     if not 1024 <= port <= 65534:
         raise ServerError(f"port {port} is not a usable port (1024 to 65534)")
 

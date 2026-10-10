@@ -398,7 +398,8 @@ export default {
     const opts = /** @type {Record<string, unknown>} */ (options ?? {});
     const reminder = opts.reminder !== false;
     const briefs = opts.brief !== false;
-    const gateSetting = new GateSetting({ cacheApi: typeof opts.cacheApi === "string" ? opts.cacheApi : "" });
+    const gateSetting = new GateSetting({ cacheApi: typeof opts.cacheApi === "string" ? opts.cacheApi : "",
+                                          carlId: typeof opts.carlId === "string" ? opts.carlId : "" });
     const coder = typeof opts.coder === "string" && opts.coder ? opts.coder : "coder";
     const chains = opts.chain !== false;
     // the Tests setting (Phase 23.4.6): read at each coder task, so /carl's change needs no restart

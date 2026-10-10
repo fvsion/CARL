@@ -132,6 +132,29 @@ class JobsTest(unittest.TestCase):
         self.assertNotIn("backend", self.store.saved[-1])
         self.assertFalse(os.path.exists(os.path.join(os.path.dirname(self.store.config_file), "last-backend")))
 
+    def test_a_port_taken_by_another_program_starts_on_the_free_one_and_stops_nothing(self) -> None:
+        """Phase 23.5: Apply with the port held by another program (here: sleep) starts the server on the port the
+        question offered; that program is left alone, the dashboard follows the new port."""
+        import subprocess as sp
+        self.launcher(HEALTH_SERVER)
+        other = sp.Popen(["sleep", "30"])
+        try:
+            new = free_port()
+            d = ServerData(pid=other.pid, cmd="sleep 30")
+            self.jobs._restart(self.pending, d, new)
+            self.assertIsNone(other.poll())                                   # still running
+            self.assertEqual(self.collector.endpoint.port, new)
+            self.assertTrue(self.ui.toast_msg[0].startswith("The server restarted with the new settings"))
+        finally:
+            other.kill()
+
+    def test_the_next_free_port(self) -> None:
+        from monitor.system import TcpRow, next_free_port
+        rows = [TcpRow("127.0.0.1", 9275, "*.*", "LISTEN", 1), TcpRow("127.0.0.1", 9276, "*.*", "LISTEN", 2),
+                TcpRow("127.0.0.1", 9277, "1.2.3.4.5", "ESTABLISHED", 3)]
+        self.assertEqual(next_free_port(rows, 9275), 9277)
+        self.assertIsNone(next_free_port([TcpRow("*", p, "*.*", "LISTEN", 1) for p in range(9276, 9280)], 9275, 4))
+
     def test_server_env(self) -> None:
         env = server_env({"CTX": "1", "HOME": "/h", "SETTINGS_FILE": "x"}, 8095, {"MODEL": "/m/a.gguf"})
         self.assertEqual(env, {"HOME": "/h", "MONITOR": "0", "PORT": "8095", "MODEL": "/m/a.gguf"})

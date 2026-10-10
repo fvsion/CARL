@@ -181,6 +181,10 @@ class UIState:
     page_scroll: int = 0            # Auto-tune, Router, Caching: rows scrolled off the top (0 when the panel changes)
     edit: Optional[str] = None      # a number being typed into the selected row
     confirm: bool = False           # Apply: "restart?" asked
+    confirm_port: Optional[int] = None   # Apply with the port taken by another program: the free port offered
+    confirm_taken: str = ""         # ...and what holds the port ("ssh, pid 4242")
+    api_port: Optional[int] = None  # the dashboard API's port now (app.cache_api; None: not running)
+    api_note: str = ""              # why it runs elsewhere, or why it does not run
     restart: Optional[str] = None   # what a restart is doing now
     restart_t: float = 0.0          # when it began
     mrow: int = 0                   # Models panel: the selected model (in the sorted, filtered list)

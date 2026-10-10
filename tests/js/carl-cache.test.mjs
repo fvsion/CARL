@@ -5,6 +5,7 @@ import { mkdtempSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileS
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
+import { forgetPings, isCarl } from "../../client/shared/carl-api.js";
 import {
   CarlCache, rankSlots, commonPrefix, isStateName, overBudget, prefixFile, relocate, sessionFile, splitOpenCode, splitPi,
   thinkingOff,
@@ -496,14 +497,16 @@ test("two processes on this Mac don't pin the same slot", async () => {
 });
 
 test("a client on another computer uses the dashboard's cache API: settings, claims, records", async () => {
+  forgetPings();
   const srv = fakeServer();
   const api = { claims: new Set(), records: new Map(), calls: [], turns: [] };
   const fetch = async (url, init = {}) => {
     const u = new URL(url);
     if (u.port !== "8081") return srv.fetch(url, init);
     const body = init.body ? JSON.parse(init.body) : {};
-    api.calls.push(u.pathname);
     const json = (x, status = 200) => new Response(JSON.stringify(x), { status });
+    if (u.pathname === "/carl/ping") return json({ carl: "c".repeat(32) });     // no key: CARL's API (Phase 23.5)
+    api.calls.push(u.pathname);
     if (u.pathname === "/carl/cache/settings") return json({ prefix: true, sessions: true, save: "switch", disk_gb: 10 });
     if (u.pathname === "/carl/cache/claim") {
       const k = `${body.model}:${body.slot}`;
@@ -644,6 +647,7 @@ test("CARL_CACHE_LOG: what the cache let go is written there (this user only), n
   const was = process.env.CARL_CACHE_LOG;
   process.env.CARL_CACHE_LOG = log;
   try {
+    forgetPings();
     const down = async () => { throw new TypeError("fetch failed"); };
     const c = new CarlCache({ baseURL: "http://10.0.0.1:8080/v1", apiKey: "sk-secret-123", fetch: down, home: "/nonexistent",
                               cacheApi: "http://10.0.0.1:8081" });
@@ -652,7 +656,7 @@ test("CARL_CACHE_LOG: what the cache let go is written there (this user only), n
     const { payload } = await c.before(request("hello"), { session: "s1", agent: "build" });
     assert.equal(payload.id_slot, undefined);
     const text = readFileSync(log, "utf8");
-    assert.match(text, /cache API POST \/carl\/cache\/claim: fetch failed/);
+    assert.match(text, /cache API POST \/carl\/cache\/claim: http:\/\/10\.0\.0\.1:8081 is not CARL's dashboard API \(no key sent\)/);
     assert.match(text, /before: fetch failed/);
     assert.ok(!text.includes("sk-secret-123"));
     assert.equal(mode(log), 0o600);
@@ -661,3 +665,133 @@ test("CARL_CACHE_LOG: what the cache let go is written there (this user only), n
     else process.env.CARL_CACHE_LOG = was;
   }
 });
+
+// ------------------------------------------------------------------ Phase 23.5: what the cache matrix found
+
+/** The fake server's saves also written to the slots folder (as llama-server does on this Mac). */
+const onDisk = (srv, h) => {
+  const inner = srv.fetch;
+  srv.fetch = async (url, init) => {
+    const res = await inner(url, init);
+    if (String(url).includes("action=save") && res.ok) writeFileSync(join(h, ".config", "carl", "slots", JSON.parse(init.body).filename), "x");
+    return res;
+  };
+  return srv;
+};
+const local = (srv, h) => new CarlCache({ baseURL: "http://127.0.0.1:8080/v1", fetch: srv.fetch, split: splitOpenCode, home: h });
+
+test("Phase 23.5: another process's session in the slot is saved from its record before the slot is taken, and comes back from that file", () => withSave("auto", async () => {
+  const h = home();
+  const srv = onDisk(fakeServer({ slots: 1 }), h);
+  const a = local(srv, h);
+  await send(a, request("hello"), { session: "s1", agent: "build" });
+  ran(srv, 0, 9000);
+  await a.after({ session: "s1", agent: "build" });                        // recorded, not saved (auto)
+  assert.equal(sessionSaves(srv).length, 0);
+  await new Promise((ok) => setTimeout(ok, 20));
+  const b = local(srv, h);                                                 // another OpenCode or Pi (or a restart)
+  await send(b, request("other"), { session: "s2", agent: "build" });
+  const saves = sessionSaves(srv);
+  assert.equal(saves.length, 1);
+  assert.match(saves[0].body.filename, /\+s1\.bin$/);
+  assert.ok(!readdirSync(join(h, ".config", "carl", "slots")).some((n) => n.startsWith(".resident+")));
+  ran(srv, 0, 7000);
+  srv.st.calls.length = 0;
+  const back = await send(a, request("back"), { session: "s1", agent: "build" });
+  assert.equal(back.payload.id_slot, 0);
+  assert.ok(srv.st.calls.some((x) => x.path.endsWith("?restore") && /\+s1\.bin$/.test(x.body.filename)),
+            "not restored from the file the other process saved");
+}));
+
+test("Phase 23.5: with the window cache (the launcher's server file) the request is pinned and nothing is read, restored or saved", () => withSave("turn", async () => {
+  const h = home();
+  writeFileSync(join(h, ".config", "carl", "server-8080.json"), JSON.stringify({ version: 1, port: 8080, mode: "single",
+                                                                                   models: { m: { swa: "window" } } }));
+  const srv = fakeServer();
+  const logs = [];
+  const c = new CarlCache({ baseURL: "http://127.0.0.1:8080/v1", fetch: srv.fetch, split: splitOpenCode, home: h, log: (m) => logs.push(m) });
+  const { payload } = await send(c, request("hello"), { session: "s1", agent: "build" });
+  assert.equal(payload.id_slot, 0);
+  ran(srv, 0, 9000);
+  await c.after({ session: "s1", agent: "build" });
+  assert.ok(!srv.st.calls.some((x) => x.path === "/completion" || x.path.endsWith("?save") || x.path.endsWith("?restore")),
+            srv.st.calls.map((x) => x.path).join(" "));
+  assert.equal(logs.filter((m) => m.includes("nothing is restored or saved")).length, 1);   // said once
+}));
+
+test("Phase 23.5: in single mode the files go under the model the server runs, not the one the client names", async () => {
+  const srv = fakeServer();
+  const inner = srv.fetch;
+  srv.fetch = async (url, init) => (String(url).endsWith("/props")
+    ? new Response(JSON.stringify({ model_path: "/models/m.gguf", build_info: "b1", model_alias: "real" })) : inner(url, init));
+  const c = cache(srv.fetch);
+  await send(c, { ...request("hello"), model: "what-the-client-calls-it" }, { session: "s1", agent: "build" });
+  assert.match([...srv.st.files.keys()][0], /^carl-prefix\+real\+build\+/);
+  ran(srv, 0, 9000);
+  await c.after({ session: "s1", agent: "build" });
+  assert.ok([...srv.st.files.keys()].some((n) => /^carl-session\+real\+[0-9a-f]{10}\+s1\.bin$/.test(n)));
+});
+
+test("Phase 23.5: a file on this Mac the server cannot restore is retired; one restored short is too", async () => {
+  const h = home();
+  const srv = fakeServer();
+  const c = local(srv, h);
+  const key = await c.serverKey("m", false, c.model("m", []));
+  const dir = join(h, ".config", "carl", "slots");
+  writeFileSync(join(dir, sessionFile("m", key, "s1")), "damaged");      // here, but the server can't restore it
+  await send(c, request("hello"), { session: "s1", agent: "build" });
+  assert.ok(!readdirSync(dir).includes(sessionFile("m", key, "s1")));
+  // a prompt file that restores fewer tokens than the prompt has: retired, the prompt read again
+  const pf = [...srv.st.files.keys()].find((n) => n.startsWith("carl-prefix+"));
+  writeFileSync(join(dir, pf), "x");
+  srv.st.files.set(pf, 5);
+  const d = local(srv, h);
+  srv.st.calls.length = 0;
+  await send(d, request("hi"), { session: "s2", agent: "build" });
+  assert.ok(srv.st.calls.some((x) => x.path === "/completion"), "the prompt was not read again");
+  assert.equal(srv.st.files.get(pf) > 5, true);                           // saved again, whole
+});
+
+test("Phase 23.5: a fork (history, no file of its own) starts from the saved session whose tokens start it", () => withSave("turn", async () => {
+  const h = home();
+  const srv = fakeServer();
+  const c = local(srv, h);
+  const key = await c.serverKey("m", false, c.model("m", []));
+  const forked = request("first", { messages: [{ role: "system", content: LONG + OC_SYSTEM }, { role: "user", content: "first" },
+                                               { role: "assistant", content: "done" }, { role: "user", content: "and now" }] });
+  // the parent's saved state: the first 5,000 tokens of what the fork's request renders to (the fake: char codes)
+  const out = (await c.before(forked, { agent: "title" })).payload;      // only to get the request as it is sent
+  const rendered = (await (await srv.fetch("http://127.0.0.1:8080/apply-template", { method: "POST",
+    body: JSON.stringify({ messages: out.messages, tools: out.tools }) })).json()).prompt;
+  const toks = [...rendered].slice(0, 5000).map((ch) => ch.charCodeAt(0));
+  const head = Buffer.alloc(24 + 4 * toks.length);
+  [0x67677371, 1, 1, 0xFFFFFFFF, 1, toks.length].forEach((v, i) => head.writeUInt32LE(v, 4 * i));
+  toks.forEach((t, i) => head.writeInt32LE(t, 24 + 4 * i));
+  const parent = sessionFile("m", key, "parent");
+  writeFileSync(join(h, ".config", "carl", "slots", parent), head);
+  srv.st.files.set(parent, toks.length);
+  srv.st.calls.length = 0;
+  await send(c, forked, { session: "fork", agent: "build" });
+  const restored = srv.st.calls.filter((x) => x.path.endsWith("?restore")).map((x) => x.body.filename);
+  assert.ok(restored.includes(parent), restored.join(" "));
+  assert.ok(!srv.st.calls.some((x) => x.path === "/completion"), "the agent's prompt was read as well");
+}));
+
+test("Phase 23.5: the key goes only to CARL's API (the ID it knows); an older CARL dashboard counts when no ID is known", async () => {
+  const id = "a".repeat(32);
+  const reply = (status, body, headers = {}) => async () => new Response(JSON.stringify(body), { status, headers });
+  forgetPings();
+  assert.equal(await isCarl("http://h:1", id, reply(200, { carl: id })), true);
+  assert.equal(await isCarl("http://h:2", id, reply(200, { carl: "b".repeat(32) })), false);       // another CARL
+  assert.equal(await isCarl("http://h:3", "", reply(200, { carl: "b".repeat(32) })), true);        // no ID known: any CARL
+  assert.equal(await isCarl("http://h:4", "", reply(401, {}, { "X-Carl-Version": "1.16.0" })), true);   // before /carl/ping
+  assert.equal(await isCarl("http://h:5", "", reply(401, {})), false);                            // not CARL (a proxy)
+  assert.equal(await isCarl("http://h:6", id, reply(401, {}, { "X-Carl-Version": "1.16.0" })), false);
+  assert.equal(await isCarl("http://h:7", "", async () => { throw new Error("down"); }), false);
+  let asked = 0;
+  const count = async () => (asked++, new Response(JSON.stringify({ carl: id })));
+  await isCarl("http://h:8", id, count);
+  await isCarl("http://h:8", id, count);
+  assert.equal(asked, 1);                                                    // the answer is kept a while
+});
+

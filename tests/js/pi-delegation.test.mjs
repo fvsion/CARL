@@ -11,7 +11,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 const REPO = fileURLToPath(new URL("../../", import.meta.url));
 const dir = mkdtempSync(join(tmpdir(), "carl-delegation-pi-"));
 copyFileSync(join(REPO, "client/pi/extensions/carl-delegation/index.ts"), join(dir, "index.ts"));
-for (const f of ["carl-delegation.js", "carl-brief.js"]) copyFileSync(join(REPO, "client/shared", f), join(dir, f));
+for (const f of ["carl-delegation.js", "carl-brief.js", "carl-api.js"]) copyFileSync(join(REPO, "client/shared", f), join(dir, f));
 const agentDir = mkdtempSync(join(tmpdir(), "carl-pi-agent-"));     // carl.json: none at first (the defaults)
 process.env.PI_CODING_AGENT_DIR = agentDir;
 process.env.HOME = mkdtempSync(join(tmpdir(), "carl-pi-home-"));     // no dashboard setting: the gate is off
@@ -23,6 +23,9 @@ try {
 } catch (e) {
   why = String(e?.code ?? e);
   if (!/UNKNOWN_FILE_EXTENSION|ERR_MODULE_NOT_FOUND|Cannot find package/.test(why)) throw e;
+  // a file of the staging folder missing is a fault of the test or the extension, never a skip (Phase 23.5: the
+  // missing carl-api.js skipped every test here unseen)
+  if (String(e?.message ?? "").includes(dir)) throw e;
 }
 
 /** A fake Pi: the handlers by event; fire() calls them in order and returns the last result. */

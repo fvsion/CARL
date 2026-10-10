@@ -181,6 +181,8 @@ DELEGATION_CORE = "shared/carl-delegation.js"           # the hand-off rules bot
 BRIEF_CORE = "shared/carl-brief.js"                     # the coder's TOML brief: reader, check (carl-delegation imports it)
 BRIEF_CHECK = "shared/carl-brief-check.mjs"             # the check as a command (a user's, agent-bench's): next to it
 CHAIN_CORE = "shared/carl-chain.js"                     # the test session, then the code session (carl-delegation, subagent)
+API_CORE = "shared/carl-api.js"                         # is an address CARL's dashboard API (before the key goes there)
+MODEL_CHECK_CORE = "shared/carl-model-check.js"         # what the server runs against what the client asks for
 TUI_CORE = "shared/carl-tui.js"                         # the helpers the sidebar and the switcher carry
 CODER = "coder"                                         # the coder subagent's name in both clients
 CODER_ALT = "carl-coder"                                # ... when the user has their own "coder"
@@ -229,6 +231,8 @@ class Options:
     run_gate: bool = True     # the Coder Loop's run gate (23.4.3 addendum)
     fix_rounds: int = 1       # its fix rounds, 0-3
     free_form: str = "model"  # the free-form brief (23.4.3 addendum): model | on | off
+    cache_api_url: str = ""      # the dashboard API as remote.json says (its real port); "" = port + 1
+    carl_id: str = ""            # CARL's ID (remote.json "id"): the API must answer it before the key goes there
 
     @property
     def oc_dir(self) -> str:
@@ -247,8 +251,9 @@ class Options:
 
     @property
     def cache_api(self) -> str:
-        """The dashboard's cache API (tools/monitor/cacheapi.py): next to the server, port + 1."""
-        return f"http://{self.host}:{int(self.llama_port) + 1}"
+        """The dashboard's cache API (tools/monitor/cacheapi.py): where remote.json says it runs, else the server's
+        port + 1."""
+        return self.cache_api_url or f"http://{self.host}:{int(self.llama_port) + 1}"
 
 
 def host_arg(v: str) -> str:
@@ -300,12 +305,27 @@ def switch_arg(v: str) -> bool:
     return v == "1"
 
 
+def api_url_arg(v: str) -> str:
+    """http://HOST:PORT (the dashboard API), or "" (port + 1)."""
+    if v and not re.fullmatch(r"https?://[A-Za-z0-9.:\[\]-]+:[0-9]{1,5}", v):
+        raise argparse.ArgumentTypeError(f"takes http://HOST:PORT, got {v!r}")
+    return v
+
+
+def carl_id_arg(v: str) -> str:
+    if v and not re.fullmatch(r"[0-9a-f]{32}", v):
+        raise argparse.ArgumentTypeError(f"takes 32 hex digits, got {v!r}")
+    return v
+
+
 def parse_args(argv: list[str]) -> Options:
     ap = argparse.ArgumentParser(description="Merge the CARL client configs into OpenCode and Pi (run by install.sh).")
     ap.add_argument("--bundle", required=True, help="the client/ directory")
     ap.add_argument("--home", default=os.path.expanduser("~"))
     ap.add_argument("--host", required=True, type=host_arg)
     ap.add_argument("--llama-port", required=True, type=port_arg)
+    ap.add_argument("--cache-api", default="", type=api_url_arg, help="the dashboard API (remote.json cache_api)")
+    ap.add_argument("--carl-id", default="", type=carl_id_arg, help="CARL's ID (remote.json id)")
     ap.add_argument("--ctx", type=ctx_arg, required=True)
     ap.add_argument("--models", required=True, help="installed-models.json (tools/carl.py client-models)")
     ap.add_argument("--running", default=None, help="the model id the server runs now")
@@ -347,7 +367,8 @@ def parse_args(argv: list[str]) -> Options:
                    browser=a.browser, browser_headed=a.browser_headed, profile=a.profile,
                    cache=a.cache, clients=a.clients, reminder=a.reminder, coder_model=a.coder_model,
                    coder_model_thinking=a.coder_model_thinking if a.coder_model else "", coder_tests=a.coder_tests,
-                   request_check=a.request_check, run_gate=a.run_gate, fix_rounds=a.fix_rounds, free_form=a.free_form)
+                   request_check=a.request_check, run_gate=a.run_gate, fix_rounds=a.fix_rounds, free_form=a.free_form,
+                   cache_api_url=a.cache_api, carl_id=a.carl_id)
 
 
 # ================================================================== merge rules (no I/O)
@@ -1263,7 +1284,12 @@ class Installer:
         st.update({"providers": ids, "base_url": o.base_url, "updated": self.stamp, "models": models_state(o.models),
                    "coder_model": o.coder_model or "main", "coder_tests": o.coder_tests,
                    "request_check": o.request_check,
-                   "run_gate": o.run_gate, "fix_rounds": o.fix_rounds, "free_form": o.free_form})
+                   "run_gate": o.run_gate, "fix_rounds": o.fix_rounds, "free_form": o.free_form,
+                   "cache_api": o.cache_api})          # the /carl panel's speeds (Phase 23.5 item 9)
+        if o.carl_id:
+            st["carl_id"] = o.carl_id                  # the API must answer it before the key goes there
+        else:
+            st.pop("carl_id", None)
         self.cf.save(path, cfg)
         self.save_state(oc, "OpenCode", st)
         return ids
@@ -1294,9 +1320,13 @@ class Installer:
             if merge_plugin_entry(cfg, entry, None, self.fs.isdir(dest), name, self.report):
                 self.fs.rmtree(dest)
             return
-        shared = {CACHE: (CACHE_CORE, PANEL_CORE), DELEGATION: (DELEGATION_CORE, BRIEF_CORE, BRIEF_CHECK, CHAIN_CORE)}.get(name, ())
+        shared = {CACHE: (CACHE_CORE, PANEL_CORE, API_CORE),
+                  DELEGATION: (DELEGATION_CORE, BRIEF_CORE, BRIEF_CHECK, CHAIN_CORE, API_CORE),
+                  MODEL_CHECK: (MODEL_CHECK_CORE,)}.get(name, ())
         self.install_folder(os.path.join("opencode/plugins", name), dest, shared)
-        want = [entry, {"provider": provider_id, **({"cacheApi": self.o.cache_api} if name == CACHE else {}),
+        want = [entry, {"provider": provider_id,
+                        **({"cacheApi": self.o.cache_api} if name == CACHE else {}),
+                        **({"carlId": self.o.carl_id} if name == CACHE and self.o.carl_id else {}),
                         **(extra or {})}]
         merge_plugin_entry(cfg, entry, want, True, f"{name} ({what})", self.report)
 
@@ -1342,6 +1372,7 @@ class Installer:
         thinking = carl_models.coder_efforts(self.o.models, provider_id)
         self._oc_server_plugin(cfg, DELEGATION, True, provider_id, "the hand-off to the coder",
                                {"reminder": self.o.reminder, "cacheApi": self.o.cache_api, "coder": name,
+                                **({"carlId": self.o.carl_id} if self.o.carl_id else {}),
                                 "stateFile": os.path.join(oc, NAMES.state),
                                 **({"coderThinking": thinking} if thinking else {}),
                                 **({"coderModel": ext} if ext else {}),
@@ -1457,12 +1488,12 @@ class Installer:
         tui = self.cf.load(tui_path)
         tplug = tui.setdefault("plugin", [])
         for name, label, want, shared in (
-                ("subagents-sidebar", "OpenCode subagents sidebar", self.o.sidebar, TUI_CORE),
-                ("session-switcher", "OpenCode session switcher", self.o.switcher, TUI_CORE),
-                (PANEL, "OpenCode /carl panel", True, PANEL_CORE)):
+                ("subagents-sidebar", "OpenCode subagents sidebar", self.o.sidebar, (TUI_CORE,)),
+                ("session-switcher", "OpenCode session switcher", self.o.switcher, (TUI_CORE,)),
+                (PANEL, "OpenCode /carl panel", True, (PANEL_CORE, API_CORE, TUI_CORE))):
             dest = os.path.join(oc, "plugins", name)
             if want:
-                self.install_folder(os.path.join("opencode/plugins", name), dest, (shared,))
+                self.install_folder(os.path.join("opencode/plugins", name), dest, shared)
             if merge_tui_plugin(tplug, "file:" + dest, want, label, self.report):
                 self.fs.rmtree(dest)
         if not tplug:
@@ -1503,12 +1534,13 @@ class Installer:
             self.cf.save(mp, mcp)
 
         self._pi_extensions_and_coder(st)
-        self._pi_ext(CACHE, o.cache, (CACHE_CORE, PANEL_CORE), "the disk cache", st, "cache_ext")
-        self._pi_ext(PANEL, True, (PANEL_CORE,), "the /carl panel", st, "panel_ext")
+        self._pi_ext(CACHE, o.cache, (CACHE_CORE, PANEL_CORE, API_CORE), "the disk cache", st, "cache_ext")
+        self._pi_ext(MODEL_CHECK, o.model_check, (MODEL_CHECK_CORE,), "model warnings", st, "model_check_ext")
+        self._pi_ext(PANEL, True, (PANEL_CORE, API_CORE), "the /carl panel", st, "panel_ext")
         coder_on = "coder_agent" in st
         self._code_command(os.path.join(o.pi_dir, "prompts", "code.md"), "pi/prompts/code.md" if coder_on else "",
                            str(st.get("coder_agent") or CODER), "Pi")
-        self._pi_ext(DELEGATION, coder_on, (DELEGATION_CORE, BRIEF_CORE, BRIEF_CHECK), "the hand-off to the coder", st, "delegation_ext")
+        self._pi_ext(DELEGATION, coder_on, (DELEGATION_CORE, BRIEF_CORE, BRIEF_CHECK, API_CORE), "the hand-off to the coder", st, "delegation_ext")
         if coder_on:
             st["delegation"] = {"reminder": o.reminder}            # the gate: the dashboard's setting (23.4)
             coder_thinking = pi_coder_thinking(new_id, o.models)   # the coder's thinking per model (23.4.4)
@@ -1521,16 +1553,18 @@ class Installer:
         else:
             st.pop("delegation", None)
             st.pop("thinking", None)
-        if o.cache:
-            st["cache_api"] = o.cache_api
-        else:
-            st.pop("cache_api", None)
+        st["cache_api"] = o.cache_api      # the cache, the delegation gate and the /carl panel's speeds (Phase 23.5)
 
         # the coder's model (23.4.5): an external one the subagent extension passes as --model, else "main"
         st.update({"providers": ids, "base_url": o.base_url, "updated": self.stamp, "models": models_state(o.models),
                    "coder_model": o.coder_model or "main", "coder_tests": o.coder_tests,
                    "request_check": o.request_check,
                    "run_gate": o.run_gate, "fix_rounds": o.fix_rounds, "free_form": o.free_form})
+        st.pop("model_check", None)                    # 23.5 before its own extension: the extension says it now
+        if o.carl_id:
+            st["carl_id"] = o.carl_id                  # the API must answer it before the key goes there
+        else:
+            st.pop("carl_id", None)
         self.save_state(pi, "Pi", st)
         return ids
 

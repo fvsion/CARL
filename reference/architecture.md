@@ -7,11 +7,11 @@
 ```
  Mac (M3 Pro, 36 GB, in the measurements)              VM (VMware Fusion, Kali, 4 GB) -- optional
  ┌──────────────────────────────────────────┐          ┌──────────────────────────────────┐
- │ host/serve.sh  ──►  llama-server :8080    │  vmnet8  │ OpenCode ─┐                       │
+ │ host/serve.sh  ──►  llama-server :9275    │  vmnet8  │ OpenCode ─┐                       │
  │   (default)         (llama.cpp, Metal)    │◄─────────┤           ├─ Bearer key from      │
  │                                           │  NAT     │ Pi ───────┘  ~/.config/carl/      │
  │ dashboard in the same terminal            │          │ configs from carl-client/setup    │
- │ dashboard API on :8081                    │          │ VM address 192.168.42.130         │
+ │ dashboard API on :9276                    │          │ VM address 192.168.42.130         │
  │ binds 127.0.0.1 (default) or 192.168.42.1 │          │                                   │
  │ OpenCode / Pi here too (--local)          │          │                                   │
  └──────────────────────────────────────────┘          └──────────────────────────────────┘
@@ -114,7 +114,7 @@ The top-level keys `default` and `default_small` are the offline fallback of Aut
 | `client/configure.py` | The non-destructive merge that `install.sh` uses (USERGUIDE.md, "What the setup changes"). `--clients` writes the configs of one client only. |
 | `client/carl_models.py` | The OpenCode and Pi model entries, one for each installed model. It uses only the standard library. Its input is `client/installed-models.json` (git-ignored) or the server's `/v1/models` ids. |
 | `client/carl-sync.py` | The client config sync: `watch`, `once`, `apply`, `auto on\|off`, `status`, `register on\|off`. It runs `install.sh` again with the last switches. |
-| `client/remote.json`, `client/api-key` | Written at each server start (git-ignored, mode 0600): the address, the port, the dashboard API, the CARL version, the key |
+| `client/remote.json`, `client/api-key` | Written at each server start (git-ignored, mode 0600): the address, the port, the dashboard API, CARL's ID, the CARL version, the key |
 | `client/VERSION` | Only in a client package: its CARL version (the `/carl` panel shows it) |
 | `client/opencode/opencode.json` | The OpenCode config template (the `llamacpp` provider) |
 | `client/pi/models.json` | The Pi config template |
@@ -122,6 +122,8 @@ The top-level keys `default` and `default_small` are the offline fallback of Aut
 | `client/agents/browser.md` | The **browser** subagent of OpenCode (the Playwright MCP tools) |
 | `client/shared/carl-cache.js` | The disk cache core ([Caching](caching.md)). `configure.py` copies it next to the plugin and the extension. |
 | `client/shared/carl-panel.js` | The `/carl` panel core: for each section, its lines (plain sentences), its details and its actions |
+| `client/shared/carl-api.js` | The check before a client sends its key to the dashboard API: the API must answer `GET /carl/ping` with CARL's ID ([Clients on other computers](client-sync.md#the-dashboards-api)). `configure.py` copies it next to `carl-cache` and `carl-delegation`. |
+| `client/shared/carl-model-check.js` | The model check core: OpenCode's `carl-model-check` plugin and Pi's `carl-model-check` extension use it |
 | `client/shared/carl-delegation.js` | The hand-off rules: the delegation rule for main agents only, the reminder, the new-file gate ([the hand-off to the coder](delegation.md)). `configure.py` copies it next to the plugin and the extension. |
 | `client/opencode/plugins/carl-delegation/`, `client/pi/extensions/carl-delegation/` | The hand-off in OpenCode (it takes the rule out of subagents' prompts, adds the reminder, runs the gate) and in Pi (the reminder, the gate). With the coder. |
 | `client/opencode/commands/code.md`, `client/pi/prompts/code.md` | `/code`: a task straight to the coder. With the coder. |
@@ -132,7 +134,7 @@ The top-level keys `default` and `default_small` are the offline fallback of Aut
 | `client/opencode/plugins/session-switcher/` | An OpenCode TUI plugin: a session switcher in the prompt box (`‹ 2/3 ● title ›`), and `/switch` for a list of the recent sessions. The setup adds it to `tui.json`. |
 | `client/pi/extensions/subagent/` | The official subagent extension of Pi (vendored, MIT). A patch adds the installed agents to the tool description. Thus, the model can delegate without help. `result.js` formats the result of a background subagent for the screen (`✓ Coder finished (42 s)`, the first 3 lines). |
 
-**`carl-model-check`** (the `chat.params` hook):
+**`carl-model-check`** (the `chat.params` hook; Pi: its own `carl-model-check` extension, `before_provider_request`, one notice for each situation):
 - Before each request to CARL's provider, it reads the server's `/v1/models`. The cache time is 5 s and the timeout is 1.5 s. It ignores errors.
 - It shows a TUI toast one time for each situation. It also writes a line in OpenCode's log (`service=carl-model-check`).
 - The situations: the server runs a different model (single model), the model is not installed (router: HTTP 400), the model loads (router).

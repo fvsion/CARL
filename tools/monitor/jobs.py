@@ -152,6 +152,7 @@ class ServerJobs:
         itself had to go (alone over the limit)."""
         folder = self.paths.slots
         diskcache.remove(folder, diskcache.legacy(folder))
+        diskcache.reconcile(folder, time.time())     # what clients that went away left
         if self.cache_conf().share:
             slotpack.tidy(folder)                   # new saves as patches against their prompt, copies gone
         gone = diskcache.over_budget(diskcache.listing(folder), self.cache_conf().limit, keep)
@@ -164,21 +165,24 @@ class ServerJobs:
         return wait_up(proc, port, lambda: self.collector.endpoint.key, self.vm_addr, host)
 
     # ------------------------------------------------------------ settings: restart
-    def restart(self, p: Pending, d: ServerData) -> None:
+    def restart(self, p: Pending, d: ServerData, port: Optional[int] = None) -> None:
         """Save the settings, stop the server, start it with them (in a thread); while a reply is
-        being written, ask first (when_idle)."""
+        being written, ask first (when_idle). port: start on this port instead (the server's port is
+        another program's: that program is left alone)."""
         def go() -> None:
             self.ui.restart, self.ui.restart_t = "CARL is saving the settings…", time.time()
             self.ui.start_error = []
-            threading.Thread(target=self._restart, args=(dict(p), d), daemon=True).start()
+            threading.Thread(target=self._restart, args=(dict(p), d, port), daemon=True).start()
         self.when_idle(d, "apply the settings (the server restarts)", go)
 
-    def _restart(self, p: Pending, d: ServerData) -> None:
+    def _restart(self, p: Pending, d: ServerData, new_port: Optional[int] = None) -> None:
         """Save, stop the old server, start the new one; on failure, put config.json back
-        and start the old server again."""
+        and start the old server again. new_port: another program has the port: start there, stop nothing."""
         ui, ep = self.ui, self.collector.endpoint
         path = self.paths.config_file
         old_cmd, old_pid, port = d.cmd, d.target_pid or d.pid, ep.port
+        if new_port and new_port != port:
+            old_cmd, old_pid, port = "", None, new_port
         console = self.paths.console(port)
         try:
             old_text = fsio.read_text(path) if os.path.exists(path) else None   # the rollback puts it back

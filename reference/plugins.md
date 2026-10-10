@@ -11,13 +11,13 @@ Type `/carl` in OpenCode or Pi to turn each piece on this computer on or off.
 | Piece | Client | Kind | What you get | Switch |
 |---|---|---|---|---|
 | `carl-cache` | OpenCode, Pi | server plugin / extension | The disk cache: fast starts, sessions back after a restart | `NO_CACHE=1` |
-| `carl-model-check` | OpenCode | server plugin | A warning when the model that you select is not the model that the server runs | `NO_MODEL_CHECK=1` |
+| `carl-model-check` | OpenCode, Pi | server plugin / Pi extension | A warning when the model that you select is not the model that the server runs | `NO_MODEL_CHECK=1` |
 | `carl-background` | OpenCode | server plugin | The coder runs in the background | `NO_BACKGROUND_SUBAGENTS=1` |
 | `carl-delegation` | OpenCode, Pi | server plugin / extension | The hand-off to the coder: the delegation rule for main agents only (OpenCode), the reminder, the brief check, the coder's gates, the new-file gate; in OpenCode also the chain (tests first, then the code) and the coder's thinking per model | comes with the coder; `NO_REMINDER=1` or `/carl`; the gate: the dashboard (Connect > Setup) |
 | `subagent` | Pi | extension | The `subagent` tool: the coder and other agents, also in the background; the chain (tests first, then the code) | comes with the coder (`NO_CODER=1`) |
 | `subagents-sidebar` | OpenCode | TUI plugin | The Subagents panel in the sidebar | `NO_SIDEBAR=1` |
 | `session-switcher` | OpenCode | TUI plugin | `‹ 2/3 ● title ›` in the prompt box, `/switch` | `NO_SWITCHER=1` |
-| `carl-panel` | OpenCode, Pi | TUI plugin / extension | The `/carl` control panel: the switches of the pieces; the config sync | always |
+| `carl-panel` | OpenCode, Pi | TUI plugin / extension | The `/carl` control panel: the switches of the pieces; the config sync; the server's speeds | always |
 
 Put a switch in front of the setup, for example `NO_SIDEBAR=1 ./carl.sh install --config-only`. The setup then removes that piece, and keeps it off at the next setup and sync. `NO_SIDEBAR=0` puts it back.
 
@@ -29,7 +29,7 @@ Put a switch in front of the setup, for example `NO_SIDEBAR=1 ./carl.sh install 
 | Pi | `~/.pi/agent/extensions/NAME/` | Pi loads every folder in `extensions/`. |
 
 - The source is in `client/opencode/plugins/` and `client/pi/extensions/`.
-- The code that more than one piece uses is in `client/shared/`: `carl-cache.js` (the disk cache), `carl-panel.js` (the /carl panel), `carl-delegation.js` (the hand-off rules), `carl-brief.js` (the coder's TOML brief, revision 4: the reader, the check, the report), `carl-chain.js` (the chain of a test session and a code session) and `carl-tui.js` (the TUI helpers of the session switcher and the subagents panel). The setup copies each file into each piece that uses it.
+- The code that more than one piece uses is in `client/shared/`: `carl-cache.js` (the disk cache), `carl-api.js` (the check of the dashboard API before the key goes there), `carl-model-check.js` (the model check), `carl-panel.js` (the /carl panel and the speeds), `carl-delegation.js` (the hand-off rules), `carl-brief.js` (the coder's TOML brief, revision 4: the reader, the check, the report), `carl-chain.js` (the chain of a test session and a code session) and `carl-tui.js` (the TUI helpers of the session switcher and the subagents panel). The setup copies each file into each piece that uses it.
 - OpenCode and Pi load the pieces when they start. After a setup, restart OpenCode or Pi.
 - To get new versions of the pieces on another computer, unzip a new client package over the old folder and run `./setup` again.
 
@@ -55,9 +55,14 @@ For each request, the cache does these steps:
 - The dashboard's Stop, Apply, Auto-tune and router loads read the turn marks. They can wait for the end of a turn, so that the session is saved whole.
 - A client on another computer does the same through the dashboard's API ([Clients on other computers](client-sync.md)).
 - **Only CARL's provider** (Phase 23.4.5, the coder on an external model). OpenCode: `chat.headers` marks only a request whose model's provider is CARL's (the plugin's `provider` option); the `fetch` wrapper sends each unmarked request on as it is, and reads the `Authorization` header only of a marked one. Pi: the hooks act only on a model whose provider is in `"providers"` of `~/.pi/agent/carl.json`; only then do they ask Pi for the key (`getApiKeyAndHeaders`). So a request to another provider (an external coder model) is not marked, saved, restored or claimed, and the cache sends nothing to CARL's server or the dashboard API for it. Tested in `tests/js/opencode-plugins.test.mjs` and `tests/js/pi-cache.test.mjs`.
+- **The window cache.** The cache reads each model's cache from the server file (`~/.config/carl/server-PORT.json`; on another computer from the dashboard API, `GET /carl/cache/settings?port=N`). With the window cache, it restores and saves nothing, and says so one time in its log. It still keeps each session in its own slot.
+- **Single-model mode:** the files, the claims and the records go under the model that the server runs (its alias, `/props`), whatever model name the client sends.
+- **The key goes only to CARL.** Before a call to the dashboard API, the cache asks `GET /carl/ping` (no key). It sends the key only when the answer has CARL's ID (`client/shared/carl-api.js`; [Clients on other computers](client-sync.md#the-dashboards-api)).
+- **Pi** keeps one cache for each Pi process. Pi loads its extensions again at each session switch (`/new`, `/resume`, a fork); the cache still knows which session is in which slot.
+- The other rules (the slot records of other processes, files that cannot be restored, forks) are in [Caching](caching.md#before-each-request).
 - `CARL_CACHE=0` turns the cache off for one run. `CARL_CACHE_SAVE=turn|auto|switch|stop` sets the save rule for one client. `CARL_CACHE_LOG=FILE` writes what the cache does to a file, also each failure it lets go (a request never fails because of the cache). The file never holds the key or a request body.
 
-## carl-model-check: the model warning (OpenCode)
+## carl-model-check: the model warning (OpenCode and Pi)
 
 Before each request to CARL's provider, the plugin compares the model that you selected with the server. It shows a message (a toast) one time for each situation:
 
@@ -69,6 +74,8 @@ Before each request to CARL's provider, the plugin compares the model that you s
 The plugin asks the server for its models at most every 5 s. OpenCode's log has the same lines (`service=carl-model-check`).
 
 It checks only requests to CARL's provider (its `provider` option). A request to another provider, for example the coder on an external model (Phase 23.4.5), gets no check and no message, and the plugin sends no request to CARL's server for it. Tested in `tests/js/opencode-plugins.test.mjs`.
+
+**Pi** has the same check in its own extension, `carl-model-check` (`client/shared/carl-model-check.js`, the same messages). It shows a notice one time for each situation in a Pi process. `NO_MODEL_CHECK=1`, or the **Model Check** row of `/carl` in either client, turns both off; both clients must then restart.
 
 ## carl-background: the coder in the background (OpenCode)
 
@@ -180,7 +187,7 @@ Type `/carl`. The panel is a control panel (user, 2026-10-08: no explanations): 
 | Model Check | OpenCode | `carl-model-check` in `opencode.json` | `set NO_MODEL_CHECK=1\|on` |
 
 - **A switch** runs `client/carl-sync.py set KEY=VALUE` (in the client folder that the setup recorded). It writes the key to `~/.config/carl/client-install.env` (`1`: off; `on`: the line goes, so the default holds; the other lines stay; mode 0600), then runs `install.sh` next to it with the recorded switches and `CARL_SYNC=1`, as a sync does, but with the models that the folder has now (`installed-models.json`): it gets no new config from the dashboard. It holds the sync's lock, so it never runs beside a sync. It does not set `NO_PROFILE`: a switch can add the shell-profile line for OpenCode's tool switches, as `./setup` does. The output of the installer goes to `~/.config/carl/client-sync.log`.
-- `set` prints JSON: `changed` (each key, `from` and `to`), `ok` and `error`, `restart` (the clients that must restart: `opencode`, `pi`; the keys of LSP, the side panel, the switcher and the model check are OpenCode only), `new_terminal` (OpenCode reads web search, LSP and the background coder from the shell, so it must start from a new terminal) and `slots` (the server's slots that `install.sh` read for its coder rule, `/props` `total_slots`; `null` when the server did not answer). An unknown key or value: exit code 2, and nothing changes.
+- `set` prints JSON: `changed` (each key, `from` and `to`), `ok` and `error`, `restart` (the clients that must restart: `opencode`, `pi`; the keys of LSP, the side panel and the switcher are OpenCode only), `new_terminal` (OpenCode reads web search, LSP and the background coder from the shell, so it must start from a new terminal) and `slots` (the server's slots that `install.sh` read for its coder rule, `/props` `total_slots`; `null` when the server did not answer). An unknown key or value: exit code 2, and nothing changes.
 - After a switch, the panel reads the rows again. A message says what changed and which program must restart ("CARL turned the subagents side panel off. Restart OpenCode to use it."); it is red when the switch failed, or when the state did not change.
 - Turning the coder on also sets `CODER=1`: it stays on with a 1-slot server.
 - When the coder goes on and the server runs 1 slot (`set`'s `slots`; not known: no warning), the message is a warning (OpenCode: a `warning` toast; Pi: a `warning` notice) that says that the coder takes the main session's slot while it works.
@@ -202,4 +209,12 @@ Type `/carl`. The panel is a control panel (user, 2026-10-08: no explanations): 
 - The new-file gate (`delegation.gate`) is not in `/carl`: it is a setting of the dashboard only.
 - Without the sync service, the panel checks the server for a new config one time when OpenCode or Pi starts.
 - When a config from the dashboard is applied while OpenCode or Pi runs, OpenCode shows a message and Pi shows a notice: restart it to use the new config.
+- **The speeds** (`speedLine`, `SpeedPoller` in `carl-panel.js`). OpenCode shows a CARL line in the sidebar's footer, between the folder and the OpenCode version (the `sidebar_footer` slot; the plugin draws the folder and the version again). Pi shows it in its status line. The line comes from the dashboard API (`GET /carl/status`), asked each second while a turn runs, and one time more at its end. Without the dashboard, there is no line.
+
+  | When | The line |
+  |---|---|
+  | The model writes | `write 18.4 tok/s · read 652 tok/s` |
+  | The server reads a prompt | `reading 38% · 652 tok/s` |
+  | After the turn | `last turn: write 18.4 · read 652` |
+
 - A state while an action runs uses the -ing form (`turning off…`); the messages are whole sentences ("New configs from the dashboard now wait for you.").

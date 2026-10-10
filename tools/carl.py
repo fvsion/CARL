@@ -35,8 +35,14 @@ CLI (./carl.sh models | download | verify use it through host/models.sh)
   carl.py launch-env [--model NAME|PATH] [--no-config]   KEY=value lines for serve-llama.sh
   carl.py llama-version                the start line when the installed llama.cpp is older than the version
                                        CARL is tested with (carl_core/domain/llamacpp.py), else nothing
-  carl.py router-preset --out FILE --templates DIR   router mode's presets INI (serve-llama.sh); prints
-                                       "start NAME", "model NAME SETUP" and "skip NAME: WHY" lines
+  carl.py router-preset --out FILE --templates DIR [--port PORT]   router mode's presets INI (serve-llama.sh); prints
+                                       "start NAME", "model NAME SETUP" and "skip NAME: WHY" lines; --port: also
+                                       the server file (below) with each model's cache
+  carl.py carl-id                      this CARL's ID (made once): the dashboard API's /carl/ping answers it, and a
+                                       client sends its key only to an API that does
+  carl.py server-file --port PORT --model NAME --swa full|window|- [--kv K] [--ctx N] [--slots N]
+                                       the clients' facts about a single-model start: config dir/server-PORT.json
+                                       (carl_core/domain/runtime.py; carl-cache reads it)
   carl.py client-models [--running NAME] [--router]   the models for the OpenCode / Pi configs (JSON:
                                        client/install.sh writes it to client/installed-models.json);
                                        single-model mode: only the model the server runs (NAME, else
@@ -67,6 +73,7 @@ from typing import Dict, List, Mapping, Optional, Sequence, Tuple  # noqa: E402
 from carl_core.app import Carl  # noqa: E402
 from carl_core.domain import cards as _cards  # noqa: E402
 from carl_core.domain.router import preset_ini  # noqa: E402
+from carl_core.domain import runtime  # noqa: E402
 from carl_core.domain import models as _dm  # noqa: E402
 from carl_core.domain.autofit import AutoFit as AutoFit, as_goal, as_scope  # noqa: E402
 from carl_core.domain.errors import ConfigError as ConfigError  # noqa: E402  (re-exported)
@@ -489,10 +496,13 @@ def cmd_cache(argv: Sequence[str]) -> None:
         return
     print()
     rows = []
+    from monitor import sessionnames             # the sessions' current names (OpenCode's and Pi's stores here)
+    named = sessionnames.names(os.path.expanduser("~"), [sessionnames.session_id(f.name) for f in files])
     for f in sorted(files, key=lambda f: -f.mtime):
         kind = ("saved prompt" if f.kind == diskcache.PROMPT else
                 "saved session*" if f.packed else "saved session")
-        rows.append((kind, diskcache.describe(f.name), file_size(f.bytes)))
+        name = named.get(sessionnames.session_id(f.name), "")
+        rows.append((kind, diskcache.describe(f.name) + (f" ({name})" if name else ""), file_size(f.bytes)))
     kw = max(len(r[0]) for r in rows)
     sw = max(len(r[2]) for r in rows)
     nw = max(10, w - kw - sw - 6)
@@ -654,12 +664,30 @@ def main(argv: List[str]) -> int:
         preset, common = app().router_preset(app().load_config(), tdir)
         with open(out, "w", encoding="utf-8") as fh:
             fh.write(preset_ini(preset, common))
+        if "--port" in a:                       # the server file for this Mac's clients (Phase 23.5)
+            port = int(_arg(a, a.index("--port") + 1, use + " [--port PORT]"))
+            runtime.write(os.path.dirname(CONFIG_FILE), port, "router", {
+                p.name: runtime.model_entry("full" if p.swa else "window" if p.window else "none", p.kv, p.ctx, p.slots)
+                for p in preset.models})
         for p in preset.models:
             print(f"model {p.name} {p.describe()}")
         for n, why in preset.skipped:
             print(f"skip {n}: {why}")
         if preset.start:
             print(f"start {preset.start}")
+    elif cmd == "carl-id":                     # this CARL's ID (the API's /carl/ping; the client package's remote.json)
+        print(runtime.carl_id(os.path.dirname(CONFIG_FILE)))
+    elif cmd == "server-file":
+        use = "server-file --port PORT --model NAME --swa full|window|- [--kv K] [--ctx N] [--slots N]"
+
+        def opt(name: str, default: str = "") -> str:
+            return _arg(a, a.index(name) + 1, use) if name in a else default
+        port, model = opt("--port"), opt("--model")
+        if not port or not model:
+            _arg([], 0, use)
+        runtime.write(os.path.dirname(CONFIG_FILE), int(port), "single", {
+            model: runtime.model_entry(opt("--swa", "-"), opt("--kv"), int(opt("--ctx", "0") or 0),
+                                       int(opt("--slots", "0") or 0))})
     elif cmd == "client-models":
         use = "client-models [--running NAME] [--router]"
         running = _arg(a, a.index("--running") + 1, use) if "--running" in a else None

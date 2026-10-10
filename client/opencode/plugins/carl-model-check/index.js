@@ -1,13 +1,13 @@
 // @ts-check
 // OpenCode server plugin (installed by CARL's client/install.sh): before each request to
-// CARL's provider, checks the model picked against the server (check.js) and shows a
+// CARL's provider, checks the model picked against the server (carl-model-check.js) and shows a
 // toast when they don't match:
 //   single-model mode   the server runs another model (it answers with that one)
 //   router mode         the model isn't installed (HTTP 400), or it is being loaded
 // Each situation is said once (also in OpenCode's log, service=carl-model-check). Options: { provider: "<our provider id>" } (configure.py).
 // Export nothing else from this file: older OpenCode versions call every export of the
 // entry module as a plugin function.
-import { serverModels, verdict } from "./check.js";
+import { serverModels, verdict } from "./carl-model-check.js";
 
 const CACHE_MS = 5000;
 

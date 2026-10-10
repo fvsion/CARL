@@ -122,7 +122,7 @@ def topics(cmd: str) -> Dict[str, List[Block]]:
                    (f"{c} COMMAND [OPTIONS]", "Run a command."),
                    (f"{c} help COMMAND", f"Show the help for a command. {c} COMMAND --help does the same.")]),
             ("h", "THE SERVER AND THE DASHBOARD"),
-            ("d", [("llama [OPTIONS]", "Start the server (llama.cpp) on port 8080. The dashboard opens in this "
+            ("d", [("llama [OPTIONS]", "Start the server (llama.cpp) on port 9275. The dashboard opens in this "
                                        "terminal. More: help llama."),
                    ("dashboard", "Open the dashboard and do not start a server. --no-start does the same."),
                    ("monitor", "Open the dashboard for a server that runs.")]),
@@ -153,7 +153,7 @@ def topics(cmd: str) -> Dict[str, List[Block]]:
                   "The documents: README.md (overview), USERGUIDE.md (how to), reference/README.md (details)."),
         ],
         "llama": [
-            ("p", "Start the server (llama.cpp) on port 8080. In a terminal, the server runs in the background "
+            ("p", "Start the server (llama.cpp) on port 9275. In a terminal, the server runs in the background "
                   "and the dashboard opens in this terminal. When you quit the dashboard, it asks if the server "
                   "must stop."),
             ("h", "USAGE"),
@@ -199,9 +199,9 @@ def topics(cmd: str) -> Dict[str, List[Block]]:
             ("d", [(c, "Open the dashboard. If no server runs, CARL starts the server with your saved settings."),
                    (f"{c} dashboard", "Open the dashboard. If no server runs, it opens without a server. Settings "
                                       "(tab 5) can start one. --no-start does the same."),
-                   (f"{c} monitor [--port N]", "Open the dashboard for a server that runs (default port 8080).")]),
+                   (f"{c} monitor [--port N]", "Open the dashboard for a server that runs (default port 9275).")]),
             ("h", "OPTIONS"),
-            ("d", [("--port N", "The port of the server (default 8080)."),
+            ("d", [("--port N", "The port of the server (default 9275)."),
                    ("--once", "Show the dashboard one time as text, then stop."),
                    ("--expand", "Show every card with all its details.")]),
             ("p", "In the dashboard, press ? to see all the keys. Press q to quit. When a server runs, the dashboard "
@@ -231,7 +231,7 @@ def topics(cmd: str) -> Dict[str, List[Block]]:
                    ("--local", "Connect the clients to the server on this Mac (the default)."),
                    ("--vm [HOST]", "Connect the clients to the server on the VM network (default 192.168.42.1)."),
                    ("--host ADDR", "Connect the clients to the server at this address."),
-                   ("--port N", "The port of the server (default 8080)."),
+                   ("--port N", "The port of the server (default 9275)."),
                    ("--key-file FILE", "Read the API key from FILE.")]),
             ("p", "The setup also reads environment variables, for example NO_CACHE=1 (no disk cache) or "
                   "WEB_SEARCH=off. client/setup --help and client/install.sh --help list them."),
@@ -457,7 +457,7 @@ def topics(cmd: str) -> Dict[str, List[Block]]:
             ("d", [("NET=local", "local or vm, as --local and --vm."),
                    ("VM_HOST=192.168.42.1", "The address that --vm uses."),
                    ("HOST", "One address to listen on. It wins over NET. CARL refuses 0.0.0.0."),
-                   ("PORT=8080", "The port of the server."),
+                   ("PORT=9275", "The port of the server."),
                    ("API_KEY_FILE", "The API key file. Default: ~/.config/carl/api-key.")]),
             ("h", "THE START"),
             ("d", [("MONITOR=1", "Show the dashboard in this terminal. 0: the server runs in the foreground, with "

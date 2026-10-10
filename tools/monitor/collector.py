@@ -64,6 +64,9 @@ class Sample:
     decoded: int
 
 
+STALE_S = 30.0          # how long the last /slots and /metrics stand in for ones that did not answer
+
+
 def live_rates(d: ServerData, last: Optional[Sample]) -> Tuple[Optional[float], Optional[float]]:
     """(prompt, generation) tokens per second since the last sample, same request only."""
     if last and d.busy and last.task == d.task:
@@ -85,9 +88,10 @@ def log_pointer(home: str, port: int) -> Dict[str, object]:
 
 
 def choose_log(cmd: str, log_arg: Optional[str], console: str, home: str, filtered: str = "") -> Optional[str]:
-    """The log to show: the server's --log-file (cmd: its command line; or --log; or filtered: the log CARL's filter
-    writes for a server at -lv 4), else its console output, else the latest llama.cpp log."""
-    path = flag(cmd, "--log-file") or log_arg or filtered
+    """The log to show: the server's --log-file (cmd: its command line), or filtered (the log CARL's filter writes
+    for a server at -lv 4: it names this start's log, where --log can name an earlier start's after a restart from the
+    dashboard), or --log; else its console output, else the latest llama.cpp log."""
+    path = flag(cmd, "--log-file") or filtered or log_arg      # the filter's log first: --log names an older start
     if not path or not os.path.exists(path) or os.path.getsize(path) == 0:
         return console if os.path.exists(console) else (path or os.path.join(home, "models/logs/llama-server-latest.log"))
     return path
@@ -119,6 +123,8 @@ class Collector:
         self.model_size: Optional[int] = None
         self.slow = SlowStats()                         # filled by slow_loop
         self.gpu_limit: Optional[Tuple[int, str]] = None   # filled by a background thread
+        self.good_slots: Tuple[float, List[SlotInfo]] = (0.0, [])         # the last /slots that answered
+        self.good_metrics: Tuple[float, JSONDict, Dict[int, float]] = (0.0, {}, {})   # the last /metrics
 
     def follow(self, port: int, pid: Optional[int], console: str) -> None:
         """Watch the server on port (a start for another port moves the dashboard there)."""
@@ -255,9 +261,29 @@ class Collector:
             d.n_ctx, d.busy, d.prompt, d.cached, d.processed, d.decoded, d.task = (
                 s.n_ctx, s.busy, s.prompt, s.cached, s.processed, s.decoded, s.task)
             d.slots = True
+            self.good_slots = (time.time(), d.slot_list)
         except FETCH_ERRORS + SHAPE_ERRORS:
             d.slots = False
+            self._stale_slots(d)
         try:
             d.metrics, d.accepted_by_pos = parse_metrics(ep.get("/metrics" + q))
+            self.good_metrics = (time.time(), d.metrics, d.accepted_by_pos)
         except FETCH_ERRORS:
-            pass
+            t, metrics, pos = self.good_metrics
+            if time.time() - t <= STALE_S:
+                d.metrics, d.accepted_by_pos = metrics, pos
+
+    def _stale_slots(self, d: ServerData) -> None:
+        """/slots did not answer while /health did: llama.cpp answers /slots only between two batches, and a batch of
+        a long prompt can take longer than the poll waits. The last answer stands in (up to STALE_S old), with a
+        request running."""
+        t, slots = self.good_slots
+        age = time.time() - t
+        if not slots or age > STALE_S:
+            return
+        busy = [x for x in slots if x.busy]
+        s = busy[0] if busy else slots[0]
+        d.slot_list = slots
+        d.n_ctx, d.prompt, d.cached, d.processed, d.decoded, d.task = (
+            s.n_ctx, s.prompt, s.cached, s.processed, s.decoded, s.task)
+        d.busy, d.slots, d.stale_s = True, True, age

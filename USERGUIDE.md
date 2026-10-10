@@ -82,7 +82,7 @@ Commands with the label **Mac** run in the CARL folder on the Mac. Commands with
    - The first lines of the output show each setting and where it comes from. For example, for `gemma-4-e4b`:
      ```
      CARL starts the server: gemma-4-e4b (gemma-4-E4B-it-Q4_0.gguf).
-     Address: http://127.0.0.1:8080. Only this Mac can use the server.
+     Address: http://127.0.0.1:9275. Only this Mac can use the server.
      Slots: 2 (from Auto-tune). Context: 96K tokens per slot (from Auto-tune).
      Context memory type: q4 (from Auto-tune). RAM cache: 8.0 GiB.
      Speculation: MTP + n-gram, 2 guesses (from Auto-tune). The MTP drafter is mtp-gemma-4-E4B-it-Q4_0.gguf.
@@ -90,6 +90,8 @@ Commands with the label **Mac** run in the CARL folder on the Mac. Commands with
      Log file: ~/models/logs/llama-server-….log. Batch: -ub 512. Your settings: ./carl.sh config show.
      ```
    - The sources of a setting are: your option (a flag), the environment, your settings (`config.json`), Auto-tune, the catalogue, the model file, Auto fit, and CARL's default.
+   - The server's port is 9275 (`PORT=N ./carl.sh llama` sets another). CARL's earlier default was 8080. OpenCode and Pi on this Mac that were set up for port 8080 show as out of date in the dashboard's Connect tab: push `u` to update them. On other computers, the sync finds the new port by itself.
+   - If another program uses the port, the start offers the next free port ([Daily use](#2-daily-use)).
    - If your llama.cpp is older than the version that CARL is tested with, the second line tells you: `llama.cpp 0.4.1 (build 9001) is older than the version that CARL is tested with (0.6.0, build 11429): update it with brew upgrade llama.cpp.` The server starts. The HEALTH card of the dashboard shows the same warning.
    - A refused start shows one `error:` sentence first, then the lines that tell you what to do.
    - `./carl.sh` with no arguments also starts the server, and opens the dashboard ([Daily use](#2-daily-use)).
@@ -110,7 +112,7 @@ Commands with the label **Mac** run in the CARL folder on the Mac. Commands with
 - To make the VM the default, set **Network** to **this Mac and the VM** in the Settings tab. Or run `./carl.sh config set llama.net vm`.
 - Before 1.3.0, the default was "auto": the VM address when the Fusion network was up. The server was then open to the VM network without a question, so CARL removed this mode. A saved `llama.net = auto` changes to local one time, with a note at the start. `NET=auto` means local.
 
-**The client folder.** At each server start, the launcher writes two files into the `client/` folder: `remote.json` (the server's address, its port and the CARL version) and `api-key`. Both have mode 0600, and git ignores them. The client package for other computers takes them from there ([The client package](#the-client-package)).
+**The client folder.** At each server start, the launcher writes two files into the `client/` folder: `remote.json` (the server's address, its port, the dashboard API, CARL's ID and the CARL version) and `api-key`. Both have mode 0600, and git ignores them. The client package for other computers takes them from there ([The client package](#the-client-package)).
 
 ### Clients on the same Mac (no VM)
 
@@ -198,7 +200,7 @@ What `./setup` does on the other computer:
 - It keeps the key at `~/.config/carl/api-key`.
 - It adds the client sync service. The service applies the config that you send from the dashboard ([Clients on other computers](reference/client-sync.md)). `NO_SYNC_SERVICE=1 ./setup` leaves it out. Keep the `carl-client` folder: the service runs from it.
 - On Linux, the service runs only while you are logged in. To keep it running (a VM that you reach by SSH), run `loginctl enable-linger $USER` one time. The setup tells you when this is necessary.
-- At the end, it does a smoke test. The line `OK: the server answers at http://192.168.42.1:8080/v1. It has qwen3.6-35b-a3b.` tells you that the connection works. The name is the loaded model.
+- At the end, it does a smoke test. The line `OK: the server answers at http://192.168.42.1:9275/v1. It has qwen3.6-35b-a3b.` tells you that the connection works. The name is the loaded model.
 
 The client configs are in these files:
 
@@ -324,8 +326,9 @@ Use this procedure for clients that are not on the server Mac and not in the VMw
    ```
    | Situation | What `./carl.sh` does |
    |---|---|
-   | A server runs on port 8080 | The dashboard attaches to it. |
+   | A llama.cpp server runs on port 9275 | The dashboard attaches to it. |
    | No server runs | It starts llama.cpp with your saved settings, then shows the dashboard. |
+   | Another program uses port 9275 | It offers the next free port (below). |
    | No model is downloaded | It first offers to download Auto fit's choice for this Mac. |
 3. **VM or Mac:** go to the folder of your project, then run `opencode` or `pi` there. The client works on the folder that you start it in.
 4. In the client, select the model that the server runs: `/models` in OpenCode, `/model` in Pi.
@@ -343,6 +346,16 @@ Use this procedure for clients that are not on the server Mac and not in the VMw
 
 CAUTION: **The server does not start if another model is in memory.** Two models do not fit. The launcher looks for each process larger than 8 GiB, and shows it.
 
+**Another program uses the port.** The start then offers the next free port. It never changes the port without a question, because other computers find the server by its port.
+
+| Where | What you see |
+|---|---|
+| A terminal | `Port 9275 is in use by another program (ssh, process 4242). Start the server on port 9276? [Y/n]`. `n` stops the start. |
+| No terminal (a script) | An `error:` line that names the free port, and `PORT=9276 ./carl.sh llama` to start the server there. |
+| The dashboard (Start, Apply) | `Port 9275 is in use by another program (ssh, pid 4242). This starts the server on port 9277.` and **[ Start on port 9277 (y) ]**. |
+
+- A llama.cpp server on the port is a server that runs already: the start stops with an error (one model at a time).
+
 ### Stop the server, or keep it running
 
 1. In the dashboard, push `q` (or Ctrl-C, or click **[ Quit ]**).
@@ -356,9 +369,9 @@ CAUTION: **The server does not start if another model is in memory.** Two models
 
 - To attach the dashboard again, run `./carl.sh` (or `./carl.sh monitor`).
 - If an agent's turn is running, Stop asks first: wait for the end of the turn, or stop now ([A turn is running](#a-turn-is-running)).
-- To stop the server without the dashboard, run `./carl.sh monitor`, then push `q` and `s`. Or run this command. It finds the process that listens on port 8080:
+- To stop the server without the dashboard, run `./carl.sh monitor`, then push `q` and `s`. Or run this command. It finds the process that listens on port 9275:
   ```bash
-  kill $(netstat -anv -p tcp | awk '$6=="LISTEN" && $4 ~ /[.]8080$/ {n=split($(NF-8),a,":"); print a[n]; exit}')
+  kill $(netstat -anv -p tcp | awk '$6=="LISTEN" && $4 ~ /[.]9275$/ {n=split($(NF-8),a,":"); print a[n]; exit}')
   ```
 
 ### What to expect
@@ -831,17 +844,25 @@ The setup (`./carl.sh install`, `./setup`) adds these to OpenCode and Pi. Each o
 | Plugin | In | What you get | Off |
 |---|---|---|---|
 | **Disk Cache** (`carl-cache`) | OpenCode, Pi | Fast starts: each agent's prompt and each session saved on the server's disk ([Fast starts](#7-fast-starts-the-disk-cache)) | `NO_CACHE=1` |
-| **Model Check** (`carl-model-check`) | OpenCode | A warning when the model that you select is not the model that the server runs, is not installed, or loads now | `NO_MODEL_CHECK=1` |
+| **Model Check** (`carl-model-check`) | OpenCode, Pi | A warning when the model that you select is not the model that the server runs, is not installed, or loads now. Pi says it one time. | `NO_MODEL_CHECK=1` |
 | **Coder in the background** (`carl-background`) | OpenCode | The coder subagent runs in the background, so the main session stays free | `NO_BACKGROUND_SUBAGENTS=1` |
 | **Hand-off** (`carl-delegation`) | OpenCode, Pi | The delegation rule for the main agent only, and the reminder at the end of your messages ([The coder subagent](#the-coder-subagent-opencode-and-pi)) | `NO_REMINDER=1` (the reminder); `NO_CODER=1` (all) |
 | **Subagent tool** (`subagent`) | Pi | The `subagent` tool: the coder and other agents, one, several at the same time, a chain, or in the background; `/subagents` | `NO_CODER=1` |
 | **Subagents panel** (`subagents-sidebar`) | OpenCode | The running and finished subagents in the sidebar ([The Subagents panel](#the-subagents-panel-opencode)) | `NO_SIDEBAR=1` |
 | **Session Switcher** (`session-switcher`) | OpenCode | `‹ 2/3 ● title ›` in the prompt box, `/switch` ([Switching sessions](#switching-sessions-opencode)) | `NO_SWITCHER=1` |
-| **The /carl panel** (`carl-panel`) | OpenCode, Pi | A control panel: every CARL piece on this computer with its state, changed in place, and the config sync | (always on) |
+| **The /carl panel** (`carl-panel`) | OpenCode, Pi | A control panel: every CARL piece on this computer with its state, changed in place, and the config sync. Also the server's speeds (below). | (always on) |
 
 - Put a switch in front of the setup, for example `NO_SIDEBAR=1 ./carl.sh install --config-only`. The setup then removes the plugin, and keeps it off the next time. `NO_SIDEBAR=0` puts it back.
 - Restart OpenCode or Pi after an install. They load their plugins when they start.
 - Your own plugins and extensions stay. If one of yours has the same name, CARL does not install its own.
+
+**The speeds.** OpenCode shows a CARL line in the footer of its sidebar, between the folder and the OpenCode version. Pi shows it in its status line. It needs the dashboard: without the dashboard, there is no line.
+
+| When | The line |
+|---|---|
+| The model writes | `write 18.4 tok/s · read 652 tok/s` |
+| The server reads a prompt | `reading 38% · 652 tok/s` |
+| After the turn | `last turn: write 18.4 · read 652` |
 
 **The /carl panel.** Type `/carl` in OpenCode or Pi. The panel is a control panel: one list, one row for each CARL piece, with its label and its state. For example (OpenCode):
 
@@ -908,7 +929,7 @@ Check for a New Config
 | Subagents Side Panel | OpenCode | `NO_SIDEBAR` |
 | Session Switcher | OpenCode | `NO_SWITCHER` |
 | Disk Cache | OpenCode, Pi | `NO_CACHE` |
-| Model Check | OpenCode | `NO_MODEL_CHECK` |
+| Model Check | OpenCode, Pi | `NO_MODEL_CHECK` |
 | Sync Service | OpenCode, Pi (a server on another computer) | — |
 | Apply New Configs at Once | OpenCode, Pi (a server on another computer) | `carl-sync.py auto on\|off` |
 
@@ -959,7 +980,7 @@ For the stop saves, OpenCode and Pi leave a small record of the session that eac
 - **What changes in the prompt:** some parts of the system prompt change between projects and days. The cache puts them after the part that is the same everywhere:
   - OpenCode: the environment block (folder, git, date) and the project's instructions (the AGENTS.md files in the working folder). Instructions from outside the folder stay in the system prompt.
   - Pi: the project context and the folder.
-  - With Qwen models they go to the start of your first message. The model follows AGENTS.md more often there (measured 2026-10-08). With Gemma 4 they stay where they are (CARL saves no prompt for Gemma 4). With other models they stay where they are too, unless you set Settings > Caching > Other templates to "move to your message".
+  - With Qwen models they go to the start of your first message. The model follows AGENTS.md more often there (measured 2026-10-08). With Gemma 4 they stay where they are (with the full cache, each project gets its own saved prompt). With other models they stay where they are too, unless you set Settings > Caching > Other templates to "move to your message".
   - The model gets the same information. The agent's prompt is then the same in each project, and its saved file fits each session.
 - **Router mode:** before a request for a different model, the plugin loads that model and puts the session back. A switch then costs the load (30 s to 2 min) and about a second. OpenCode's title requests go to the loaded model, so a new session does not cause two switches.
 - **Any model:** the Qwen hybrid models and normal transformer models (tested: Gemma 4 E4B, whose template puts the tools after the system prompt).
@@ -967,14 +988,19 @@ For the stop saves, OpenCode and Pi leave a small record of the session that eac
   - Two requests never take the same slot at the same time. OpenCode and Pi on this Mac claim a slot with a small file (`.claim+…`) until the server has the request.
   - If every slot is taken, llama.cpp decides, as without the cache.
   - When a subagent needs a slot that holds a different session, that session is saved first. It comes back from its file.
+  - Before a session takes a slot, the session that another OpenCode or Pi process recorded in that slot is saved first. This is also true for the same process before a restart.
   - OpenCode's title requests run without thinking (they are short), so they do not hold a slot for a long time.
 - **A saved state is used only when it fits exactly.** It needs the same model file, the same llama.cpp build, and a prompt that starts with the saved one. If the request is different (you added a tool, or edited an earlier message), the server reads the whole prompt, as without the cache. The new state is then saved for the next time.
+- **A fork starts from its parent.** A fork (Pi `/fork` or a clone, an OpenCode fork), or any session with history and no file of its own, starts from the longest saved session on this Mac whose tokens start its request.
+- **A file that the server cannot restore is removed.** A saved prompt that restores a different number of tokens is removed too, and the prompt is read again.
+- **Single-model mode:** the files go under the model that the server runs, whatever model name the client sends.
+- **Pi** keeps its cache state when you switch sessions (one cache for each Pi process).
 - **When the prompt changes** (a new tool or MCP server, an OpenCode or Pi update): the next new session reads the new prompt one time and saves it. The old prompt files are removed. A saved session from before the change is read again one time.
 - NOTE: Subagent sessions and title requests are not saved.
 
 ### Models with sliding-window layers
 
-Gemma 4 models have sliding-window layers. llama.cpp can put their saved states back only with the **full cache**: every layer keeps every token (`--swa-full`). This costs memory: +2.3 GiB for Gemma 4 E4B at 2 × 96K. The **window cache** uses less memory, but CARL cannot restore saved sessions and prompts.
+Gemma 4 models have sliding-window layers. llama.cpp can put their saved states back only with the **full cache**: every layer keeps every token (`--swa-full`). This costs memory: +2.3 GiB for Gemma 4 E4B at 2 × 96K. The **window cache** uses less memory, but CARL cannot restore saved sessions and prompts. With the window cache, OpenCode and Pi restore and save nothing. They still keep each session in its own slot.
 
 | Gemma models (`cache.swa`) | Effect |
 |---|---|
@@ -991,6 +1017,7 @@ Gemma 4 models have sliding-window layers. llama.cpp can put their saved states 
 - The files are in `~/.config/carl/slots` (the server's folder).
 - They stay inside a disk limit: **10 GB** by default. The oldest saved sessions go first, then the oldest saved prompts.
 - The clients on the server's Mac apply the limit after each save. The dashboard applies it each minute, and the launcher at each start (for files that clients on other computers wrote).
+- Each minute, the dashboard also removes what clients leave behind: slot claims older than 2 minutes, turn marks older than 10 minutes, half-written `.tmp` files older than 1 hour, and a part of a stored session whose other part is gone (a lone `.json` or `.zst`).
 - A saved prompt is ~25–120 MB. On the 35B, a saved session is ~59 MB plus ~5.8 KB for each token (a 74K-token session: ~0.5 GB).
 - When the disk has less than 10 GB free, the clients on the server's Mac save nothing.
 - **Shared storage:** a saved session is stored as the changes to the saved prompt that it starts with. The prompt part is then on the disk only one time ([Caching](reference/caching.md#how-a-saved-state-is-built)).
@@ -1001,7 +1028,7 @@ Gemma 4 models have sliding-window layers. llama.cpp can put their saved states 
 ### Settings and switches
 
 - **Settings tab → Caching panel** (experimental): the disk limit, saved prompts on or off, saved sessions on or off, when to save, save after, shared storage, Gemma models, what is on the disk, and **[ Clear the disk cache (c) ]** ([Caching panel](#caching-panel)).
-- `./carl.sh cache show` lists the saved prompts and the saved sessions, with their sizes (GB, MB). A `*` marks a saved session that is stored as the changes to its saved prompt. `./carl.sh cache trim` applies the limit (and stores new saved sessions as changes). `./carl.sh cache clear` removes all files.
+- `./carl.sh cache show` lists the saved prompts and the saved sessions, with their sizes (GB, MB). Each saved session shows its name next to its ID (the OpenCode title, or the Pi `/name` or first message). A `*` marks a saved session that is stored as the changes to its saved prompt. `./carl.sh cache trim` applies the limit (and stores new saved sessions as changes). `./carl.sh cache clear` removes all files.
 
 | Switch | Effect |
 |---|---|
@@ -1220,7 +1247,7 @@ It does these steps. The model loads one time for each speculation mode.
 
 - CARL saves the result in `~/.config/carl/models.json`. Each later start of the model uses it. A value that you set in the settings file has priority ([The settings file](#the-settings-file)).
 - `./carl.sh tune all` tunes each downloaded model, one after the other. A model that fails does not stop the others.
-- CAUTION: **Auto-tune needs the GPU for itself.** It does not start in these conditions: a server runs on port 8080, another large process (more than 8 GiB, `BIG_GB`) is in memory, or a known model server runs. `ALLOW_SECOND_MODEL=1` skips the check for a large process. Stop the server first. The **Auto-tune** panel of the dashboard stops the server for you, and starts it again after the tune.
+- CAUTION: **Auto-tune needs the GPU for itself.** It does not start in these conditions: a server runs on port 9275 (or 8080, CARL's earlier port), another large process (more than 8 GiB, `BIG_GB`) is in memory, or a known model server runs. `ALLOW_SECOND_MODEL=1` skips the check for a large process. Stop the server first. The **Auto-tune** panel of the dashboard stops the server for you, and starts it again after the tune.
 - Auto-tune uses its own server on port 8093 (`--port` changes it). `--dry-run` measures, but does not save.
 - NOTE: The edit workload copies `tools/carl_core/adapters/llama_server.py`. Thus, the edit speeds are not directly comparable with older Auto-tune results.
 
@@ -1233,7 +1260,7 @@ The dashboard is `tools/llama-monitor.py`. It shows the live state of the server
 ### Start and quit
 
 **It runs in the terminal in which you start the server.**
-- `./carl.sh` with no arguments opens the dashboard. It attaches to a server on port 8080. If no server runs, it starts llama.cpp with your saved settings. If no model is downloaded, it offers to download Auto fit's choice for this Mac.
+- `./carl.sh` with no arguments opens the dashboard. It attaches to a llama.cpp server on port 9275. If no server runs, it starts llama.cpp with your saved settings. If no model is downloaded, it offers to download Auto fit's choice for this Mac.
 - When the dashboard opens, a **CARL STARTS** card shows its progress: it reads the server state, the model list and what fits this Mac.
 - `./carl.sh llama` starts the server in the background, in its own process group under `nohup`. Thus, Ctrl-C cannot stop the server by accident. The dashboard then uses the terminal.
 - The server writes its log file (`~/models/logs/llama-server-<time>.log`). Its console output goes to `~/models/logs/.console-<port>.out`. The Log tab shows the log file. If that file is missing or empty, it shows the console file.
@@ -1267,7 +1294,7 @@ Stop, Apply, Auto-tune and a router load stop the model. If an agent's turn is r
 **To attach by hand** (after "leave it running", or from a different terminal):
 ```bash
 ./carl.sh monitor                       # finds the server's address itself
-./carl.sh monitor --port 8081           # a server on a different port
+./carl.sh monitor --port 9277           # a server on a different port
 ./carl.sh monitor --once                # print the Live tab one time, at the saved levels
 ```
 
@@ -1315,6 +1342,9 @@ A click on the title of a section selects it and changes its level in the same w
 | WRITING | The server is writing an answer. |
 | BUSY ×N | N slots are working at the same time. |
 
+- While the server reads a long prompt, it can fail to answer `/slots`. The dashboard then keeps the last answer (up to 30 s). It does not show IDLE or "No model is loaded" in that time.
+- After a restart from the dashboard, the dashboard follows the log of the new start.
+
 **How a screen is laid out:**
 - Each screen starts with the state, and what you can do next.
 - One value is on one row: a label on the left, and the value after it. A table has a header row.
@@ -1349,7 +1379,7 @@ A click on the title of a section selects it and changes its level in the same w
 | **1 Live** | A sentence with the state of the server, for example "No request is running. The 2 slots are free.". Then the cards, and under them the RECENT REQUESTS card and the LOG card ([Live cards](#live-cards)). |
 | **2 Connect** | Two sub-tabs. **Setup:** OpenCode and Pi on this Mac, a VM or another computer, and by hand (the address, the key and the configs to copy). **Clients:** each computer that syncs, and its config ([Connect tab](#connect-tab)). |
 | **3 Requests** | All finished requests in the log, newest first: **Started**, **Context**, **New tokens**, **Read tok/s**, **Output**, **Write tok/s**, **Took**, **Guesses OK** (the % of the guesses that were correct) and **Reused** (the tokens that the server did not read again). The **Mean** row under the header gives the mean read and write speeds of the requests in the list. A failed request shows `error` in the Guesses OK column. The title shows the count, for example `50 since 13:02`. The full level adds **Slot** (the slot of the request) and **Reused from** (where the reused tokens came from). Reused from shows `–` for now: a later CARL version fills it. On a narrow terminal, these two values are on a second row under the request. |
-| **4 Log** | The full server log, which you can scroll. `w` wraps the lines (**[ Wrap lines: off (w) ]**). `f` shows only the errors and the warnings (**[ Errors and warnings: off (f) ]**). End goes back to the end. Red lines are errors, yellow lines are warnings, and dim lines are routine lines (they are normal at any time). The full level adds the milliseconds to the times, and the path of the log file (**File** row). |
+| **4 Log** | The full server log, which you can scroll. `w` wraps the lines (**[ Wrap lines: off (w) ]**). `f` shows only the errors and the warnings (**[ Errors and warnings: off (f) ]**). End goes back to the end. Red lines are errors, yellow lines are warnings, and dim lines are routine lines (they are normal at any time). A known llama.cpp warning is grey, with a dim line under it that gives the reason (`↳ known: …`). The HEALTH card counts it as a routine notice. The full level adds the milliseconds to the times, and the path of the log file (**File** row). |
 | **5 Settings** | Six panels: **Server**, **Models**, **Auto fit**, **Auto-tune**, **Router**, **Caching** ([The Settings tab](#the-settings-tab)) |
 
 ### Live cards
@@ -1373,7 +1403,7 @@ If a value is not available, the card shows a dash or a sentence (for example `n
 | Card (summary in the title) | Simple | Full adds |
 |---|---|---|
 | SLOTS (`2 × 96K   27% used`) | One row for each slot: a bar, its tokens of the context (`41.5K of 96K`) and what it does (`writing`, `reading`, `between turns` (a conversation is in the slot; its next turn continues it without reading it again), `free`). Under the slots, a **RAM cache** row: a bar, its memory (`1.0 GiB of 2.5 GiB`) and its sessions (`2 sessions`, `empty`): the sessions that left a slot and that the server keeps in RAM while it runs (any number, up to its size; they are usually in the disk cache too). It shows for a server that CARL started with one model (CARL starts it at the log level that reports the RAM cache, [Log files](#log-files)); not in router mode. For each busy slot, a block: **Request** (its tokens), **Reused** (the tokens that the server did not read again, with the %), then **Read** and **Still to read** while it reads, or **Written** while it writes. A warning when the K and V types of the context memory are different. For a Gemma model with the window cache: a **Sliding window** row. | **Context memory** (its K and V types), **Allocated** (for all slots), **In use**, **Recurrent state** and **Checkpoints** (Qwen), **RAM cache** (its sessions and memory), **Can grow to**, **Shared pool**, **Per token**, **Trained for**; the **Sliding window** row also with the full cache |
-| SPEED (`write 42.7 tok/s`) | A table of the read and the write speed (tok/s) in three columns: **Now**, **Average** (every request since the server started) and **Last request**. Then **Guesses OK**: the % of the guesses that were correct, or `off`. | **Speculation** (`MTP + n-gram, 1 guess`), **Per step** (the tokens accepted for each step), the guesses accepted by position, **Last request** (its time), **Total read**, **Total reused**, **Total written**, **Waiting** (the queue), **Largest context** |
+| SPEED (`write 42.7 tok/s`) | A table of the read and the write speed (tok/s) in three columns: **Now** (from llama.cpp's progress lines, for every running slot), **Average** (every request since the server started) and **Last request** (not CARL's own cache requests; a stopped request keeps its speeds). Then **Guesses OK**: the % of the guesses that were correct, or `off`. | **Speculation** (`MTP + n-gram, 1 guess`), **Per step** (the tokens accepted for each step), the guesses accepted by position, **Last request** (its time), **Total read**, **Total reused**, **Total written**, **Waiting** (the queue), **Largest context** |
 | MEMORY (`server 17.9 GiB`) | **Server**: a bar and the RAM that the server uses (`17.9 of 32.0 GiB`). This is the memory of the server process (with the GPU buffers) plus the model file and the drafter file, which the server maps from the disk. Then the parts: **Model**, **Drafter** (Gemma), **Context memory**, **Buffers** (the rest). The parts add up to the **Server** value. While the model loads, **Model** says `loading`. | **Server process** (the memory of the process without the model files: the value that Activity Monitor shows), **GPU limit** (the GPU memory limit), **GPU, all apps** (the GPU memory that all apps use), **Server CPU** |
 | THIS MAC (`pressure normal`; `GPU 95%` when the GPU is 90% busy or more) | **Memory**: a bar and the RAM that this Mac uses. It is the same value as **Memory Used** in Activity Monitor: app memory + wired + compressed. **Pressure**: the macOS memory pressure (`normal`, `warning`, `critical`). **Swap** (`none (no swap file)` when the Mac has no swap file). **GPU**: a bar and `38% busy`. **Power**. **Heat** (`normal`, `warm`, `hot`, `very hot`). The card shows also when no server runs. | **App memory**, **Wired**, **Compressed** (the three parts of **Memory**), **Cached files** (files in RAM that macOS can free when apps need the memory; not in **Memory**), **Free**, **Load** (1, 5 and 15 min), **Disk free** |
 | CONNECT (`this Mac only`) | **Address**, **Key** (masked; `k` shows it), **Connections** (and the computers they come from, when another computer is connected), **OpenCode, Pi** (if they are set up), **Disk cache** (`2.4 of 10 GB`) | **Saved** (the saved prompts and sessions), **Model name**, **From**, **Key file**, the copy buttons |
@@ -1412,7 +1442,7 @@ The buttons of the Setup sub-tab:
 
 - The screen masks the key. Push `k` to show or hide it. The copy has the real key.
 - CAUTION: Protect a copied config as you protect the key.
-- When the OpenCode and Pi configs on this Mac do not agree with the models for the clients, the tab shows **2 Connect ⚠**. In single-model mode, this is the model that the server runs: a start with a different model makes the configs out of date. In router mode, these are the installed models. The card tells what an update adds and removes, for example `⚠ OpenCode and Pi on this Mac are out of date.`, `In single-model mode, OpenCode and Pi list only the model of the server: qwen3.8-27b.` and `An update adds qwen3.8-27b.` Push `u` to update them.
+- When the OpenCode and Pi configs on this Mac do not agree with the models for the clients, the tab shows **2 Connect ⚠**. In single-model mode, this is the model that the server runs: a start with a different model makes the configs out of date. In router mode, these are the installed models. The card tells what an update adds and removes, for example `⚠ OpenCode and Pi on this Mac are out of date.`, `In single-model mode, OpenCode and Pi list only the model of the server: qwen3.8-27b.` and `An update adds qwen3.8-27b.` Push `u` to update them. A client that was set up for another port (for example 8080, CARL's earlier default) is out of date too: `OpenCode uses port 8080. The server runs on port 9275.`
 - When the models for the clients changed after the last config that you sent, step 3 (and the Clients sub-tab) says `The last config sent is out of date`. Push `P` to send the new config to the other computers.
 
 **Clients sub-tab.** Push `[` or `]` to change between Setup and Clients.
@@ -1444,7 +1474,7 @@ The Server panel has these sections:
 
 | Section (summary in the title) | Shows |
 |---|---|
-| **SERVER** (`running` or `stopped`, `router mode`, the number of changes) | The state, for example "qwen3.6-35b-a3b-iq3 runs on port 8080, this Mac only. Your settings match it.". Then the table of the settings and the buttons. |
+| **SERVER** (`running` or `stopped`, `router mode`, the number of changes) | The state, for example "qwen3.6-35b-a3b-iq3 runs on port 9275, this Mac only. Your settings match it.". Then the table of the settings and the buttons. |
 | **MEMORY** (`✓ 15.3 of 25.0 GiB`, or `✗` when it does not fit) | If the settings fit the GPU memory limit |
 | **AUTO FIT** (Auto fit's choice) | Auto fit's choice for this Mac |
 | **MODEL** (the name of the model) | The MODEL card: what the model is for, and its speeds |
@@ -1482,6 +1512,7 @@ From 151 columns, ABOUT and MODELS are in a column on the right. Below 151 colum
 - **Sliding window** (only for a model with sliding-window layers, the Gemma models): `auto`, `full cache` or `window cache` ([Models with sliding-window layers](#models-with-sliding-window-layers)). The row shows what `auto` chose, for example `auto (full cache)`. This is one setting for every Gemma model (`cache.swa`): the **Gemma models** row of the Caching panel is the same setting. When you select the row, the ABOUT section shows the memory that a start needs with each cache.
 - **RAM cache:** `auto (2.5 GiB)`: CARL sizes it from the free memory.
 - **Network:** this Mac only (the default), this Mac and the VM, and each address of this Mac (for example the LAN address). An address is saved as `llama.host`.
+- **API port:** the port of the dashboard API (`llama.api_port`). `auto` (the default) is the server's port + 1, else the next free port. Or push Enter and type a port (1024–65535). The **Running now** column shows the port that the API took, and why when it is not the server's port + 1, for example `9277: 9276 is in use (ssh)`.
 
 **The ABOUT section** tells you what the selected setting does, and how to change it. It also gives the llama.cpp flag (**Flag**) and the `config.json` key (**Config key**) of the setting.
 
@@ -1659,7 +1690,7 @@ The Caching panel controls the [disk cache](#7-fast-starts-the-disk-cache). The 
 | **Gemma models** | auto (full when it fits), full cache, window cache (models with sliding-window layers; from the next start). The **Sliding window** row of the Server panel is the same setting. |
 | **Other templates** | For a model whose chat template CARL does not know (not Qwen, not Gemma 4): leave in place (the default: the folder, the date and AGENTS.md stay in the system prompt; each new project reads the whole prompt) or move to your message (one saved prompt serves every project; not for a template that also uses a sliding-window cache) |
 
-- **The ON THE DISK section:** **Used** (a bar: the space used of the limit), **Files**, **Folder**, **Shared** (the space that shared storage saves), **Other computers** (if the computers that sync use these settings now, through the dashboard API). Then **[ Clear the disk cache (c) ]**, and the files: the kind (saved prompt or saved session), the model, the agent or the session, the size and the age. The list shows 5 files on a terminal of 40 rows, 10 files from 50 rows, and all the files from 60 rows. The full level adds the server flag (`--slot-save-path`), and the kind `shared` for a saved session that is stored as changes.
+- **The ON THE DISK section:** **Used** (a bar: the space used of the limit), **Files**, **Folder**, **Shared** (the space that shared storage saves), **Other computers** (if the computers that sync use these settings now, through the dashboard API), and **Window cache** when the running model has the window cache (OpenCode and Pi save and restore nothing for it). Then **[ Clear the disk cache (c) ]**, and the files: the kind (saved prompt or saved session), the model, the agent or the session (its name, then its ID in grey), the size and the age. The list shows 5 files on a terminal of 40 rows, 10 files from 50 rows, and all the files from 60 rows. The full level adds the server flag (`--slot-save-path`), and the kind `shared` for a saved session that is stored as changes.
 - **[ Clear the disk cache (c) ]** asks (**CLEAR THE DISK CACHE?**), then removes each saved prompt and saved session. The server keeps what it holds now.
 - The RAM cache (llama.cpp's own, lost when the server stops) is the **RAM cache** row of the Server panel.
 
@@ -1703,7 +1734,7 @@ The footer shows the keys of the screen that you see. `?` shows all of them: the
 - **The dashboard watches the server, and changes it only when you tell it to.**
   - It reads `/health`, `/slots`, `/metrics`, `/props`, `/v1/models` (and `/models` in router mode) and the log file. Thus, it is safe to use during a session.
   - It writes only for an action: it saves slots before a stop (`/slots/N?action=save`), and loads or unloads a model in router mode (`/models/load`, `/models/unload`).
-  - It serves the dashboard API on the server's port + 1, for the clients' disk cache and config sync ([Clients on other computers](reference/client-sync.md)).
+  - It serves the dashboard API on the server's port + 1 (Settings > Server, **API port**), for the clients' disk cache, the config sync and the speeds in OpenCode and Pi ([Clients on other computers](reference/client-sync.md)).
 - **The dashboard calculates the context memory. It does not measure it.** The server does not log it. Thus, the dashboard calculates it from the GGUF metadata of the model and the server flags ([Context memory](reference/memory.md#context-memory-kv-cache-and-recurrent-state)).
 
 ### Auto fit: the best model for this Mac
@@ -1805,9 +1836,9 @@ A server with one model runs at llama.cpp's log level 4, because only that level
 **Quick server checks (Mac):**
 ```bash
 K=$(cat ~/.config/carl/api-key)
-curl -s -H "Authorization: Bearer $K" http://127.0.0.1:8080/v1/models          # which model is loaded
-curl -s -H "Authorization: Bearer $K" http://127.0.0.1:8080/props | python3 -c 'import json,sys; print(json.load(sys.stdin)["default_generation_settings"]["n_ctx"])'   # the context of a slot
-PID=$(netstat -anv -p tcp | awk '$6=="LISTEN" && $4 ~ /[.]8080$/ {n=split($(NF-8),a,":"); print a[n]; exit}')   # the server process
+curl -s -H "Authorization: Bearer $K" http://127.0.0.1:9275/v1/models          # which model is loaded
+curl -s -H "Authorization: Bearer $K" http://127.0.0.1:9275/props | python3 -c 'import json,sys; print(json.load(sys.stdin)["default_generation_settings"]["n_ctx"])'   # the context of a slot
+PID=$(netstat -anv -p tcp | awk '$6=="LISTEN" && $4 ~ /[.]9275$/ {n=split($(NF-8),a,":"); print a[n]; exit}')   # the server process
 ps -o rss=,command= -p $PID                                                        # memory + exact flags
 ```
 
@@ -1915,14 +1946,15 @@ Both still work alone, for scripts and for the instructions of earlier versions.
 |---|---|---|
 | `error: MODEL does not fit this Mac with N slots × CTX tokens (q4): it needs N GiB, and the GPU memory limit is M GiB. …` at the start (the start is refused) | The model and the context are larger than the memory that macOS lets the GPU use. The model would fail to load, or swap. | Use the suggested `--ctx`, Auto fit's choice (shown), a smaller build, or q4 context memory. See `./carl.sh fit`. Expert override: `FIT_CHECK=0` (it can fail to load, or swap). |
 | No dashboard shows; plain server output shows | You did not start the server from a terminal (a script, `nohup`), or `MONITOR=0` is set. | This is correct. To attach, run `./carl.sh monitor`. |
-| The header shows **STOPPED** directly after the start, and the Live tab says "The server stopped." | The server did not start (bad flag, file not found, out of memory). | Read the lines of the launcher in the SERVER card ("The last start failed. The launcher said:"). The full output is in `~/models/logs/.console-8080.out`. |
+| The header shows **STOPPED** directly after the start, and the Live tab says "The server stopped." | The server did not start (bad flag, file not found, out of memory). | Read the lines of the launcher in the SERVER card ("The last start failed. The launcher said:"). The full output is in `~/models/logs/.console-9275.out`. |
 | You closed the terminal, and you do not know if the server still runs | The server continues to run, because it runs under `nohup`. | To attach again, run `./carl.sh monitor`. Then push `q` → `s` to stop it. |
 | Clients on the Mac cannot connect to 127.0.0.1 | The server started for the VM (192.168.42.1). | Run `./carl.sh install --config-only` again (it uses the address on which the server listens). Or start the server without `--vm`. |
-| The VM cannot reach 192.168.42.1:8080 | Since 1.3.0, the server serves only this Mac unless you ask for more. | Start it with `./carl.sh --vm`, or set **Network** to **this Mac and the VM** in Settings (`llama.net = vm`). The Connect tab tells you which one runs. |
+| The VM cannot reach 192.168.42.1:9275 | Since 1.3.0, the server serves only this Mac unless you ask for more. | Start it with `./carl.sh --vm`, or set **Network** to **this Mac and the VM** in Settings (`llama.net = vm`). The Connect tab tells you which one runs. |
 | `error: --vm: no network interface has the address 192.168.42.1. …` | The Fusion network is not up. | Start VMware Fusion, or use `--local`. |
 | The HEALTH card says `✗ The GPU failed (out of memory or a compute error). …` | GPU out-of-memory or compute errors in the log | Restart the server. Make sure that no other large program runs. |
 | The start or the HEALTH card says `llama.cpp … is older than the version that CARL is tested with` (or `… older than the tested version`) | The installed llama.cpp is older than the version that CARL is tested with. Some functions can fail or work differently. | Run `brew upgrade llama.cpp`, then restart the server (Settings > Server, `a`). |
-| `error: port 8080 is in use by process PID (…). Stop it first: …` | A server runs already (one model at a time). | Stop it first: `./carl.sh monitor`, then `q` and `s`. Or use the `kill` command of [Daily use](#stop-the-server-or-keep-it-running). Or only watch it with `./carl.sh monitor`. |
+| `error: a server runs on port 9275 already (process PID). One model at a time: …` | A server runs already (one model at a time). | Stop it first: `./carl.sh monitor`, then `q` and `s`. Or use the `kill` command of [Daily use](#stop-the-server-or-keep-it-running). Or only watch it with `./carl.sh monitor`. |
+| `error: port 9275 is in use by another program (NAME, process PID). Port 9276 is free: …` | A different program uses the port, and the start has no terminal to ask in. | Start the server on the free port: `PORT=9276 ./carl.sh llama`. Or stop the other program. In a terminal, the start asks you ([Daily use](#2-daily-use)). |
 | `error: another large process (possibly a model) is in memory. …` | A model server runs already: llama.cpp, or a server that started in a different way. Two models do not fit in the GPU memory. | Stop the other server first. The message shows its process ID and its size. If the large process is not a model, start with `ALLOW_SECOND_MODEL=1`. |
 | The prompt progress stops for many minutes, then continues | The Mac went to sleep (lid closed on battery power, or `KEEP_AWAKE=0`). | Connect the power supply and keep the lid open. To check, run `pmset -g log \| grep -E "Sleep\|Wake"`. |
 | All requests fail with `Compute error`, but `/health` says ok | A GPU out-of-memory event. Usually, a second model started at the same time. | Restart the server. CAUTION: Do not run two models at the same time. |
@@ -1934,7 +1966,7 @@ Both still work alone, for scripts and for the instructions of earlier versions.
 | Slow replies late in a long session | The write speed decreases as the context becomes larger (27B: ~7 tok/s at 60–80K). | Compact the session or start a new session. Or use the 35B. |
 | The client shows the wrong model name | The client selection does not control the server. | Select the entry that agrees with `./carl.sh --model ...`. OpenCode's model check warns you. |
 | The setup waits at the API key prompt | The client folder has no key (not a client package). | Paste the key, or make a client package on the server Mac (`./carl.sh package`) and use it. |
-| Smoke test: `Note: no server runs at http://HOST:PORT. …` | The server is not up, or the VM cannot reach the Mac. | Start the server. From the VM, run `curl -s http://192.168.42.1:8080/health`. |
+| Smoke test: `Note: no server runs at http://HOST:PORT. …` | The server is not up, or the VM cannot reach the Mac. | Start the server. From the VM, run `curl -s http://192.168.42.1:9275/health`. |
 | The download stops or fails its checksum | A network interruption, or a bad file (`*.bad`) | First, delete the `.bad` file. Then run `download` again (it continues from where it stopped). |
 | The dashboard or `./carl.sh` freezes, and Ctrl-C does not stop it (versions before 1.1.0) | Old versions used `lsof` to find the server. `lsof` checks each mounted volume. On a stale network share (for example a disconnected Time Machine SMB volume), it hangs, and you cannot stop it. | Update CARL: it now uses `netstat`. To release the hang now, eject the stale volume in Finder (or `diskutil unmount force /Volumes/NAME`), then close the terminal. |
 | `CARL needs these programs, and they are not installed: llama.cpp aria2 ansifilter zstd.` | Homebrew tools are missing. | Answer `Y`, and CARL runs `brew install`. Or install them yourself. `SKIP_DEPS=1` skips the check. If Homebrew is missing, install it first (https://brew.sh). |
@@ -1942,7 +1974,7 @@ Both still work alone, for scripts and for the instructions of earlier versions.
 | `Auto fit chooses X for this Mac, but it is not downloaded (./carl.sh download X). CARL starts Y, the best downloaded model that fits.` | `llama.model` is `auto`, and Auto fit chooses from the whole catalogue (`llama.auto_fit catalogue`). | This is correct. To use X, run `./carl.sh download X` (or push `A` in the Settings tab). To choose only from downloaded models, run `./carl.sh config set llama.auto_fit downloaded`. To always use Y, run `./carl.sh config set llama.model Y`. |
 | `error: Auto fit: No stock model with a quality rank fits this Mac (downloaded models only). …` | `llama.model` is `auto`, and only abliterated (or no fitting) models are downloaded. Auto fit never chooses an abliterated model. | Download Auto fit's choice (`./carl.sh download default`), or select the model by name: `./carl.sh config set llama.model NAME`. |
 | `error: models.NAME.ctx: ... is out of range` (or a different key) | A bad value in `~/.config/carl/config.json` | Correct the value, or remove it with `./carl.sh config unset KEY`. `./carl.sh config show` lists the valid keys. |
-| `error: a server runs on port 8080. Stop it first: two models do not fit in the memory.` from `./carl.sh tune` | Auto-tune needs the GPU for itself. | Stop the server first, or run Auto-tune from the dashboard (Settings, **Auto-tune** panel): it stops and starts the server for you. |
+| `error: a server runs on port 9275. Stop it first: two models do not fit in the memory.` from `./carl.sh tune` | Auto-tune needs the GPU for itself. | Stop the server first, or run Auto-tune from the dashboard (Settings, **Auto-tune** panel): it stops and starts the server for you. |
 | `error: another large process (possibly a model) is in memory: …` from `./carl.sh tune` | A different model server, or another process larger than 8 GiB (`BIG_GB`), runs. | Stop it first. If the process is not a model, run with `ALLOW_SECOND_MODEL=1`. |
 | `error: …opencode.json is not plain JSON (comments?)` from the setup | The setup cannot merge a config file with comments (JSONC). | Remove the comments, or move the file. Then run the setup again. It changed nothing. |
 | A config that you send does not arrive on a client computer | The sync service is not running, the dashboard is not running, or new configs wait for you (`/carl`: **Apply New Configs at Once** is `off`). | Look at the Clients sub-tab of the Connect tab, and at `/carl` on the client. When a new config waits, select **Apply the Waiting Config** in `/carl`. |
@@ -1953,9 +1985,9 @@ Both still work alone, for scripts and for the instructions of earlier versions.
 
 ## 13. Benchmarking and testing
 
-CAUTION: Some of these commands restart the server. Run them only when no session is active and **no other server runs**. The scripts that restart the server (`llama-spec-sweep.sh`, `llama-ab.sh`) use port 8080 on the default address.
+CAUTION: Some of these commands restart the server. Run them only when no session is active and **no other server runs**. The scripts that restart the server (`llama-spec-sweep.sh`, `llama-ab.sh`) use port 9275 on the default address.
 
-The easy way to find the best speculation and context for a model on this Mac is Auto-tune: `./carl.sh tune NAME` ([Auto-tune](#auto-tune)). Stop the server first: Auto-tune does not start while a server runs on port 8080, or while another model is in memory.
+The easy way to find the best speculation and context for a model on this Mac is Auto-tune: `./carl.sh tune NAME` ([Auto-tune](#auto-tune)). Stop the server first: Auto-tune does not start while a server runs on port 9275, or while another model is in memory.
 
 ```bash
 # Speculation configs (model via MODEL=path; the number of guesses via spec:n)
@@ -2014,7 +2046,7 @@ CARL_DOCKER_TESTS=1 python3 -m unittest tests/integration/test_sync_docker.py
 
 | Command | Does |
 |---|---|
-| `./carl.sh` | Opens the dashboard: attaches to a server on 8080, else starts llama.cpp with the saved settings. It first checks for `llama-server`, `aria2c`, `ansifilter` and `zstd` (offers `brew install`), and offers to download a model if none is downloaded. |
+| `./carl.sh` | Opens the dashboard: attaches to a llama.cpp server on 9275, else starts llama.cpp with the saved settings. It first checks for `llama-server`, `aria2c`, `ansifilter` and `zstd` (offers `brew install`), and offers to download a model if none is downloaded. |
 | `./carl.sh llama` | llama.cpp with the model of Auto fit (`qwen3.6-35b-a3b`; the IQ3 build on 24 GB; the Gemma 4 E4B on 16 GB), q4 context memory, 2 slots |
 | `./carl.sh monitor` | Attaches the live dashboard (a server start shows it in the same terminal) |
 | `./carl.sh --no-start` (or `dashboard`) | The dashboard only: attaches to a server, or opens it without a server (no model loads). `--expand`: every section at full for this run. |
@@ -2079,7 +2111,7 @@ The script sends all other arguments after the flags to `llama-server`.
 | `NO_CODER=1` / `CODER=1` | Without the coder subagent and its rule / with the coder in all conditions (as `--coder off` / `--coder on`) |
 | `NO_BACKGROUND_SUBAGENTS=1` | The coder runs in the foreground |
 | `NO_CACHE=1` (or `NO_PREFIX_CACHE=1`) | Without the disk cache |
-| `NO_MODEL_CHECK=1` | Without the OpenCode model check |
+| `NO_MODEL_CHECK=1` | Without the model check (OpenCode and Pi) |
 | `NO_SIDEBAR=1` | Without the OpenCode Subagents panel |
 | `NO_SWITCHER=1` | Without the OpenCode session switcher |
 | `NO_BROWSER=1`, `BROWSER_HEADED=1` | Without the browser / the browser with a window |

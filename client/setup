@@ -82,7 +82,7 @@ Where the server is (only when you need it):
   --local\tThe server runs on this computer.
   --vm [HOST]\tThe server runs on the host of this VM. The default HOST is 192.168.42.1.
   --host ADDRESS\tThe server is at ADDRESS.
-  --port N\tThe port of the server. The default is 8080.
+  --port N\tThe port of the server. The default is 9275.
   --key-file FILE\tRead the API key from FILE. The package has the key in api-key.
 
 To update: make a new package on the server Mac, unzip it over this folder (unzip -o), and run ./setup again. To turn a part off, run ./setup again and answer off. ./install.sh --help lists more switches.

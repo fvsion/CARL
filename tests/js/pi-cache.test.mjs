@@ -21,6 +21,7 @@ process.env.PI_CODING_AGENT_DIR = agentDir;
 const dir = mkdtempSync(join(tmpdir(), "carl-pi-cache-ext-"));
 copyFileSync(join(REPO, "client/pi/extensions/carl-cache/index.ts"), join(dir, "index.ts"));
 copyFileSync(join(REPO, "client/shared/carl-cache.js"), join(dir, "carl-cache.js"));
+copyFileSync(join(REPO, "client/shared/carl-api.js"), join(dir, "carl-api.js"));
 
 /** Every fetch: the URL. CARL's fake server answers the few calls a CARL request makes. */
 const seen = [];

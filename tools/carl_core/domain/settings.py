@@ -109,6 +109,8 @@ LLAMA_KEYS: Dict[str, SettingSpec] = {
     "net": _choice("local", NET_CHOICES, "NET"),
     "host": _str("", "HOST"),                               # one address of this Mac (wins over net)
     "cache_ram": SettingSpec("intauto", "auto", "CACHE_RAM", min=0, max=65536),
+    # the dashboard API's port (Phase 23.5): auto = the server's port + 1, else the next free one; or a fixed port
+    "api_port": SettingSpec("intauto", "auto", None, min=1024, max=65535),
     "ub": _int(512, 64, 8192, "UB"),
     "batch": _int(2048, 64, 16384, "BATCH"),
     "ckpt": _int(8, 0, 64, "CKPT"),

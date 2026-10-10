@@ -3,10 +3,10 @@
 # (the default, 127.0.0.1) or in a VMware Fusion guest over the NAT network
 # (vmnet8, with --vm). One server at a time: two models don't fit together.
 #
-#   ./host/serve.sh                       the dashboard: attaches to a running server on :8080, else
+#   ./host/serve.sh                       the dashboard: attaches to a running server on :9275, else
 #                                         starts llama.cpp with its saved settings (config.json)
 #   ./host/serve.sh -h | help [TOPIC]     the help of every command (tools/carl_help.py; also CMD --help)
-#   ./host/serve.sh llama [opts]          llama.cpp on :8080 (host/serve-llama.sh)
+#   ./host/serve.sh llama [opts]          llama.cpp on :9275 (host/serve-llama.sh)
 #   ./host/serve.sh monitor               live dashboard (tools/llama-monitor.py); a server start in a
 #                                         terminal shows it automatically (MONITOR=0 = off)
 #   --local | --vm                        network mode for any server command (host/common.sh)
@@ -46,7 +46,7 @@ client_install() {
 # ---- dispatch -------------------------------------------------------------
 # shellcheck source=SCRIPTDIR/common.sh
 source "$HERE/common.sh"
-LLAMA_PORT=8080
+LLAMA_PORT="${PORT:-$CARL_DEFAULT_PORT}"
 # The settings folder's old name, moved once before anything reads it (not for
 # help, nor for a command that doesn't exist).
 case "${1:-}" in
@@ -56,7 +56,8 @@ esac
 if [[ $# -eq 0 ]]; then
   # No arguments: the dashboard. Attach to a server that runs already (one model
   # at a time), else start llama.cpp with its saved settings.
-  if [[ -n "$(port_pid "$LLAMA_PORT")" ]]; then
+  pid="$(port_pid "$LLAMA_PORT")"
+  if [[ -n "$pid" ]] && is_llama_server "${pid%%$'\n'*}"; then      # only a llama-server: another program is not one
     exec python3 "$HERE/../tools/llama-monitor.py" --port "$LLAMA_PORT"
   fi
   ensure_deps

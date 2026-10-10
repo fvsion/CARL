@@ -274,6 +274,7 @@ class ServerData:
     slot_list: List[SlotInfo] = field(default_factory=list)
     n_ctx: int = 0
     busy: bool = False
+    stale_s: Optional[float] = None     # /slots did not answer: the last answer this old stands in (collector)
     prompt: int = 0
     cached: int = 0
     processed: int = 0

@@ -7,7 +7,7 @@
 | | llama.cpp (`./carl.sh llama`) |
 |---|---|
 | Program | `llama-server` from Homebrew `llama.cpp`. CARL is tested with 0.6.0, build 11429 (both Macs since 2026-10-09). An older version gives a warning ([The llama.cpp version](#the-llamacpp-version)). The older measurements used 0.4.1 (M3 Pro) and 0.5.0, build 11146 (M2 Max). |
-| Port | 8080 |
+| Port | 9275 (`PORT=N` sets another). CARL's earlier default was 8080: OpenCode and Pi on this Mac that were set up for 8080 show as out of date in the dashboard's Connect tab, and `u` updates them. On other computers, the sync finds the new port by itself (`client/carl-sync.py`: `find_api`, `server_moved`). |
 | API | The OpenAI API (`/v1/chat/completions`, `/v1/models`) and the Bearer key `~/.config/carl/api-key` |
 | Weights | GGUF files in `~/models/gguf/`: the catalogue models and any other GGUF |
 | Catalogue | Qwen3.6-35B-A3B (Q4 and IQ3), Qwen3.8-27B stock (Q4, Q3, IQ3), Qwen3.8-27B abliterated (orcarouter: Q4, Q3, IQ3), Heretic 35B-A3B abliterated (Q4, IQ3), Qwen3.8-9B Distill, Gemma 4 E4B, 12B, 26B-A4B and 31B ([Models](models.md)) |
@@ -24,7 +24,7 @@
 | Effort values | They depend on the template of the model ([Thinking by model](thinking.md#thinking-by-model)). |
 | Bad effort value | The Qwen3.8 27B template raises an error, and the request fails. |
 | Concurrency | `--slots auto` (default): 2 slots when two full contexts fit, else 1. `--slots` accepts 1–4. More requests wait in a queue. |
-| Stop | In the dashboard: `q`, then `s`. Or stop the PID that `netstat -anv -p tcp` shows for :8080 ([Port and PID lookups](#port-and-pid-lookups-no-lsof)). |
+| Stop | In the dashboard: `q`, then `s`. Or stop the PID that `netstat -anv -p tcp` shows for :9275 ([Port and PID lookups](#port-and-pid-lookups-no-lsof)). |
 | Logs | `~/models/logs/llama-server-*.log` (`tools/llama-log.sh`) |
 | Health | `/health`, `/props`, `/metrics`, `/slots` |
 
@@ -39,7 +39,7 @@
 ### The start
 
 - `host/serve.sh` gives the `llama` command to `host/serve-llama.sh`.
-- `./carl.sh` with no arguments opens the dashboard. If a server runs on port 8080, the dashboard attaches to it.
+- `./carl.sh` with no arguments opens the dashboard. If a llama.cpp server runs on port 9275, the dashboard attaches to it. Another program on the port is not a server: the start goes on (below).
 - If no server runs, `./carl.sh` starts llama.cpp with the saved settings.
 - If no model is downloaded, `./carl.sh` first offers to download Auto fit's choice for this Mac (`llama-fit.py --pick-default`: the whole catalogue, the everyday goal).
 - If you answer no, or no model fits, the dashboard opens without a server.
@@ -51,7 +51,7 @@
 |---|---|
 | The model | `CARL starts the server: NAME (FILE).` |
 | An older llama.cpp (only then) | `llama.cpp 0.4.1 (build 9001) is older than the version that CARL is tested with (0.6.0, build 11429): update it with brew upgrade llama.cpp.` |
-| The address | `Address: http://127.0.0.1:8080. Only this Mac can use the server.` |
+| The address | `Address: http://127.0.0.1:9275. Only this Mac can use the server.` |
 | Slots and context | `Slots: 2 (from Auto-tune). Context: 96K tokens per slot (from Auto-tune).` With `--slots auto`: `Slots: 2 (auto: two slots fit).` |
 | Context memory and RAM cache | `Context memory type: q4 (from Auto-tune). RAM cache: 8.0 GiB.` |
 | Speculation | `Speculation: MTP + n-gram, 2 guesses (from Auto-tune).` With a drafter: `The MTP drafter is FILE.` |
@@ -60,6 +60,19 @@
 
 - The sources (`CARL_SOURCES`) are: `from your option` (a flag), `from the environment`, `from your settings` (`config.json`), `from Auto-tune`, `from the catalogue`, `from the model file`, `from Auto fit: the largest context that fits`, and `CARL's default`.
 - Each refusal starts with `error:`. The dashboard shows these lines when a start fails.
+
+**The port at start** (`host/serve-llama.sh`; the dashboard: `tools/monitor/settings_actions.py`, `settings_panels/server.py`). When another program holds the server's port, the start offers the next free port. It never changes the port without a question: other computers reach the server by its port.
+
+| Where | What occurs |
+|---|---|
+| A terminal | `Port 9275 is in use by another program (ssh, process 4242). Start the server on port 9276? [Y/n]`. `n` stops the start. |
+| No terminal | An `error:` line that names the free port: `PORT=9276 ./carl.sh llama starts the server there.` |
+| The dashboard (Start, Apply) | `Port 9275 is in use by another program (ssh, pid 4242). This starts the server on port 9277.` and **[ Start on port 9277 (y) ]** |
+
+- A llama-server on the port is still a server that runs already: `error: a server runs on port 9275 already (process PID).` One model at a time.
+- The next free port is the first port after the server's port that nothing listens on (at most 100 ports after it).
+
+**The server file** (`tools/carl_core/domain/runtime.py`). At each start, the launcher writes `~/.config/carl/server-PORT.json` (mode 0600). It says each model's cache: `swa` (`full`, `window` or `none`), `kv`, `ctx` and `slots`, and the mode (`single` or `router`; router mode writes it from its presets). The dashboard adds the dashboard API's real port (`api_port`). `carl-cache` reads it ([Caching](caching.md#sliding-window-models)). A client on another computer gets the same facts from the dashboard API (`GET /carl/cache/settings?port=N`).
 
 ### The llama.cpp version
 
@@ -103,7 +116,7 @@ The slots, the RAM cache (`--cache-ram`, 1–8 GiB from the free RAM) and the di
 
 - **Sleep stops requests.** The launchers keep `caffeinate -i` active while the server runs. `KEEP_AWAKE=0` turns this off. If you close the lid on battery power, the Mac still goes to sleep.
   - **Evidence:** before this change, idle sleep (1 min on battery) stopped a 74K prompt for 30+ min.
-- **The server ignores the model name in a request** (single model). The GGUF that is loaded answers all requests. Thus, the model in the client must match the server. The OpenCode plugin `carl-model-check` warns when they are different.
+- **The server ignores the model name in a request** (single model). The GGUF that is loaded answers all requests. Thus, the model in the client must match the server. The `carl-model-check` plugin of OpenCode and extension of Pi warn when they are different.
 - **Served names (since 1.3.0):** each model is served under its CARL name (`--alias` = the catalogue or custom name). Before 1.3.0, builds shared a family alias such as `qwen3.8-27b`, and OpenCode could show the wrong build.
 - **The client lists (since 1.3.0):** the client configs list only the installed models, one entry each (`tools/carl.py client-models`). Since Phase 23.4.4, single-model mode lists only the model that the server runs, and router mode all the installed models ([the model list](client-configs.md#the-model-list-single-model-mode-and-router-mode-phase-2344)). Each entry has the id, the label and the context for each slot (from the effective settings). It also has the thinking type from the card: `on-off` or `effort`. The default model of the clients is the model that the server runs now (a single model), else the model that a start loads ([OpenCode and Pi configs](client-configs.md#the-provider-and-the-models)).
 - The dashboard compares the models in the configs on this Mac (`opencode.json`, `models.json`, CARL's provider) with the downloaded models. The Connect tab shows a warning when they are different.
@@ -225,7 +238,7 @@ The network modes are in `host/common.sh`:
 
 **The address and the key of the setup** (`client/setup`, which runs `client/install.sh`; `./carl.sh install` on the server Mac, `./setup` in the client package on other computers):
 - With no address argument, the setup reads `remote.json` in the client folder. The client package has it ([The client package](client-sync.md#the-client-package-carries-the-connection)). Without it, the default is `--local` on macOS and `--vm` on Linux.
-- `--local` sets the clients to the address on which the server actually listens. `--host ADDR` sets any address. `--port N` sets the llama.cpp port (default 8080).
+- `--local` sets the clients to the address on which the server actually listens. `--host ADDR` sets any address. `--port N` sets the llama.cpp port (default 9275).
 - The old form `install.sh HOST [X] [PORT]` still works. The installer ignores the second value (an old MTPLX port) with a note. The third value is the llama.cpp port.
 
 The setup takes the API key from the first of these sources:
@@ -286,7 +299,7 @@ CARL does not use `lsof`. `lsof` examines each mounted file system. On a stale n
 The launchers (`port_pid`, `port_host` in `host/common.sh`), the dashboard, `client/install.sh` and the test tools use `netstat -anv -p tcp`. Its `process:pid` column gives the PID of the process that listens on a port. To do the same by hand:
 
 ```bash
-netstat -anv -p tcp | awk '$6=="LISTEN" && $4 ~ /[.]8080$/ {n=split($(NF-8),a,":"); print a[n]; exit}'
+netstat -anv -p tcp | awk '$6=="LISTEN" && $4 ~ /[.]9275$/ {n=split($(NF-8),a,":"); print a[n]; exit}'
 ```
 
 `$(NF-8)` counts from the end of the line, because a process name can contain spaces.
@@ -375,7 +388,7 @@ More about cards:
 `./carl.sh tune NAME [--quick | --long]` (`tools/carl-tune.py`) measures one model on this Mac. `./carl.sh tune all` measures each downloaded model in turn. `--dry-run` measures but does not save.
 
 - Auto-tune starts its own server on port 8093, one time for each speculation mode. The default run takes about 5–10 min, `--quick` about 4 min, and `--long` 10–40 min more.
-- It refuses to start if a server runs on 8080 or 8093. It also refuses if a different large process is in memory (more than `BIG_GB`, default 8 GiB, or a known model server). `ALLOW_SECOND_MODEL=1` skips this check, as for the launch guard.
+- It refuses to start if a server runs on 9275 (or 8080, CARL's earlier port) or 8093. It also refuses if a different large process is in memory (more than `BIG_GB`, default 8 GiB, or a known model server). `ALLOW_SECOND_MODEL=1` skips this check, as for the launch guard.
 
 The steps:
 
@@ -413,7 +426,7 @@ This table shows the flags that `host/serve-llama.sh` gives to `llama-server` (s
 
 | Setting | Value | Why |
 |---|---|---|
-| Bind | `--host 127.0.0.1 --port 8080 --api-key-file ~/.config/carl/api-key` | This Mac only by default (`--vm`: 192.168.42.1). A shared key. llama.cpp's own default port changes to 9931 in a later release: CARL always gives `--port` (the single start, the router, Auto-tune and agent-bench, which start the server through the launcher). |
+| Bind | `--host 127.0.0.1 --port 9275 --api-key-file ~/.config/carl/api-key` | This Mac only by default (`--vm`: 192.168.42.1). A shared key. llama.cpp's own default port changes to 9931 in a later release: CARL always gives `--port` (the single start, the router, Auto-tune and agent-bench, which start the server through the launcher). |
 | Model name | `--alias NAME` | The CARL name of the model |
 | Offload | `-ngl 999` | The whole model is on the GPU (Metal). |
 | Flash attention | `-fa on` | Necessary for a quantized V cache. It was on for each measurement. |

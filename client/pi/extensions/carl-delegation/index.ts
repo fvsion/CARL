@@ -27,7 +27,7 @@ import { CoderGate, FREE_FORM_TEXT, GateSetting, RequestCheck, Turn, freeFormFor
 const agentDir = (): string => process.env.PI_CODING_AGENT_DIR || join(homedir(), ".pi", "agent");
 
 /** CARL's settings for the hand-off (carl.json in Pi's agent folder). */
-function settings(): { reminder: boolean; brief: boolean; briefFormat: "toml" | "json"; cacheApi: string; coder: string } {
+function settings(): { reminder: boolean; brief: boolean; briefFormat: "toml" | "json"; cacheApi: string; carlId: string; coder: string } {
 	try {
 		const st = JSON.parse(readFileSync(join(agentDir(), "carl.json"), "utf8")) as Record<string, unknown>;
 		const d = (st.delegation ?? {}) as Record<string, unknown>;
@@ -36,10 +36,11 @@ function settings(): { reminder: boolean; brief: boolean; briefFormat: "toml" | 
 			brief: d.brief !== false,
 			briefFormat: d.brief_format === "json" ? "json" : "toml",
 			cacheApi: typeof st.cache_api === "string" ? st.cache_api : "",
+			carlId: typeof st.carl_id === "string" ? st.carl_id : "",
 			coder: typeof st.coder_agent === "string" && st.coder_agent ? st.coder_agent : "coder",
 		};
 	} catch {
-		return { reminder: true, brief: true, briefFormat: "toml", cacheApi: "", coder: "coder" };
+		return { reminder: true, brief: true, briefFormat: "toml", cacheApi: "", carlId: "", coder: "coder" };
 	}
 }
 
@@ -66,7 +67,7 @@ export default function carlDelegation(pi: ExtensionAPI) {
 	}
 	const turn = new Turn();
 	const request = new RequestCheck(); // the Request Check (the 23.4.3 addendum): the user's messages since the last brief taken
-	const gateSetting = new GateSetting({ cacheApi: set.cacheApi });
+	const gateSetting = new GateSetting({ cacheApi: set.cacheApi, carlId: set.carlId });
 	pi.on("input", async (event) => {
 		if (set.brief) request.user(event.text.trimStart().replace(/^\/\S+\s*/, "")); // "/code TASK": the task's words
 		if (!set.reminder || !event.text.trim() || event.text.trimStart().startsWith("/")) return { action: "continue" as const };

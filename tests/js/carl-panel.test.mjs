@@ -16,6 +16,8 @@ delete process.env.PI_CODING_AGENT_DIR;
 const { act, allRows, coderModel, costOf, duration, hostOf, openCodeModels, openCodeSearch, outcome, packageVersions,
         panel, piModels, piSearch, restartNotice, rowsAt, shownState, stateModels, switches, thinkingOverrides,
         thinkingValues, thinkingWord, viewText, when } = await import("../../client/shared/carl-panel.js");
+const P = await import("../../client/shared/carl-panel.js");
+const { forgetPings } = await import("../../client/shared/carl-api.js");
 const CARL = join(HOME, ".config", "carl");
 const PI = join(HOME, ".pi", "agent");
 mkdirSync(CARL, { recursive: true });
@@ -81,7 +83,7 @@ const TWO = { ...ONE, "gemma-4-e4b": { thinking: "on-off", main: "on", coder: "o
 function stage(allOn, models = ONE) {
   mkdirSync(OC, { recursive: true });
   mkdirSync(BUNDLE, { recursive: true });
-  for (const d of ["extensions/carl-cache", "extensions/subagent", "agents"]) mkdirSync(join(PI, d), { recursive: true });
+  for (const d of ["extensions/carl-cache", "extensions/carl-model-check", "extensions/subagent", "agents"]) mkdirSync(join(PI, d), { recursive: true });
   writeFileSync(join(BUNDLE, "remote.json"), JSON.stringify({ host: "192.168.42.1", port: 8080, cache_api: "http://192.168.42.1:8081" }));
   writeFileSync(join(CARL, "client-sync.json"), JSON.stringify({
     bundle: BUNDLE, service: allOn, connected: allOn, alive: Date.now() / 1000 - 30, auto_apply: !allOn,
@@ -96,7 +98,7 @@ function stage(allOn, models = ONE) {
   writeFileSync(join(CARL, "opencode.env"), allOn ? envFile("exa") + "export OPENCODE_EXPERIMENTAL_LSP_TOOL=1\n" : "");
   writeFileSync(join(CARL, "client-install.env"), allOn ? "CLIENTS=both\n"
     : ["CLIENTS=both", "WEB_SEARCH=off", ...OFF_KEYS.map((k) => `${k}=1`)].join("\n") + "\n");
-  for (const f of ["extensions/carl-cache/index.ts", "extensions/subagent/index.ts", "agents/coder.md"]) {
+  for (const f of ["extensions/carl-cache/index.ts", "extensions/carl-model-check/index.ts", "extensions/subagent/index.ts", "agents/coder.md"]) {
     if (allOn) writeFileSync(join(PI, f), "x");
     else rmSync(join(PI, f), { force: true });
   }
@@ -106,7 +108,7 @@ function stage(allOn, models = ONE) {
 }
 
 const OC_ROWS = ["subagent", "browser", "web", "lsp", "sidebar", "switcher", "cache", "check", "sync", "auto", "apply", "once"];
-const PI_ROWS = ["subagent", "browser", "web", "cache", "sync", "auto", "apply", "once"];
+const PI_ROWS = ["subagent", "browser", "web", "cache", "check", "sync", "auto", "apply", "once"];   // Model Check: 23.5
 const CODER_ROWS = ["coder", "background", "reminder", "tests", "request", "free-form", "loop", "thinking", "coder-model"];
 const LABELS = { subagent: "Coder Subagent", coder: "Coder", background: "Background Coder", reminder: "Delegation Reminder",
                  tests: "Tests", request: "Request Check", "free-form": "Free-Form Brief", loop: "Coder Loop", "run-gate": "Run Gate",
@@ -118,7 +120,7 @@ const LABELS = { subagent: "Coder Subagent", coder: "Coder", background: "Backgr
 const KEYS = { coder: "NO_CODER", background: "NO_BACKGROUND_SUBAGENTS", reminder: "NO_REMINDER", browser: "NO_BROWSER",
                lsp: "NO_LSP", sidebar: "NO_SIDEBAR", switcher: "NO_SWITCHER", cache: "NO_CACHE", check: "NO_MODEL_CHECK" };
 
-test("one row for each part, in the order of the groups; OpenCode has LSP, the side panels and the model check", () => {
+test("one row for each part, in the order of the groups; OpenCode has LSP and the side panels; both the model check", () => {
   stage(true);
   assert.deepEqual(ids("opencode"), OC_ROWS);
   assert.deepEqual(ids("pi"), PI_ROWS);
@@ -556,7 +558,13 @@ test("router mode: the action reads the row again for the same session's model",
 function copyPanel(src, file) {
   const dir = mkdtempSync(join(tmpdir(), "carl-panel-ui-"));
   copyFileSync(join(REPO, src, file), join(dir, file));
-  copyFileSync(join(REPO, "client/shared/carl-panel.js"), join(dir, "carl-panel.js"));
+  for (const f of ["carl-panel.js", "carl-api.js", "carl-tui.js"]) copyFileSync(join(REPO, "client/shared", f), join(dir, f));
+  mkdirSync(join(dir, "node_modules", "@opentui", "solid"), { recursive: true });       // the footer's node makers
+  writeFileSync(join(dir, "node_modules", "@opentui", "solid", "package.json"),
+                JSON.stringify({ name: "@opentui/solid", type: "module", main: "index.js" }));
+  writeFileSync(join(dir, "node_modules", "@opentui", "solid", "index.js"),
+                "export const createElement = (tag) => ({ tag, props: {}, kids: [] });\n" +
+                "export const setProp = (n, k, v) => { n.props[k] = v; };\nexport const insert = (n, c) => { n.kids.push(c); };\n");
   mkdirSync(join(dir, "node_modules", "solid-js"), { recursive: true });
   writeFileSync(join(dir, "node_modules", "solid-js", "package.json"), JSON.stringify({ name: "solid-js", type: "module", main: "index.js" }));
   writeFileSync(join(dir, "node_modules", "solid-js", "index.js"),
@@ -1278,4 +1286,64 @@ test("the 23.4.3 addendum: Free-Form Brief (per model, on, off), Coder Loop (Run
   dialogs.at(-1).props.onSelect({ value: "free-form" });
   assert.equal(dialogs.at(-1).props.title, "Free-Form Brief");
   assert.deepEqual(abouts, [{ variant: "info", message: "Lets a strong main model add its own words to the coder's brief. Per model allows it for cloud models and CARL's larger models.", duration: 8000 }]);
+});
+
+// ------------------------------------------------------------------ Phase 23.5 item 9: the speeds
+
+test("Phase 23.5: the speed line in the user's wording, for each state", () => {
+  assert.equal(P.speedLine({ state: "writing", write: 18.43, read: 651.6 }), "write 18.4 tok/s · read 652 tok/s");
+  assert.equal(P.speedLine({ state: "writing", write: 18.4 }), "write 18.4 tok/s");
+  assert.equal(P.speedLine({ state: "reading", read: 1651.6, progress: 0.38 }), "reading 38% · 1,652 tok/s");
+  assert.equal(P.speedLine({ state: "reading" }), "reading");
+  assert.equal(P.speedLine({ state: "idle", last: { write: 18.4, read: 652 } }), "last turn: write 18.4 · read 652");
+  assert.equal(P.speedLine({ state: "idle", last: null }), "");
+  assert.equal(P.speedLine(undefined), "");
+});
+
+test("Phase 23.5: the poller asks while a turn runs, sends the key only to CARL's API, then shows the last turn", async () => {
+  forgetPings();
+  const asked = [];
+  let state = { state: "writing", write: 20, read: 600 };
+  const fetchFn = async (url, init) => {
+    asked.push([String(url), init?.headers?.Authorization ?? ""]);
+    if (String(url).endsWith("/carl/ping")) return new Response(JSON.stringify({ carl: "a".repeat(32) }));
+    return new Response(JSON.stringify(state));
+  };
+  const lines = [];
+  const poller = new P.SpeedPoller(() => ({ api: "http://127.0.0.1:9276", id: "a".repeat(32), key: "k" }),
+                                   (l) => lines.push(l), { fetch: fetchFn, everyMs: 20 });
+  poller.running(true);
+  await new Promise((ok) => setTimeout(ok, 70));
+  state = { state: "idle", last: { write: 20, read: 600 } };
+  poller.running(false);
+  await new Promise((ok) => setTimeout(ok, 30));
+  assert.deepEqual(lines, ["write 20.0 tok/s · read 600 tok/s", "last turn: write 20.0 · read 600"]);
+  assert.ok(asked.every(([u, auth]) => u.endsWith("/carl/ping") ? auth === "" : auth === "Bearer k"));
+  // another program on the port: no key, no line
+  forgetPings();
+  const other = [];
+  const p2 = new P.SpeedPoller(() => ({ api: "http://127.0.0.1:9277", id: "a".repeat(32), key: "k" }), (l) => other.push(l),
+                               { fetch: async (url, init) => (asked.push([String(url), init?.headers?.Authorization ?? ""]),
+                                                              new Response("{}", { status: 404 })) });
+  await p2.tick();
+  assert.deepEqual(other, []);
+  assert.ok(!asked.some(([u, auth]) => u.includes(":9277") && auth));
+});
+
+test("Phase 23.5: OpenCode's sidebar footer draws the folder and the version again, with CARL's line between", async () => {
+  stage(true);
+  const plugin = (await import(copyPanel("client/opencode/plugins/carl-panel", "tui.js"))).default;
+  let footer;
+  const handlers = {};
+  const api = {
+    command: { register: () => () => {} }, lifecycle: { onDispose: () => {} }, ui: {},
+    theme: { current: { text: "T", textMuted: "M", success: "G" } },
+    state: { path: { directory: "/Users/u/work/app" } }, app: { version: "1.18.34" },
+    event: { on: (name, f) => { handlers[name] = f; return () => {}; } },
+    slots: { register: (r) => { footer = r.slots.sidebar_footer; } },
+  };
+  await plugin.tui(api);
+  const flat = (n) => (typeof n === "string" ? n : n ? n.kids.map(flat).join("") : "");
+  assert.equal(flat(footer()), "/Users/u/work/app• OpenCode 1.18.34");   // no dashboard: no CARL line
+  assert.equal(typeof handlers["session.status"], "function");
 });

@@ -37,6 +37,7 @@ import { spawn } from "node:child_process";
 import * as fs from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { isCarl } from "./carl-api.js";
 
 const HOME = homedir();
 const CARL = join(HOME, ".config", "carl");
@@ -819,7 +820,9 @@ function parts(client, session) {
       ? `${sett.defaultProvider}/${sett.defaultModel}` : "";
     browser = Boolean(servers["carl-browser"]);
     search = piSearch(servers["carl-web-search"]);
-    server = [switchRow("cache", "Disk Cache", "the disk cache", "NO_CACHE", exists(join(PI, "extensions", "carl-cache", "index.ts")))];
+    server = [switchRow("cache", "Disk Cache", "the disk cache", "NO_CACHE", exists(join(PI, "extensions", "carl-cache", "index.ts"))),
+              switchRow("check", "Model Check", "the model check", "NO_MODEL_CHECK",
+                        exists(join(PI, "extensions", "carl-model-check", "index.ts")))];   // Phase 23.5: as OpenCode
   }
   // the coder's rows: a sub-list (user, 2026-10-09); without the coder only its switch (user, 2026-10-08: the
   // others do nothing then, and they disappear)
@@ -1043,3 +1046,105 @@ export function checkOnce() {
   p.on("error", () => {});
   p.unref();
 }
+
+// ------------------------------------------------------------------ the speeds (Phase 23.5 item 9)
+// The dashboard API's GET /carl/status: { state: writing | reading | idle, read, write, progress, last }, its snapshot
+// of the server's log. OpenCode shows the line in its sidebar's footer, Pi in its status line; both ask only while a
+// turn runs (each second), then once more for the last turn's speeds. No dashboard: no line.
+
+/** The number of tokens per second as the line shows it (write: one decimal; read: whole). @param {unknown} v @param {number} d */
+function tps(v, d) {
+  return typeof v === "number" && v > 0 ? (d ? v.toFixed(d) : Math.round(v).toLocaleString("en-US")) : "";
+}
+
+/**
+ * The speeds as one line (the user's wording, 2026-10-10): "write 18.4 tok/s · read 652 tok/s" while it writes,
+ * "reading 38% · 652 tok/s" while it reads a prompt, "last turn: write 18.4 · read 652" after; "" when there is none.
+ * @param {unknown} status @returns {string}
+ */
+export function speedLine(status) {
+  const st = obj(status);
+  const [w, r] = [tps(st.write, 1), tps(st.read, 0)];
+  if (st.state === "writing" && w) return `write ${w} tok/s${r ? ` · read ${r} tok/s` : ""}`;
+  if (st.state === "reading") {
+    const p = typeof st.progress === "number" ? ` ${Math.round(st.progress * 100)}%` : "";
+    return `reading${p}${r ? ` · ${r} tok/s` : ""}`;
+  }
+  const last = obj(st.last);
+  const [lw, lr] = [tps(last.write, 1), tps(last.read, 0)];
+  if (!lw && !lr) return "";
+  return `last turn: ${[lw && `write ${lw}`, lr && `read ${lr}`].filter(Boolean).join(" · ")}`;
+}
+
+/**
+ * The client's way to the dashboard API: its address and CARL's ID from the client's state file (configure.py), the
+ * key from ~/.config/carl/api-key. Undefined when the setup has no API.
+ * @param {Client} client @returns {{ api: string, id: string, key: string } | undefined}
+ */
+export function statusSource(client) {
+  const st = obj(json(join(client === "opencode" ? OC : PI, "carl.json")));
+  const api = typeof st.cache_api === "string" ? st.cache_api.replace(/\/+$/, "") : "";
+  let key = "";
+  try {
+    key = fs.readFileSync(join(CARL, "api-key"), "utf8").trim();
+  } catch { /* no key: no speeds */ }
+  return api && key ? { api, id: typeof st.carl_id === "string" ? st.carl_id : "", key } : undefined;
+}
+
+/**
+ * /carl/status, after the API answered as CARL's (carl-api.js: never the key to another program); undefined when it
+ * does not answer. @param {{ api: string, id: string, key: string }} src @param {typeof fetch} [fetchFn]
+ * @returns {Promise<JsonObject | undefined>}
+ */
+export async function fetchStatus(src, fetchFn = globalThis.fetch) {
+  if (!(await isCarl(src.api, src.id, fetchFn))) return undefined;
+  try {
+    const r = await fetchFn(`${src.api}/carl/status`, { headers: { Authorization: `Bearer ${src.key}` },
+                                                         signal: AbortSignal.timeout(2_000) });
+    return r.ok ? obj(await r.json()) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Asks /carl/status each second while a turn runs, then once more; tells each new line (show("") clears it).
+ * running(true) at a turn's start, running(false) at its end.
+ */
+export class SpeedPoller {
+  /** @param {() => ({ api: string, id: string, key: string } | undefined)} source @param {(line: string) => void} show
+   *  @param {{ fetch?: typeof fetch, everyMs?: number }} [o] */
+  constructor(source, show, o = {}) {
+    this.source = source;
+    this.show = show;
+    this.fetch = o.fetch ?? globalThis.fetch;
+    this.everyMs = o.everyMs ?? 1_000;
+    /** @type {ReturnType<typeof setInterval> | undefined} */
+    this.timer = undefined;
+    this.line = "";
+  }
+
+  async tick() {
+    const src = this.source();
+    const st = src ? await fetchStatus(src, this.fetch) : undefined;
+    const line = st ? speedLine(st) : "";
+    if (line !== this.line) {
+      this.line = line;
+      this.show(line);
+    }
+  }
+
+  /** @param {boolean} on */
+  running(on) {
+    if (on && !this.timer) {
+      this.timer = setInterval(() => void this.tick(), this.everyMs);
+      this.timer.unref?.();
+      void this.tick();
+    } else if (!on && this.timer) {
+      clearInterval(this.timer);
+      this.timer = undefined;
+      void this.tick();                       // the last turn's speeds
+    }
+  }
+}
+

@@ -213,3 +213,42 @@ def remove(folder: str, names: Sequence[str]) -> None:
 def gb(n: int) -> str:
     """Bytes as GB (the unit of the limit)."""
     return f"{n / 10 ** 9:.1f} GB"
+
+
+# What a client that went away leaves (research-2 suggestion 9, Phase 23.5): removed by the dashboard's minute loop.
+CLAIM_STALE_S = 120         # a slot claim lives for one request (carl-cache.js CLAIM_STALE_MS)
+TURN_STALE_S = 600          # a turn mark this old is a client that went away (carl-cache.js TURN_STALE_MS)
+TMP_STALE_S = 3600          # a half-written file (a save or an unpack that stopped)
+
+
+def reconcile(folder: str, now: float) -> List[str]:
+    """Remove what no client will use: claims and turn marks of clients that went away, half-written files, and the
+    pieces of a stored session whose other piece is gone (a .json without its .zst or .bin, a .zst without its .json).
+    The names removed."""
+    try:
+        names = set(os.listdir(folder))
+    except OSError:
+        return []
+    gone = []
+
+    def age(n: str) -> float:
+        try:
+            return now - os.path.getmtime(os.path.join(folder, n))
+        except OSError:
+            return 0.0
+    for n in sorted(names):
+        stale = ((n.startswith(".claim+") and age(n) > CLAIM_STALE_S)
+                 or (n.startswith(".turn+") and age(n) > TURN_STALE_S)
+                 or (n.endswith(".tmp") and n.startswith((".", "carl-")) and age(n) > TMP_STALE_S))
+        if n.startswith("carl-session+") and n.endswith(".bin.json"):
+            stem = n[:-len(".json")]
+            stale = stale or (stem not in names and stem + slotpack.PACK not in names)
+        elif n.startswith("carl-session+") and n.endswith(".bin" + slotpack.PACK):
+            stale = stale or n[:-len(slotpack.PACK)] + ".json" not in names
+        if stale:
+            try:
+                os.remove(os.path.join(folder, n))
+                gone.append(n)
+            except OSError:
+                pass
+    return gone

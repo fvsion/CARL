@@ -1,4 +1,4 @@
-// The OpenCode server plugins: carl-background, carl-model-check (check.js) and carl-cache (its hooks and
+// The OpenCode server plugins: carl-background, carl-model-check (shared/carl-model-check.js) and carl-cache (its hooks and
 // its fetch wrapper, staged with the shared files as the installer lays them out, against a fake server).
 // Run: node --test tests/js (tests/scripts/test_js.py runs it with the other suites).
 import assert from "node:assert/strict";
@@ -9,7 +9,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import background from "../../client/opencode/plugins/carl-background/index.js";
-import { parseModels, verdict } from "../../client/opencode/plugins/carl-model-check/check.js";
+import { parseModels, verdict } from "../../client/shared/carl-model-check.js";
 import * as B from "../../client/shared/carl-brief.js";
 
 const REPO = fileURLToPath(new URL("../../", import.meta.url));
@@ -38,6 +38,7 @@ copyFileSync(join(REPO, "client/opencode/plugins/carl-delegation/index.js"), joi
 copyFileSync(join(REPO, "client/shared/carl-delegation.js"), join(delegationDir, "carl-delegation.js"));
 copyFileSync(join(REPO, "client/shared/carl-brief.js"), join(delegationDir, "carl-brief.js"));
 copyFileSync(join(REPO, "client/shared/carl-chain.js"), join(delegationDir, "carl-chain.js"));
+copyFileSync(join(REPO, "client/shared/carl-api.js"), join(delegationDir, "carl-api.js"));
 const delegationMod = await import(pathToFileURL(join(delegationDir, "index.js")).href);
 const { RULE_BEGIN, RULE_END, withoutRule } = delegationMod;
 const delegation = delegationMod.default;
@@ -842,7 +843,7 @@ const srv = fakeServer();
 globalThis.fetch = srv.fetch;                // the plugin wraps the fetch it finds
 const dir = mkdtempSync(join(tmpdir(), "carl-cache-plugin-"));
 copyFileSync(join(REPO, "client/opencode/plugins/carl-cache/index.js"), join(dir, "index.js"));
-for (const f of ["carl-cache.js", "carl-panel.js"]) copyFileSync(join(REPO, "client/shared", f), join(dir, f));
+for (const f of ["carl-cache.js", "carl-panel.js", "carl-api.js"]) copyFileSync(join(REPO, "client/shared", f), join(dir, f));
 const plugin = (await import(pathToFileURL(join(dir, "index.js")).href)).default;
 const client = {
   app: { log: async () => ({}) },
@@ -932,7 +933,10 @@ test("carl-delegation, an external coder model: chat.params sends only the varia
 });
 
 test("carl-model-check: a request to the coder's external model is not checked (no request to CARL's server, no warning)", async () => {
-  const { default: check } = await import("../../client/opencode/plugins/carl-model-check/index.js");
+  const staged = mkdtempSync(join(tmpdir(), "carl-model-check-"));            // as the installer lays it out
+  copyFileSync(join(REPO, "client/opencode/plugins/carl-model-check/index.js"), join(staged, "index.js"));
+  copyFileSync(join(REPO, "client/shared/carl-model-check.js"), join(staged, "carl-model-check.js"));
+  const { default: check } = await import(pathToFileURL(join(staged, "index.js")).href);
   const said = [];
   const asked = [];
   const keep = globalThis.fetch;

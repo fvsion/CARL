@@ -7,7 +7,7 @@ cd "$(dirname "$0")/.." || exit 1
 # shellcheck source=SCRIPTDIR/../host/common.sh
 source host/common.sh   # port_pid (netstat-based)
 LOGDIR="${LOGDIR:-/tmp}"
-PORT="${PORT:-8080}"
+PORT="${PORT:-9275}"
 
 stop_server() {
   local pid; pid=$(port_pid "$PORT")
