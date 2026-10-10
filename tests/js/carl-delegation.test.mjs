@@ -213,3 +213,24 @@ test("the coder's gates: work_mode tests-only writes test files only (any test f
     .replace('file_path = "tests/test_csv_export.py"\nfile_action = "create"', 'file_path = "tests/test_csv_export.py"\nfile_action = "read"')), "/p");
   assert.match(readTest.before("write", { filePath: "tests/test_csv_export.py" }), /is in your brief to read only/);
 });
+
+test("addendum: after a refused code brief, a tests-only brief in the same turn is refused; a taken code brief or a new message ends it", () => {
+  const turn = new D.Turn();
+  const call = (prompt) => turn.brief("task", { subagent_type: "coder", prompt });
+  const broken = BRIEF.replace(/\[\[acceptance_check\]\][\s\S]*$/, "");                 // no check
+  const testsOnly = BRIEF.replace('work_mode = "code"', 'work_mode = "tests-only"').replace(/\[\[known_file\]\][\s\S]*?(?=\[\[task_requirement)/, "");
+  assert.equal(call(testsOnly), "");                                                      // on its own: fine
+  const first = call(broken);
+  assert.match(first, /^\[CARL\] Brief refused: the coder did not start\. Fix these points/);
+  const switched = call(testsOnly);
+  assert.equal(switched, D.modeSwitchText(first));
+  assert.match(switched, /^\[CARL\] Brief refused: the coder did not start\. The last brief, with work_mode = "code", was refused, and this one changes work_mode to "tests-only"\. .*Keep work_mode = "code" and fix the points of the last refusal:\n- The brief has no check/s);
+  assert.equal(call(BRIEF), "");                                                          // the fixed code brief
+  assert.equal(call(testsOnly), "");                                                      // then tests-only is fine
+  call(broken);
+  turn.reset();                                                                            // the user writes again
+  assert.equal(call(testsOnly), "");
+  call('work_mode = "code"\ntask_summary = not toml');                                   // a code brief that does not read
+  assert.match(call(testsOnly), /changes work_mode to "tests-only"/);
+  assert.equal(new D.Turn().brief("task", { subagent_type: "explore", prompt: "Find it." }), "");
+});

@@ -185,12 +185,24 @@ const before = async (hooks, tool, args, sessionID = "m") => {
   }
 };
 
+test("carl-delegation: after a refused code brief, the same session's tests-only brief is refused until the user writes again", async () => {
+  const client = { session: { get: async () => ({ data: {} }) } };
+  const hooks = await delegation.server({ client, directory: "/p" }, { coder: "coder" });
+  const broken = BRIEF.replace(/\[\[acceptance_check\]\][\s\S]*$/, "");
+  const testsOnly = BRIEF.replace('work_mode = "code"', 'work_mode = "tests-only"').replace(/\[\[known_file\]\][\s\S]*?(?=\[\[task_requirement)/, "");
+  assert.match(await before(hooks, "task", { subagent_type: "coder", prompt: broken }, "s1"), /Fix these points/);
+  assert.match(await before(hooks, "task", { subagent_type: "coder", prompt: testsOnly }, "s1"), /changes work_mode to "tests-only"/);
+  assert.equal(await before(hooks, "task", { subagent_type: "coder", prompt: testsOnly }, "s2"), "");   // another session
+  await hooks["chat.message"]({ sessionID: "s1", agent: "build" }, { message: {}, parts: [{ type: "text", text: "only tests, please" }] });
+  assert.equal(await before(hooks, "task", { subagent_type: "coder", prompt: testsOnly }, "s1"), "");
+});
+
 test("carl-delegation: a coder task whose brief fails the check is refused before the coder starts", async () => {
   const client = { session: { get: async () => ({ data: {} }) } };
   const hooks = await delegation.server({ client, directory: "/p" }, { coder: "coder" });
   assert.equal(await before(hooks, "task", { subagent_type: "coder", prompt: "Here it is:\n```toml\n" + BRIEF + "```" }), "");
   assert.match(await before(hooks, "task", { subagent_type: "coder", prompt: "Mode: code\nGoal: add the header" }),
-               /^\[CARL\] Brief refused: the coder takes its task only as a TOML brief, .*send it again\.$/);
+               /^\[CARL\] Brief refused: the coder takes its task only as a TOML brief, .*send it again\. The brief's form/);
   const gap = await before(hooks, "task", { subagent_type: "carl-coder", prompt: BRIEF.replace(/current_state = .*\n/, "") });
   assert.match(gap, /^\[CARL\] Brief refused: the coder did not start\. Fix these points .*:\n- current_state is empty: with work_type = "follow_up"/);
   const tests = BRIEF.replace('work_type = "follow_up"', 'work_type = "follow_up"\nexisting_tests = ["tests/test_csv_export.py"]');

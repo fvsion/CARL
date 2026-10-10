@@ -731,7 +731,9 @@ function testSession(t) {
  * The brief in a task text, TOML or JSON (extractBrief). format: "toml", "json", or "" when the text has no brief
  * at all; toml: the brief is TOML; error: the reader's error (with the line), "" when it read.
  * @param {string} taskText
- * @returns {{ brief: Brief | null, error: string, toml: boolean, format: "toml" | "json" | "" }}
+ * line and reason: the reader's error's line in the task text and its reason (only with an error).
+ * @returns {{ brief: Brief | null, error: string, toml: boolean, format: "toml" | "json" | "", line?: number,
+ *             reason?: string }}
  */
 export function parseBrief(taskText) {
   const x = extractBrief(taskText);
@@ -741,7 +743,9 @@ export function parseBrief(taskText) {
     const raw = toml ? parseToml(x.text, { firstLine: x.firstLine, stopAtProse: true }) : parseJson(x.text, { firstLine: x.firstLine });
     return { brief: normalizeBrief(raw), error: "", toml, format: x.format };
   } catch (e) {
-    if (e instanceof TomlError || e instanceof JsonError) return { brief: null, error: e.message, toml, format: x.format };
+    if (e instanceof TomlError || e instanceof JsonError) {
+      return { brief: null, error: e.message, toml, format: x.format, line: e.line, reason: e.reason };
+    }
     throw e;
   }
 }
@@ -822,8 +826,9 @@ export function checkBrief(b, format = "toml", o = {}) {
   const out = [];
   for (const k of b.unknown) {
     const use = RENAMED[k];
+    const misplaced = use ? "" : misplacedKey(k, format === "json" ? "json" : "toml");
     out.push(use ? `The brief has the key "${k}", which is not in the schema: use ${use.map((u) => `"${u}"`).join(" and ")}.`
-      : `The brief has the key "${k}", which is not in the schema: remove it, or put its content in a key of the schema.`);
+      : misplaced || `The brief has the key "${k}", which is not in the schema: remove it, or put its content in a key of the schema.`);
   }
   if (!b.workMode) {
     out.push(`work_mode is missing: write ${kv("work_mode", '"code"')} (the hand-off writes or changes program code) or ${kv("work_mode", '"tests-only"')} (it writes or changes tests only).`);
@@ -889,8 +894,14 @@ export function checkBrief(b, format = "toml", o = {}) {
     out.push(`The brief has no check: ${addItem("acceptance_check")} with check_id, covers_requirements, run_command and expected_result, so that every requirement is in the covers_requirements of a check.`);
   } else {
     const covered = new Set(b.checks.flatMap((c) => c.covers));
-    for (const r of b.requirements) {
-      if (r.id && !covered.has(r.id)) out.push(`Requirement ${r.id} is in no check's covers_requirements: add it to a check, or add a check for it.`);
+    const open = b.requirements.map((r) => r.id).filter((id) => id && !covered.has(id));
+    if (open.length) {
+      const which = open.length === 1 ? `Requirement ${open[0]} is` : `Requirements ${open.join(", ")} are`;
+      let n = b.checks.length + 1;
+      while (checkIds.has(`C${n}`)) n++;
+      out.push(`${which} in no check's covers_requirements: add ${open.length === 1 ? "it" : "them"} to a check, or add a check for ${open.length === 1 ? "it" : "them"}, for example:\n` +
+        block("acceptance_check", { check_id: `C${n}`, covers_requirements: open, run_command: "the command that checks it",
+                                     expected_result: "what it shows when the work is right" }, format === "json" ? "json" : "toml"));
     }
   }
 
@@ -920,20 +931,157 @@ export function checkBrief(b, format = "toml", o = {}) {
  * @param {string} taskText @param {{ format?: "toml" | "json", root?: string, exists?: (p: string) => boolean }} [o]
  */
 export function briefRefusal(taskText, o = {}) {
-  const { brief, error, format } = parseBrief(taskText);
+  const { brief, error, format, line, reason } = parseBrief(taskText);
   if (!format) {
-    return `${BRIEF_MARK}: the coder takes its task only as a ${o.format === "json" ? "JSON" : "TOML"} brief, so write the task in the brief's format from your instructions and send it again.`;
+    const json = o.format === "json";
+    return `${BRIEF_MARK}: the coder takes its task only as a ${json ? "JSON" : "TOML"} brief, so write the task in the brief's format from your instructions and send it again.` +
+      (json ? "" : ` The brief's form (every block of it is needed; fill in each "..." from the request and the project):\n\n${SKELETON}`);
   }
   const name = format === "json" ? "JSON" : "TOML";
   if (!brief) {
-    const form = format === "json" ? "" : " Each item of a list is its own block, for example:\n[[task_requirement]]\n" +
-      'requirement_id = "R1"\nrequirement_text = "..."\n\n[[task_requirement]]\nrequirement_id = "R2"\nrequirement_text = "..."';
-    return `${BRIEF_MARK}: the brief is not valid ${name} (${error}). Fix it and send the whole brief again.${form}`;
+    const bad = line ? taskLine(taskText, line) : "";
+    const key = format === "json" ? "" : keyAt(taskText, line ?? 0);
+    const list = key && SCHEMA[key] && key !== "failed_attempt";
+    const form = format === "json" ? "" : key ? `\nThe right form of ${SCHEMA[key] ? (list ? `[[${key}]]` : `[${key}]`) : key}` +
+      `${list ? " (one block for each item, not a list in [ ] or { })" : ""}:\n${keyForm(key)}`
+      : "\nEach item of a list is its own block, for example:\n" + LIST_FORM;
+    const where = line ? `\nLine ${line}${bad.trim() ? ` is: ${bad.trim().slice(0, 200)}` : ""}` : "";
+    return `${BRIEF_MARK}: the brief is not valid ${name}: ${reason ?? error}.${where}${form}\nFix it and send the whole brief again.`;
   }
   const problems = checkBrief(brief, format, { root: o.root, exists: o.exists });
   if (!problems.length) return "";
   return `${BRIEF_MARK}: the coder did not start. Fix these points and send the whole brief again:\n` +
-    problems.map((p) => `- ${p}`).join("\n");
+    problems.map((p) => `- ${p}`).join("\n") + "\n\n" + checklist(brief, format === "json" ? "json" : "toml");
+}
+
+// ------------------------------------------------------------------ the refusal's guidance (Phase 23.4.3 addendum)
+// User, 2026-10-10: the refusal must always guide the main agent to the fix. The E4B fixed one point and dropped
+// another (a check added, then the file to change gone), wrote keys under the wrong [[block]], and broke the TOML.
+
+/** A list's form in TOML (a broken line with no key of the schema on it). */
+const LIST_FORM = '[[task_requirement]]\nrequirement_id = "R1"\nrequirement_text = "..."\n\n[[task_requirement]]\nrequirement_id = "R2"\nrequirement_text = "..."';
+
+/** The brief's form with the keys that a code task needs (the main agent's template, shortened). */
+const SKELETON = ['work_mode = "code"                 # code | tests-only', 'work_type = "new_feature"          # new_feature | follow_up | bug_fix',
+  'task_summary = """\n...\n"""', 'expected_outcome = """\n...\n"""', 'current_state = """\n...\n"""',
+  'exact_interfaces = [\n  "...",\n]', "",
+  '[[known_file]]\nfile_path = "..."\nfile_action = "create"           # create | change | read', "",
+  '[[task_requirement]]\nrequirement_id = "R1"\nrequirement_text = "..."', "",
+  '[[acceptance_check]]\ncheck_id = "C1"\ncovers_requirements = ["R1"]\nrun_command = "..."\nexpected_result = "..."'].join("\n");
+
+/** The examples of the plain keys (the template's forms). @type {Record<string, string>} */
+const PLAIN_FORMS = {
+  work_mode: 'work_mode = "code"                 # code | tests-only',
+  work_type: 'work_type = "new_feature"          # new_feature | follow_up | bug_fix',
+  existing_tests: 'existing_tests = ["tests/test_x.py"]',
+  exact_interfaces: 'exact_interfaces = [\n  "...",\n  "...",\n]',
+};
+/** Example values of the tables' keys. @type {Record<string, unknown>} */
+const FIELD_EXAMPLES = {
+  doc_path: "docs/architecture.md", doc_purpose: "...", file_path: "...", file_action: "create", requirement_id: "R1",
+  requirement_text: "...", check_id: "C1", covers_requirements: ["R1"], run_command: "...", expected_result: "...",
+  rule_text: "...", rule_source: "AGENTS.md", example_source: "...", example_text: "...", error_output: "...",
+  fix_change: "...", fix_result: "...",
+};
+
+/** The form of a key of the brief: a block with its keys, or the plain key (prose keys as """...""").
+ * @param {string} key a key of SCHEMA @returns {string} */
+function keyForm(key) {
+  const keys = SCHEMA[key];
+  if (keys) return block(key, Object.fromEntries(keys.map((k) => [k, FIELD_EXAMPLES[k] ?? "..."])), "toml");
+  return PLAIN_FORMS[key] ?? `${key} = """\n...\n"""`;
+}
+
+/**
+ * A block of the brief with its keys, as TOML ([[name]] / [name] for failed_attempt) or as JSON (an item of the list).
+ * @param {string} name @param {Record<string, unknown>} fields @param {"toml" | "json"} format @returns {string}
+ */
+function block(name, fields, format) {
+  if (format === "json") return `"${name}": [${JSON.stringify(fields)}]`;
+  const head = name === "failed_attempt" ? `[${name}]` : `[[${name}]]`;
+  return [head, ...Object.entries(fields).map(([k, v]) => `${k} = ${JSON.stringify(v).replace(/","/g, '", "')}`)].join("\n");
+}
+
+/** The table each table key belongs to ("file_path": "known_file"). @type {Record<string, string>} */
+const OWNER = Object.fromEntries(Object.entries(SCHEMA).filter(([k]) => k !== "test_session")
+  .flatMap(([t, keys]) => (keys ?? []).filter((k) => k !== "run_command").map((k) => [k, t])));
+
+/**
+ * A key under the wrong block ("acceptance_check.known_file", "known_file.scope_limits", "acceptance_check.file_path"):
+ * the sentence that explains TOML's block rule and where the key goes; "" when the key is no key of the schema.
+ * @param {string} k the unknown key as unknownKeys writes it @param {"toml" | "json"} format @returns {string}
+ */
+function misplacedKey(k, format) {
+  const dot = k.indexOf(".");
+  if (dot < 0) return "";
+  const [inTable, sub] = [k.slice(0, dot), k.slice(dot + 1)];
+  const home = Object.prototype.hasOwnProperty.call(SCHEMA, sub) ? sub : OWNER[sub] ?? "";
+  if (!home) return "";
+  const json = format === "json";
+  const rule = json ? `The key "${sub}" is inside an item of "${inTable}", where it does not belong.`
+    : `The key "${sub}" is inside a [[${inTable}]] block: in TOML every line after a [[...]] or [...] header belongs to that block, up to the next header.`;
+  if (home === sub && !SCHEMA[sub]) {
+    return `${rule} ${sub} is a key of the brief itself: ${json ? "put it at the top of the object" : "move it above the first [[...]] header (the brief's own keys come before the blocks)"}.`;
+  }
+  const how = json ? `add an item to "${home}"` : home === sub ? `start it as its own block, with its header` : `start a [[${home}]] block for it`;
+  return `${rule} ${home === sub ? `${sub} is its own block` : `${sub} belongs to ${json ? `"${home}"` : `[[${home}]]`}`}: ` +
+    `${how} (do not remove it), for example:\n${json ? block(home, { [sub]: FIELD_EXAMPLES[sub] ?? "..." }, "json") : keyForm(home)}`;
+}
+
+/** The line n of a task text, as the readers count lines ("" when there is none). @param {string} taskText @param {number} n */
+function taskLine(taskText, n) {
+  return String(taskText ?? "").replace(/\r\n?/g, "\n").replace(/^\s*Task:[ \t]*/, (m) => m.replace(/[^\n]/g, "")).split("\n")[n - 1] ?? "";
+}
+
+/**
+ * The key of the brief that a broken line belongs to: the key or block header on it, else on the nearest line above it
+ * (a list or a text over several lines); "" when it is no key of the schema.
+ * @param {string} taskText @param {number} n @returns {string}
+ */
+function keyAt(taskText, n) {
+  let sub = "";                                     // a block's key on the way up: its block's header decides
+  for (let i = n; i > 0 && i > n - 40; i--) {
+    const m = /^\s*(?:\[\[?\s*([A-Za-z0-9_-]+)|"?([A-Za-z0-9_-]+)"?\s*=)/.exec(taskLine(taskText, i));
+    if (!m) continue;
+    if (m[1]) return Object.prototype.hasOwnProperty.call(SCHEMA, m[1]) && m[1] !== "test_session" ? m[1] : OWNER[sub] ?? "";
+    const k = m[2];
+    if (sub) continue;
+    if (Object.prototype.hasOwnProperty.call(SCHEMA, k) && k !== "test_session") return k;
+    if (!TABLE_KEYS.has(k)) return "";
+    sub = k;
+  }
+  return OWNER[sub] ?? "";
+}
+
+/** Every key of the brief's blocks. */
+const TABLE_KEYS = new Set(Object.values(SCHEMA).flatMap((keys) => keys ?? []));
+
+/**
+ * The brief as it is now, against what a brief needs (user, 2026-10-10: the whole picture with each refusal, so that a
+ * fix of one point does not drop another): each needed part, and ok or what is missing.
+ * @param {Brief} b @param {"toml" | "json"} format @returns {string}
+ */
+export function checklist(b, format = "toml") {
+  const t = (/** @type {string} */ n) => (format === "json" ? `"${n}"` : `[[${n}]]`);
+  const code = b.workMode !== "tests-only";
+  const ids = b.requirements.map((r) => r.id).filter(Boolean);
+  const covered = new Set(b.checks.flatMap((c) => c.covers));
+  const open = ids.filter((id) => !covered.has(id));
+  const writes = b.files.filter((f) => f.action === "create" || f.action === "change").length;
+  /** @type {[string, string][]} */
+  const rows = [
+    ["work_mode", WORK_MODES.includes(b.workMode) ? `"${b.workMode}": ok` : "missing or not valid"],
+    ["work_type", WORK_TYPES.includes(b.workType) ? `"${b.workType}": ok` : "missing or not valid"],
+    ["task_summary", b.taskSummary ? "ok" : "missing"],
+    ["expected_outcome", b.expectedOutcome ? "ok" : "missing"],
+  ];
+  if (b.workType === "follow_up" || b.workType === "bug_fix") rows.push(["current_state", b.currentState ? "ok" : "missing"]);
+  if (code) rows.push([`${t("known_file")} to create or change`, writes ? `${writes}: ok` : "missing"]);
+  rows.push([t("task_requirement"), ids.length ? `${ids.length} (${ids.join(", ")}): ok` : "missing"]);
+  rows.push([`${t("acceptance_check")} covering every requirement`, !b.checks.length ? "missing"
+    : open.length ? `${open.join(", ")} not covered` : `${b.checks.length}: ok`]);
+  const w = Math.max(...rows.map(([a]) => a.length));
+  return `The brief now (keep each part that is ok when you fix the rest):\n` + rows.map(([a, v]) => `- ${a.padEnd(w)}  ${v}`).join("\n");
 }
 
 // ------------------------------------------------------------------ the chain's helpers

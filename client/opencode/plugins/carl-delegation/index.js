@@ -714,8 +714,9 @@ export default {
       "tool.execute.before": async (input, output) => {
         const tool = String(input?.tool ?? "");
         const args = /** @type {Record<string, unknown>} */ (output?.args ?? {});
-        if (briefs) {
-          const why = briefCheck(tool, args, { format: briefFormat, root: cwd });   // a coder task with an incomplete brief
+        if (briefs) {                                            // a coder task with an incomplete brief (and the turn's
+          const o = { format: briefFormat, root: cwd };          // memory: no switch to tests-only after a refusal)
+          const why = input?.sessionID ? turn(input.sessionID).brief(tool, args, o) : briefCheck(tool, args, o);
           if (why) throw new Error(why);
         }
         const mine = input?.sessionID ? gates.get(input.sessionID) : undefined;

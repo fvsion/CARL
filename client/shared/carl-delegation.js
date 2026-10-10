@@ -24,7 +24,7 @@
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
-import { briefRefusal, filesByAction, isTestFile } from "./carl-brief.js";
+import { BRIEF_MARK, briefRefusal, filesByAction, isTestFile, parseBrief } from "./carl-brief.js";
 
 export const RULE_BEGIN = "<!-- carl:main-agents-only begin -->";
 export const RULE_END = "<!-- carl:main-agents-only end -->";
@@ -276,6 +276,22 @@ export function briefCheck(tool, args, o = {}) {
   return "";
 }
 
+/** A brief's work_mode, also from a brief that does not read ("" when it says none). @param {string} text */
+function modeOf(text) {
+  const { brief } = parseBrief(text);
+  if (brief?.workMode) return brief.workMode;
+  const m = /work_mode["']?\s*[=:]\s*["']([A-Za-z-]+)/.exec(String(text ?? ""));
+  return m ? m[1].toLowerCase() : "";
+}
+
+/** The refusal of a brief that changes work_mode to tests-only after a refused code brief. @param {string} last */
+export function modeSwitchText(last) {
+  const points = last.split("\n").slice(1).join("\n").trim();
+  return `${BRIEF_MARK}: the coder did not start. The last brief, with work_mode = "code", was refused, and this one ` +
+    `changes work_mode to "tests-only". A tests-only task writes tests only, no program code, so the code of the request ` +
+    `would not be written. Keep work_mode = "code" and fix the points of the last refusal${points ? `:\n${points}` : "."}`;
+}
+
 /**
  * The gates in the coder's own session, from its brief: in work_mode code no test file, in work_mode tests-only only
  * test files (isTestFile); a known_file with file_action read is never written. Any other file passes: the
@@ -326,11 +342,30 @@ export class Turn {
   constructor() {
     this.coder = false;                                       // the coder was called: the gate stands down
     this.created = 0;
+    this.refusedCode = "";                                    // the refusal of a brief in work_mode code (this turn)
   }
 
   reset() {
     this.coder = false;
     this.created = 0;
+    this.refusedCode = "";
+  }
+
+  /**
+   * The brief check of a coder call (briefCheck), with the turn's memory (Phase 23.4.3 addendum): after a refused
+   * brief in work_mode code, a brief in work_mode tests-only is refused too, until a brief in work_mode code is taken
+   * or the user writes again (reset). The E4B (2026-10-09) left three refusals of a code brief by sending the same
+   * task as tests-only, which needs no file to change: the coder wrote tests and no program code.
+   * @param {string} tool @param {Record<string, unknown>} args @param {{ format?: "toml" | "json", root?: string }} [o]
+   */
+  brief(tool, args, o = {}) {
+    const modes = coderTaskItems(tool, args).map((t) => modeOf(t.text));
+    if (!modes.length) return "";
+    if (this.refusedCode && modes.includes("tests-only")) return modeSwitchText(this.refusedCode);
+    const why = briefCheck(tool, args, o);
+    if (why && modes.includes("code")) this.refusedCode = why;
+    else if (!why && modes.includes("code")) this.refusedCode = "";
+    return why;
   }
 
   /** Before a call: the gate's block reason, or "" to let it run. gate: the number (0: off).

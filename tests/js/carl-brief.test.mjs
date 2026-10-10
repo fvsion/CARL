@@ -309,7 +309,9 @@ test("checkBrief: task_requirement and acceptance_check: ids, texts, run_command
   assert.deepEqual(problems(FULL.replace('requirement_text = "notes list shows the date after the text."', 'requirement_text = ""')),
                    ["Requirement R2 has no requirement_text: say in one point what it must do."]);
   assert.deepEqual(problems(FULL.replace('covers_requirements = ["R1", "R2"]', 'covers_requirements = ["R1"]')),
-                   ["Requirement R2 is in no check's covers_requirements: add it to a check, or add a check for it."]);
+                   ["Requirement R2 is in no check's covers_requirements: add it to a check, or add a check for it, for example:\n" +
+                    '[[acceptance_check]]\ncheck_id = "C2"\ncovers_requirements = ["R2"]\nrun_command = "the command that checks it"\n' +
+                    'expected_result = "what it shows when the work is right"']);         // with a ready example (the 23.4.3 addendum)
   assert.deepEqual(problems(FULL.replace('covers_requirements = ["R1", "R2"]', 'covers_requirements = ["R1", "R2", "R9"]')),
                    ['Check C1 covers "R9", but no requirement has that requirement_id: fix the id, or add the requirement.']);
   assert.deepEqual(problems(FULL.replace('run_command = "python -m pytest tests/test_model.py -q"\n', "")),
@@ -372,14 +374,17 @@ test("checkBrief: keys that are not in the schema; revision 1's keys name revisi
 
 test("briefRefusal: one sentence for a text that is no TOML; the reader's error; the problems as a list; the project folder", () => {
   assert.equal(B.briefRefusal(FULL), "");
-  assert.equal(B.briefRefusal("Mode: code\nGoal: add it"),
-               "[CARL] Brief refused: the coder takes its task only as a TOML brief, so write the task in the brief's " +
-               "format from your instructions and send it again.");
+  assert.ok(B.briefRefusal("Mode: code\nGoal: add it").startsWith(
+    "[CARL] Brief refused: the coder takes its task only as a TOML brief, so write the task in the brief's " +
+    "format from your instructions and send it again. The brief's form (every block of it is needed; fill in each " +
+    '"..." from the request and the project):\n\nwork_mode = "code"'));                    // the skeleton (the addendum)
   assert.match(B.briefRefusal('work_mode = "code"\ntask_summary = add it'),
-               /^\[CARL\] Brief refused: the brief is not valid TOML \(line 2: .*\)\. Fix it and send the whole brief again\. Each item of a list is its own block/);
+               /^\[CARL\] Brief refused: the brief is not valid TOML: .*\.\nLine 2 is: task_summary = add it\nThe right form of task_summary:\ntask_summary = """\n\.\.\.\n"""\nFix it and send the whole brief again\.$/);
   const r = B.briefRefusal(FULL.replace('covers_requirements = ["R1", "R2"]', 'covers_requirements = ["R1"]'));
-  assert.equal(r, "[CARL] Brief refused: the coder did not start. Fix these points and send the whole brief again:\n" +
-                  "- Requirement R2 is in no check's covers_requirements: add it to a check, or add a check for it.");
+  assert.ok(r.startsWith("[CARL] Brief refused: the coder did not start. Fix these points and send the whole brief again:\n" +
+                         "- Requirement R2 is in no check's covers_requirements"), r);
+  assert.match(r, /\n\nThe brief now \(keep each part that is ok when you fix the rest\):\n- work_mode +"code": ok\n/);
+  assert.match(r, /- \[\[acceptance_check\]\] covering every requirement +R2 not covered$/);
   assert.match(B.briefRefusal(FULL, { root: mkdtempSync(join(tmpdir(), "empty-")) }),
                /- existing_tests has "tests\/test_store\.py", which is not in the project/);
   for (const p of B.checkBrief(brief('work_type = "x"\n[[known_file]]\nfile_action = "edit"\n[[task_requirement]]\n[[acceptance_check]]\n[failed_attempt]\n[[tried_fix]]\n'))) {
@@ -599,8 +604,8 @@ test("JSON: the check and the refusal name the keys the JSON way", () => {
   assert.deepEqual(json({ ...FULL_JSON, acceptance_check: [{ check_id: "C1", covers_requirements: [], run_command: "" }] }), [
     'Check C1 has no run_command: give the command that checks it, for example "run_command": "python -m pytest tests/test_x.py".',
     'Check C1 covers no requirement: write "covers_requirements": ["R1"] with the requirement ids it checks.',
-    "Requirement R1 is in no check's covers_requirements: add it to a check, or add a check for it.",
-    "Requirement R2 is in no check's covers_requirements: add it to a check, or add a check for it."]);
+    "Requirements R1, R2 are in no check's covers_requirements: add them to a check, or add a check for them, for example:\n" +
+    '"acceptance_check": [{"check_id":"C2","covers_requirements":["R1","R2"],"run_command":"the command that checks it","expected_result":"what it shows when the work is right"}]']);
   assert.deepEqual(json({ ...FULL_JSON, tried_fix: [{ fix_change: "a", fix_result: "b" }] }), [
     '"tried_fix" is only for "work_type": "bug_fix" (a fix that already failed): set "work_type": "bug_fix", or remove it.',
     '"tried_fix" is only for a fix that already failed: add the "failed_attempt" with run_command and error_output, or remove "tried_fix".']);
@@ -610,7 +615,7 @@ test("JSON: the check and the refusal name the keys the JSON way", () => {
     'The brief has the key "mode", which is not in the schema: use "work_mode".']);
   assert.equal(B.briefRefusal(JSON_TEXT), "");
   assert.match(B.briefRefusal('```json\n{"work_mode": "code", "task_summary": oops}\n```'),
-               /^\[CARL\] Brief refused: the brief is not valid JSON \(line 2: this value has no quotes.*\)\. Fix it and send the whole brief again\.$/);
+               /^\[CARL\] Brief refused: the brief is not valid JSON: this value has no quotes.*\nLine 2 is: .*\nFix it and send the whole brief again\.$/);
   assert.equal(B.briefRefusal("Mode: code\nGoal: add it", { format: "json" }),
                "[CARL] Brief refused: the coder takes its task only as a JSON brief, so write the task in the brief's " +
                "format from your instructions and send it again.");
@@ -675,5 +680,55 @@ file_action = "create"
 test("1.13.2: a refusal for broken TOML shows the [[table]] form of a list", () => {
   const said = B.briefRefusal('work_mode = "code"\ntask_requirement = [ { requirement_id "R1" } ]\n');
   assert.match(said, /not valid TOML/);
-  assert.match(said, /Each item of a list is its own block, for example:\n\[\[task_requirement\]\]\nrequirement_id = "R1"/);
+  assert.match(said, /The right form of \[\[task_requirement\]\] \(one block for each item, not a list in \[ \] or \{ \}\):\n\[\[task_requirement\]\]\nrequirement_id = "R1"/);
+});
+
+// ------------------------------------------------------------------ the refusal's guidance (Phase 23.4.3 addendum)
+
+test("addendum: a key under the wrong block gets the block rule and where it goes, not \"remove it\"", () => {
+  const moved = FULL.replace('scope_limits = "No API changes."\n', "")
+    .replace('expected_result = "all tests pass"\n', 'expected_result = "all tests pass"\nscope_limits = "No API changes."\nfile_path = "notes/x.py"\n[[known_file]]\nfile_path = "notes/y.py"\nfile_action = "create"\nknown_file = "z"\n');
+  const p = problems(moved);
+  const at = (k) => p.find((x) => x.includes(`"${k}"`));
+  assert.match(at("scope_limits"), /^The key "scope_limits" is inside a \[\[acceptance_check\]\] block: in TOML every line after a \[\[\.\.\.\]\] or \[\.\.\.\] header belongs to that block, up to the next header\. scope_limits is a key of the brief itself: move it above the first \[\[\.\.\.\]\] header/);
+  assert.match(at("file_path"), /file_path belongs to \[\[known_file\]\]: start a \[\[known_file\]\] block for it \(do not remove it\), for example:\n\[\[known_file\]\]\nfile_path = "\.\.\."\nfile_action = "create"$/);
+  assert.match(at("known_file"), /inside a \[\[known_file\]\] block.*known_file is its own block: start it as its own block, with its header/s);
+  assert.ok(!p.some((x) => /remove it, or put its content/.test(x)), p.join("\n"));
+  assert.deepEqual(problems(FULL.replace('file_action = "read"', 'file_action = "read"\nwhy = "x"')),
+    ['The brief has the key "known_file.why", which is not in the schema: remove it, or put its content in a key of the schema.']);
+});
+
+test("addendum: several uncovered requirements: one point with a ready check for all of them", () => {
+  const two = FULL.replace(/\[\[acceptance_check\]\][\s\S]*?(?=\[\[project_rule)/,
+                           '[[acceptance_check]]\ncheck_id = "C1"\ncovers_requirements = ["R9"]\nrun_command = "pytest"\n\n')
+    .replace('requirement_text = "notes list shows the date after the text."', 'requirement_text = "notes list shows the date after the text."\n\n[[task_requirement]]\nrequirement_id = "R9"\nrequirement_text = "x"');
+  const p = problems(two);
+  assert.deepEqual(p, ["Requirements R1, R2 are in no check's covers_requirements: add them to a check, or add a check for them, for example:\n" +
+    '[[acceptance_check]]\ncheck_id = "C2"\ncovers_requirements = ["R1", "R2"]\nrun_command = "the command that checks it"\nexpected_result = "what it shows when the work is right"']);
+});
+
+test("addendum: broken TOML quotes the line and shows the form of its key (a block's key: the block)", () => {
+  const inTable = B.briefRefusal('work_mode = "code"\n[[known_file]]\nfile_path = notes/x.py\nfile_action = "create"\n');
+  assert.match(inTable, /\nLine 3 is: file_path = notes\/x\.py\nThe right form of \[\[known_file\]\] \(one block for each item, not a list in \[ \] or \{ \}\):\n\[\[known_file\]\]\nfile_path = "\.\.\."\nfile_action = "create"\nFix it/);
+  const failed = B.briefRefusal('work_mode = "code"\n[failed_attempt]\nrun_command = pytest\n');
+  assert.match(failed, /The right form of \[failed_attempt\]:\n\[failed_attempt\]\nrun_command = "\.\.\."\nerror_output = "\.\.\."/);
+  const unknown = B.briefRefusal('work_mode = "code"\nwhatever = not quoted\n');
+  assert.match(unknown, /Each item of a list is its own block, for example:\n\[\[task_requirement\]\]/);
+  const multi = B.briefRefusal('work_mode = "code"\nexact_interfaces = [\n  "a",\n  b,\n]\n');
+  assert.match(multi, /The right form of exact_interfaces:\nexact_interfaces = \[\n  "\.\.\.",\n  "\.\.\.",\n\]/);   // the key above
+});
+
+test("addendum: the checklist: the needed parts and their state; tests-only needs no file; follow-up needs current_state", () => {
+  const b = brief(FULL.replace('covers_requirements = ["R1", "R2"]', 'covers_requirements = ["R1"]'));
+  assert.equal(B.checklist(b), "The brief now (keep each part that is ok when you fix the rest):\n" + [
+    '- work_mode                                        "code": ok',
+    '- work_type                                        "new_feature": ok',
+    "- task_summary                                     ok",
+    "- expected_outcome                                 ok",
+    "- [[known_file]] to create or change               2: ok",
+    "- [[task_requirement]]                             2 (R1, R2): ok",
+    "- [[acceptance_check]] covering every requirement  R2 not covered"].join("\n"));
+  const t = B.checklist(brief(FULL.replace('work_mode = "code"', 'work_mode = "tests-only"').replace('work_type = "new_feature"', 'work_type = "follow_up"')));
+  assert.ok(!t.includes("known_file") && /- current_state +ok/.test(t), t);
+  assert.match(B.checklist(B.normalizeBrief({})), /- work_mode +missing or not valid\n[\s\S]*- \[\[acceptance_check\]\] covering every requirement +missing$/);
 });

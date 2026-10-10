@@ -21,7 +21,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { checkBrief, parseBrief } from "./carl-brief.js";
-import { CoderGate, GateSetting, Turn, briefCheck, isCoderName, withReminder } from "./carl-delegation.js";
+import { CoderGate, GateSetting, Turn, isCoderName, withReminder } from "./carl-delegation.js";
 
 /** CARL's settings for the hand-off (carl.json in Pi's agent folder). */
 function settings(): { reminder: boolean; brief: boolean; briefFormat: "toml" | "json"; cacheApi: string; coder: string } {
@@ -76,7 +76,8 @@ export default function carlDelegation(pi: ExtensionAPI) {
 		const tool = String(event.toolName);
 		const input = (event.input ?? {}) as Record<string, unknown>;
 		if (set.brief) {
-			const why = briefCheck(tool, input, { format: set.briefFormat, root: String(ctx.cwd ?? process.cwd()) }); // a coder task with an incomplete brief
+			// a coder task with an incomplete brief (and the turn's memory: no switch to tests-only after a refusal)
+			const why = turn.brief(tool, input, { format: set.briefFormat, root: String(ctx.cwd ?? process.cwd()) });
 			if (why) return { block: true, reason: why };
 		}
 		const gate = await gateSetting.get(); // the dashboard's setting (Connect > Setup)
