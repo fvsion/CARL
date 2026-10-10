@@ -3,6 +3,62 @@
 All notable changes to CARL. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Dates are local dates on the development Mac (M3 Pro, 36 GB).
 
+## 1.17.0 - 2026-10-10
+
+Phase 23.5: the cache, tested against what really runs (a matrix of 48 setups with the real OpenCode and Pi);
+CARL's own port; the speeds in OpenCode and Pi.
+
+### Changed
+- **CARL's default port is 9275** (was 8080, which other software often uses). OpenCode and Pi on this Mac that were
+  set up for 8080 show as out of date in the dashboard's Connect tab: `u` updates them. The sync on other computers
+  finds the new port by itself.
+- **When another program holds the server's port**, the start offers the next free port (a question in a terminal and
+  in the dashboard); it never changes the port without asking, and never stops that program. `./carl.sh` with no
+  arguments attaches the dashboard only to a llama.cpp server.
+- **The dashboard API's port** (Settings > Server > API port): auto (the server's port + 1, else the next free one) or
+  a number. It listens on 127.0.0.1 and ::1, tries again while it does not run, and writes its real port where the
+  clients look (`client/remote.json`, `~/.config/carl/server-PORT.json`).
+- **The key goes only to CARL's API**: the API answers `GET /carl/ping` without a key with CARL's ID
+  (`~/.config/carl/carl-id`, in the client package's `remote.json`); OpenCode, Pi and the sync send their key only to
+  an API that answers that ID. The sync finds an API that moved and sets the clients up again when the server's port
+  changed.
+- **Gemma 4 keeps cache.swa = auto** (the full cache when it fits). The matrix: with the full cache a session that
+  comes back reads 62 tokens again, with the window cache its whole conversation.
+- Pi's model check is its own extension (`carl-model-check`, as OpenCode's plugin), with a Model Check row in Pi's
+  `/carl`.
+
+### Added
+- **The speeds in OpenCode and Pi**: "write 18.4 tok/s · read 652 tok/s" while a turn runs, "reading 38% · 652
+  tok/s", "last turn: …" after it; OpenCode in the sidebar's footer, Pi in its status line (the dashboard API's new
+  `GET /carl/status`).
+- **Pi's model check**: a notice when the server runs another model than Pi asks for (as OpenCode's).
+- The saved sessions' names (the OpenCode title, the Pi name) next to their IDs in `./carl.sh cache show` and the
+  Caching panel; a Window cache row there when the running model has it.
+- Known llama.cpp warnings in the Log tab: grey, with their reason under them ("↳ known: …").
+- Each minute the dashboard removes what clients that went away leave in the disk cache (stale claims and turn marks,
+  half-written files, the lone half of a stored session).
+- `tools/cache-matrix/`: the cache matrix (the real OpenCode and Pi, a real server, scripted turns).
+
+### Fixed
+- **Pi lost the disk cache's state at each session switch**: a session that another took the slot of was not saved
+  first, and came back by reading its whole conversation again (the A3B IQ3: 26,376 of 32,987 tokens; OpenCode: 66).
+  One cache per Pi process now.
+- **A client restart, or a second OpenCode or Pi, forgot which session was in a slot**: the session in a slot is now
+  saved from its record before another session takes the slot, from any process.
+- **A fork started from the agent's prompt only** (~26K tokens read again on the A3B): a session with history and no
+  saved file of its own starts from the longest saved session whose tokens start it.
+- **With the window cache, saved prompts and sessions were restored and saved for nothing**: the clients now restore
+  and save nothing then (they still keep each session in its own slot).
+- **Single-model mode filed the saved states under the model the client named**, not the one the server runs: the
+  dashboard's save before a stop missed them.
+- A file the server could not restore was asked for at every request; now it is retired (or, when not on this Mac,
+  not asked again for a minute).
+- **Router mode saved to `~/.config/carl/slots` even with `CARL_CONF_DIR` set**: the model server did not start, or the
+  saves went where no client looked.
+- **The dashboard's speeds went missing**: CARL's own cache requests were shown as the last request; a long prompt's
+  batch made `/slots` time out (now the last answer stays, up to 30 s); "Now" depended on two polls (now the log's
+  progress lines, every slot); after a restart from the dashboard it could follow the old log.
+
 ## 1.16.0 - 2026-10-10
 
 The Phase 23.4.3 addendum (the brief's checks and the run gate), the RAM cache count, a held chain's project.
