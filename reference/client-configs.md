@@ -64,6 +64,8 @@ The dashboard has two thinking settings for each model (Settings > Agents): **Ma
 
 - The setup writes only the model's name. The provider and its key are the client's own: CARL adds no provider for it and reads no key.
 
+`/carl`'s Request Check (the 23.4.3 addendum: `CODER_REQUEST_CHECK=reminder|on|off`; `reminder` or no line: the default) goes to `configure.py` as `--request-check`; both state files get `"request_check"`, which `carl-delegation` reads at each coder task (OpenCode through its `stateFile` option). No restart.
+
 `/carl`'s Tests (Phase 23.4.6: `CODER_TESTS=before|after|off` in `client-install.env`; `before` or no line: the default) goes to `configure.py` as `--coder-tests`. Both state files get `"coder_tests"`; OpenCode's `carl-delegation` gets the option `"stateFile"` (the path of its `carl.json`) and reads the value from there at each coder task, as Pi's `subagent` tool reads its own `carl.json`. `carl-sync.py set CODER_TESTS=...` therefore asks neither client to restart ([The Tests setting](delegation.md#the-tests-setting)).
 - The setup's coder rule: with `CODER_MODEL` set, `auto` turns the coder on also with a 1-slot server ("The coder runs on PROVIDER/MODEL, not on the server."). `NO_CODER=1` still turns it off.
 - One switch for the computer: both clients get the same `PROVIDER/MODEL`. A client that does not know that model fails the coder's task with its error.

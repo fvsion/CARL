@@ -21,13 +21,15 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { checkBrief, parseBrief } from "./carl-brief.js";
-import { CoderGate, GateSetting, Turn, isCoderName, withReminder } from "./carl-delegation.js";
+import { CoderGate, GateSetting, RequestCheck, Turn, isCoderName, requestFrom, withReminder } from "./carl-delegation.js";
+
+/** Pi's agent folder (carl.json is there). */
+const agentDir = (): string => process.env.PI_CODING_AGENT_DIR || join(homedir(), ".pi", "agent");
 
 /** CARL's settings for the hand-off (carl.json in Pi's agent folder). */
 function settings(): { reminder: boolean; brief: boolean; briefFormat: "toml" | "json"; cacheApi: string; coder: string } {
 	try {
-		const dir = process.env.PI_CODING_AGENT_DIR || join(homedir(), ".pi", "agent");
-		const st = JSON.parse(readFileSync(join(dir, "carl.json"), "utf8")) as Record<string, unknown>;
+		const st = JSON.parse(readFileSync(join(agentDir(), "carl.json"), "utf8")) as Record<string, unknown>;
 		const d = (st.delegation ?? {}) as Record<string, unknown>;
 		return {
 			reminder: d.reminder !== false,
@@ -63,8 +65,10 @@ export default function carlDelegation(pi: ExtensionAPI) {
 		return; // a subagent: no reminder, no new-file gate
 	}
 	const turn = new Turn();
+	const request = new RequestCheck(); // the Request Check (the 23.4.3 addendum): the user's messages since the last brief taken
 	const gateSetting = new GateSetting({ cacheApi: set.cacheApi });
 	pi.on("input", async (event) => {
+		if (set.brief) request.user(event.text.trimStart().replace(/^\/\S+\s*/, "")); // "/code TASK": the task's words
 		if (!set.reminder || !event.text.trim() || event.text.trimStart().startsWith("/")) return { action: "continue" as const };
 		return { action: "transform" as const, text: withReminder(event.text, "pi", set.coder), images: event.images };
 	});
@@ -79,6 +83,9 @@ export default function carlDelegation(pi: ExtensionAPI) {
 			// a coder task with an incomplete brief (and the turn's memory: no switch to tests-only after a refusal)
 			const why = turn.brief(tool, input, { format: set.briefFormat, root: String(ctx.cwd ?? process.cwd()) });
 			if (why) return { block: true, reason: why };
+			// the request's literals in the brief (carl.json "request_check": on, reminder, off; read at each task)
+			const missing = request.check(tool, input, requestFrom(join(agentDir(), "carl.json")));
+			if (missing) return { block: true, reason: missing };
 		}
 		const gate = await gateSetting.get(); // the dashboard's setting (Connect > Setup)
 		if (!gate) return undefined;

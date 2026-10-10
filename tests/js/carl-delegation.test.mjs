@@ -234,3 +234,35 @@ test("addendum: after a refused code brief, a tests-only brief in the same turn 
   assert.match(call(testsOnly), /changes work_mode to "tests-only"/);
   assert.equal(new D.Turn().brief("task", { subagent_type: "explore", prompt: "Find it." }), "");
 });
+
+test("addendum: the Request Check: single reminder once, on until each literal is in the brief or not_in_task, off; the user's messages since the last brief taken", () => {
+  const call = (r, prompt, setting) => r.check("task", { subagent_type: "coder", prompt }, setting);
+  const lacks = BRIEF;                                                          // has no "--csv-sep" nor "exit code 3"
+  const r = new D.RequestCheck();
+  r.user("Add `report --csv FILE`.");
+  r.user("Also `--csv-sep`, and exit with code 3 on a bad path.");           // a second message of the same request
+  const said = call(r, lacks, "reminder");
+  assert.equal(said, "[CARL] Brief refused: the request check: these are in the user's request but not in the brief:\n" +
+    "- `--csv-sep`\n- exit code 3\nCopy each into the brief where it belongs, word for word (a placeholder such as FILE or N may " +
+    "stay): commands, signatures, output formats and messages in exact_interfaces, files in [[known_file]]. Then send the whole " +
+    "brief again. This is a single reminder: the next brief is taken as it is.");
+  assert.equal(call(r, lacks, "reminder"), "");                                // reminded once: taken
+  assert.deepEqual(r.texts, []);                                               // the next request starts
+  const on = new D.RequestCheck();
+  on.user("Add `--csv-sep`.");
+  assert.match(call(on, lacks, "on"), /- `--csv-sep`\n.*If one is not part of this task, list it in not_in_task = \["\.\.\."\]\.$/s);
+  assert.match(call(on, lacks, "on"), /--csv-sep/);                            // on: again
+  assert.equal(call(on, lacks.replace('expected_outcome = ', 'not_in_task = ["--csv-sep"]\nexpected_outcome = '), "on"), "");
+  const off = new D.RequestCheck();
+  off.user("Add `--csv-sep`.");
+  assert.equal(call(off, lacks, "off"), "");
+  const has = new D.RequestCheck();
+  has.user("Add `report --csv FILE` writes CSV.");
+  assert.equal(call(has, lacks.replace("report --csv FILE writes CSV", "`report --csv FILE` writes CSV"), "on"), "");
+  assert.equal(new D.RequestCheck().check("task", { subagent_type: "explore", prompt: "x" }, "on"), "");
+  assert.equal(D.requestSetting("nope"), "reminder");
+  const dir = mkdtempSync(join(tmpdir(), "req-"));
+  assert.equal(D.requestFrom(join(dir, "carl.json")), "reminder");
+  writeFileSync(join(dir, "carl.json"), JSON.stringify({ request_check: "on" }));
+  assert.equal(D.requestFrom(join(dir, "carl.json")), "on");
+});

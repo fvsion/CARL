@@ -316,6 +316,18 @@ class ConfigureTests(unittest.TestCase):
         self.assertNotIn("coderTests", self.delegation_options())              # read live from the state file
         self.assertEqual(self.run_configure("--coder-tests", "sometimes").returncode, 2)
 
+    def test_the_request_check(self) -> None:
+        """The 23.4.3 addendum, /carl's Request Check (CODER_REQUEST_CHECK through --request-check): both state files keep
+        request_check (reminder by default), which carl-delegation reads at each coder task."""
+        self.assertEqual(self.run_configure("--coder", "1").returncode, 0)
+        for f in (".config/opencode/carl.json", ".pi/agent/carl.json"):
+            self.assertEqual(self.read_json(f)["request_check"], "reminder", f)
+        p = self.run_configure("--coder", "1", "--request-check", "off")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        for f in (".config/opencode/carl.json", ".pi/agent/carl.json"):
+            self.assertEqual(self.read_json(f)["request_check"], "off", f)
+        self.assertEqual(self.run_configure("--request-check", "sometimes").returncode, 2)
+
     def test_a_pi_thinking_level_the_user_changed_stays(self) -> None:
         self.models = {"schema": 1, "default": "qwen3.8-27b", "models": [
             MODELS["models"][0], dict(MODELS["models"][1], thinking_main="medium")]}

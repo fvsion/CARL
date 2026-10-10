@@ -60,6 +60,9 @@
 // tool runs the code session, the plugin then starts the test session, and CARL runs the checks after both. off: one
 // session, and its result ends with TESTS_OFF. The held chain's record names its sessions first and second (the task
 // tool's and the plugin's); a record from before (test, code) is read the same.
+// The Request Check (the 23.4.3 addendum; carl-delegation.js RequestCheck): the user's messages of each main session
+// (chat.message, their own text parts) since the last brief that was taken; a coder task whose brief passed the brief
+// check is checked for the request's literals, as the state file's "request_check" says (on, reminder, off).
 // The 23.4.5 follow-up (the hand check: a new project at the same path got an old chain's result): a record also keeps
 // the project folder's identity (folderId: its device and inode, so a folder made again at the same path is another
 // one) and OpenCode's project id. At the next start, a record is delivered only when both still match (when the record
@@ -71,7 +74,8 @@ import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { parseBrief, checkBrief } from "./carl-brief.js";
 import { Chain, TESTS_OFF, Watch, coderPlan, testsFrom } from "./carl-chain.js";
-import { CoderGate, GateSetting, RULE_BEGIN, RULE_END, Turn, briefCheck, isCoderName, withReminder, withoutRule }
+import { CoderGate, GateSetting, RULE_BEGIN, RULE_END, RequestCheck, Turn, briefCheck, isCoderName, requestFrom, withReminder,
+  withoutRule }
   from "./carl-delegation.js";
 
 export { RULE_BEGIN, RULE_END, withoutRule };
@@ -387,6 +391,15 @@ export default {
     // the Tests setting (Phase 23.4.6): read at each coder task, so /carl's change needs no restart
     const stateFile = typeof opts.stateFile === "string" ? opts.stateFile : "";
     const tests = () => (stateFile ? testsFrom(stateFile) : "before");
+    const requestSetting = () => (stateFile ? requestFrom(stateFile) : "reminder");
+    /** @type {Map<string, RequestCheck>} a main session's Request Check */
+    const requests = new Map();
+    /** @param {string} id */
+    const request = (id) => {
+      let r = requests.get(id);
+      if (!r) requests.set(id, (r = new RequestCheck()));
+      return r;
+    };
     // the brief's format in the main agent's instructions, named when a task has no brief at all (agent-bench's
     // brief_json variant sets "json"; a JSON brief is read either way)
     const briefFormat = opts.briefFormat === "json" ? "json" : "toml";
@@ -705,7 +718,14 @@ export default {
         turns.get(input.sessionID)?.reset();
         const agent = String(input.agent || /** @type {any} */ (output)?.message?.agent || "");
         if (agent) agents.set(input.sessionID, agent);
-        if (agent !== coder && !isCoderName(agent)) return;
+        if (agent !== coder && !isCoderName(agent)) {
+          if (briefs && !(await isSub(input.sessionID))) {           // the user's own words, for the Request Check
+            const own = (/** @type {any[]} */ (output?.parts ?? [])).filter((p) => p?.type === "text" && !p.synthetic)
+              .map((p) => String(p.text ?? "")).join("\n");
+            request(input.sessionID).user(own);
+          }
+          return;
+        }
         const text = (/** @type {any[]} */ (output?.parts ?? [])).filter((p) => p?.type === "text")
           .map((p) => String(p.text ?? "")).join("\n");
         const { brief } = parseBrief(text);
@@ -718,6 +738,10 @@ export default {
           const o = { format: briefFormat, root: cwd };          // memory: no switch to tests-only after a refusal)
           const why = input?.sessionID ? turn(input.sessionID).brief(tool, args, o) : briefCheck(tool, args, o);
           if (why) throw new Error(why);
+          if (input?.sessionID && !(await isSub(input.sessionID))) {   // the request's literals in the brief
+            const missing = request(input.sessionID).check(tool, args, requestSetting());
+            if (missing) throw new Error(missing);
+          }
         }
         const mine = input?.sessionID ? gates.get(input.sessionID) : undefined;
         if (mine) {                                                // the coder's own session: its brief's gates

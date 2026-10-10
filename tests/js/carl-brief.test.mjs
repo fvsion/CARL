@@ -732,3 +732,34 @@ test("addendum: the checklist: the needed parts and their state; tests-only need
   assert.ok(!t.includes("known_file") && /- current_state +ok/.test(t), t);
   assert.match(B.checklist(B.normalizeBrief({})), /- work_mode +missing or not valid\n[\s\S]*- \[\[acceptance_check\]\] covering every requirement +missing$/);
 });
+
+// ------------------------------------------------------------------ the request's literals (the 23.4.3 addendum)
+
+const REQUEST = "Add a CLI: `python3 -m textstats` with `count FILE`, which prints `words: N`. Use the existing sentences() " +
+  "and add syllable_count(word) -> int in textstats/readability.py. Support --limit, and exit with code 2 on a missing " +
+  'file. The button says "Clear done". Read item["id"] and \'done\'. Print 3 lines.';
+
+test("addendum: the request's literals: backticks, calls with return types, paths, flags, exit codes, quoted text; no noise", () => {
+  assert.deepEqual(B.requestLiterals(REQUEST).map((l) => [l.kind, l.text]), [
+    ["text", "python3 -m textstats"], ["text", "count FILE"], ["text", "words: N"], ["exit", "2"],
+    ["call", "sentences()"], ["call", "syllable_count(word) -> int"], ["path", "textstats/readability.py"],
+    ["flag", "--limit"], ["text", "Clear done"]]);              // not "id" (a key in code), "done" (part of "Clear done"), 3
+  assert.deepEqual(B.requestLiterals("Nothing exact here."), []);
+});
+
+test("addendum: a literal in the brief: placeholders, dates and numbers stand for any word; a call by its name and return type", () => {
+  const lit = (kind, text) => ({ kind, text });
+  assert.equal(B.hasLiteral(lit("text", "notes add TEXT --due 2026-11-01"), 'exact_interfaces = ["notes add TEXT --due YYYY-MM-DD"]'), true);
+  assert.equal(B.hasLiteral(lit("text", "(due 2026-11-01)"), "shows the date after the text"), false);
+  assert.equal(B.hasLiteral(lit("call", "syllable_count(word) -> int"), "syllable_count(word: str) -> int"), true);
+  assert.equal(B.hasLiteral(lit("call", "syllable_count(word) -> int"), "syllable_count(word): count the groups"), false);
+  assert.equal(B.hasLiteral(lit("call", "sentences()"), "use the existing sentences function"), true);
+  assert.equal(B.hasLiteral(lit("exit", "2"), "a bad date is rejected with exit code 2"), true);
+  assert.equal(B.hasLiteral(lit("exit", "2"), "it fails"), false);
+  const lits = B.requestLiterals(REQUEST);
+  assert.deepEqual(B.missingLiterals(lits, REQUEST), []);
+  assert.deepEqual(B.missingLiterals(lits, "nothing", ["Clear done", "--limit"]).map((l) => l.text),   // not_in_task: left out
+                   ["python3 -m textstats", "count FILE", "words: N", "2", "sentences()", "syllable_count(word) -> int",
+                    "textstats/readability.py"]);
+  assert.deepEqual(problems(FULL.replace('scope_limits = "No API changes."', 'scope_limits = "No API changes."\nnot_in_task = ["--limit"]')), []);
+});

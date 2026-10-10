@@ -45,6 +45,8 @@ Rules
   with --model) and, with a thinking level, "thinking": {"coder": {"PROVIDER/MODEL": LEVEL}}. Both state files keep
   "coder_model" ("main" when the coder runs on the main session's model). The provider's keys stay the client's:
   CARL writes only the model's name.
+- The Request Check (the 23.4.3 addendum; --request-check reminder|on|off: CODER_REQUEST_CHECK): both state files keep
+  "request_check", which carl-delegation (OpenCode, through stateFile; Pi) reads at each coder task.
 - The Tests setting (Phase 23.4.6; --coder-tests before|after|off: CODER_TESTS, /carl's Tests row): when the chain's
   test session runs. Both state files keep "coder_tests"; OpenCode's carl-delegation gets the option "stateFile" (its
   carl.json) and Pi's subagent extension reads its own carl.json, each at every coder task (no restart).
@@ -150,6 +152,7 @@ OLD_PI_EXT_SIG = "Pi <-> MTPLX request bridge"
 WEB_SEARCH = ("exa", "parallel", "off")
 CLIENTS = ("both", "opencode", "pi")
 CODER_TESTS = ("before", "after", "off")   # the Tests setting (23.4.6)
+REQUEST_CHECK = ("reminder", "on", "off")  # the Request Check (23.4.3 addendum)
 SEARCH_MCP = {"exa": "https://mcp.exa.ai/mcp", "parallel": "https://search.parallel.ai/mcp"}
 SEARCH_NAME = "carl-web-search"                         # Pi's MCP server entry
 PI_TOOLS = ["+grep", "+find", "+ls"]                    # Pi's built-in tools that are off by default
@@ -221,6 +224,7 @@ class Options:
     coder_model: str = ""     # an external model for the coder: PROVIDER/MODEL of the client ("": the main session's)
     coder_model_thinking: str = ""   # its variant (OpenCode) or thinking level (Pi); "": the model's own default
     coder_tests: str = "before"   # the Tests setting (23.4.6): before | after | off (the chain's test session)
+    request_check: str = "reminder"   # the Request Check (23.4.3 addendum): reminder | on | off
 
     @property
     def oc_dir(self) -> str:
@@ -321,6 +325,8 @@ def parse_args(argv: list[str]) -> Options:
                     help="the thinking of that model: a variant (OpenCode) or a thinking level (Pi)")
     ap.add_argument("--coder-tests", choices=CODER_TESTS, default="before",
                     help="/carl's Tests: the coder's test session before the code session, after it, or off")
+    ap.add_argument("--request-check", choices=REQUEST_CHECK, default="reminder",
+                    help="/carl's Request Check: the brief must carry the literals of the user's request")
     a = ap.parse_args(argv)
     try:
         models = carl_models.only_running(carl_models.load_list(a.models), a.running)  # single-model mode (23.4.4)
@@ -333,7 +339,8 @@ def parse_args(argv: list[str]) -> Options:
                    model_check=a.model_check, web_search=a.web_search, lsp=a.lsp, background=a.background,
                    browser=a.browser, browser_headed=a.browser_headed, profile=a.profile,
                    cache=a.cache, clients=a.clients, reminder=a.reminder, coder_model=a.coder_model,
-                   coder_model_thinking=a.coder_model_thinking if a.coder_model else "", coder_tests=a.coder_tests)
+                   coder_model_thinking=a.coder_model_thinking if a.coder_model else "", coder_tests=a.coder_tests,
+                   request_check=a.request_check)
 
 
 # ================================================================== merge rules (no I/O)
@@ -1247,7 +1254,8 @@ class Installer:
         self._oc_tui()
 
         st.update({"providers": ids, "base_url": o.base_url, "updated": self.stamp, "models": models_state(o.models),
-                   "coder_model": o.coder_model or "main", "coder_tests": o.coder_tests})
+                   "coder_model": o.coder_model or "main", "coder_tests": o.coder_tests,
+                   "request_check": o.request_check})
         self.cf.save(path, cfg)
         self.save_state(oc, "OpenCode", st)
         return ids
@@ -1512,7 +1520,8 @@ class Installer:
 
         # the coder's model (23.4.5): an external one the subagent extension passes as --model, else "main"
         st.update({"providers": ids, "base_url": o.base_url, "updated": self.stamp, "models": models_state(o.models),
-                   "coder_model": o.coder_model or "main", "coder_tests": o.coder_tests})
+                   "coder_model": o.coder_model or "main", "coder_tests": o.coder_tests,
+                   "request_check": o.request_check})
         self.save_state(pi, "Pi", st)
         return ids
 

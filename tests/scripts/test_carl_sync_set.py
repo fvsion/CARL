@@ -239,6 +239,18 @@ class SetTest(unittest.TestCase):
         self.assertEqual(r["restart"], ["opencode", "pi"])
         self.assertIn("CODER_TESTS takes before or after or off, not 'never'.", self.run_set("CODER_TESTS=never").stderr)
 
+    def test_coder_request_check_live_in_both_clients(self) -> None:
+        """/carl's Request Check (the 23.4.3 addendum): CODER_REQUEST_CHECK=on or off is kept; reminder (the default) takes
+        the line out; both clients read it at each coder task, so nothing restarts."""
+        r = json.loads(self.run_set("CODER_REQUEST_CHECK=on").stdout)
+        self.assertIn("CODER_REQUEST_CHECK=on", self.env_lines())
+        self.assertEqual((r["changed"], r["restart"]), ({"CODER_REQUEST_CHECK": {"from": "reminder", "to": "on"}}, []))
+        r = json.loads(self.run_set("CODER_REQUEST_CHECK=reminder").stdout)
+        self.assertFalse(any(ln.startswith("CODER_REQUEST_CHECK") for ln in self.env_lines()), self.env_lines())
+        self.assertEqual(r["restart"], [])
+        self.assertIn("CODER_REQUEST_CHECK takes reminder or on or off, not 'always'.",
+                      self.run_set("CODER_REQUEST_CHECK=always").stderr)
+
     def test_a_failed_installer_is_reported(self) -> None:
         open(os.path.join(self.home, "fail"), "w").close()
         p = self.run_set("NO_REMINDER=1")

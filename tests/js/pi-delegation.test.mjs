@@ -116,3 +116,26 @@ test("Pi, the coder's process: its prompt gives the brief; writes against its wo
     delete process.env.CARL_AGENT;
   }
 });
+
+test("Pi, the Request Check: the user's words since the last brief taken; one reminder by default; on and off from carl.json", async (t) => {
+  if (!ext) return t.skip(`needs type stripping: ${why}`);
+  delete process.env.CARL_AGENT;
+  writeFileSync(join(agentDir, "carl.json"), "{}");
+  const { pi, fire } = fakePi();
+  ext(pi);
+  const call = (task) => fire("tool_call", { toolName: "subagent", input: { agent: "coder", task } });
+  await fire("input", { text: "Add a header row: `month,orders,total`, and exit with code 4 when the file is open." });
+  const r = await call(BRIEF);
+  assert.equal(r.block, true);
+  assert.match(r.reason, /^\[CARL\] Brief refused: the request check: [^\n]*\n- exit code 4\n.*single reminder/s);   // the header is in it
+  assert.equal(await call(BRIEF), undefined);                                    // the next brief is taken
+  writeFileSync(join(agentDir, "carl.json"), JSON.stringify({ request_check: "on" }));
+  await fire("input", { text: "/code also `--sep`" });                           // a command's words count
+  assert.match((await call(BRIEF)).reason, /- `--sep`\n.*not_in_task/s);
+  assert.match((await call(BRIEF)).reason, /- `--sep`/);                         // on: until it is in the brief
+  assert.equal(await call(BRIEF.replace('task_summary = ', 'not_in_task = ["--sep"]\ntask_summary = ')), undefined);
+  writeFileSync(join(agentDir, "carl.json"), JSON.stringify({ request_check: "off" }));
+  await fire("input", { text: "and `--quote`" });
+  assert.equal(await call(BRIEF), undefined);
+  writeFileSync(join(agentDir, "carl.json"), "{}");
+});

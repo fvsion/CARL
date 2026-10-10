@@ -31,6 +31,8 @@
 // Phase 23.4.6: Tests (after Delegation reminder, only while the coder is on): when CARL's test session runs for new
 // code: before code (the default), after code, off. `carl-sync.py set CODER_TESTS=VALUE`; the setup writes it into
 // both state files (carl.json "coder_tests"), which the chain reads at each coder task: no restart in either client.
+// The 23.4.3 addendum: Request Check (after Tests): on, single reminder (the default), off; CODER_REQUEST_CHECK, carl.json
+// "request_check", read by carl-delegation at each coder task: no restart.
 import { spawn } from "node:child_process";
 import * as fs from "node:fs";
 import { homedir } from "node:os";
@@ -635,6 +637,30 @@ function coderModelRow(cur, carl, external, client) {
            kind: "choice", values, titles: { main: thinkingWord("main") }, notes, actions };
 }
 
+/** The Request Check row's values and their words (the 23.4.3 addendum; default reminder). */
+const REQUEST = ["on", "reminder", "off"];
+/** @type {Record<string, string>} */
+const REQUEST_WORDS = { on: "on", reminder: "single reminder", off: "off" };
+
+/**
+ * The Request Check row (the 23.4.3 addendum): whether the coder's brief must carry the literals of the user's request.
+ * CODER_REQUEST_CHECK=VALUE; both clients read it at each coder task (live: no restart).
+ * @param {unknown} v the state file's request_check ("reminder" when missing) @returns {Row}
+ */
+function requestRow(v) {
+  const cur = REQUEST.includes(/** @type {string} */ (v)) ? String(v) : "reminder";
+  const name = "the request check";
+  /** @type {Record<string, Action>} */
+  const actions = {};
+  for (const t of REQUEST.filter((x) => x !== cur)) {
+    actions[t] = { id: `set:CODER_REQUEST_CHECK=${t}`, args: ["set", `CODER_REQUEST_CHECK=${t}`],
+                   busy: t === "off" ? "turning off…" : `switching to ${REQUEST_WORDS[t]}…`, row: "request", want: t, name,
+                   did: `CARL set ${name} to ${REQUEST_WORDS[t]} on this computer.`, live: ["opencode", "pi"] };
+  }
+  return { id: "request", label: "Request Check", state: REQUEST_WORDS[cur], value: cur, kind: "choice", values: REQUEST,
+           titles: REQUEST_WORDS, notes: {}, actions };
+}
+
 /** The Tests row's values and their words (Phase 23.4.6). */
 const TESTS = ["before", "after", "off"];
 /** @type {Record<string, string>} */
@@ -668,7 +694,7 @@ function parts(client, session) {
   const over = thinkingOverrides(env.CODER_THINKING);
   const envOn = (/** @type {string} */ key) => env[key] !== "1";
   const oc = text(join(CARL, "opencode.env"));
-  let coderOn, bg, reminder, browser, search, models, providers, fallback, tests;
+  let coderOn, bg, reminder, browser, search, models, providers, fallback, tests, request;
   let coderRef = "main";                     // Coder model: "main" or the external model the setup wrote
   let refThinking = "default";               // its thinking on this computer ("default": model default)
   /** @type {Row[]} */
@@ -690,6 +716,7 @@ function parts(client, session) {
     search = openCodeSearch(oc);
     const st = obj(json(join(OC, "carl.json")));
     tests = st.coder_tests;
+    request = st.request_check;
     models = stateModels(st.models, over);
     providers = providerIds(st);
     fallback = typeof cfg.model === "string" ? cfg.model : "";
@@ -708,6 +735,7 @@ function parts(client, session) {
     const servers = obj(mcp.mcpServers ?? mcp.servers);
     const st = obj(json(join(PI, "carl.json")));
     tests = st.coder_tests;
+    request = st.request_check;
     coderOn = exists(join(PI, "agents", "coder.md")) || exists(join(PI, "agents", "carl-coder.md"));
     bg = coderOn ? st.background_subagents !== false : envOn("NO_BACKGROUND_SUBAGENTS");
     reminder = coderOn ? obj(st.delegation).reminder !== false : envOn("NO_REMINDER");
@@ -734,7 +762,7 @@ function parts(client, session) {
     switchRow("coder", "Coder", "the coder subagent", "NO_CODER", coderOn),
     ...(coderOn ? [switchRow("background", "Background Coder", "the background coder", "NO_BACKGROUND_SUBAGENTS", bg),
                    switchRow("reminder", "Delegation Reminder", "the delegation reminder", "NO_REMINDER", reminder),
-                   testsRow(tests), ...thinking, coderModelRow(coderRef, carl?.m.id ?? "", external, client)] : []),
+                   testsRow(tests), requestRow(request), ...thinking, coderModelRow(coderRef, carl?.m.id ?? "", external, client)] : []),
   ];
   return [
     { id: "subagent", label: "Coder Subagent", state: coderOn ? "on" : "off", kind: "list", listTitle: "Coder Subagent",

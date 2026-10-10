@@ -107,9 +107,9 @@ function stage(allOn, models = ONE) {
 
 const OC_ROWS = ["subagent", "browser", "web", "lsp", "sidebar", "switcher", "cache", "check", "sync", "auto", "apply", "once"];
 const PI_ROWS = ["subagent", "browser", "web", "cache", "sync", "auto", "apply", "once"];
-const CODER_ROWS = ["coder", "background", "reminder", "tests", "thinking", "coder-model"];
+const CODER_ROWS = ["coder", "background", "reminder", "tests", "request", "thinking", "coder-model"];
 const LABELS = { subagent: "Coder Subagent", coder: "Coder", background: "Background Coder", reminder: "Delegation Reminder",
-                 tests: "Tests",
+                 tests: "Tests", request: "Request Check",
                  thinking: "Coder Thinking", "coder-model": "Coder Model", browser: "Browser",
                  web: "Web Search", lsp: "LSP", sidebar: "Subagents Side Panel", switcher: "Session Switcher",
                  cache: "Disk Cache", check: "Model Check", auto: "Apply New Configs at Once", sync: "Sync Service",
@@ -234,7 +234,7 @@ test("router mode: the row is for the session's model, else the config's default
   assert.equal(getIn("pi", "thinking", { model: `llamacpp/${Q}` }).notes.main, "the main session's thinking (low)");
   rmSync(join(PI, "settings.json"));
   stage(true, {});                                                                      // an install before 23.4.4
-  assert.deepEqual(subIds("pi"), ["coder", "background", "reminder", "tests", "coder-model"]);
+  assert.deepEqual(subIds("pi"), ["coder", "background", "reminder", "tests", "request", "coder-model"]);
 });
 
 test("coderModel: the session's CARL model, else the default, else the first", () => {
@@ -291,7 +291,7 @@ for (const allOn of [true, false]) {
     stage(allOn);
     for (const client of ["opencode", "pi"]) {
       for (const r of allRows(panel(client).rows)) {
-        if (["sync", "apply", "once", "subagent", "tests", "thinking", "coder-model"].includes(r.id)) continue;
+        if (["sync", "apply", "once", "subagent", "tests", "request", "thinking", "coder-model"].includes(r.id)) continue;
         const want = r.id === "web" ? (allOn ? "exa" : "off") : r.id === "auto" ? (allOn ? "off" : "on") : allOn ? "on" : "off";
         assert.equal(r.state, want, `${client} ${r.id}`);
         if (r.id === "auto") {
@@ -702,7 +702,7 @@ test("OpenCode: Coder Subagent opens its list; Coder Thinking its values (● th
   assert.equal(sub.title, "Coder Subagent");
   assert.equal(sub.placeholder, undefined);                               // no search line in a sub-list
   assert.deepEqual(sub.options.map((o) => [o.title, o.footer]), [["Coder", "on"], ["Background Coder", "on"],
-    ["Delegation Reminder", "on"], ["Tests", "before code ›"], ["Coder Thinking", "dashboard default ›"],
+    ["Delegation Reminder", "on"], ["Tests", "before code ›"], ["Request Check", "single reminder ›"], ["Coder Thinking", "dashboard default ›"],
     ["Coder Model", "same as main"]]);
   const n = dialogs.length;
   sub.onSelect({ value: "coder-model" });                                 // one value: nothing opens
@@ -901,12 +901,12 @@ test("Pi: Pi's settings list; Coder Subagent opens its list in place (Esc back);
   assert.equal(screen()[2], "→ Coder Subagent  on ›");
   key("\r");                                                               // opens the list in the same place
   assert.deepEqual(screen(), ["Coder Subagent", "", "→ Coder  on", "  Background Coder  on", "  Delegation Reminder  on",
-                              "  Tests  before code ›", "  Coder Thinking  dashboard default ›", "  Coder Model  same as main"]);
-  key(DOWN, DOWN, DOWN, DOWN, DOWN, "\r");                                 // Coder Model: one value, nothing happens
+                              "  Tests  before code ›", "  Request Check  single reminder ›", "  Coder Thinking  dashboard default ›", "  Coder Model  same as main"]);
+  key(DOWN, DOWN, DOWN, DOWN, DOWN, DOWN, "\r");                           // Coder Model: one value, nothing happens
   assert.equal(screen()[0], "Coder Subagent");
   assert.ok(screen().includes("→ Coder Model  same as main"), screen().join("\n"));
   assert.deepEqual(calls(), []);
-  key(DOWN, DOWN, DOWN, DOWN, DOWN, "\r");                                 // around to Coder Thinking: its values
+  key(DOWN, DOWN, DOWN, DOWN, DOWN, DOWN, "\r");                           // around to Coder Thinking: its values
   assert.equal(screen()[0], `Coder Thinking with ${g}`);                  // the session's model (ctx.model)
   assert.deepEqual(screen().slice(2), ["→ dashboard default  off", "  same as main  the main session's thinking (on)",
                                        "  off", "  on"]);
@@ -1051,7 +1051,7 @@ test("Coder Model: a choice runs carl-sync.py set CODER_MODEL; the toast says wh
     + "to openrouter.ai, and the model costs money. Restart OpenCode to use it." });     // 1 slot: no warning (no slot used)
   const sub = rowsAt(panel("opencode", OC_SESSION).rows, ["subagent"]);
   assert.deepEqual(sub.map((r) => [r.label, shownState(r)]), [["Coder", "on"], ["Background Coder", "on"],
-    ["Delegation Reminder", "on"], ["Tests", "before code ›"], ["Coder Thinking", "model default ›"], ["Coder Model", `${OR} ›`]]);
+    ["Delegation Reminder", "on"], ["Tests", "before code ›"], ["Request Check", "single reminder ›"], ["Coder Thinking", "model default ›"], ["Coder Model", `${OR} ›`]]);
   assert.match(panel("opencode", OC_SESSION).title, /^Restart OpenCode to use \d+ changes?\.$/);   // (1 in the TUI test)
   // back to same as main: the coder stays on (CODER=1); with 1 slot, the warning of the coder on the server
   fake({ files: { [join(OC, "opencode.json")]: ocWith() }, out: { ok: true, restart: ["opencode"], slots: 1 } });
@@ -1162,7 +1162,7 @@ test("Pi: Coder Model's values come from Pi's model registry; a choice says wher
   const DOWN = "\x1b[B";
   key("\r");
   assert.equal(screen().at(-1), "  Coder Model  same as main ›");
-  key(DOWN, DOWN, DOWN, DOWN, DOWN, "\r");
+  key(DOWN, DOWN, DOWN, DOWN, DOWN, DOWN, "\r");
   assert.equal(screen()[0], "Coder Model");
   assert.deepEqual(screen().slice(2), [`→ same as main  CARL: ${Q}`, "  opencode/free-coder-1  opencode.ai, free",
                                        `  ${OR}  openrouter.ai, paid`, "  custom/no-price  10.0.0.5"]);
@@ -1214,4 +1214,33 @@ test("Tests: before code (the default), after code, off; set CODER_TESTS; no res
   }
   stage(false);
   assert.ok(!subIds("opencode").includes("tests"));                                    // the coder off: the row goes
+});
+
+test("Request Check (the 23.4.3 addendum): single reminder (the default), on, off; set CODER_REQUEST_CHECK; no restart", async () => {
+  stage(true);
+  for (const client of ["opencode", "pi"]) {
+    const r = get(client, "request");
+    assert.deepEqual([r.kind, r.label, r.state, r.value], ["choice", "Request Check", "single reminder", "reminder"]);
+    assert.equal(shownState(r), "single reminder ›");
+    assert.deepEqual(r.values, ["on", "reminder", "off"]);
+    assert.deepEqual(r.titles, { on: "on", reminder: "single reminder", off: "off" });
+    assert.deepEqual(r.notes, {});
+    const a = r.actions.on;
+    assert.deepEqual([a.args, a.row, a.want, a.live], [["set", "CODER_REQUEST_CHECK=on"], "request", "on", ["opencode", "pi"]]);
+    assert.equal(a.did, "CARL set the request check to on on this computer.");
+    assert.equal(r.actions.off.busy, "turning off…");
+  }
+  for (const [client, file] of [["opencode", join(OC, "carl.json")], ["pi", join(PI, "carl.json")]]) {
+    stage(true);
+    const st = JSON.parse(readFileSync(file, "utf8"));
+    const title = panel(client).title;
+    fake({ files: { [file]: JSON.stringify({ ...st, request_check: "off" }) }, out: { ok: true, restart: [] } });
+    const said = await act(get(client, "request").actions.off, client);
+    assert.deepEqual(calls(), ["set CODER_REQUEST_CHECK=off"]);
+    assert.deepEqual(said, { ok: true, message: "CARL set the request check to off on this computer." });
+    assert.equal(get(client, "request").state, "off");
+    assert.equal(panel(client).title, title);
+  }
+  stage(false);
+  assert.ok(!subIds("opencode").includes("request"));
 });

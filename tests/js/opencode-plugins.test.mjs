@@ -197,6 +197,28 @@ test("carl-delegation: after a refused code brief, the same session's tests-only
   assert.equal(await before(hooks, "task", { subagent_type: "coder", prompt: testsOnly }, "s1"), "");
 });
 
+test("carl-delegation: the Request Check: the user's words of the main session; a reminder once (the state file's setting)", async () => {
+  const client = { session: { get: async ({ path }) => ({ data: { id: path.id, parentID: path.id === "sub" ? "m" : undefined } }) } };
+  const dir = mkdtempSync(join(tmpdir(), "carl-req-"));
+  const stateFile = join(dir, "carl.json");
+  const hooks = await delegation.server({ client, directory: "/p" }, { coder: "coder", stateFile });
+  const say = (sessionID, text, synthetic = false) =>
+    hooks["chat.message"]({ sessionID, agent: "build" }, { message: {}, parts: [{ type: "text", text, synthetic }] });
+  await say("m", "Write the header `month,orders,total` and exit with code 4 when the file is open.");
+  await say("m", "<task id=\"x\" state=\"completed\">`--never-the-users`</task>", true);   // not the user's words
+  const refused = await before(hooks, "task", { subagent_type: "coder", prompt: BRIEF });
+  assert.match(refused, /^\[CARL\] Brief refused: the request check: [^\n]*\n- exit code 4\nCopy each/);
+  assert.doesNotMatch(refused, /never-the-users/);
+  assert.equal(await before(hooks, "task", { subagent_type: "coder", prompt: BRIEF }), "");     // reminded once: taken
+  writeFileSync(stateFile, JSON.stringify({ request_check: "off" }));
+  await say("m", "Add `--sep`.");
+  assert.equal(await before(hooks, "task", { subagent_type: "coder", prompt: BRIEF }), "");
+  writeFileSync(stateFile, JSON.stringify({ request_check: "on" }));
+  await say("m", "Add `--sep`.");
+  assert.match(await before(hooks, "task", { subagent_type: "coder", prompt: BRIEF }), /- `--sep`/);
+  assert.match(await before(hooks, "task", { subagent_type: "coder", prompt: BRIEF }), /- `--sep`/);
+});
+
 test("carl-delegation: a coder task whose brief fails the check is refused before the coder starts", async () => {
   const client = { session: { get: async () => ({ data: {} }) } };
   const hooks = await delegation.server({ client, directory: "/p" }, { coder: "coder" });

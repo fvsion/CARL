@@ -490,7 +490,7 @@ export function parseJson(text, o = {}) {
 const SCHEMA = {
   work_mode: null, work_type: null, existing_tests: null,
   task_summary: null, expected_outcome: null, current_state: null, design_notes: null,
-  exact_interfaces: null, scope_limits: null,
+  exact_interfaces: null, scope_limits: null, not_in_task: null,
   reference_doc: ["doc_path", "doc_purpose"],
   known_file: ["file_path", "file_action"],
   task_requirement: ["requirement_id", "requirement_text"],
@@ -634,7 +634,7 @@ export function extractBrief(text) {
  * @typedef {{
  *   workMode: string, workType: string, existingTests: string[],
  *   taskSummary: string, expectedOutcome: string, currentState: string, designNotes: string,
- *   exactInterfaces: string[], scopeLimits: string,
+ *   exactInterfaces: string[], scopeLimits: string, notInTask: string[],
  *   referenceDocs: { path: string, purpose: string }[],
  *   files: BriefFile[], requirements: Requirement[], checks: Check[],
  *   projectRules: { text: string, source: string }[], inputExamples: { source: string, text: string }[],
@@ -695,6 +695,7 @@ export function normalizeBrief(raw) {
     currentState: str(raw.current_state),
     designNotes: str(raw.design_notes),
     exactInterfaces: list(raw.exact_interfaces).map(str).filter(Boolean),
+    notInTask: list(raw.not_in_task).map(str).filter(Boolean),
     scopeLimits: str(raw.scope_limits),
     referenceDocs: list(raw.reference_doc).map((d) => ({ path: str(tab(d).doc_path), purpose: str(tab(d).doc_purpose) })),
     files: list(raw.known_file).map((f) => ({ path: briefPath(tab(f).file_path), action: str(tab(f).file_action).toLowerCase() })),
@@ -1082,6 +1083,76 @@ export function checklist(b, format = "toml") {
     : open.length ? `${open.join(", ")} not covered` : `${b.checks.length}: ok`]);
   const w = Math.max(...rows.map(([a]) => a.length));
   return `The brief now (keep each part that is ok when you fix the rest):\n` + rows.map(([a, v]) => `- ${a.padEnd(w)}  ${v}`).join("\n");
+}
+
+// ------------------------------------------------------------------ the request's literals (Phase 23.4.3 addendum)
+// The Request Check: the literals of the user's request (what a brief must carry word for word) and which of them a
+// brief lacks. Tested on agent-bench's prompts and the 36 format runs' briefs (docs: phase23.4.3/literals): the E4B's
+// briefs lost return types, output formats and the entry point. A literal: backticked text, an exit code, a call or a
+// signature (its name and its return type), a file path, a --flag, quoted text. Left out: a bare number (only as an exit
+// code), quoted text right after [ or ( (a key in code), a literal that is part of a longer one. In matching, an upper
+// case placeholder (TEXT, FILE, N), a date or a number stands for any word.
+
+/** @typedef {{ kind: "text" | "exit" | "call" | "path" | "flag", text: string }} Literal */
+
+/**
+ * The literals of a request (the user's messages).
+ * @param {string} text @returns {Literal[]}
+ */
+export function requestLiterals(text) {
+  /** @type {Literal[]} */
+  const out = [];
+  const t = String(text ?? "");
+  /** @param {Literal["kind"]} kind @param {string} v */
+  const add = (kind, v) => {
+    const x = v.trim();
+    if (!x || (kind !== "exit" && /^\d+$/.test(x)) || out.some((o) => o.text.toLowerCase() === x.toLowerCase())) return;
+    out.push({ kind, text: x });
+  };
+  for (const m of t.matchAll(/`([^`\n]+)`/g)) add("text", m[1]);
+  const plain = t.replace(/`[^`\n]+`/g, " ");
+  for (const m of plain.matchAll(/exit(?:s| with)?(?: with)? (?:code|status) (\d+)/gi)) add("exit", m[1]);
+  for (const m of plain.matchAll(/\b([A-Za-z_]\w*)\(([^()]*)\)(?:\s*->\s*([\w[\], ]+?))?(?=[\s,.;)]|$)/g)) add("call", m[0]);
+  for (const m of plain.matchAll(/(?<![\w/.-])((?:[\w-]+\/)*[\w-]+\.(?:py|js|ts|mjs|cjs|json|toml|md|txt|csv|ya?ml|sh|go|rs))\b/g)) add("path", m[1]);
+  for (const m of plain.matchAll(/(?<![\w-])(--[A-Za-z][\w-]*)/g)) add("flag", m[1]);
+  for (const m of plain.matchAll(/(?<![[(\w])"([^"\n]{1,60})"|(?<![[(\w])'([^'\n]{1,60})'(?!\w)/g)) add("text", m[1] ?? m[2]);
+  // a literal that is part of a longer one goes ("done" in "Clear done"; a call's own words stay with it)
+  return out.filter((o) => o.kind === "exit" || !out.some((x) => x !== o && x.kind !== "exit" &&
+    x.text.length > o.text.length && x.text.toLowerCase().includes(o.text.toLowerCase())));
+}
+
+const PLACEHOLDER = /\b(?:[A-Z]{1,8}|\d{4}-\d{2}-\d{2}|\d+(?:\.\d+)?)\b/g;
+/** @param {string} s */
+const squash = (s) => s.replace(/\s+/g, " ").trim();
+/** @param {string} s */
+const reEsc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/**
+ * Is a literal in a brief's text (any key)? A call: its name with "(" (with no arguments: the name as a word) and its
+ * return type after "->"; an exit code: "exit" or "code" and the number; else the text, a placeholder, a date or a
+ * number standing for any word.
+ * @param {Literal} lit @param {string} briefText @returns {boolean}
+ */
+export function hasLiteral(lit, briefText) {
+  const b = squash(String(briefText ?? ""));
+  if (lit.kind === "call") {
+    const m = /^(\w+)\((.*?)\)(?:\s*->\s*(.+))?$/.exec(lit.text);
+    if (!m) return b.toLowerCase().includes(lit.text.toLowerCase());
+    const name = new RegExp(m[2].trim() ? `\\b${reEsc(m[1])}\\s*\\(` : `\\b${reEsc(m[1])}\\b`, "i");
+    return name.test(b) && (!m[3] || new RegExp(`->\\s*${reEsc(m[3].trim())}`, "i").test(b));
+  }
+  if (lit.kind === "exit") return new RegExp(`(?:exit|code)[^.\\n]{0,30}\\b${lit.text}\\b`, "i").test(b);
+  const parts = squash(lit.text).split(PLACEHOLDER);
+  return new RegExp(parts.map(reEsc).join("\\S+"), "i").test(b);
+}
+
+/**
+ * The literals of a request that a brief lacks (also not in the brief's not_in_task, when it has one).
+ * @param {Literal[]} lits @param {string} briefText @param {string[]} [notInTask] @returns {Literal[]}
+ */
+export function missingLiterals(lits, briefText, notInTask = []) {
+  const skip = notInTask.map((x) => squash(x).toLowerCase());
+  return lits.filter((l) => !hasLiteral(l, briefText) && !skip.includes(squash(l.text).toLowerCase()));
 }
 
 // ------------------------------------------------------------------ the chain's helpers

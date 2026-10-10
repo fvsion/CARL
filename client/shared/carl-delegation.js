@@ -24,7 +24,7 @@
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
-import { BRIEF_MARK, briefRefusal, filesByAction, isTestFile, parseBrief } from "./carl-brief.js";
+import { BRIEF_MARK, briefRefusal, filesByAction, isTestFile, missingLiterals, parseBrief, requestLiterals } from "./carl-brief.js";
 
 export const RULE_BEGIN = "<!-- carl:main-agents-only begin -->";
 export const RULE_END = "<!-- carl:main-agents-only end -->";
@@ -274,6 +274,93 @@ export function briefCheck(tool, args, o = {}) {
     if (why) return tasks.length > 1 ? why.replace(": ", `: coder task ${n + 1}: `) : why;
   }
   return "";
+}
+
+// ------------------------------------------------------------------ the Request Check (Phase 23.4.3 addendum)
+// The literals of the user's request (carl-brief.js requestLiterals: commands, signatures, output formats, exit codes,
+// files, flags, quoted text) must reach the coder: a brief that lacks some is sent back before the coder starts (user,
+// 2026-10-10: at brief time, "result makes no sense ... that would be after the issue has propagated"). The request is
+// the user's messages since the last brief that was taken. /carl's Request Check (CODER_REQUEST_CHECK, carl.json
+// "request_check", read at each coder task): on (refused until each literal is in the brief or in not_in_task), reminder
+// (the default: refused once with the list; the next brief is taken as it is), off.
+
+export const REQUEST_SETTINGS = ["on", "reminder", "off"];
+
+/** The Request Check setting from a value of the client's state file (default reminder). @param {unknown} v
+ * @returns {"on" | "reminder" | "off"} */
+export function requestSetting(v) {
+  return REQUEST_SETTINGS.includes(/** @type {string} */ (v)) ? /** @type {"on" | "reminder" | "off"} */ (v) : "reminder";
+}
+
+/** The Request Check setting in a client's state file (carl.json "request_check"), read at each coder task.
+ * @param {string} file @returns {"on" | "reminder" | "off"} */
+export function requestFrom(file) {
+  try {
+    return requestSetting(JSON.parse(readFileSync(file, "utf8"))?.request_check);
+  } catch {
+    return "reminder";
+  }
+}
+
+/** A literal as the refusal names it. @param {import("./carl-brief.js").Literal} l */
+const literalText = (l) => (l.kind === "exit" ? `exit code ${l.text}` : "`" + l.text + "`");
+
+/**
+ * The refusal of a brief that lacks literals of the user's request.
+ * @param {import("./carl-brief.js").Literal[]} missing @param {"on" | "reminder"} setting @returns {string}
+ */
+export function requestText(missing, setting) {
+  return `${BRIEF_MARK}: the request check: these are in the user's request but not in the brief:\n` +
+    missing.map((l) => `- ${literalText(l)}`).join("\n") + "\n" +
+    "Copy each into the brief where it belongs, word for word (a placeholder such as FILE or N may stay): commands, " +
+    "signatures, output formats and messages in exact_interfaces, files in [[known_file]]. Then send the whole brief again. " +
+    (setting === "on" ? 'If one is not part of this task, list it in not_in_task = ["..."].'
+      : "This is a single reminder: the next brief is taken as it is.");
+}
+
+/**
+ * The Request Check of one main session: the user's messages since the last brief that was taken, and the check of a
+ * coder call whose brief passed the brief check.
+ */
+export class RequestCheck {
+  constructor() {
+    /** @type {string[]} */
+    this.texts = [];
+    this.reminded = false;
+  }
+
+  /** A message of the user (its own text, without CARL's reminder). @param {string} text */
+  user(text) {
+    if (String(text ?? "").trim()) this.texts.push(String(text));
+  }
+
+  /** A brief was taken: the next request starts. */
+  taken() {
+    this.texts = [];
+    this.reminded = false;
+  }
+
+  /**
+   * Before a coder call whose brief passed the brief check: the refusal, or "" (the brief is taken).
+   * @param {string} tool @param {Record<string, unknown>} args @param {"on" | "reminder" | "off"} setting
+   */
+  check(tool, args, setting) {
+    const items = coderTaskItems(tool, args);
+    if (!items.length) return "";
+    if (setting === "off" || (setting === "reminder" && this.reminded)) {
+      this.taken();
+      return "";
+    }
+    const brief = items.map((t) => t.text).join("\n\n");
+    const notIn = setting === "on" ? items.flatMap((t) => parseBrief(t.text).brief?.notInTask ?? []) : [];
+    const missing = missingLiterals(requestLiterals(this.texts.join("\n\n")), brief, notIn);
+    if (!missing.length) {
+      this.taken();
+      return "";
+    }
+    this.reminded = true;
+    return requestText(missing, setting);
+  }
 }
 
 /** A brief's work_mode, also from a brief that does not read ("" when it says none). @param {string} text */
