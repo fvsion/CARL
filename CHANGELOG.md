@@ -3,6 +3,43 @@
 All notable changes to CARL. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Dates are local dates on the development Mac (M3 Pro, 36 GB).
 
+## 1.16.0 - 2026-10-10
+
+The Phase 23.4.3 addendum (the brief's checks and the run gate), the RAM cache count, a held chain's project.
+
+### Added
+- **The run gate** (/carl, Coder Subagent, Coder Loop > Run Gate; on by default): before a coder task with code,
+  CARL runs the project's tests (pytest, npm test or node --test, go test, cargo test); after it, it checks the
+  changed files (py_compile, ruff's error rules, `python -m PKG --help`, node --check, go vet, cargo check) and runs
+  the tests again. A failing check, tests that do not run, or a test that passed before and fails now starts a fix
+  round (Fix Rounds 0-3, default 1); when none is left, the main agent gets NOT DONE with the output and a ready
+  brief. OpenCode: in the foreground; a held background chain is checked too (delivered after a restart).
+- **The Request Check** (/carl, Request Check: reminder, the default; on; off): after the brief check, CARL compares
+  the brief with the literals of the user's messages (backticked text, exit codes, signatures, paths, flags, quoted
+  text). Reminder refuses once with the list and where each goes; on refuses until each is in the brief or in the
+  new `not_in_task`.
+- **The free-form brief** (/carl, Free-Form Brief: per model, the default; on; off): `detailed_brief`, the main
+  agent's own words next to the structured keys, taught only to a main session whose model qualifies (a model that is
+  not CARL's, or a catalogue entry marked for it: the 35B-A3B and the 27B Q4 builds).
+- **The RAM cache count** in the dashboard's SLOTS card: the prompts and sessions llama.cpp holds in RAM (--cache-ram)
+  and their memory. A single-model start runs at `-lv 4` and writes its log through `tools/llama-log-filter.py`,
+  which drops the per-request detail, so the log stays about its size. HEALTH warns when the filter stopped.
+- Each Coder setting with values explains itself in two sentences when its values open (OpenCode: a note; Pi: under
+  the title).
+
+### Changed
+- **A refused brief says how to fix it**: a checklist of the brief's parts and their state, a ready
+  `[[acceptance_check]]` for requirements no check covers, where a key under the wrong block goes, and for broken TOML
+  the line and the key's right form. A task text with no brief gets the brief's form.
+- /carl's row labels are title case ("Coder Subagent").
+
+### Fixed
+- A held background chain was delivered to a new project at the same path: it now goes only to the same folder
+  (device and inode), the same OpenCode project and a main session that is still there.
+- After a refused code brief, the main agent could send the task as tests only (the coder then wrote tests and no
+  code): refused until a code brief is taken or the user writes again.
+- `carl-sync.py set` dropped a value `on` for settings that are not on/off switches.
+
 ## 1.15.0 - 2026-10-09
 
 Phase 23.4.6: the test session configurable.
