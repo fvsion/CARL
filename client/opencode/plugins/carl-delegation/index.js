@@ -60,9 +60,13 @@
 // tool runs the code session, the plugin then starts the test session, and CARL runs the checks after both. off: one
 // session, and its result ends with TESTS_OFF. The held chain's record names its sessions first and second (the task
 // tool's and the plugin's); a record from before (test, code) is read the same.
+// The 23.4.5 follow-up (the hand check: a new project at the same path got an old chain's result): a record also keeps
+// the project folder's identity (folderId: its device and inode, so a folder made again at the same path is another
+// one) and OpenCode's project id. At the next start, a record is delivered only when both still match (when the record
+// has them) and its main session is still there in this folder; else the record is dropped, not delivered.
 
 import { execFile } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { parseBrief, checkBrief } from "./carl-brief.js";
@@ -209,6 +213,37 @@ function alive(pid) {
  * directory (the project), pid (the OpenCode process), at, chain (Chain.snapshot()). A record of v 1 (before 23.4.6)
  * has test, code and the stages test, held, code: firstOf and stageOf read both.
  */
+/** A folder's identity: its device and inode ("" when it cannot be read). A folder made again at the same path has
+ * another one. @param {string} dir @returns {string} */
+export function folderId(dir) {
+  try {
+    const st = statSync(dir);
+    return `${st.dev}:${st.ino}`;
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * Whether a held chain's record belongs to this project now: the same folder (its identity, when the record has one),
+ * the same OpenCode project (when both are known), and its main session is there in this folder (when the client can
+ * say; a session that is gone does not match). @param {any} r @param {{ folder: string, project: string }} here
+ * @param {any} client @returns {Promise<boolean>}
+ */
+export async function recordIsHere(r, here, client) {
+  if (r?.folder && here.folder && r.folder !== here.folder) return false;
+  if (r?.project && here.project && r.project !== here.project) return false;
+  if (typeof client?.session?.get !== "function") return true;
+  try {
+    const got = /** @type {any} */ (await client.session.get({ path: { id: String(r.parent) } }));
+    const info = got?.data ?? (got?.error ? undefined : got);
+    if (!info?.id) return false;
+    return !info.directory || info.directory === r.directory;
+  } catch {
+    return false;
+  }
+}
+
 /** A record's first session (v 2: first; v 1: test). @param {any} r @returns {string} */
 export const firstOf = (r) => String(r?.first ?? r?.test ?? "");
 /** A record's second session (v 2: second; v 1: code). @param {any} r @returns {string} */
@@ -356,6 +391,8 @@ export default {
     // brief_json variant sets "json"; a JSON brief is read either way)
     const briefFormat = opts.briefFormat === "json" ? "json" : "toml";
     const cwd = String(/** @type {any} */ (ctx)?.directory ?? process.cwd());
+    // the project's identity for the held chains' records (the 23.4.5 follow-up)
+    const here = { folder: folderId(cwd), project: String(/** @type {any} */ (ctx)?.project?.id ?? "") };
     const client = /** @type {any} */ (ctx)?.client;
     /** @type {Map<string, Pending>} a coder task call (its callID) with a chain or a watch */
     const calls = new Map();
@@ -454,7 +491,8 @@ export default {
     const record = (p, stage) => {
       if (!p.chain || !p.first) return;
       store.put({ v: 2, parent: p.parent, first: p.first, stage, ...(p.second ? { second: p.second } : {}), description: p.description,
-                  agent: p.agent ?? "", directory: cwd, pid: process.pid, at: Date.now(), chain: p.chain.snapshot() });
+                  agent: p.agent ?? "", directory: cwd, ...(here.folder ? { folder: here.folder } : {}),
+                  ...(here.project ? { project: here.project } : {}), pid: process.pid, at: Date.now(), chain: p.chain.snapshot() });
     };
     /**
      * The chain's second session (the code session; with the Tests setting "after", the test session): a child
@@ -562,6 +600,10 @@ export default {
         if (!r || r.directory !== cwd || !r.parent || !first || !r.chain) continue;
         if (r.pid === process.pid || alive(r.pid) || !store.claim(r)) continue;
         try {
+          if (!(await recordIsHere(r, here, client))) {           // another project at this path, or no session:
+            store.drop(r.parent, first);                           // never delivered to it
+            continue;
+          }
           const chain = Chain.from(r.chain);
           /** @type {{ id: string, state: string, text: string }} */
           let out;

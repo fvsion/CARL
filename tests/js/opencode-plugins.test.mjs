@@ -397,6 +397,7 @@ test("carl-delegation, the chain in the background: the test session's completio
     output: delegationMod.taskXml({ id: "ses_test", state: "running", summary: "Background task started", text: "working" }) });
   const rec = () => JSON.parse(readFileSync(join(CHAINS, "m.json"), "utf8")).chains;
   assert.deepEqual(rec().map((r) => [r.v, r.parent, r.first, r.stage, r.directory, r.pid]), [[2, "m", "ses_test", "first", oc.dir, process.pid]]);
+  assert.equal(rec()[0].folder, delegationMod.folderId(oc.dir));      // the folder's identity (the 23.4.5 follow-up)
   assert.equal(statSync(join(CHAINS, "m.json")).mode & 0o777, 0o600);
   const done = delegationMod.taskXml({ id: "ses_test", state: "completed", summary: "Background task completed: Feature: tests",
                                       text: testSession(oc.dir, false) });
@@ -564,6 +565,35 @@ test("carl-delegation, the hold is safe: a chain that OpenCode left undelivered 
   assert.deepEqual(store.read("p1").map((r) => r.test), ["ses_t6", "ses_t7"]);   // the delivered ones are gone
   store.write("p1", []);
   assert.equal(existsSync(join(CHAINS, "p1.json")), false);
+});
+
+test("carl-delegation, the hold is safe: a record of another folder at the same path, another project or a session that is gone is dropped, not delivered", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "carl-oc-recover3-"));
+  const dead = spawnSync(process.execPath, ["-e", ""]).pid;
+  const chain = new chainMod.Chain(chainMod.coderPlan(CHAIN_BRIEF()).brief, dir);
+  const here = delegationMod.folderId(dir);
+  const rec = (first, parent, extra = {}) => ({ v: 2, parent, first, stage: "held", description: `Task ${first}`, agent: "build",
+                                                directory: dir, folder: here, project: "prj_now", pid: dead, at: 1,
+                                                chain: chain.snapshot(), ...extra });
+  const store = new delegationMod.ChainStore(CHAINS);
+  for (const [first, parent, extra] of [["ses_ok", "p3", {}], ["ses_folder", "p4", { folder: "1:2" }],
+                                        ["ses_project", "p5", { project: "prj_old" }], ["ses_gone", "p6", {}],
+                                        ["ses_moved", "p7", {}], ["ses_old", "p8", { folder: undefined, project: undefined }]]) {
+    store.write(parent, [rec(first, parent, extra)]);
+  }
+  const sessions = { p3: { id: "p3", directory: dir }, p4: { id: "p4", directory: dir }, p5: { id: "p5", directory: dir },
+                     p7: { id: "p7", directory: "/elsewhere" }, p8: { id: "p8", directory: dir } };
+  const sent = [];
+  const client = { session: {
+    get: async ({ path }) => (sessions[path.id] ? { data: sessions[path.id] } : { error: { name: "NotFoundError" } }),
+    messages: async () => ({ data: [] }),
+    promptAsync: async (o) => (sent.push(o.path.id), { data: undefined }),
+  } };
+  await delegation.server({ client, directory: dir, project: { id: "prj_now" } }, { recoverMs: 5 });
+  await new Promise((r) => setTimeout(r, 120));
+  assert.deepEqual(sent.sort(), ["p3", "p8"]);                         // this folder, this project, its session there
+  for (const p of ["p3", "p4", "p5", "p6", "p7", "p8"]) assert.equal(existsSync(join(CHAINS, `${p}.json`)), false, p);
+  assert.equal(delegationMod.folderId(join(dir, "nope")), "");
 });
 
 test("carl-delegation, the hold is safe with Tests after code: a record of v 2 (first, second) is delivered with the sessions' roles", async () => {
