@@ -3,8 +3,9 @@ the entries from this list; installed-models.json carries it to a VM). Pure.
 
 Only downloaded models, never the whole catalogue. Each one: its CARL name (the id the server
 serves it under), its label, its window per slot (its effective settings), how it thinks
-(the catalogue's or the user's card "thinking"; a custom model without one: on / off) and the
-thinking of each role (thinking_main, thinking_coder: its effective settings, domain/thinking.py).
+(the catalogue's or the user's card "thinking"; a custom model without one: on / off), the
+thinking of each role (thinking_main, thinking_coder: its effective settings, domain/thinking.py), and free_form when
+the catalogue entry says free_form_brief (its main session may write the brief's free-form part: the 23.4.3 addendum).
 """
 from __future__ import annotations
 
@@ -33,7 +34,8 @@ def client_entry(m: ModelInfo, ctx: int, roles: Optional[Roles] = None) -> JsonO
     qwen = str(m.get("family") or "").startswith("qwen")
     kind = m.get("thinking") or DEFAULT_THINKING
     return {"id": m.get("name", ""), "label": label or m.get("name", ""), "ctx": int(ctx),
-            "thinking": kind, "off_sampling": "qwen" if qwen else "same", **thinking.values(kind, roles)}
+            "thinking": kind, "off_sampling": "qwen" if qwen else "same", **thinking.values(kind, roles),
+            **({"free_form": True} if m.get("free_form_brief") is True else {})}
 
 
 def client_list(models: List[ModelInfo], ctx_of: Callable[[ModelInfo], int], default: Optional[str],

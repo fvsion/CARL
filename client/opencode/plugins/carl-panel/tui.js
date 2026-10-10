@@ -137,6 +137,8 @@ function controlPanel(api) {
     } else if (r.kind === "list") {
       open([...path, r.id]);
     } else if (r.kind === "choice" && (r.values ?? []).length > 1) {
+      // a Coder setting's explanation (at most two sentences): a toast, since the dialog has no text area
+      if (r.about) api.ui.toast({ variant: "info", message: r.about, duration: 8000 });
       show(() => api.ui.DialogSelect({
         title: r.choiceTitle ?? r.label,
         options: (r.values ?? []).map((v) => ({ title: r.titles?.[v] ?? v, value: v, description: r.notes?.[v] })),

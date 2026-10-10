@@ -206,7 +206,7 @@ test("Pi: not due, one process as before; follow_up with existing_tests adds the
     writeFileSync(join(cwd, "tests", "check.test.mjs"), RED);
   });
   assert.deepEqual(existing.log().map((r) => r.mode), ["code"]);
-  assert.match(existing.text, /\n\n\[CARL\] Tests unchanged: tests\/check\.test\.mjs\.$/);
+  assert.match(existing.text, /\n\n\[CARL\] Tests unchanged: tests\/check\.test\.mjs\.\n\n\[CARL\] Run gate: done\. CARL ran `node --test --test-reporter=tap`\.$/);
   const chain = await call({ chain: [{ agent: "scout", task: "Look." }, { agent: "coder", task: BRIEF() }] });
   assert.deepEqual(chain.log().map((r) => [r.agent, r.mode]), [["scout", "other"], ["coder", "test"], ["coder", "code"]]);
   assert.match(chain.text, /^\[CARL\] Chain:/);

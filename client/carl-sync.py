@@ -51,6 +51,10 @@ Usage: carl-sync.py COMMAND
                     CODER_REQUEST_CHECK: reminder (the default), on or off:
                       the check that the brief carries the literals of
                       your request (no restart).
+                    CODER_RUN_GATE: on (the default) or off: CARL checks
+                      the coder's work after each code session.
+                    CODER_FIX_ROUNDS: 0, 1 (the default), 2 or 3: the fix
+                      rounds that the run gate starts by itself.
                   It shows the result as JSON: what changed, which client
                   (OpenCode, Pi) must restart, and the server's slots (as the
                   installer read them; null when the server does not answer).
@@ -95,7 +99,8 @@ INSTALL_ENV = os.path.join(CONF, "client-install.env")
 # the install switches a sync applies again (install.sh records them)
 SWITCHES = ("CLIENTS", "CODER", "NO_CODER", "WEB_SEARCH", "NO_LSP", "LSP", "NO_BROWSER", "BROWSER_HEADED",
             "NO_SIDEBAR", "NO_SWITCHER", "NO_MODEL_CHECK", "NO_BACKGROUND_SUBAGENTS", "NO_CACHE", "LLAMA_CTX",
-            "NO_REMINDER", "CODER_THINKING", "CODER_MODEL", "CODER_MODEL_THINKING", "CODER_TESTS", "CODER_REQUEST_CHECK")
+            "NO_REMINDER", "CODER_THINKING", "CODER_MODEL", "CODER_MODEL_THINKING", "CODER_TESTS", "CODER_REQUEST_CHECK",
+            "CODER_RUN_GATE", "CODER_FIX_ROUNDS", "CODER_FREE_FORM")
 # the switches that "set" (the /carl panel) changes, and their values: 1 = off, "on" = the line goes (the default)
 OFF_SWITCHES = ("NO_CODER", "NO_BACKGROUND_SUBAGENTS", "NO_REMINDER", "NO_BROWSER", "NO_LSP", "NO_SIDEBAR",
                 "NO_SWITCHER", "NO_CACHE", "NO_MODEL_CHECK")
@@ -105,7 +110,10 @@ SETTABLE = {**{k: ("1", "on") for k in OFF_SWITCHES}, "WEB_SEARCH": ("exa", "par
             "CODER_MODEL": (),         # PROVIDER/MODEL (CODER_MODEL_RE) or main (Phase 23.4.5)
             "CODER_MODEL_THINKING": (),    # a level or variant name (LEVEL_RE) or default
             "CODER_TESTS": ("before", "after", "off"),    # the Tests setting (Phase 23.4.6)
-            "CODER_REQUEST_CHECK": ("reminder", "on", "off")}    # the Request Check (23.4.3 addendum)
+            "CODER_REQUEST_CHECK": ("reminder", "on", "off"),    # the Request Check (23.4.3 addendum)
+            "CODER_RUN_GATE": ("on", "off"),                       # the Coder Loop's run gate (23.4.3 addendum)
+            "CODER_FIX_ROUNDS": ("0", "1", "2", "3"),              # its fix rounds
+            "CODER_FREE_FORM": ("model", "on", "off")}             # the free-form brief (23.4.3 addendum)
 THINKING_VALUES = ("main", "on", "off", "low", "medium", "xhigh")
 THINKING_DEFAULT = "default"    # "set": the model's entry goes (the dashboard's Coder thinking applies again)
 MODEL_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")   # a model name (client/carl_models.py)
@@ -115,9 +123,10 @@ CODER_MODEL_MAIN = "main"       # the coder on the main session's model (the def
 LEVEL_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,39}")
 OPENCODE_ONLY = ("NO_LSP", "NO_SIDEBAR", "NO_SWITCHER", "NO_MODEL_CHECK")    # Pi has no such part
 # Pi reads the coder's thinking and model (carl.json) each time it starts the coder: no restart
-PI_LIVE = (*OPENCODE_ONLY, "CODER_THINKING", "CODER_MODEL", "CODER_MODEL_THINKING", "CODER_TESTS", "CODER_REQUEST_CHECK")
+PI_LIVE = (*OPENCODE_ONLY, "CODER_THINKING", "CODER_MODEL", "CODER_MODEL_THINKING", "CODER_TESTS", "CODER_REQUEST_CHECK",
+           "CODER_RUN_GATE", "CODER_FIX_ROUNDS", "CODER_FREE_FORM")
 # OpenCode's carl-delegation reads the Tests setting (carl.json) at each coder task: no restart (Phase 23.4.6)
-OPENCODE_LIVE = ("CODER_TESTS", "CODER_REQUEST_CHECK")
+OPENCODE_LIVE = ("CODER_TESTS", "CODER_REQUEST_CHECK", "CODER_RUN_GATE", "CODER_FIX_ROUNDS", "CODER_FREE_FORM")
 OPENCODE_ENV = ("WEB_SEARCH", "NO_LSP", "NO_BACKGROUND_SUBAGENTS")   # opencode.env: read when the shell starts
 READ_TIMEOUT = 75            # the dashboard sends a comment every 25 s: silence this long = reconnect
 BACKOFF = (5, 10, 30, 60)
@@ -331,7 +340,8 @@ def thinking_text(m: Dict[str, str], keep_default: bool = False) -> str:
 
 
 DEFAULTS = {"WEB_SEARCH": "exa", "CODER_THINKING": "", "CODER_MODEL": CODER_MODEL_MAIN,
-            "CODER_MODEL_THINKING": THINKING_DEFAULT, "CODER_TESTS": "before", "CODER_REQUEST_CHECK": "reminder"}
+            "CODER_MODEL_THINKING": THINKING_DEFAULT, "CODER_TESTS": "before", "CODER_REQUEST_CHECK": "reminder",
+            "CODER_RUN_GATE": "on", "CODER_FIX_ROUNDS": "1", "CODER_FREE_FORM": "model"}
 
 
 def shown(key: str, env: Dict[str, str]) -> str:
@@ -380,7 +390,10 @@ def set_switches(want: Dict[str, str]) -> Json:
         # default)
         want = {k: ("" if (k, v) in (("CODER_MODEL", CODER_MODEL_MAIN), ("CODER_MODEL_THINKING", THINKING_DEFAULT),
                                      ("CODER_TESTS", DEFAULTS["CODER_TESTS"]),
-                                     ("CODER_REQUEST_CHECK", DEFAULTS["CODER_REQUEST_CHECK"]))
+                                     ("CODER_REQUEST_CHECK", DEFAULTS["CODER_REQUEST_CHECK"]),
+                                     ("CODER_RUN_GATE", DEFAULTS["CODER_RUN_GATE"]),
+                                     ("CODER_FIX_ROUNDS", DEFAULTS["CODER_FIX_ROUNDS"]),
+                                     ("CODER_FREE_FORM", DEFAULTS["CODER_FREE_FORM"]))
                     else v) for k, v in want.items()}
         if "CODER_MODEL" in want and "CODER_MODEL_THINKING" not in want \
                 and shown("CODER_MODEL", before) != shown("CODER_MODEL", {"CODER_MODEL": want["CODER_MODEL"]}):

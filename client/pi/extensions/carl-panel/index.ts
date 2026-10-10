@@ -63,8 +63,9 @@ export default function carlPanel(pi: ExtensionAPI) {
 				const box = new Container();
 				let list: SettingsList | undefined;
 
-				const heading = (text: string, note = "") =>
-					title.setText(theme.fg("accent", theme.bold(text)) + (note ? `   ${theme.fg("accent", note)}` : ""));
+				const heading = (text: string, note = "", about = "") =>
+					title.setText(theme.fg("accent", theme.bold(text)) + (note ? `   ${theme.fg("accent", note)}` : "") +
+						(about ? `\n${theme.fg("dim", about)}` : "")); // a Coder setting's explanation, under the title
 				/** The name of the list shown: CARL, or the list row's title. */
 				const listName = () => {
 					let name = "CARL";
@@ -115,7 +116,7 @@ export default function carlPanel(pi: ExtensionAPI) {
 							const pick = new SelectList(values.map((v, i) => ({ value: v, label: words[i], description: r.notes?.[v] })),
 								values.length, getSelectListTheme(), { minPrimaryColumnWidth: width, maxPrimaryColumnWidth: width });
 							pick.setSelectedIndex(Math.max(0, values.indexOf(cur)));
-							heading(r.choiceTitle ?? r.label);
+							heading(r.choiceTitle ?? r.label, "", r.about ?? "");
 							const back = (v?: string) => {
 								heading(listName(), panel("pi", session).title);
 								close(v);

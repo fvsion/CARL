@@ -109,6 +109,9 @@ Switches (environment variables, for example NO_CACHE=1 ./install.sh):
   CODER_MODEL_THINKING=LEVEL\tThe thinking of that external model: a variant (OpenCode) or a thinking level (Pi). Without it: the model's own default. /carl sets it.
   CODER_TESTS=WHEN\tWhen CARL's test session runs for new code: before (the default: the tests, then the code), after (the code, then the tests) or off (no test session). /carl sets it.
   CODER_REQUEST_CHECK=MODE\tThe check that the coder's brief carries the literals of your request (commands, signatures, formats, files): reminder (the default: one reminder), on (until each one is in the brief) or off. /carl sets it.
+  CODER_RUN_GATE=on|off\tCARL checks the coder's work after each code session (compile, language checks, the project's tests): on (the default) or off. /carl sets it.
+  CODER_FIX_ROUNDS=N\tHow many times the run gate sends failing work back to the coder by itself: 0 to 3 (the default 1). /carl sets it.
+  CODER_FREE_FORM=MODE\tThe free-form part of the coder's brief: model (the default: the model decides), on or off. /carl sets it.
   NO_BROWSER=1\tDo not install the browser tools.
   BROWSER_HEADED=1\tShow the browser on the screen.
   WEB_SEARCH=PROVIDER\texa (the default), parallel or off.
@@ -405,6 +408,7 @@ python3 "$HERE/configure.py" --bundle "$HERE" --home "$HOME" --host "$HOST" --cl
   --coder-thinking "${CODER_THINKING:-}" \
   --coder-model "${CODER_MODEL:-}" --coder-model-thinking "${CODER_MODEL_THINKING:-}" \
   --coder-tests "${CODER_TESTS:-before}" --request-check "${CODER_REQUEST_CHECK:-reminder}" \
+  --run-gate "$([[ "${CODER_RUN_GATE:-on}" == off ]] && echo 0 || echo 1)" --fix-rounds "${CODER_FIX_ROUNDS:-1}" --free-form "${CODER_FREE_FORM:-model}" \
   --profile "$([[ "${NO_PROFILE:-0}" == 1 ]] && echo 0 || echo 1)" \
   --cache "$([[ "${NO_CACHE:-0}" == 1 || "${NO_PREFIX_CACHE:-0}" == 1 ]] && echo 0 || echo 1)" \
   --browser "$([[ "${NO_BROWSER:-0}" == 1 ]] && echo 0 || echo 1)" --browser-headed "$([[ "${BROWSER_HEADED:-0}" == 1 ]] && echo 1 || echo 0)"
@@ -467,7 +471,7 @@ if [[ "${CARL_SYNC:-0}" != 1 ]]; then
   ( umask 077; mkdir -p "$HOME/.config/carl"
     for k in CLIENTS CODER NO_CODER WEB_SEARCH NO_LSP LSP NO_BROWSER BROWSER_HEADED NO_SIDEBAR NO_SWITCHER \
              NO_MODEL_CHECK NO_BACKGROUND_SUBAGENTS NO_CACHE LLAMA_CTX NO_REMINDER CODER_THINKING CODER_MODEL \
-             CODER_MODEL_THINKING CODER_TESTS CODER_REQUEST_CHECK; do
+             CODER_MODEL_THINKING CODER_TESTS CODER_REQUEST_CHECK CODER_RUN_GATE CODER_FIX_ROUNDS CODER_FREE_FORM; do
       [[ -n "${!k:-}" ]] && printf '%s=%s\n' "$k" "${!k}"
     done > "$HOME/.config/carl/client-install.env" ) || true
   if [[ "$MODE" == local || ! -s "$HERE/remote.json" || "${NO_SYNC_SERVICE:-0}" == 1 ]]; then

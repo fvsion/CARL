@@ -230,6 +230,8 @@ export function when(stamp, now = new Date()) {
  * @property {string} [listTitle] the list's title
  * @property {boolean} [arrow]  a list row whose state shows a "›" (it opens a list: Coder subagent)
  * @property {string} [choiceTitle] a choice's title over its values, where it differs from the label
+ * @property {string} [about] a Coder setting's explanation, at most two sentences (user, 2026-10-10: "Clean, terse,
+ *   and clear"), shown when its values open: OpenCode a toast (its dialog has no text area), Pi under the title
  * @property {[string, string][]} [view] a view row's label rows
  * @property {string} [viewTitle] the view's title
  * @typedef {{ title: string, rows: Row[] }} Panel
@@ -561,7 +563,7 @@ function thinkingRow(m, from) {
   if (m.dashboard) notes.default = dashText(m);
   return { id: "thinking", label: "Coder Thinking", state: thinkingWord(cur), value: cur, kind: "choice", values,
            titles: { main: thinkingWord("main"), default: thinkingWord("default") }, notes, actions,
-           choiceTitle: `Coder Thinking with ${m.id}` };
+           choiceTitle: `Coder Thinking with ${m.id}`, about: ABOUT.thinking };
 }
 
 /** What "dashboard default" gives for this model, in words: "medium", "same as main (low)". @param {StateModel} m */
@@ -600,7 +602,8 @@ function externalThinkingRow(ref, levels, cur) {
                    live: ["pi"] };
   }
   return { id: "thinking", label: "Coder Thinking", state: modelThinkingWord(cur), value: cur, kind: "choice", values,
-           titles: { default: modelThinkingWord("default") }, notes: {}, actions, choiceTitle: `Coder Thinking with ${ref}` };
+           titles: { default: modelThinkingWord("default") }, notes: {}, actions, choiceTitle: `Coder Thinking with ${ref}`,
+           about: ABOUT.thinking };
 }
 
 /**
@@ -634,7 +637,7 @@ function coderModelRow(cur, carl, external, client) {
                    live: ["pi"] };
   }
   return { id: "coder-model", label: "Coder Model", state: cur === "main" ? thinkingWord("main") : cur, value: cur,
-           kind: "choice", values, titles: { main: thinkingWord("main") }, notes, actions };
+           kind: "choice", values, titles: { main: thinkingWord("main") }, notes, actions, about: ABOUT.model };
 }
 
 /** The Request Check row's values and their words (the 23.4.3 addendum; default reminder). */
@@ -658,7 +661,72 @@ function requestRow(v) {
                    did: `CARL set ${name} to ${REQUEST_WORDS[t]} on this computer.`, live: ["opencode", "pi"] };
   }
   return { id: "request", label: "Request Check", state: REQUEST_WORDS[cur], value: cur, kind: "choice", values: REQUEST,
-           titles: REQUEST_WORDS, notes: {}, actions };
+           titles: REQUEST_WORDS, notes: {}, actions, about: ABOUT.request };
+}
+
+/** The explanations of the Coder settings with values (at most two sentences each; Row.about). */
+const ABOUT = {
+  tests: "When CARL's separate test session writes tests for new code. Before code is test-first; off leaves tests to the main agent.",
+  request: "Checks that the coder's brief keeps the exact commands, names and formats of your request. A single reminder sends a brief back once; on sends it back until each one is there.",
+  free: "Lets a strong main model add its own words to the coder's brief. Per model allows it for cloud models and CARL's larger models.",
+  thinking: "How much the coder thinks with this model. Off suits a full spec only.",
+  model: "The model the coder runs on. Another provider's model gets the coder's work.",
+  rounds: "How many times CARL sends failing work back to the coder by itself. With 0, the main agent gets the failure.",
+};
+
+/** The Free-Form Brief row's values and their words (the 23.4.3 addendum; default model: per model). */
+const FREE = ["model", "on", "off"];
+/** @type {Record<string, string>} */
+const FREE_WORDS = { model: "per model", on: "on", off: "off" };
+
+/**
+ * The Free-Form Brief row (the 23.4.3 addendum): whether the main session may write the brief's free-form part
+ * (detailed_brief): per model (a cloud or provider model, or a CARL model that the catalogue flags), on, off.
+ * CODER_FREE_FORM=VALUE; read at each use (live: no restart). @param {unknown} v the state file's free_form @returns {Row}
+ */
+function freeFormRow(v) {
+  const cur = FREE.includes(/** @type {string} */ (v)) ? String(v) : "model";
+  const name = "the free-form brief";
+  /** @type {Record<string, Action>} */
+  const actions = {};
+  for (const t of FREE.filter((x) => x !== cur)) {
+    actions[t] = { id: `set:CODER_FREE_FORM=${t}`, args: ["set", `CODER_FREE_FORM=${t}`],
+                   busy: t === "off" ? "turning off…" : `switching to ${FREE_WORDS[t]}…`, row: "free-form", want: t, name,
+                   did: `CARL set ${name} to ${FREE_WORDS[t]} on this computer.`, live: ["opencode", "pi"] };
+  }
+  return { id: "free-form", label: "Free-Form Brief", state: FREE_WORDS[cur], value: cur, kind: "choice", values: FREE,
+           titles: FREE_WORDS, notes: {}, actions, about: ABOUT.free };
+}
+
+/** The fix rounds' values (the 23.4.3 addendum; default 1). */
+const ROUNDS = ["0", "1", "2", "3"];
+
+/**
+ * The Coder Loop (the 23.4.3 addendum): a list with Run Gate (on / off: CARL checks the coder's work after each code
+ * session) and Fix Rounds (0-3: how often the gate sends the work back by itself). Its state is the run gate's.
+ * CODER_RUN_GATE, CODER_FIX_ROUNDS; read at each coder task (live: no restart).
+ * @param {unknown} gate the state file's run_gate (true unless false) @param {unknown} rounds its fix_rounds (default 1)
+ * @returns {Row}
+ */
+function loopRow(gate, rounds) {
+  const on = gate !== false;
+  const cur = ROUNDS.includes(String(rounds)) ? String(rounds) : "1";
+  const want = on ? "off" : "on";
+  /** @type {Row} */
+  const gateRow = { id: "run-gate", label: "Run Gate", state: on ? "on" : "off", kind: "switch", actions: { [want]: {
+    id: "set:CODER_RUN_GATE", args: ["set", `CODER_RUN_GATE=${want}`], busy: `turning ${want}…`, row: "run-gate", want,
+    name: "the run gate", live: ["opencode", "pi"] } } };
+  /** @type {Record<string, Action>} */
+  const actions = {};
+  for (const t of ROUNDS.filter((x) => x !== cur)) {
+    actions[t] = { id: `set:CODER_FIX_ROUNDS=${t}`, args: ["set", `CODER_FIX_ROUNDS=${t}`], busy: `switching to ${t}…`,
+                   row: "fix-rounds", want: t, name: "the coder's fix rounds",
+                   did: `CARL set the coder's fix rounds to ${t} on this computer.`, live: ["opencode", "pi"] };
+  }
+  const roundsRow = { id: "fix-rounds", label: "Fix Rounds", state: cur, value: cur, kind: /** @type {const} */ ("choice"),
+                      values: ROUNDS, notes: {}, actions, about: ABOUT.rounds };
+  return { id: "loop", label: "Coder Loop", state: on ? "on" : "off", kind: "list", listTitle: "Coder Loop", arrow: true,
+           rows: [gateRow, roundsRow] };
 }
 
 /** The Tests row's values and their words (Phase 23.4.6). */
@@ -682,7 +750,7 @@ function testsRow(v) {
                    live: ["opencode", "pi"] };
   }
   return { id: "tests", label: "Tests", state: TESTS_WORDS[cur], value: cur, kind: "choice", values: TESTS,
-           titles: TESTS_WORDS, notes: {}, actions };
+           titles: TESTS_WORDS, notes: {}, actions, about: ABOUT.tests };
 }
 
 /**
@@ -694,7 +762,7 @@ function parts(client, session) {
   const over = thinkingOverrides(env.CODER_THINKING);
   const envOn = (/** @type {string} */ key) => env[key] !== "1";
   const oc = text(join(CARL, "opencode.env"));
-  let coderOn, bg, reminder, browser, search, models, providers, fallback, tests, request;
+  let coderOn, bg, reminder, browser, search, models, providers, fallback, tests, request, free, gate, rounds;
   let coderRef = "main";                     // Coder model: "main" or the external model the setup wrote
   let refThinking = "default";               // its thinking on this computer ("default": model default)
   /** @type {Row[]} */
@@ -717,6 +785,7 @@ function parts(client, session) {
     const st = obj(json(join(OC, "carl.json")));
     tests = st.coder_tests;
     request = st.request_check;
+    [free, gate, rounds] = [st.free_form, st.run_gate, st.fix_rounds];
     models = stateModels(st.models, over);
     providers = providerIds(st);
     fallback = typeof cfg.model === "string" ? cfg.model : "";
@@ -736,6 +805,7 @@ function parts(client, session) {
     const st = obj(json(join(PI, "carl.json")));
     tests = st.coder_tests;
     request = st.request_check;
+    [free, gate, rounds] = [st.free_form, st.run_gate, st.fix_rounds];
     coderOn = exists(join(PI, "agents", "coder.md")) || exists(join(PI, "agents", "carl-coder.md"));
     bg = coderOn ? st.background_subagents !== false : envOn("NO_BACKGROUND_SUBAGENTS");
     reminder = coderOn ? obj(st.delegation).reminder !== false : envOn("NO_REMINDER");
@@ -762,7 +832,7 @@ function parts(client, session) {
     switchRow("coder", "Coder", "the coder subagent", "NO_CODER", coderOn),
     ...(coderOn ? [switchRow("background", "Background Coder", "the background coder", "NO_BACKGROUND_SUBAGENTS", bg),
                    switchRow("reminder", "Delegation Reminder", "the delegation reminder", "NO_REMINDER", reminder),
-                   testsRow(tests), requestRow(request), ...thinking, coderModelRow(coderRef, carl?.m.id ?? "", external, client)] : []),
+                   testsRow(tests), requestRow(request), freeFormRow(free), loopRow(gate, rounds), ...thinking, coderModelRow(coderRef, carl?.m.id ?? "", external, client)] : []),
   ];
   return [
     { id: "subagent", label: "Coder Subagent", state: coderOn ? "on" : "off", kind: "list", listTitle: "Coder Subagent",

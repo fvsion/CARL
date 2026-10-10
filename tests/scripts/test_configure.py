@@ -316,6 +316,22 @@ class ConfigureTests(unittest.TestCase):
         self.assertNotIn("coderTests", self.delegation_options())              # read live from the state file
         self.assertEqual(self.run_configure("--coder-tests", "sometimes").returncode, 2)
 
+    def test_the_coder_loop_and_the_free_form_brief(self) -> None:
+        """The 23.4.3 addendum: --run-gate, --fix-rounds, --free-form into both state files (read at each coder task);
+        a model of the list with free_form (the catalogue's free_form_brief) is marked in the state files' models."""
+        self.models = {**MODELS, "models": [{**MODELS["models"][0], "free_form": True}, MODELS["models"][1]]}
+        self.assertEqual(self.run_configure("--coder", "1").returncode, 0)
+        for f in (".config/opencode/carl.json", ".pi/agent/carl.json"):
+            st = self.read_json(f)
+            self.assertEqual((st["run_gate"], st["fix_rounds"], st["free_form"]), (True, 1, "model"), f)
+            self.assertIs(st["models"]["qwen3.6-35b-a3b"].get("free_form"), True, f)
+            self.assertNotIn("free_form", st["models"]["qwen3.8-27b"], f)
+        p = self.run_configure("--coder", "1", "--run-gate", "0", "--fix-rounds", "3", "--free-form", "off")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        st = self.read_json(".pi/agent/carl.json")
+        self.assertEqual((st["run_gate"], st["fix_rounds"], st["free_form"]), (False, 3, "off"))
+        self.assertEqual(self.run_configure("--fix-rounds", "4").returncode, 2)
+
     def test_the_request_check(self) -> None:
         """The 23.4.3 addendum, /carl's Request Check (CODER_REQUEST_CHECK through --request-check): both state files keep
         request_check (reminder by default), which carl-delegation reads at each coder task."""

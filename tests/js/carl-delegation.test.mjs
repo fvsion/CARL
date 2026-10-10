@@ -266,3 +266,22 @@ test("addendum: the Request Check: single reminder once, on until each literal i
   writeFileSync(join(dir, "carl.json"), JSON.stringify({ request_check: "on" }));
   assert.equal(D.requestFrom(join(dir, "carl.json")), "on");
 });
+
+test("addendum: the free-form brief: per model (not CARL's, or a flagged CARL model), on, off; the check takes detailed_brief only when allowed", () => {
+  const dir = mkdtempSync(join(tmpdir(), "free-"));
+  const file = join(dir, "carl.json");
+  writeFileSync(file, JSON.stringify({ providers: { llamacpp: "llamacpp" }, models: { "qwen3.6-35b-a3b": { free_form: true }, "gemma-4-e4b": {} } }));
+  assert.equal(D.freeFormFor(file, "openrouter/some-model"), true);                     // not CARL's
+  assert.equal(D.freeFormFor(file, "llamacpp/qwen3.6-35b-a3b"), true);                  // flagged
+  assert.equal(D.freeFormFor(file, "llamacpp/gemma-4-e4b"), false);
+  assert.equal(D.freeFormFor(file, ""), false);
+  writeFileSync(file, JSON.stringify({ free_form: "off" }));
+  assert.equal(D.freeFormFor(file, "openrouter/x"), false);
+  writeFileSync(file, JSON.stringify({ free_form: "on" }));
+  assert.equal(D.freeFormFor(file, "llamacpp/gemma-4-e4b"), true);
+  const free = BRIEF.replace('expected_outcome = ', 'detailed_brief = """\nUse csv.writer.\n"""\nexpected_outcome = ');
+  const turn = new D.Turn();
+  assert.match(turn.brief("task", { subagent_type: "coder", prompt: free }, { freeForm: false }), /- The brief has the key "detailed_brief", which is not in the schema/);
+  assert.equal(new D.Turn().brief("task", { subagent_type: "coder", prompt: free }, { freeForm: true }), "");
+  assert.match(D.FREE_FORM_TEXT, /^\*\*Your own words in the brief\.\*\* You may add `detailed_brief = """\.\.\."""`/);
+});

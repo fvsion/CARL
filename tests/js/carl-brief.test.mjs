@@ -763,3 +763,12 @@ test("addendum: a literal in the brief: placeholders, dates and numbers stand fo
                     "textstats/readability.py"]);
   assert.deepEqual(problems(FULL.replace('scope_limits = "No API changes."', 'scope_limits = "No API changes."\nnot_in_task = ["--limit"]')), []);
 });
+
+test("addendum: detailed_brief: read, written back after task_summary, not in the test session's brief", () => {
+  const b = brief(FULL.replace("expected_outcome = ", 'detailed_brief = """\nThe store keeps ISO dates.\n"""\nexpected_outcome = '));
+  assert.equal(b.detailedBrief, "The store keeps ISO dates.");
+  assert.match(B.writeBrief(b), /\ntask_summary = ".*"\ndetailed_brief = "The store keeps ISO dates\."\nexpected_outcome = /);
+  assert.equal(B.parseBrief(B.writeBriefJson(b)).brief.detailedBrief, "The store keeps ISO dates.");
+  assert.equal(B.testSessionBrief(b).detailedBrief, "");
+  assert.deepEqual(B.checkBrief(b), []);                                                  // the coder's side takes it
+});

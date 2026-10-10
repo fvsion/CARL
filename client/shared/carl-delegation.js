@@ -276,6 +276,52 @@ export function briefCheck(tool, args, o = {}) {
   return "";
 }
 
+// ------------------------------------------------------------------ the free-form brief (Phase 23.4.3 addendum)
+// User, 2026-10-10: "for frontier level models our template is limiting, can we allow a free form section where a
+// frontier model could detail the way it usually would, that is locked out for small models somehow?"; "per model and
+// setting". A main session whose model qualifies gets FREE_FORM_TEXT with its delegation rule (OpenCode: the system
+// transform; Pi: before each agent start) and may write detailed_brief; any other session never sees it, and the brief
+// check refuses the key from it. /carl's Free-Form Brief (CODER_FREE_FORM, carl.json "free_form", read at each use):
+// model (the default: a model that is not CARL's, or a CARL model whose catalogue entry has free_form_brief), on, off.
+
+export const FREE_FORM_SETTINGS = ["model", "on", "off"];
+
+/** The section of the delegation rule for a model that may write the free-form part. */
+export const FREE_FORM_TEXT = "**Your own words in the brief.** You may add `detailed_brief = \"\"\"...\"\"\"` to the brief, after " +
+  "`task_summary`: describe the task there the way you would brief a strong engineer (the context, the approach, the edge " +
+  "cases, the pitfalls). It adds to the brief's keys and replaces none of them: the requirements, the checks and the " +
+  "exact interfaces stay as the schema says.";
+
+/** The client's state file (carl.json) as an object, or {}. @param {string} file @returns {Record<string, any>} */
+function stateOf(file) {
+  try {
+    const st = JSON.parse(readFileSync(file, "utf8"));
+    return st && typeof st === "object" && !Array.isArray(st) ? st : {};
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * May a main session with this model write the free-form part? model: "provider/model". The state file's free_form
+ * (model, on, off) and, with "model", its providers (CARL's: the first key or entry) and models (free_form).
+ * @param {string} file the client's carl.json @param {string} model @returns {boolean}
+ */
+export function freeFormFor(file, model) {
+  const st = stateOf(file);
+  const setting = FREE_FORM_SETTINGS.includes(st.free_form) ? st.free_form : "model";
+  if (setting !== "model") return setting === "on";
+  const ref = String(model ?? "");
+  const slash = ref.indexOf("/");
+  if (slash < 1) return false;
+  const [provider, id] = [ref.slice(0, slash), ref.slice(slash + 1)];
+  const p = st.providers;
+  const ids = Array.isArray(p) ? p.map(String) : p && typeof p === "object" ? Object.values(p).map(String) : [];
+  const carl = ids.length ? ids : ["llamacpp"];                // CARL's provider id (the setup's default)
+  if (!carl.includes(provider)) return true;                  // not CARL's: a cloud or provider model
+  return st.models?.[id]?.free_form === true;
+}
+
 // ------------------------------------------------------------------ the Request Check (Phase 23.4.3 addendum)
 // The literals of the user's request (carl-brief.js requestLiterals: commands, signatures, output formats, exit codes,
 // files, flags, quoted text) must reach the coder: a brief that lacks some is sent back before the coder starts (user,
@@ -443,7 +489,9 @@ export class Turn {
    * brief in work_mode code, a brief in work_mode tests-only is refused too, until a brief in work_mode code is taken
    * or the user writes again (reset). The E4B (2026-10-09) left three refusals of a code brief by sending the same
    * task as tests-only, which needs no file to change: the coder wrote tests and no program code.
-   * @param {string} tool @param {Record<string, unknown>} args @param {{ format?: "toml" | "json", root?: string }} [o]
+   * @param {string} tool @param {Record<string, unknown>} args
+   * @param {{ format?: "toml" | "json", root?: string, freeForm?: boolean }} [o] freeForm: the session's model may
+   *   write detailed_brief
    */
   brief(tool, args, o = {}) {
     const modes = coderTaskItems(tool, args).map((t) => modeOf(t.text));

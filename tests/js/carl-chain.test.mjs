@@ -2,6 +2,7 @@
 // session runner and a fake check runner (no model, no client). Run: node --test tests/js.
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -455,4 +456,151 @@ test("after code: the snapshot keeps the order; an interrupted or unheld chain n
   assert.match(back.unheld("the code report"), /^\[CARL\] Chain: the code session ran in the background, where CARL cannot hold its result on this OpenCode, so the test session did not run\./);
   const before = new C.Chain(brief, "/x");
   assert.match(before.interrupted("first"), /the test session did not finish, and the code session did not run/);
+});
+
+// ------------------------------------------------------------------ the run gate (the 23.4.3 addendum)
+
+const PYBRIEF = `work_mode = "code"
+work_type = "follow_up"
+task_summary = "Make add() handle three numbers."
+expected_outcome = "add(1, 2, 3) is 6."
+current_state = "calc/core.py has add(a, b)."
+
+[[known_file]]
+file_path = "calc/core.py"
+file_action = "change"
+
+[[task_requirement]]
+requirement_id = "R1"
+requirement_text = "add takes a third number, default 0"
+
+[[acceptance_check]]
+check_id = "C1"
+covers_requirements = ["R1"]
+run_command = "python3 -m pytest -q"
+expected_result = "all pass"
+`;
+
+/** A Python project: calc/core.py and its tests (test_add passes; test_old fails before any work). */
+function pyProject() {
+  const dir = mkdtempSync(join(tmpdir(), "gate-py-"));
+  mkdirSync(join(dir, "calc"));
+  mkdirSync(join(dir, "tests"));
+  writeFileSync(join(dir, "calc", "__init__.py"), "");
+  writeFileSync(join(dir, "calc", "core.py"), "def add(a, b):\n    return a + b\n");
+  writeFileSync(join(dir, "tests", "test_core.py"),
+    "from calc.core import add\n\ndef test_add():\n    assert add(1, 2) == 3\n\ndef test_old():\n    assert add(1, 1) == 3\n");
+  return dir;
+}
+
+const write = (dir, f, text) => writeFileSync(join(dir, f), text);
+const gateOn = (rounds = 1) => ({ gate: { gate: true, rounds } });
+
+test("run gate: a test that passed before and fails now is not done; a fix round mends it; a test failing before is not the coder's", async () => {
+  const dir = pyProject();
+  const steps = [];
+  const run = async (text, step) => {
+    steps.push([step, B.parseBrief(text).brief?.workType]);
+    if (steps.length === 1) write(dir, "calc/core.py", "def add(a, b, c=0):\n    return a - b + c\n");    // breaks test_add
+    else write(dir, "calc/core.py", "def add(a, b, c=0):\n    return a + b + c\n");                      // the fix
+    return { ok: true, output: 'task_status = "done"' };
+  };
+  const out = await C.runCoderTask(PYBRIEF, dir, run, gateOn(1));
+  assert.deepEqual(steps, [["one", "follow_up"], ["code", "bug_fix"]]);
+  assert.match(out.text, /## Fix round 1 \(work_mode code, bug_fix\)/);
+  assert.match(out.text, /\[CARL\] Run gate: done after 1 fix round\. CARL ran `python3 -m py_compile calc\/core\.py`.*`python3 -m pytest -q -rA/);
+  assert.doesNotMatch(out.text, /test_old/);                                      // failing before: not the coder's
+});
+
+test("run gate: rounds used up: NOT DONE with the output and a ready bug_fix brief; 0 rounds: no fix session", async () => {
+  const dir = pyProject();
+  const calls = [];
+  const run = async (text, step) => {
+    calls.push(step);
+    write(dir, "calc/core.py", "def add(a, b, c=0):\n    return a - b\n");
+    return { ok: true, output: "done" };
+  };
+  const out = await C.runCoderTask(PYBRIEF, dir, run, gateOn(1));
+  assert.deepEqual(calls, ["one", "code"]);
+  assert.match(out.text, /\[CARL\] Run gate: NOT DONE after 1 fix round\.\n- a test that passed before fails now: tests\/test_core\.py::test_add: `python3 -m pytest/);
+  const ready = /```toml\n([\s\S]*?)```$/.exec(out.text)[1];
+  const fix = B.parseBrief(ready).brief;
+  assert.deepEqual([fix.workMode, fix.workType, B.checkBrief(fix)], ["code", "bug_fix", []]);
+  assert.match(fix.failedAttempt.run, /^python3 -m pytest/);
+  assert.equal(fix.triedFixes.length, 2);                                         // both sessions
+  const none = [];
+  const dir2 = pyProject();
+  await C.runCoderTask(PYBRIEF, dir2, async (t, step) => (none.push(step), write(dir2, "calc/core.py", "def add(a, b):\n    return 0\n"), { ok: true, output: "x" }), gateOn(0));
+  assert.deepEqual(none, ["one"]);
+});
+
+test("run gate: compile errors, the language check, a __main__ that does not start, tests that do not collect; new failing tests are findings", async () => {
+  const dir = pyProject();
+  const out = await C.runCoderTask(PYBRIEF, dir, async () => {
+    write(dir, "calc/core.py", "def add(a, b):\n    return a + b\n\ndef broken(:\n");
+    return { ok: true, output: "x" };
+  }, gateOn(0));
+  assert.match(out.text, /- a changed Python file does not compile: `python3 -m py_compile calc\/core\.py`/);
+  assert.match(out.text, /- the project's tests do not run: `python3 -m pytest/);
+  const dir2 = pyProject();
+  const out2 = await C.runCoderTask(PYBRIEF, dir2, async () => {
+    write(dir2, "calc/core.py", "def add(a, b):\n    return a + b\n\ndef later():\n    return undefined_name\n");
+    write(dir2, "calc/__main__.py", "raise SystemExit('no')\n");
+    write(dir2, "tests/test_new.py", "from calc.core import add\n\ndef test_three():\n    assert add(1, 2) == 4\n");
+    return { ok: true, output: "x" };
+  }, { ...gateOn(0), has: (c) => c === "ruff" });
+  assert.match(out2.text, /- the language check finds errors: `ruff check --no-cache --select E9,F63,F7,F82/);
+  assert.match(out2.text, /- python -m calc does not start: `python3 -m calc --help`/);
+  assert.match(out2.text, /New tests fail \(the code or the test can be wrong\): tests\/test_new\.py::test_three/);
+  assert.doesNotMatch(out2.text, /test_three.*passed before/);
+});
+
+test("run gate: node, go and rust projects; off in the Coder Loop: no gate", async () => {
+  const js = mkdtempSync(join(tmpdir(), "gate-js-"));
+  mkdirSync(join(js, "test"));
+  write(js, "lib.mjs", "export const two = () => 2;\n");
+  write(js, "test/lib.test.mjs", 'import { test } from "node:test";\nimport assert from "node:assert";\nimport { two } from "../lib.mjs";\ntest("two", () => assert.equal(two(), 2));\n');
+  const brief = PYBRIEF.replace("calc/core.py", "lib.mjs");
+  const out = await C.runCoderTask(brief, js, async () => (write(js, "lib.mjs", "export const two = () => 3;\n"), { ok: true, output: "x" }), gateOn(0));
+  assert.match(out.text, /- a test that passed before fails now: two: `node --test --test-reporter=tap`/);
+  const syntax = await C.runCoderTask(brief, js, async () => (write(js, "lib.mjs", "export const two = ( => 2;\n"), { ok: true, output: "x" }), gateOn(0));
+  assert.match(syntax.text, /- a changed JavaScript file does not compile: `node --check lib\.mjs`/);
+  const off = await C.runCoderTask(brief, js, async () => ({ ok: true, output: "plain" }), { gate: { gate: false, rounds: 1 } });
+  assert.equal(off.text, "plain");
+  const has = (c) => spawnSync(c, ["--version"]).status === 0;
+  if (has("go")) {
+    const go = mkdtempSync(join(tmpdir(), "gate-go-"));
+    write(go, "go.mod", "module calc\n\ngo 1.21\n");
+    write(go, "calc.go", "package calc\n\nfunc Add(a, b int) int { return a + b }\n");
+    write(go, "calc_test.go", 'package calc\n\nimport "testing"\n\nfunc TestAdd(t *testing.T) { if Add(1, 2) != 3 { t.Fatal("no") } }\n');
+    const g = await C.runCoderTask(brief.replace("lib.mjs", "calc.go"), go, async () => (write(go, "calc.go", "package calc\n\nfunc Add(a, b int) int { return a - b }\n"), { ok: true, output: "x" }), gateOn(0));
+    assert.match(g.text, /- a test that passed before fails now: calc\/TestAdd: `go test -json \.\/\.\.\.`/);
+    const gb = await C.runCoderTask(brief.replace("lib.mjs", "calc.go"), go, async () => (write(go, "calc.go", "package calc\n\nfunc Add(a, b int) int { return a +  }\n"), { ok: true, output: "x" }), gateOn(0));
+    assert.match(gb.text, /- the Go code does not build or vet: `go vet \.\/\.\.\.`/);
+  }
+  if (has("cargo")) {
+    const rs = mkdtempSync(join(tmpdir(), "gate-rs-"));
+    mkdirSync(join(rs, "src"));
+    write(rs, "Cargo.toml", '[package]\nname = "calc"\nversion = "0.1.0"\nedition = "2021"\n');
+    write(rs, "src/lib.rs", "pub fn add(a: i32, b: i32) -> i32 { a + b }\n#[cfg(test)]\nmod tests { #[test] fn adds() { assert_eq!(super::add(1, 2), 3); } }\n");
+    const r = await C.runCoderTask(brief.replace("lib.mjs", "src/lib.rs"), rs, async () => (write(rs, "src/lib.rs", "pub fn add(a: i32, b: i32) -> i32 { a - b }\n#[cfg(test)]\nmod tests { #[test] fn adds() { assert_eq!(super::add(1, 2), 3); } }\n"), { ok: true, output: "x" }), gateOn(0));
+    assert.match(r.text, /- a test that passed before fails now: tests::adds: `cargo test --no-fail-fast --color never`/);
+  }
+});
+
+test("run gate: the parsers of each suite's output; the Coder Loop's settings", () => {
+  assert.deepEqual(C.suiteResults("python", "PASSED tests/a.py::t1\nFAILED tests/a.py::t2 - x\n", 1), { ran: true, tests: { "tests/a.py::t1": "pass", "tests/a.py::t2": "fail" } });
+  assert.equal(C.suiteResults("python", "ERROR tests/b.py - ImportError\n", 2).ran, false);
+  assert.deepEqual(C.suiteResults("node", "ok 1 - a\nnot ok 2 - b\nok 3 - c # SKIP\n", 1).tests, { a: "pass", b: "fail", c: "pass" });
+  assert.deepEqual(C.suiteResults("node", "✔ a (1.2ms)\n✖ b (0.3ms)\nℹ tests 2\n", 1).tests, { a: "pass", b: "fail" });
+  assert.deepEqual(C.suiteResults("go", '{"Action":"pass","Package":"p","Test":"TestA"}\n{"Action":"fail","Package":"p","Test":"TestB"}\n', 1).tests, { "p/TestA": "pass", "p/TestB": "fail" });
+  assert.equal(C.suiteResults("go", "FAIL p [build failed]\n", 1).ran, false);
+  assert.deepEqual(C.suiteResults("rust", "test tests::a ... ok\ntest tests::b ... FAILED\n", 101).tests, { "tests::a": "pass", "tests::b": "fail" });
+  assert.equal(C.suiteResults("rust", "error[E0308]: mismatched types\n", 101).ran, false);
+  const dir = mkdtempSync(join(tmpdir(), "loop-"));
+  assert.deepEqual(C.loopFrom(join(dir, "carl.json")), { gate: true, rounds: 1 });
+  writeFileSync(join(dir, "carl.json"), JSON.stringify({ run_gate: false, fix_rounds: 3 }));
+  assert.deepEqual(C.loopFrom(join(dir, "carl.json")), { gate: false, rounds: 3 });
+  writeFileSync(join(dir, "carl.json"), JSON.stringify({ fix_rounds: 9 }));
+  assert.deepEqual(C.loopFrom(join(dir, "carl.json")), { gate: true, rounds: 1 });
 });

@@ -63,6 +63,14 @@
 // The Request Check (the 23.4.3 addendum; carl-delegation.js RequestCheck): the user's messages of each main session
 // (chat.message, their own text parts) since the last brief that was taken; a coder task whose brief passed the brief
 // check is checked for the request's literals, as the state file's "request_check" says (on, reminder, off).
+// The run gate (the 23.4.3 addendum; carl-chain.js runGate; the state file's "run_gate" and "fix_rounds", option "gate":
+// on unless false): a coder task in work_mode code gets the project's tests run before it (the baseline) and the gate
+// after its one result; while the gate says not done and fix rounds are left, the plugin starts a fix session (a child
+// session of the main session, the bug_fix brief) and runs the gate again. In the foreground, all of it before the task
+// returns. In the background with the hold, the completion is held as a chain's is (a record of kind "gate": a restart
+// delivers the coder's result and says that the gate did not end); without the hold, the checks only (no fix round).
+// The free-form brief (the 23.4.3 addendum; carl-delegation.js freeFormFor): the system transform of a main session
+// whose model qualifies adds FREE_FORM_TEXT, and the brief check takes detailed_brief only from such a session.
 // The 23.4.5 follow-up (the hand check: a new project at the same path got an old chain's result): a record also keeps
 // the project folder's identity (folderId: its device and inode, so a folder made again at the same path is another
 // one) and OpenCode's project id. At the next start, a record is delivered only when both still match (when the record
@@ -72,10 +80,11 @@ import { execFile } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
-import { parseBrief, checkBrief } from "./carl-brief.js";
-import { Chain, TESTS_OFF, Watch, coderPlan, testsFrom } from "./carl-chain.js";
-import { CoderGate, GateSetting, RULE_BEGIN, RULE_END, RequestCheck, Turn, briefCheck, isCoderName, requestFrom, withReminder,
-  withoutRule }
+import { changedFiles, checkBrief, parseBrief, writeBrief, writeBriefJson } from "./carl-brief.js";
+import { Chain, TESTS_OFF, Watch, coderPlan, fixBrief, gateText, loopFrom, runGate, runSuites, sourceHashes, testsFrom }
+  from "./carl-chain.js";
+import { CoderGate, FREE_FORM_TEXT, GateSetting, RULE_BEGIN, RULE_END, RequestCheck, Turn, briefCheck, freeFormFor, isCoderName,
+  requestFrom, withReminder, withoutRule }
   from "./carl-delegation.js";
 
 export { RULE_BEGIN, RULE_END, withoutRule };
@@ -88,9 +97,13 @@ const POLL_MS = 5_000;                                       // the code session
 const RECOVER_MS = 2_000;                                    // after the load: the undelivered chains of this project
 
 /** A coder task call that CARL follows: a chain (first: the task tool's session; second: the one the plugin starts),
- * a watch, or off (the Tests setting is off: the result gets TESTS_OFF).
- * @typedef {{ chain?: Chain, watch?: Watch, off?: boolean, parent: string, description: string, hold?: boolean,
- *              first?: string, second?: string, agent?: string, model?: { providerID?: string, modelID?: string } }} Pending */
+ * a watch, or off (the Tests setting is off: the result gets TESTS_OFF), and the run gate (gate: the baseline before
+ * the task, the source files' hashes, the brief, its format, the fix rounds).
+ * @typedef {{ baseline: import("./carl-chain.js").Baseline, before: Record<string, string | null>,
+ *              brief: import("./carl-brief.js").Brief, format: "toml" | "json", rounds: number }} GateState
+ * @typedef {{ chain?: Chain, watch?: Watch, off?: boolean, gate?: GateState, parent: string, description: string,
+ *              hold?: boolean, first?: string, firstText?: string, second?: string, agent?: string,
+ *              model?: { providerID?: string, modelID?: string } }} Pending */
 /** @typedef {{ ok: boolean, why: string }} Hold */
 
 /**
@@ -391,7 +404,11 @@ export default {
     // the Tests setting (Phase 23.4.6): read at each coder task, so /carl's change needs no restart
     const stateFile = typeof opts.stateFile === "string" ? opts.stateFile : "";
     const tests = () => (stateFile ? testsFrom(stateFile) : "before");
+    const gates_on = opts.gate !== false;                        // the run gate (agent-bench's measurements: false)
+    const loop = () => (stateFile ? loopFrom(stateFile) : { gate: true, rounds: 1 });
     const requestSetting = () => (stateFile ? requestFrom(stateFile) : "reminder");
+    /** @type {Map<string, boolean>} a main session: its model may write the free-form part (its last system prompt) */
+    const freeForm = new Map();
     /** @type {Map<string, RequestCheck>} a main session's Request Check */
     const requests = new Map();
     /** @param {string} id */
@@ -502,7 +519,15 @@ export default {
     };
     /** A held chain's record in the state file. @param {Pending} p @param {import("./carl-chain.js").Stage} stage */
     const record = (p, stage) => {
-      if (!p.chain || !p.first) return;
+      if (!p.first) return;
+      if (!p.chain) {                                          // a held run gate: the coder's result, to deliver
+        if (p.gate && stage === "held") {
+          store.put({ v: 2, kind: "gate", parent: p.parent, first: p.first, stage, text: p.firstText ?? "", description: p.description,
+                      agent: p.agent ?? "", directory: cwd, ...(here.folder ? { folder: here.folder } : {}),
+                      ...(here.project ? { project: here.project } : {}), pid: process.pid, at: Date.now() });
+        }
+        return;
+      }
       store.put({ v: 2, parent: p.parent, first: p.first, stage, ...(p.second ? { second: p.second } : {}), description: p.description,
                   agent: p.agent ?? "", directory: cwd, ...(here.folder ? { folder: here.folder } : {}),
                   ...(here.project ? { project: here.project } : {}), pid: process.pid, at: Date.now(), chain: p.chain.snapshot() });
@@ -511,11 +536,12 @@ export default {
      * The chain's second session (the code session; with the Tests setting "after", the test session): a child
      * session of the main session, as OpenCode's task tool makes one (the coder agent; no task or todo tool; the main
      * session's deny and external-directory rules), with its brief.
-     * @param {Pending} p @param {string} task
+     * A fix round of the run gate is such a session too (label: "fix N").
+     * @param {Pending} p @param {string} task @param {string} [label]
      * @returns {Promise<{ id: string, ok: boolean, output: string }>}
      */
-    const secondSession = async (p, task) => {
-      const role = /** @type {Chain} */ (p.chain).steps[1];
+    const secondSession = async (p, task, label = "") => {
+      const role = label || /** @type {Chain} */ (p.chain).steps[1];
       try {
         /** @type {any[]} */
         let permission = [];
@@ -525,12 +551,12 @@ export default {
             .filter((/** @type {any} */ r) => r?.permission === "external_directory" || r?.action === "deny");
         } catch { /* the main session's rules: not known */ }
         permission.push({ permission: "todowrite", pattern: "*", action: "deny" }, { permission: "task", pattern: "*", action: "deny" });
-        const made = await client.session.create({ body: { parentID: p.parent, title: `${p.description}: ${role === "code" ? "code" : "tests"} (@${coder} subagent)`,
+        const made = await client.session.create({ body: { parentID: p.parent, title: `${p.description}: ${role === "test" ? "tests" : role} (@${coder} subagent)`,
                                                            agent: coder, permission } });
         const id = String((made?.data ?? made)?.id ?? "");
         if (!id) return { id: "", ok: false, output: `CARL could not start the ${role} session: ${JSON.stringify(made?.error ?? made)}` };
         sub.set(id, true);
-        if (p.hold) {
+        if (p.hold && !label) {
           p.second = id;
           record(p, "second");
         }
@@ -562,17 +588,49 @@ export default {
      * @param {Pending} p @param {{ id: string, state: string, text: string }} res
      * @returns {Promise<{ id: string, state: string, text: string }>}
      */
-    const finish = async (p, res) => {
+    const finish = async (p, res, rounds = p.gate?.rounds ?? 0) => {
+      const out = await finishTask(p, res);
+      if (!p.gate || out.state !== "completed") return out;
+      return { ...out, text: await gateLoop(p, out.text, rounds) };
+    };
+    /** The task's one result without the run gate. @param {Pending} p @param {{ id: string, state: string, text: string }} res
+     * @returns {Promise<{ id: string, state: string, text: string }>} */
+    const finishTask = async (p, res) => {
       if (p.watch) {
         const note = p.watch.note();
         return { id: res.id, state: res.state, text: note ? `${res.text}\n\n${note}` : res.text };
       }
       if (p.off) return { ...res, text: res.state === "completed" ? `${res.text}\n\n${TESTS_OFF}` : res.text };
-      const chain = /** @type {Chain} */ (p.chain);
+      if (!p.chain) return res;                                   // one session: its result as it is
+      const chain = p.chain;
       if (res.state !== "completed") return { id: res.id, state: "error", text: chain.stopped(res.text) };
       const task = await chain.afterFirst({ ok: true, output: res.text });
       const second = await secondSession(p, task);
       return { id: second.id || res.id, state: second.ok ? "completed" : "error", text: await chain.end(second) };
+    };
+    /**
+     * The run gate after the task's one result, and its fix rounds (fix sessions), as runCoderTask does in Pi.
+     * @param {Pending} p @param {string} text the result so far @param {number} rounds @returns {Promise<string>}
+     */
+    const gateLoop = async (p, text, rounds) => {
+      const g = /** @type {GateState} */ (p.gate);
+      const write = g.format === "json" ? writeBriefJson : writeBrief;
+      const changed = () => changedFiles(g.before, sourceHashes(cwd));
+      let gate = await runGate(cwd, g.baseline, changed());
+      if (!gate.checked.length) return text;                      // nothing to check
+      let n = 0;
+      let last = g.brief;
+      const reports = [];
+      while (gate.notDone.length && n < rounds) {
+        n++;
+        last = fixBrief(last, gate, n);
+        const fix = await secondSession(p, write(last), `fix ${n}`);
+        reports.push(`## Fix round ${n} (work_mode code, bug_fix)\n\n${fix.output.trim() || "(no output)"}`);
+        gate = await runGate(cwd, g.baseline, changed());
+        if (!fix.ok) break;
+      }
+      const ready = gate.notDone.length ? write(fixBrief(last, gate, n + 1)) : "";
+      return [text, ...reports, gateText(gate, n, ready)].join("\n\n");
     };
     /** A completion message to the main session, as OpenCode's own for a background task.
      * @param {string} parent @param {string} agent @param {string} description
@@ -589,14 +647,15 @@ export default {
      * @param {Pending} p @param {{ id: string, state: string, text: string }} res @param {string} agent */
     const deliver = async (p, res, agent) => {
       p.agent = agent;
-      /** @type {Chain} */ (p.chain).firstOutcome({ ok: true, output: res.text });
+      p.firstText = res.text;
+      p.chain?.firstOutcome({ ok: true, output: res.text });
       record(p, "held");                                       // before the first await: the throw follows
       /** @type {{ id: string, state: string, text: string }} */
       let out;
       try {
         out = await finish(p, res);
       } catch (e) {                                            // never leave the main agent without a result
-        out = { id: res.id, state: "error", text: `${res.text}\n\n[CARL] The chain stopped after the ${/** @type {Chain} */ (p.chain).steps[0]} session: ${e instanceof Error ? e.message : String(e)}` };
+        out = { id: res.id, state: "error", text: `${res.text}\n\n[CARL] ${p.chain ? `The chain stopped after the ${p.chain.steps[0]} session` : "The run gate stopped"}: ${e instanceof Error ? e.message : String(e)}` };
       }
       try {
         await send(p.parent, agent, p.description, out);
@@ -610,11 +669,17 @@ export default {
         const first = firstOf(r);
         const second = secondOf(r);
         const stage = stageOf(r);
-        if (!r || r.directory !== cwd || !r.parent || !first || !r.chain) continue;
+        if (!r || r.directory !== cwd || !r.parent || !first || (!r.chain && r.kind !== "gate")) continue;
         if (r.pid === process.pid || alive(r.pid) || !store.claim(r)) continue;
         try {
           if (!(await recordIsHere(r, here, client))) {           // another project at this path, or no session:
             store.drop(r.parent, first);                           // never delivered to it
+            continue;
+          }
+          if (r.kind === "gate") {                                   // a held run gate: the coder's result
+            await send(r.parent, String(r.agent ?? ""), String(r.description ?? "coder task"), { id: first, state: "completed",
+              text: `${String(r.text ?? "")}\n\n[CARL] Run gate: OpenCode stopped before the run gate ended. Run the project's tests yourself before you answer the user.` });
+            store.drop(r.parent, first);
             continue;
           }
           const chain = Chain.from(r.chain);
@@ -676,7 +741,14 @@ export default {
       },
       // in place: OpenCode reads its own array after the hook (a new array would be ignored)
       "experimental.chat.system.transform": async (input, output) => {
-        if (!input?.sessionID || !Array.isArray(output?.system) || !(await isSub(input.sessionID))) return;
+        if (!input?.sessionID || !Array.isArray(output?.system)) return;
+        if (!(await isSub(input.sessionID))) {                    // a main session: the free-form part, per its model
+          const model = /** @type {any} */ (input)?.model;
+          const ok = stateFile !== "" && freeFormFor(stateFile, `${String(model?.providerID ?? "")}/${String(model?.id ?? "")}`);
+          freeForm.set(input.sessionID, ok);
+          if (ok && output.system.some((s) => typeof s === "string" && s.includes(RULE_BEGIN))) output.system.push(FREE_FORM_TEXT);
+          return;
+        }
         output.system.forEach((s, i) => {
           if (typeof s === "string") output.system[i] = withoutRule(s);
         });
@@ -705,14 +777,16 @@ export default {
             part.text = taskXml({ ...res, text: p.chain.unheld(res.text) });
             break;
           }
-          if (p.watch || p.off || res.state !== "completed") {  // in place: the one result is this message
-            if (p.first) store.drop(p.parent, p.first);
-            const out = await finish(p, res);
+          const held = res.state === "completed" && p.hold && (p.chain || (p.gate && p.gate.rounds > 0));
+          if (!held) {                                          // in place: the one result is this message (the gate:
+            if (p.first) store.drop(p.parent, p.first);         // its checks only, no fix round: no hold)
+            const out = await finish(p, res, 0);
             part.text = taskXml({ ...out, summary: res.summary });
             break;
           }
           void deliver(p, res, String(input.agent ?? ""));
-          const [one, two] = /** @type {Chain} */ (p.chain).steps;
+          if (!p.chain) throw new Error(`${HOLD_MARK}: the coder session of "${p.description}" ended; CARL runs its checks now and sends one result when they end.`);
+          const [one, two] = p.chain.steps;
           throw new Error(`${HOLD_MARK}: the ${one} session of "${p.description}" ended; CARL runs its ${two} session now and sends one result when it ends.`);
         }
         turns.get(input.sessionID)?.reset();
@@ -735,7 +809,8 @@ export default {
         const tool = String(input?.tool ?? "");
         const args = /** @type {Record<string, unknown>} */ (output?.args ?? {});
         if (briefs) {                                            // a coder task with an incomplete brief (and the turn's
-          const o = { format: briefFormat, root: cwd };          // memory: no switch to tests-only after a refusal)
+          const o = { format: briefFormat, root: cwd,            // memory: no switch to tests-only after a refusal)
+                      freeForm: input?.sessionID ? freeForm.get(input.sessionID) === true : false };
           const why = input?.sessionID ? turn(input.sessionID).brief(tool, args, o) : briefCheck(tool, args, o);
           if (why) throw new Error(why);
           if (input?.sessionID && !(await isSub(input.sessionID))) {   // the request's literals in the brief
@@ -753,6 +828,10 @@ export default {
         if (tool === "task" && (type === coder || isCoderName(type)) && input?.callID && input?.sessionID) {
           const plan = coderPlan(String(args.prompt ?? ""), Boolean(args.task_id), tests());
           const description = String(args.description ?? "") || "coder task";
+          const l = gates_on && plan.brief?.workMode === "code" ? loop() : { gate: false, rounds: 0 };
+          /** @type {GateState | undefined} */
+          const gate = l.gate && plan.brief ? { baseline: await runSuites(cwd), before: sourceHashes(cwd), brief: plan.brief,
+                                                format: plan.format, rounds: l.rounds } : undefined;
           if (plan.kind === "chain" && chains) {                    // the task tool runs the first session
             const hold = await holdReady;
             const chain = new Chain(plan.brief, cwd, { format: plan.format, order: plan.order });
@@ -762,12 +841,14 @@ export default {
               if (args.background !== false) notice(hold.why);
               args.background = false;
             }
-            calls.set(input.callID, { chain, parent: input.sessionID, description, hold: hold.ok,
+            calls.set(input.callID, { chain, gate, parent: input.sessionID, description, hold: hold.ok,
                                       agent: agents.get(input.sessionID) ?? "" });
-          } else if (plan.kind === "watch") {
-            calls.set(input.callID, { watch: new Watch(plan.brief, cwd), parent: input.sessionID, description });
-          } else if (plan.kind === "one" && plan.testsOff && chains) {
-            calls.set(input.callID, { off: true, parent: input.sessionID, description });
+          } else {
+            const hold = gate ? await holdReady : { ok: false };
+            const base = { gate, parent: input.sessionID, description, hold: hold.ok, agent: agents.get(input.sessionID) ?? "" };
+            if (plan.kind === "watch") calls.set(input.callID, { ...base, watch: new Watch(plan.brief, cwd) });
+            else if (plan.kind === "one" && plan.testsOff && chains) calls.set(input.callID, { ...base, off: true });
+            else if (gate) calls.set(input.callID, base);
           }
         }
         const gate = await gateSetting.get();                     // the dashboard's setting (Connect > Setup)
@@ -788,7 +869,7 @@ export default {
         if (meta.background === true || res?.state === "running") {
           if (!id) return;
           waiting.set(id, p);
-          if (p.chain && p.hold) {                                 // the held chain's record (the state file)
+          if ((p.chain || p.gate) && p.hold) {                     // the held chain's record (the state file)
             p.first = id;
             record(p, "first");
           }

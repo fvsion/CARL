@@ -130,6 +130,9 @@ class ClientListTest(unittest.TestCase):
                                          {"id": "c", "label": "C[2J", "ctx": 65536, "thinking": "on-off",
                                           "off_sampling": "same", "thinking_main": "on", "thinking_coder": "main"}])
         self.assertEqual(client_entry({"name": "x"}, 4096)["label"], "x")
+        # the 23.4.3 addendum: a catalogue entry's free_form_brief (its main session may write the brief's free-form part)
+        self.assertIs(client_entry({"name": "x", "free_form_brief": True}, 4096)["free_form"], True)
+        self.assertNotIn("free_form", client_entry({"name": "x", "free_form_brief": "yes"}, 4096))
 
     def test_app_client_models(self) -> None:
         w = World(catalog(BIG, SMALL), files={f"{MDIR}/Small-IQ3.gguf": 10 * GIB},

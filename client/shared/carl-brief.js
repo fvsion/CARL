@@ -490,7 +490,7 @@ export function parseJson(text, o = {}) {
 const SCHEMA = {
   work_mode: null, work_type: null, existing_tests: null,
   task_summary: null, expected_outcome: null, current_state: null, design_notes: null,
-  exact_interfaces: null, scope_limits: null, not_in_task: null,
+  exact_interfaces: null, scope_limits: null, not_in_task: null, detailed_brief: null,
   reference_doc: ["doc_path", "doc_purpose"],
   known_file: ["file_path", "file_action"],
   task_requirement: ["requirement_id", "requirement_text"],
@@ -634,7 +634,7 @@ export function extractBrief(text) {
  * @typedef {{
  *   workMode: string, workType: string, existingTests: string[],
  *   taskSummary: string, expectedOutcome: string, currentState: string, designNotes: string,
- *   exactInterfaces: string[], scopeLimits: string, notInTask: string[],
+ *   exactInterfaces: string[], scopeLimits: string, notInTask: string[], detailedBrief: string,
  *   referenceDocs: { path: string, purpose: string }[],
  *   files: BriefFile[], requirements: Requirement[], checks: Check[],
  *   projectRules: { text: string, source: string }[], inputExamples: { source: string, text: string }[],
@@ -696,6 +696,7 @@ export function normalizeBrief(raw) {
     designNotes: str(raw.design_notes),
     exactInterfaces: list(raw.exact_interfaces).map(str).filter(Boolean),
     notInTask: list(raw.not_in_task).map(str).filter(Boolean),
+    detailedBrief: text(raw.detailed_brief),
     scopeLimits: str(raw.scope_limits),
     referenceDocs: list(raw.reference_doc).map((d) => ({ path: str(tab(d).doc_path), purpose: str(tab(d).doc_purpose) })),
     files: list(raw.known_file).map((f) => ({ path: briefPath(tab(f).file_path), action: str(tab(f).file_action).toLowerCase() })),
@@ -817,14 +818,20 @@ function inProjectThere(p, root, exists) {
  * revision 1 gets the new key's name), the file actions, the ids, in tests-only a file to write that is not a test
  * file (the gate would refuse it), and, with o.root (the project folder), each existing_tests path is there.
  * format: how the sentences write the keys (the format the brief came in: parseBrief's format).
+ * o.freeForm false (the main session's model may not write the free-form part, the 23.4.3 addendum): detailed_brief
+ * is a key that is not in the schema.
  * @param {Brief} b @param {"toml" | "json" | ""} [format]
- * @param {{ root?: string, exists?: (p: string) => boolean }} [o] o.exists: for tests (default: the file system)
+ * @param {{ root?: string, exists?: (p: string) => boolean, freeForm?: boolean }} [o] o.exists: for tests (default:
+ *   the file system)
  * @returns {string[]}
  */
 export function checkBrief(b, format = "toml", o = {}) {
   const { kv, table, item, addItem } = SYNTAX[format === "json" ? "json" : "toml"];
   /** @type {string[]} */
   const out = [];
+  if (o.freeForm === false && b.detailedBrief) {
+    out.push('The brief has the key "detailed_brief", which is not in the schema: remove it, or put its content in a key of the schema.');
+  }
   for (const k of b.unknown) {
     const use = RENAMED[k];
     const misplaced = use ? "" : misplacedKey(k, format === "json" ? "json" : "toml");
@@ -929,7 +936,9 @@ export function checkBrief(b, format = "toml", o = {}) {
  * name the keys the TOML way, a JSON brief's the JSON way. o.format: the brief's format in the main agent's
  * instructions, named when the text has no brief at all (CARL's default: TOML; agent-bench's brief_json: JSON).
  * o.root: the project folder (checkBrief: the existing_tests paths are checked there).
- * @param {string} taskText @param {{ format?: "toml" | "json", root?: string, exists?: (p: string) => boolean }} [o]
+ * o.freeForm: false when the main session's model may not write detailed_brief.
+ * @param {string} taskText
+ * @param {{ format?: "toml" | "json", root?: string, exists?: (p: string) => boolean, freeForm?: boolean }} [o]
  */
 export function briefRefusal(taskText, o = {}) {
   const { brief, error, format, line, reason } = parseBrief(taskText);
@@ -949,7 +958,7 @@ export function briefRefusal(taskText, o = {}) {
     const where = line ? `\nLine ${line}${bad.trim() ? ` is: ${bad.trim().slice(0, 200)}` : ""}` : "";
     return `${BRIEF_MARK}: the brief is not valid ${name}: ${reason ?? error}.${where}${form}\nFix it and send the whole brief again.`;
   }
-  const problems = checkBrief(brief, format, { root: o.root, exists: o.exists });
+  const problems = checkBrief(brief, format, { root: o.root, exists: o.exists, freeForm: o.freeForm });
   if (!problems.length) return "";
   return `${BRIEF_MARK}: the coder did not start. Fix these points and send the whole brief again:\n` +
     problems.map((p) => `- ${p}`).join("\n") + "\n\n" + checklist(brief, format === "json" ? "json" : "toml");
@@ -1196,13 +1205,14 @@ export function testSessionDue(b, continued = false) {
 /**
  * The brief of the test session in the chain, in work_mode tests-only: task_summary, expected_outcome,
  * current_state, exact_interfaces, the requirements, the checks, scope_limits, reference_doc, project_rule and
- * input_example. Without design_notes and known_file (the user: tests from the behaviour, not the implementation),
+ * input_example. Without design_notes, detailed_brief and known_file (the user: tests from the behaviour, not the
+ * implementation),
  * and without existing_tests, [failed_attempt] and [[tried_fix]]. work_type stays (the brief needs it).
  * @param {Brief} b @returns {Brief}
  */
 export function testSessionBrief(b) {
   return {
-    ...b, workMode: "tests-only", existingTests: [], designNotes: "", files: [],
+    ...b, workMode: "tests-only", existingTests: [], designNotes: "", detailedBrief: "", files: [],
     failedAttempt: null, triedFixes: [], testSession: null, unknown: [],
   };
 }
@@ -1227,7 +1237,9 @@ export function writeBrief(b) {
   /** @type {string[]} */
   const out = [`work_mode = ${q(b.workMode)}`, `work_type = ${q(b.workType)}`];
   if (b.existingTests.length) out.push(`existing_tests = ${strings(b.existingTests)}`);
-  out.push("", `task_summary = ${q(b.taskSummary)}`, `expected_outcome = ${q(b.expectedOutcome)}`);
+  out.push("", `task_summary = ${q(b.taskSummary)}`);
+  if (b.detailedBrief) out.push(`detailed_brief = ${q(b.detailedBrief)}`);
+  out.push(`expected_outcome = ${q(b.expectedOutcome)}`);
   if (b.currentState) out.push(`current_state = ${q(b.currentState)}`);
   if (b.designNotes) out.push(`design_notes = ${q(b.designNotes)}`);
   if (b.exactInterfaces.length) out.push(`exact_interfaces = ${strings(b.exactInterfaces)}`);
@@ -1276,6 +1288,7 @@ export function writeBriefJson(b) {
   const o = { work_mode: b.workMode, work_type: b.workType };
   if (b.existingTests.length) o.existing_tests = b.existingTests;
   o.task_summary = b.taskSummary;
+  if (b.detailedBrief) o.detailed_brief = b.detailedBrief;
   o.expected_outcome = b.expectedOutcome;
   if (b.currentState) o.current_state = b.currentState;
   if (b.designNotes) o.design_notes = b.designNotes;

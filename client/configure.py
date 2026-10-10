@@ -153,6 +153,7 @@ WEB_SEARCH = ("exa", "parallel", "off")
 CLIENTS = ("both", "opencode", "pi")
 CODER_TESTS = ("before", "after", "off")   # the Tests setting (23.4.6)
 REQUEST_CHECK = ("reminder", "on", "off")  # the Request Check (23.4.3 addendum)
+FREE_FORM = ("model", "on", "off")          # the free-form brief (23.4.3 addendum)
 SEARCH_MCP = {"exa": "https://mcp.exa.ai/mcp", "parallel": "https://search.parallel.ai/mcp"}
 SEARCH_NAME = "carl-web-search"                         # Pi's MCP server entry
 PI_TOOLS = ["+grep", "+find", "+ls"]                    # Pi's built-in tools that are off by default
@@ -225,6 +226,9 @@ class Options:
     coder_model_thinking: str = ""   # its variant (OpenCode) or thinking level (Pi); "": the model's own default
     coder_tests: str = "before"   # the Tests setting (23.4.6): before | after | off (the chain's test session)
     request_check: str = "reminder"   # the Request Check (23.4.3 addendum): reminder | on | off
+    run_gate: bool = True     # the Coder Loop's run gate (23.4.3 addendum)
+    fix_rounds: int = 1       # its fix rounds, 0-3
+    free_form: str = "model"  # the free-form brief (23.4.3 addendum): model | on | off
 
     @property
     def oc_dir(self) -> str:
@@ -327,6 +331,9 @@ def parse_args(argv: list[str]) -> Options:
                     help="/carl's Tests: the coder's test session before the code session, after it, or off")
     ap.add_argument("--request-check", choices=REQUEST_CHECK, default="reminder",
                     help="/carl's Request Check: the brief must carry the literals of the user's request")
+    ap.add_argument("--run-gate", type=switch_arg, default=True, help="/carl's Coder Loop: the run gate")
+    ap.add_argument("--fix-rounds", type=int, choices=(0, 1, 2, 3), default=1, help="/carl's Coder Loop: its fix rounds")
+    ap.add_argument("--free-form", choices=FREE_FORM, default="model", help="/carl's Free-Form Brief")
     a = ap.parse_args(argv)
     try:
         models = carl_models.only_running(carl_models.load_list(a.models), a.running)  # single-model mode (23.4.4)
@@ -340,7 +347,7 @@ def parse_args(argv: list[str]) -> Options:
                    browser=a.browser, browser_headed=a.browser_headed, profile=a.profile,
                    cache=a.cache, clients=a.clients, reminder=a.reminder, coder_model=a.coder_model,
                    coder_model_thinking=a.coder_model_thinking if a.coder_model else "", coder_tests=a.coder_tests,
-                   request_check=a.request_check)
+                   request_check=a.request_check, run_gate=a.run_gate, fix_rounds=a.fix_rounds, free_form=a.free_form)
 
 
 # ================================================================== merge rules (no I/O)
@@ -856,7 +863,7 @@ def models_state(ml: ModelList) -> JsonObj:
     and the coder (/carl's override of this computer merged), and the dashboard's coder value (what /carl's
     "dashboard default" gives), for the /carl panel."""
     return {m.id: {"thinking": m.thinking, "main": m.role("main"), "coder": m.role("coder"),
-                   "dashboard": m.dashboard_coder()} for m in ml.models}
+                   "dashboard": m.dashboard_coder(), **({"free_form": True} if m.free_form else {})} for m in ml.models}
 
 
 def pi_coder_thinking(provider_id: str, ml: ModelList) -> JsonObj:
@@ -1255,7 +1262,8 @@ class Installer:
 
         st.update({"providers": ids, "base_url": o.base_url, "updated": self.stamp, "models": models_state(o.models),
                    "coder_model": o.coder_model or "main", "coder_tests": o.coder_tests,
-                   "request_check": o.request_check})
+                   "request_check": o.request_check,
+                   "run_gate": o.run_gate, "fix_rounds": o.fix_rounds, "free_form": o.free_form})
         self.cf.save(path, cfg)
         self.save_state(oc, "OpenCode", st)
         return ids
@@ -1521,7 +1529,8 @@ class Installer:
         # the coder's model (23.4.5): an external one the subagent extension passes as --model, else "main"
         st.update({"providers": ids, "base_url": o.base_url, "updated": self.stamp, "models": models_state(o.models),
                    "coder_model": o.coder_model or "main", "coder_tests": o.coder_tests,
-                   "request_check": o.request_check})
+                   "request_check": o.request_check,
+                   "run_gate": o.run_gate, "fix_rounds": o.fix_rounds, "free_form": o.free_form})
         self.save_state(pi, "Pi", st)
         return ids
 

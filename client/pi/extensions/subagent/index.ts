@@ -61,7 +61,7 @@ import { Box, Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { type AgentConfig, type AgentScope, discoverAgents } from "./agents.ts";
 import { duration, parseResult, resultBody, resultTitle } from "./result.js";
-import { TESTS_OFF, coderPlan, runCoderTask, testsFrom } from "./carl-chain.js";
+import { coderPlan, loopFrom, runCoderTask, testsFrom } from "./carl-chain.js";
 
 const MAX_PARALLEL_TASKS = 8;
 const MAX_CONCURRENCY = 4;
@@ -575,6 +575,7 @@ async function runAgentTask(
 		runSingleAgent(defaultCwd, dispatchDefaults, agents, agentName, text, cwd, step, signal, onUpdate, makeDetails);
 	if (!CODERS.has(agentName) || !agents.some((a) => a.name === agentName)) return run(task);
 	const sessions: SingleResult[] = [];
+	const outputs: string[] = [];
 	const out = await runCoderTask(
 		task,
 		cwd ?? defaultCwd,
@@ -582,13 +583,16 @@ async function runAgentTask(
 			const r = await run(text);
 			sessions.push(r);
 			const failed = isFailedResult(r);
-			return { ok: !failed, output: failed ? getResultOutput(r) : getFinalOutput(r.messages) };
+			const output = failed ? getResultOutput(r) : getFinalOutput(r.messages);
+			outputs.push(output);
+			return { ok: !failed, output };
 		},
-		{ chain: chainOn(), tests: testsNow() },
+		// the Coder Loop (the 23.4.3 addendum): the run gate and its fix rounds, carl.json "run_gate" and "fix_rounds"
+		{ chain: chainOn(), tests: testsNow(), gate: loopFrom(path.join(getAgentDir(), "carl.json")) },
 	);
 	const last = sessions[sessions.length - 1];
-	// one session as before; with the Tests setting off, its result gets CARL's line (Phase 23.4.6)
-	if (!last || (out.kind === "one" && !out.text.endsWith(TESTS_OFF))) return last ?? run(task);
+	// one session whose output is the result as it is; else (the Tests setting off, the run gate) CARL's one result
+	if (!last || (sessions.length === 1 && out.text === outputs[0])) return last ?? run(task);
 	const usage = { ...last.usage };
 	for (const s of sessions.slice(0, -1)) {
 		usage.input += s.usage.input;

@@ -10,6 +10,7 @@ import { test } from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import background from "../../client/opencode/plugins/carl-background/index.js";
 import { parseModels, verdict } from "../../client/opencode/plugins/carl-model-check/check.js";
+import * as B from "../../client/shared/carl-brief.js";
 
 const REPO = fileURLToPath(new URL("../../", import.meta.url));
 const HOME = mkdtempSync(join(tmpdir(), "carl-plugins-"));
@@ -40,7 +41,13 @@ copyFileSync(join(REPO, "client/shared/carl-chain.js"), join(delegationDir, "car
 const delegationMod = await import(pathToFileURL(join(delegationDir, "index.js")).href);
 const { RULE_BEGIN, RULE_END, withoutRule } = delegationMod;
 const delegation = delegationMod.default;
+/** Wait for p with the event loop held open (the plugin's recovery timer is unref'd: alone, node would end). */
+const alive = (p) => {
+  const t = setInterval(() => {}, 1000);
+  return p.finally(() => clearInterval(t));
+};
 const chainMod = await import(pathToFileURL(join(delegationDir, "carl-chain.js")).href);
+const FREE_FORM = (await import(pathToFileURL(join(delegationDir, "carl-delegation.js")).href)).FREE_FORM_TEXT;
 const CHAINS = join(HOME, ".config", "carl", "chains");                  // the held chains' state files
 
 test("carl-delegation: subagents never get the delegation rule; the main agent keeps it", async () => {
@@ -219,6 +226,24 @@ test("carl-delegation: the Request Check: the user's words of the main session; 
   assert.match(await before(hooks, "task", { subagent_type: "coder", prompt: BRIEF }), /- `--sep`/);
 });
 
+test("carl-delegation: the free-form brief: taught and taken in a main session whose model qualifies, never in another", async () => {
+  const client = { session: { get: async ({ path }) => ({ data: { id: path.id, parentID: path.id === "sub" ? "m" : undefined } }) } };
+  const dir = mkdtempSync(join(tmpdir(), "carl-free-"));
+  const stateFile = join(dir, "carl.json");
+  writeFileSync(stateFile, JSON.stringify({ providers: { llamacpp: "llamacpp" }, models: { "gemma-4-e4b": {} } }));
+  const hooks = await delegation.server({ client, directory: "/p" }, { gate: false, coder: "coder", stateFile });
+  const system = async (sessionID, providerID, id) => {
+    const output = { system: [`x ${delegationMod.RULE_BEGIN} the rule ${delegationMod.RULE_END}`] };
+    await hooks["experimental.chat.system.transform"]({ sessionID, model: { providerID, id } }, output);
+    return output.system;
+  };
+  assert.equal((await system("big", "openrouter", "some-frontier")).at(-1), FREE_FORM);   // not CARL's: taught
+  assert.equal((await system("small", "llamacpp", "gemma-4-e4b")).length, 1);             // CARL's E4B: never
+  const free = BRIEF.replace("expected_outcome = ", 'detailed_brief = """\nUse csv.writer.\n"""\nexpected_outcome = ');
+  assert.equal(await before(hooks, "task", { subagent_type: "coder", prompt: free }, "big"), "");
+  assert.match(await before(hooks, "task", { subagent_type: "coder", prompt: free }, "small"), /"detailed_brief", which is not in the schema/);
+});
+
 test("carl-delegation: a coder task whose brief fails the check is refused before the coder starts", async () => {
   const client = { session: { get: async () => ({ data: {} }) } };
   const hooks = await delegation.server({ client, directory: "/p" }, { coder: "coder" });
@@ -347,7 +372,7 @@ const testSession = (dir, red = true) => {
 
 test("carl-delegation, the chain in the foreground: the task becomes the test session; then the code session; one output", async () => {
   const oc = chainOpenCode();
-  const hooks = await delegation.server({ client: oc.client, directory: oc.dir }, { coder: "coder" });
+  const hooks = await delegation.server({ client: oc.client, directory: oc.dir }, { gate: false, coder: "coder" });
   oc.setHooks(hooks);
   const args = { subagent_type: "coder", description: "Feature", prompt: "```toml\n" + CHAIN_BRIEF() + "```", background: false };
   await hooks["tool.execute.before"]({ tool: "task", sessionID: "m", callID: "c1" }, { args });
@@ -384,7 +409,7 @@ test("carl-delegation, Tests after code (the state file, read at each task): the
   const oc = chainOpenCode({ second: (dir) => testSession(dir) });
   const stateFile = join(oc.dir, "carl.json");
   writeFileSync(stateFile, JSON.stringify({ coder_tests: "after" }));
-  const hooks = await delegation.server({ client: oc.client, directory: oc.dir }, { coder: "coder", stateFile });
+  const hooks = await delegation.server({ client: oc.client, directory: oc.dir }, { gate: false, coder: "coder", stateFile });
   oc.setHooks(hooks);
   const args = { subagent_type: "coder", description: "Feature", prompt: CHAIN_BRIEF(), background: false };
   await hooks["tool.execute.before"]({ tool: "task", sessionID: "m", callID: "a1" }, { args });
@@ -422,7 +447,7 @@ test("carl-delegation, Tests after code (the state file, read at each task): the
 
 test("carl-delegation, the chain in the background: the test session's completion is held; one result comes later", async () => {
   const oc = chainOpenCode({ tamper: true });
-  const hooks = await delegation.server({ client: oc.client, directory: oc.dir }, { coder: "coder" });
+  const hooks = await delegation.server({ client: oc.client, directory: oc.dir }, { gate: false, coder: "coder" });
   oc.setHooks(hooks);
   const args = { subagent_type: "coder", description: "Feature", prompt: CHAIN_BRIEF(), background: true };
   await hooks["tool.execute.before"]({ tool: "task", sessionID: "m", callID: "c2" }, { args });
@@ -455,7 +480,7 @@ test("carl-delegation, the chain in the background: the test session's completio
 
 test("carl-delegation, the chain: a failed test session's message says so in place; follow_up with existing_tests and chain: false", async () => {
   const oc = chainOpenCode();
-  const hooks = await delegation.server({ client: oc.client, directory: oc.dir }, { coder: "coder" });
+  const hooks = await delegation.server({ client: oc.client, directory: oc.dir }, { gate: false, coder: "coder" });
   oc.setHooks(hooks);
   const bg = async (callID, prompt) => {
     const args = { subagent_type: "coder", description: "Feature", prompt, background: true };
@@ -480,7 +505,7 @@ test("carl-delegation, the chain: a failed test session's message says so in pla
   const parts = [{ type: "text", synthetic: true, text: delegationMod.taskXml({ id: "ses_e", state: "completed", summary: "s", text: "Done." }) }];
   await hooks["chat.message"]({ sessionID: "m", agent: "build" }, { message: {}, parts });
   assert.match(delegationMod.parseTaskXml(parts[0].text).text, /^Done\.\n\n\[CARL\] Warning: the coder changed these test files: tests\/check\.test\.mjs\./);
-  const off = await delegation.server({ client: oc.client, directory: oc.dir }, { chain: false });
+  const off = await delegation.server({ client: oc.client, directory: oc.dir }, { chain: false, gate: false });
   const args = { subagent_type: "coder", prompt: CHAIN_BRIEF() };
   await off["tool.execute.before"]({ tool: "task", sessionID: "m", callID: "x" }, { args });
   assert.equal(args.prompt, CHAIN_BRIEF());
@@ -527,7 +552,7 @@ test("carl-delegation, the chain's base: without the hold, the task runs in the 
   for (const setup of [() => chainOpenCode({ version: "1.19.0" }),
                        () => (process.env.CARL_TEST_OPENCODE_VERSION = "0.0.0-test", chainOpenCode())]) {
     const oc = setup();
-    const hooks = await delegation.server({ client: oc.client, directory: oc.dir }, { coder: "coder" });
+    const hooks = await delegation.server({ client: oc.client, directory: oc.dir }, { gate: false, coder: "coder" });
     delete process.env.CARL_TEST_OPENCODE_VERSION;
     oc.setHooks(hooks);
     const args = { subagent_type: "coder", description: "Feature", prompt: CHAIN_BRIEF(), background: true };
@@ -547,6 +572,109 @@ test("carl-delegation, the chain's base: without the hold, the task runs in the 
     assert.match(res.text, /^\[CARL\] Chain: the coder ran in two new sessions/);
     assert.equal(existsSync(join(CHAINS, "m.json")), false);          // no hold: no record
   }
+});
+
+const GATE_BRIEF = `work_mode = "code"
+work_type = "follow_up"
+task_summary = "Make add() take a third number."
+expected_outcome = "add(1, 2, 3) is 6."
+current_state = "calc/core.py has add(a, b)."
+
+[[known_file]]
+file_path = "calc/core.py"
+file_action = "change"
+
+[[task_requirement]]
+requirement_id = "R1"
+requirement_text = "add takes a third number, default 0"
+
+[[acceptance_check]]
+check_id = "C1"
+covers_requirements = ["R1"]
+run_command = "python3 -m pytest -q"
+expected_result = "all pass"
+`;
+/** A Python project in a folder: calc/core.py, and a test that passes. */
+const gateProject = (dir) => {
+  mkdirSync(join(dir, "calc"), { recursive: true });
+  mkdirSync(join(dir, "tests"), { recursive: true });
+  writeFileSync(join(dir, "calc", "__init__.py"), "");
+  writeFileSync(join(dir, "calc", "core.py"), "def add(a, b):\n    return a + b\n");
+  writeFileSync(join(dir, "tests", "test_core.py"), "from calc.core import add\n\ndef test_add():\n    assert add(1, 2) == 3\n");
+};
+const BROKEN = "def add(a, b, c=0):\n    return a - b + c\n";
+const MENDED = "def add(a, b, c=0):\n    return a + b + c\n";
+
+test("carl-delegation, the run gate: the baseline before the task; not done after it; a fix session mends it; one result (foreground)", async () => {
+  const oc = chainOpenCode({ second: (dir) => (writeFileSync(join(dir, "calc", "core.py"), MENDED), 'task_status = "done"') });
+  gateProject(oc.dir);
+  const hooks = await delegation.server({ client: oc.client, directory: oc.dir }, { coder: "coder" });
+  oc.setHooks(hooks);
+  const args = { subagent_type: "coder", description: "Three", prompt: GATE_BRIEF, background: false };
+  await hooks["tool.execute.before"]({ tool: "task", sessionID: "m", callID: "g1" }, { args });
+  assert.equal(args.prompt, GATE_BRIEF);                                         // one session, as it is
+  writeFileSync(join(oc.dir, "calc", "core.py"), BROKEN);                        // the coder's work breaks test_add
+  const output = { metadata: { sessionId: "ses_first" }, output: delegationMod.taskXml({ id: "ses_first", state: "completed", text: 'task_status = "done"' }) };
+  await hooks["tool.execute.after"]({ tool: "task", sessionID: "m", callID: "g1", args }, output);
+  const [create, prompt] = oc.calls;
+  assert.equal(create[1].title, "Three: fix 1 (@coder subagent)");
+  const fix = B.parseBrief(prompt[2].parts[0].text).brief;
+  assert.deepEqual([fix.workType, fix.failedAttempt.run.startsWith("python3 -m pytest")], ["bug_fix", true]);
+  const res = delegationMod.parseTaskXml(output.output);
+  assert.match(res.text, /^task_status = "done"\n\n## Fix round 1 \(work_mode code, bug_fix\)\n\ntask_status = "done"\n\n\[CARL\] Run gate: done after 1 fix round\./);
+});
+
+test("carl-delegation, the run gate in the background: held with the hold (one result later); checks only without it", async () => {
+  const oc = chainOpenCode({ second: (dir) => (writeFileSync(join(dir, "calc", "core.py"), MENDED), "fixed") });
+  gateProject(oc.dir);
+  const hooks = await delegation.server({ client: oc.client, directory: oc.dir }, { coder: "coder" });
+  oc.setHooks(hooks);
+  const args = { subagent_type: "coder", description: "Three", prompt: GATE_BRIEF, background: true };
+  await hooks["tool.execute.before"]({ tool: "task", sessionID: "m", callID: "g2" }, { args });
+  await hooks["tool.execute.after"]({ tool: "task", sessionID: "m", callID: "g2", args }, {
+    metadata: { sessionId: "ses_bg", background: true }, output: delegationMod.taskXml({ id: "ses_bg", state: "running", text: "working" }) });
+  writeFileSync(join(oc.dir, "calc", "core.py"), BROKEN);
+  const done = delegationMod.taskXml({ id: "ses_bg", state: "completed", summary: "Background task completed: Three", text: "my work" });
+  await assert.rejects(hooks["chat.message"]({ sessionID: "m", agent: "build" }, { message: {}, parts: [{ type: "text", synthetic: true, text: done }] }),
+                       /^Error: \[CARL\] Held: the coder session of "Three" ended; CARL runs its checks now/);
+  const body = await oc.deliveredP;
+  const res = delegationMod.parseTaskXml(body.parts[0].text);
+  assert.match(res.text, /^my work\n\n## Fix round 1[\s\S]*\[CARL\] Run gate: done after 1 fix round\./);
+  // without the hold (a version that CARL did not check): the checks in place, no fix round
+  process.env.CARL_TEST_OPENCODE_VERSION = "0.0.0-test";
+  const oc2 = chainOpenCode({ version: "0.0.0-test" });
+  gateProject(oc2.dir);
+  const hooks2 = await delegation.server({ client: oc2.client, directory: oc2.dir }, { coder: "coder" });
+  oc2.setHooks(hooks2);
+  const args2 = { subagent_type: "coder", description: "Three", prompt: GATE_BRIEF, background: true };
+  await hooks2["tool.execute.before"]({ tool: "task", sessionID: "m", callID: "g3" }, { args: args2 });
+  await hooks2["tool.execute.after"]({ tool: "task", sessionID: "m", callID: "g3", args: args2 }, { metadata: { sessionId: "ses_b3", background: true }, output: "" });
+  writeFileSync(join(oc2.dir, "calc", "core.py"), BROKEN);
+  const parts = [{ type: "text", synthetic: true, text: delegationMod.taskXml({ id: "ses_b3", state: "completed", summary: "s", text: "my work" }) }];
+  await hooks2["chat.message"]({ sessionID: "m", agent: "build" }, { message: {}, parts });
+  delete process.env.CARL_TEST_OPENCODE_VERSION;
+  const t = delegationMod.parseTaskXml(parts[0].text).text;
+  assert.match(t, /^my work\n\n\[CARL\] Run gate: NOT DONE\.\n- a test that passed before fails now: tests\/test_core\.py::test_add/);
+  assert.match(t, /Give the coder this fix \(a bug_fix brief, ready to send\):\n```toml\nwork_mode = "code"\nwork_type = "bug_fix"/);
+  assert.equal(oc2.calls.length, 0);                                             // no fix session
+});
+
+test("carl-delegation, the hold is safe for the run gate: a held gate that OpenCode left gets the coder's result at the next start", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "carl-oc-recover-gate-"));
+  const dead = spawnSync(process.execPath, ["-e", ""]).pid;
+  new delegationMod.ChainStore(CHAINS).write("p9", [{ v: 2, kind: "gate", parent: "p9", first: "ses_g", stage: "held", text: "my work",
+                                                     description: "Three", agent: "build", directory: dir, pid: dead, at: 1 }]);
+  const sent = [];
+  let all;
+  const allP = new Promise((r) => (all = r));
+  const client = { session: { messages: async () => ({ data: [] }), promptAsync: async (o) => (sent.push(o), all(), { data: undefined }) } };
+  await delegation.server({ client, directory: dir }, { recoverMs: 5 });
+  await alive(allP);
+  const t = delegationMod.parseTaskXml(sent[0].body.parts[0].text);
+  assert.deepEqual([t.id, t.state], ["ses_g", "completed"]);
+  assert.match(t.text, /^my work\n\n\[CARL\] Run gate: OpenCode stopped before the run gate ended\. Run the project's tests yourself/);
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal(existsSync(join(CHAINS, "p9.json")), false);
 });
 
 test("carl-delegation, the hold is safe: a chain that OpenCode left undelivered is delivered at the next start", async () => {
@@ -577,7 +705,7 @@ test("carl-delegation, the hold is safe: a chain that OpenCode left undelivered 
     promptAsync: async (o) => (sent.push(o), sent.length === 5 && all(), { data: undefined }),
   } };
   await delegation.server({ client, directory: dir }, { recoverMs: 5 });
-  await allP;
+  await alive(allP);
   await new Promise((r) => setTimeout(r, 20));
   const by = Object.fromEntries(sent.map((o) => {
     const t = delegationMod.parseTaskXml(o.body.parts[0].text);
@@ -649,7 +777,7 @@ test("carl-delegation, the hold is safe with Tests after code: a record of v 2 (
     promptAsync: async (o) => (sent.push(o), sent.length === 2 && all(), { data: undefined }),
   } };
   await delegation.server({ client, directory: dir }, { recoverMs: 5 });
-  await allP;
+  await alive(allP);
   const by = Object.fromEntries(sent.map((o) => {
     const t = delegationMod.parseTaskXml(o.body.parts[0].text);
     return [t.id, t];
@@ -846,7 +974,7 @@ test("carl-delegation, the chain with an external coder model: both sessions on 
   // OpenCode's task tool starts the test session on the coder agent's model (agent.model, read in OpenCode 1.18.35)
   // and says so in its metadata; the plugin starts the code session with that model and the coder agent
   const oc = chainOpenCode();
-  const hooks = await delegation.server({ client: oc.client, directory: oc.dir }, { coder: "coder", coderModel: "openrouter/example-coder-32b" });
+  const hooks = await delegation.server({ client: oc.client, directory: oc.dir }, { gate: false, coder: "coder", coderModel: "openrouter/example-coder-32b" });
   oc.setHooks(hooks);
   const args = { subagent_type: "coder", description: "Feature", prompt: CHAIN_BRIEF(), background: false };
   await hooks["tool.execute.before"]({ tool: "task", sessionID: "m", callID: "e1" }, { args });
@@ -861,7 +989,7 @@ test("carl-delegation, the chain with an external coder model: both sessions on 
   assert.match(res.text, /Red start: CARL ran `node --test tests\/check\.test\.mjs` before the code: it failed \(exit 1\)\./);
   // without the model in the metadata (an older OpenCode): no model in the prompt, so OpenCode takes the agent's own
   const oc2 = chainOpenCode();
-  const hooks2 = await delegation.server({ client: oc2.client, directory: oc2.dir }, { coder: "coder" });
+  const hooks2 = await delegation.server({ client: oc2.client, directory: oc2.dir }, { gate: false, coder: "coder" });
   oc2.setHooks(hooks2);
   const args2 = { subagent_type: "coder", description: "Feature", prompt: CHAIN_BRIEF(), background: false };
   await hooks2["tool.execute.before"]({ tool: "task", sessionID: "m", callID: "e2" }, { args: args2 });
@@ -875,7 +1003,7 @@ test("carl-delegation, a provider failure: the coder's task fails with the provi
   const why = "401 Unauthorized: the key has expired (openrouter.ai)";
   // the code session's provider fails
   const oc = chainOpenCode({ fail: why });
-  const hooks = await delegation.server({ client: oc.client, directory: oc.dir }, { coder: "coder", coderModel: "openrouter/example-coder-32b" });
+  const hooks = await delegation.server({ client: oc.client, directory: oc.dir }, { gate: false, coder: "coder", coderModel: "openrouter/example-coder-32b" });
   oc.setHooks(hooks);
   const args = { subagent_type: "coder", description: "Feature", prompt: CHAIN_BRIEF(), background: false };
   await hooks["tool.execute.before"]({ tool: "task", sessionID: "m", callID: "f1" }, { args });
@@ -889,7 +1017,7 @@ test("carl-delegation, a provider failure: the coder's task fails with the provi
   assert.deepEqual(oc.calls[1][2].model, { providerID: "openrouter", modelID: "example-coder-32b" });
   // the test session's provider fails (OpenCode's task tool gives the error): the chain stops with it
   const oc2 = chainOpenCode();
-  const hooks2 = await delegation.server({ client: oc2.client, directory: oc2.dir }, { coder: "coder" });
+  const hooks2 = await delegation.server({ client: oc2.client, directory: oc2.dir }, { gate: false, coder: "coder" });
   oc2.setHooks(hooks2);
   const args2 = { subagent_type: "coder", description: "Feature", prompt: CHAIN_BRIEF(), background: false };
   await hooks2["tool.execute.before"]({ tool: "task", sessionID: "m", callID: "f2" }, { args: args2 });

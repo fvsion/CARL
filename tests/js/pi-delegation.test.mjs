@@ -139,3 +139,22 @@ test("Pi, the Request Check: the user's words since the last brief taken; one re
   assert.equal(await call(BRIEF), undefined);
   writeFileSync(join(agentDir, "carl.json"), "{}");
 });
+
+test("Pi, the free-form brief: the system prompt gets the section only for a model that qualifies; the check follows", async (t) => {
+  if (!ext) return t.skip(`needs type stripping: ${why}`);
+  delete process.env.CARL_AGENT;
+  writeFileSync(join(agentDir, "carl.json"), JSON.stringify({ providers: { llamacpp: "llamacpp" }, models: { "qwen3.6-35b-a3b": { free_form: true } } }));
+  const { pi, fire } = fakePi();
+  ext(pi);
+  const big = { cwd: "/p", model: { provider: "llamacpp", id: "qwen3.6-35b-a3b" } };
+  const small = { cwd: "/p", model: { provider: "llamacpp", id: "gemma-4-e4b" } };
+  const r = await fire("before_agent_start", { prompt: "go", systemPrompt: "the rule" }, big);
+  assert.match(r.systemPrompt, /^the rule\n\n\*\*Your own words in the brief\.\*\*/);
+  assert.equal(await fire("before_agent_start", { prompt: "go", systemPrompt: "the rule" }, small), undefined);
+  const free = BRIEF.replace("expected_outcome = ", 'detailed_brief = """\nUse csv.writer.\n"""\nexpected_outcome = ');
+  writeFileSync(join(agentDir, "carl.json"), JSON.stringify({ providers: { llamacpp: "llamacpp" }, request_check: "off", models: { "qwen3.6-35b-a3b": { free_form: true } } }));
+  assert.equal(await fire("tool_call", { toolName: "subagent", input: { agent: "coder", task: free } }, big), undefined);
+  const no = await fire("tool_call", { toolName: "subagent", input: { agent: "coder", task: free } }, small);
+  assert.match(no.reason, /"detailed_brief", which is not in the schema/);
+  writeFileSync(join(agentDir, "carl.json"), "{}");
+});

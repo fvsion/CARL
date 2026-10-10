@@ -21,7 +21,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { checkBrief, parseBrief } from "./carl-brief.js";
-import { CoderGate, GateSetting, RequestCheck, Turn, isCoderName, requestFrom, withReminder } from "./carl-delegation.js";
+import { CoderGate, FREE_FORM_TEXT, GateSetting, RequestCheck, Turn, freeFormFor, isCoderName, requestFrom, withReminder } from "./carl-delegation.js";
 
 /** Pi's agent folder (carl.json is there). */
 const agentDir = (): string => process.env.PI_CODING_AGENT_DIR || join(homedir(), ".pi", "agent");
@@ -72,16 +72,21 @@ export default function carlDelegation(pi: ExtensionAPI) {
 		if (!set.reminder || !event.text.trim() || event.text.trimStart().startsWith("/")) return { action: "continue" as const };
 		return { action: "transform" as const, text: withReminder(event.text, "pi", set.coder), images: event.images };
 	});
-	pi.on("before_agent_start", async () => {
+	// the free-form part of the brief (the 23.4.3 addendum): taught and taken only when the session's model qualifies
+	const freeForm = (ctx: { model?: { provider?: string; id?: string } }): boolean =>
+		freeFormFor(join(agentDir(), "carl.json"), `${ctx.model?.provider ?? ""}/${ctx.model?.id ?? ""}`);
+	pi.on("before_agent_start", async (event, ctx) => {
 		turn.reset();
-		return undefined;
+		if (!freeForm(ctx as { model?: { provider?: string; id?: string } })) return undefined;
+		return { systemPrompt: `${String(event.systemPrompt ?? "")}\n\n${FREE_FORM_TEXT}` };
 	});
 	pi.on("tool_call", async (event, ctx) => {
 		const tool = String(event.toolName);
 		const input = (event.input ?? {}) as Record<string, unknown>;
 		if (set.brief) {
 			// a coder task with an incomplete brief (and the turn's memory: no switch to tests-only after a refusal)
-			const why = turn.brief(tool, input, { format: set.briefFormat, root: String(ctx.cwd ?? process.cwd()) });
+			const why = turn.brief(tool, input, { format: set.briefFormat, root: String(ctx.cwd ?? process.cwd()),
+				freeForm: freeForm(ctx as { model?: { provider?: string; id?: string } }) });
 			if (why) return { block: true, reason: why };
 			// the request's literals in the brief (carl.json "request_check": on, reminder, off; read at each task)
 			const missing = request.check(tool, input, requestFrom(join(agentDir(), "carl.json")));

@@ -34,8 +34,8 @@
 // and the check commands (run).
 
 import { spawn } from "node:child_process";
-import { readFileSync, readdirSync, statSync } from "node:fs";
-import { isAbsolute, join, relative, resolve, sep } from "node:path";
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { changedFiles, checkBrief, hashFiles, isTestFile, namesTests, parseBrief, parseReport, testSessionBrief,
          testSessionDue, testsSetting, writeBrief, writeBriefJson } from "./carl-brief.js";
 
@@ -712,19 +712,290 @@ export class Watch {
   }
 }
 
+// ================================================================== the run gate (the 23.4.3 addendum)
+// User, 2026-10-10: "a deterministic run gate built into CARL ... we do need to treat running vs failed test different
+// because ... it's also possible for tests to be wrong"; "we need both runs"; "LSP failure should also send the code
+// back"; "CARL needs to support go and rust checks too". After a code session CARL checks the work itself (no shell, its
+// own fixed commands, a time limit, in the project folder):
+//   not done (the coder's, for certain): a changed file does not compile (python -m py_compile, node --check, go vet,
+//     cargo check), the language check finds errors in it (ruff's error rules, when ruff is there: the LSP's place;
+//     OpenCode's plugin API says only that a file's diagnostics changed, not what they are), a new or changed
+//     __main__.py does not start (python -m PACKAGE --help), the project's tests cannot be collected or run, or a test
+//     that passed before the session fails now (the baseline: the same tests, run before the first session);
+//   findings: a new test that fails (the code or the test can be wrong: the main agent decides).
+// "Not done" goes back to the coder for a fix round (a bug_fix brief with the failure: Coder Loop's Fix Rounds,
+// default 1), then the gate runs again; when no round is left, the main agent gets "not done" and the ready brief.
+
+export const GATE_MS = 600_000;                              // a test suite's time limit
+export const CHECK_MS = 120_000;                             // a compile or language check's time limit
+const GATE_OUTPUT = 3_000;                                   // the output that a not-done item keeps
+const SOURCE = /\.(?:py|js|mjs|cjs|ts|tsx|go|rs)$/;
+
+/** The Coder Loop's settings in a client's state file (carl.json "run_gate": true unless false; "fix_rounds": 0-3,
+ * default 1), read at each coder task. @param {string} file @returns {{ gate: boolean, rounds: number }} */
+export function loopFrom(file) {
+  try {
+    const st = JSON.parse(readFileSync(file, "utf8"));
+    const n = Number(st?.fix_rounds);
+    return { gate: st?.run_gate !== false, rounds: Number.isInteger(n) && n >= 0 && n <= 3 ? n : 1 };
+  } catch {
+    return { gate: true, rounds: 1 };
+  }
+}
+
+/** The project's source files (SOURCE) with their hashes. @param {string} root @returns {Record<string, string | null>} */
+export function sourceHashes(root) {
+  /** @type {string[]} */
+  const out = [];
+  let seen = 0;
+  /** @param {string} dir */
+  const walk = (dir) => {
+    let names;
+    try {
+      names = readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const d of names) {
+      if (++seen > MAX_FILES) return;
+      const p = join(dir, d.name);
+      if (d.isDirectory()) {
+        if (!SKIP_DIRS.has(d.name)) walk(p);
+      } else if (d.isFile() && SOURCE.test(d.name)) out.push(rel(root, p));
+    }
+  };
+  walk(root);
+  return hashFiles(out.sort(), root);
+}
+
+/**
+ * @typedef {"python" | "node" | "go" | "rust"} Lang
+ * @typedef {{ lang: Lang, argv: string[] }} Suite a project's test command
+ * @typedef {{ ran: boolean, tests: Record<string, "pass" | "fail">, code: number | null, output: string }} SuiteRun
+ *   ran: the tests were collected and run (a test id each); false: the suite did not start or did not collect
+ * @typedef {Record<string, SuiteRun>} Baseline by the suite's command
+ */
+
+/**
+ * The project's test suites: pytest (Python test files), npm test (a test script) or node --test (test files),
+ * go test (go.mod), cargo test (Cargo.toml).
+ * @param {string} root @returns {Suite[]}
+ */
+export function projectSuites(root) {
+  /** @type {Suite[]} */
+  const out = [];
+  const tests = projectTestFiles(root);
+  if (tests.some((f) => f.endsWith(".py"))) out.push({ lang: "python", argv: ["python3", "-m", "pytest", "-q", "-rA", "-p", "no:cacheprovider", "--color=no"] });
+  let script = "";
+  try {
+    script = String(JSON.parse(readFileSync(join(root, "package.json"), "utf8"))?.scripts?.test ?? "");
+  } catch { /* no package.json */ }
+  if (script && !/no test specified/.test(script)) out.push({ lang: "node", argv: ["npm", "test", "--silent"] });
+  else if (tests.some((f) => /\.(?:test|spec)\.[cm]?js$/.test(f))) out.push({ lang: "node", argv: ["node", "--test", "--test-reporter=tap"] });
+  if (existsSync(join(root, "go.mod"))) out.push({ lang: "go", argv: ["go", "test", "-json", "./..."] });
+  if (existsSync(join(root, "Cargo.toml"))) out.push({ lang: "rust", argv: ["cargo", "test", "--no-fail-fast", "--color", "never"] });
+  return out;
+}
+
+/**
+ * Each test's result in a suite's output, and whether the suite ran its tests.
+ * @param {Lang} lang @param {string} out @param {number | null} code @returns {Omit<SuiteRun, "code" | "output">}
+ */
+export function suiteResults(lang, out, code) {
+  /** @type {Record<string, "pass" | "fail">} */
+  const tests = {};
+  let broken = false;
+  if (lang === "python") {
+    for (const m of out.matchAll(/^(PASSED|FAILED|ERROR|XPASS|XFAIL) (\S+)/gm)) {
+      tests[m[2]] = m[1] === "PASSED" || m[1] === "XFAIL" || m[1] === "XPASS" ? "pass" : "fail";
+      if (m[1] === "ERROR" && !m[2].includes("::")) broken = true;           // a test file that does not collect
+    }
+    broken ||= code === 2 || code === 3 || code === 4 || /errors? during collection|ERROR collecting/.test(out);
+  } else if (lang === "node") {
+    for (const m of out.matchAll(/^\s*(not ok|ok) \d+ - (.+?)(?:\s+#\s*(SKIP|TODO).*)?$/gm)) {      // TAP
+      tests[m[2].trim()] = m[1] === "ok" || m[3] ? "pass" : "fail";
+    }
+    if (!Object.keys(tests).length) {                                                   // node's spec reporter
+      for (const m of out.matchAll(/^\s*([✔✖﹣]) (.+?)(?: \([\d.]+m?s\))?(?: # (?:SKIP|TODO).*)?$/gmu)) {
+        if (!/^(?:tests|suites|pass|fail|failing tests:?)\b/.test(m[2])) tests[m[2].trim()] = m[1] === "✖" ? "fail" : "pass";
+      }
+    }
+  } else if (lang === "go") {
+    for (const line of out.split("\n")) {
+      try {
+        const e = JSON.parse(line);
+        if ((e.Action === "pass" || e.Action === "fail") && e.Test) tests[`${e.Package}/${e.Test}`] = e.Action === "pass" ? "pass" : "fail";
+        if (e.Action === "fail" && !e.Test && /build failed|setup failed/.test(String(e.Output ?? ""))) broken = true;
+      } catch { /* not a JSON line */ }
+    }
+    broken ||= /\[build failed\]|\[setup failed\]/.test(out);
+  } else {
+    for (const m of out.matchAll(/^test (\S+) \.\.\. (ok|FAILED|ignored)/gm)) tests[m[1]] = m[2] === "FAILED" ? "fail" : "pass";
+    broken ||= /^error(?:\[E\d+\])?:/m.test(out) && !Object.keys(tests).length;
+  }
+  return { ran: !broken && Object.keys(tests).length > 0, tests };
+}
+
+/**
+ * Run the project's suites (the baseline before the first session, or the check after a session).
+ * @param {string} cwd @param {{ runArgv?: typeof runArgv, ms?: number }} [o] @returns {Promise<Baseline>}
+ */
+export async function runSuites(cwd, o = {}) {
+  const exec = o.runArgv ?? runArgv;
+  /** @type {Baseline} */
+  const out = {};
+  for (const s of projectSuites(cwd)) {
+    const r = await exec(s.argv, { CI: "1", NO_COLOR: "1" }, cwd, o.ms ?? GATE_MS);
+    out[s.argv.join(" ")] = { ...suiteResults(s.lang, r.output, r.code), code: r.code, output: r.output };
+  }
+  return out;
+}
+
+/** @typedef {{ what: string, command: string, output: string }} NotDone */
+/** @typedef {{ notDone: NotDone[], findings: string[], checked: string[] }} GateResult */
+
+/**
+ * The compile and language checks of the changed source files, and a new or changed __main__.py's start.
+ * @param {string} cwd @param {string[]} changed source files (relative) @param {{ runArgv?: typeof runArgv, has?: (cmd: string) => boolean }} [o]
+ * @returns {Promise<{ notDone: NotDone[], checked: string[] }>}
+ */
+export async function codeChecks(cwd, changed, o = {}) {
+  const exec = o.runArgv ?? runArgv;
+  const has = o.has ?? onPath;
+  /** @type {NotDone[]} */
+  const notDone = [];
+  /** @type {string[]} */
+  const checked = [];
+  /** @param {string} what @param {string[]} argv */
+  const check = async (what, argv) => {
+    checked.push(argv.join(" "));
+    const r = await exec(argv, { NO_COLOR: "1" }, cwd, CHECK_MS);
+    if (r.code !== 0) notDone.push({ what, command: argv.join(" "), output: tail(r.output || (r.timedOut ? "(the time limit)" : ""), GATE_OUTPUT) });
+  };
+  const there = changed.filter((f) => existsSync(join(cwd, f)));
+  const py = there.filter((f) => f.endsWith(".py"));
+  const js = there.filter((f) => /\.[cm]?js$/.test(f));
+  if (py.length) {
+    await check("a changed Python file does not compile", ["python3", "-m", "py_compile", ...py]);
+    if (has("ruff")) await check("the language check finds errors", ["ruff", "check", "--no-cache", "--select", "E9,F63,F7,F82", "--output-format", "concise", ...py]);
+    for (const m of py.filter((f) => f === "__main__.py" || f.endsWith("/__main__.py"))) {
+      const pkg = dirname(m).split("/").filter((x) => x && x !== ".").join(".");
+      if (pkg) await check(`python -m ${pkg} does not start`, ["python3", "-m", pkg, "--help"]);
+    }
+  }
+  for (const f of js) await check("a changed JavaScript file does not compile", ["node", "--check", f]);
+  if (there.some((f) => f.endsWith(".go")) && has("go")) await check("the Go code does not build or vet", ["go", "vet", "./..."]);
+  if (there.some((f) => f.endsWith(".rs")) && has("cargo")) await check("the Rust code does not build", ["cargo", "check", "--quiet", "--color", "never"]);
+  return { notDone, checked };
+}
+
+/** Is a program on the PATH? @param {string} cmd */
+function onPath(cmd) {
+  return String(process.env.PATH ?? "").split(":").some((d) => d && existsSync(join(d, cmd)));
+}
+
+/**
+ * The gate after a code session: the code checks of the changed source files, then the suites against the baseline.
+ * @param {string} cwd @param {Baseline} baseline @param {string[]} changed
+ * @param {{ runArgv?: typeof runArgv, has?: (cmd: string) => boolean, ms?: number }} [o] @returns {Promise<GateResult>}
+ */
+export async function runGate(cwd, baseline, changed, o = {}) {
+  const { notDone, checked } = await codeChecks(cwd, changed, o);
+  /** @type {string[]} */
+  const findings = [];
+  const after = await runSuites(cwd, o);
+  for (const [cmd, now] of Object.entries(after)) {
+    checked.push(cmd);
+    const was = baseline[cmd];
+    if (!now.ran) {
+      if (!was || was.ran) notDone.push({ what: "the project's tests do not run", command: cmd, output: tail(now.output, GATE_OUTPUT) });
+      continue;
+    }
+    const broke = Object.keys(now.tests).filter((t) => now.tests[t] === "fail" && was?.tests[t] === "pass");
+    if (broke.length) {
+      notDone.push({ what: `${broke.length === 1 ? "a test that passed before fails now" : `${broke.length} tests that passed before fail now`}: ${broke.slice(0, 8).join(", ")}`,
+                     command: cmd, output: tail(now.output, GATE_OUTPUT) });
+    }
+    const fresh = Object.keys(now.tests).filter((t) => now.tests[t] === "fail" && !(was && t in was.tests));
+    if (fresh.length) findings.push(`New tests fail (the code or the test can be wrong): ${fresh.slice(0, 8).join(", ")} (\`${cmd}\`).`);
+  }
+  return { notDone, findings, checked };
+}
+
+/**
+ * The bug_fix brief of a fix round: the task's brief with the gate's failure (failed_attempt), what the last session
+ * did (tried_fix) and the state now (current_state); work_mode code.
+ * @param {Brief} brief @param {GateResult} gate @param {number} round @returns {Brief}
+ */
+export function fixBrief(brief, gate, round) {
+  const first = gate.notDone[0];
+  return {
+    ...brief, workMode: "code", workType: "bug_fix", testSession: null,
+    currentState: `The coder worked on this task, and CARL's run gate says it is not done: ${gate.notDone.map((n) => n.what).join("; ")}. ` +
+      "The project's files have that work in them: fix it, do not start over.",
+    failedAttempt: { run: first.command, output: first.output },
+    triedFixes: [...brief.triedFixes, { change: `the coder's session ${round}`, result: gate.notDone.map((n) => `${n.what} (\`${n.command}\`)`).join("; ") }],
+  };
+}
+
+/** The gate's lines for the one result. @param {GateResult} gate @param {number} rounds the fix rounds that ran
+ * @param {string} [brief] the ready bug_fix brief when the work is not done @returns {string} */
+export function gateText(gate, rounds, brief = "") {
+  const fixed = rounds ? ` after ${rounds === 1 ? "1 fix round" : `${rounds} fix rounds`}` : "";
+  if (!gate.notDone.length) {
+    return `[CARL] Run gate: done${fixed}. CARL ran ${gate.checked.map((c) => "`" + c + "`").join(", ") || "no check (no source file changed, no test suite)"}.` +
+      (gate.findings.length ? `\n${gate.findings.join("\n")}` : "");
+  }
+  const items = gate.notDone.map((n) => `- ${n.what}: \`${n.command}\`\n${n.output.trim() ? "```\n" + n.output.trim() + "\n```" : ""}`).join("\n");
+  return `[CARL] Run gate: NOT DONE${fixed}.\n${items}` + (gate.findings.length ? `\n${gate.findings.join("\n")}` : "") +
+    (brief ? `\nGive the coder this fix (a bug_fix brief, ready to send):\n\`\`\`toml\n${brief}\`\`\`` : "");
+}
+
 /**
  * Run a coder task as CARL does (Pi's subagent tool; the OpenCode plugin runs the same steps around the task tool).
  * run(taskText) runs one fresh coder session. The result: kind (coderPlan's), ok, and text: the one result for the
  * main agent (for "one", the session's own output; with the Tests setting off and a test session due, TESTS_OFF
- * after it).
+ * after it). With o.gate (the Coder Loop: { gate, rounds }) and a brief in work_mode code: the project's tests run
+ * first (the baseline), the run gate after the task, and while it says not done and rounds are left, a fix round (a
+ * new coder session with the bug_fix brief), then the gate again; the gate's lines end the result.
  * @param {string} taskText @param {string} cwd
  * @param {(taskText: string, step: "test" | "code" | "one") => Promise<SessionOutcome>} run
- * @param {{ runCheck?: RunCheck, runMs?: number, chain?: boolean, tests?: unknown }} [o] chain: false runs every
- *   task as one session; tests: the Tests setting (default "before")
+ * @param {{ runCheck?: RunCheck, runMs?: number, chain?: boolean, tests?: unknown,
+ *           gate?: { gate: boolean, rounds: number }, runArgv?: typeof runArgv, has?: (cmd: string) => boolean }} [o]
+ *   chain: false runs every task as one session; tests: the Tests setting (default "before")
  * @returns {Promise<{ kind: Plan["kind"], ok: boolean, text: string }>}
  */
 export async function runCoderTask(taskText, cwd, run, o = {}) {
   const plan = coderPlan(taskText, false, o.tests);
+  const gating = Boolean(o.gate?.gate && plan.brief && plan.brief.workMode === "code");
+  const baseline = gating ? await runSuites(cwd, o) : {};
+  const before = gating ? sourceHashes(cwd) : {};
+  const out = await runPlan(plan, taskText, cwd, run, o);
+  if (!gating || !out.ok || !plan.brief) return out;
+  const brief = plan.brief;
+  const write = plan.format === "json" ? writeBriefJson : writeBrief;
+  const changed = () => changedFiles(before, sourceHashes(cwd));
+  let gate = await runGate(cwd, baseline, changed(), o);
+  if (!gate.checked.length) return out;                     // nothing to check: no source file changed, no test suite
+  let rounds = 0;
+  let last = brief;                                          // each fix brief keeps what was tried before it
+  const reports = [];
+  while (gate.notDone.length && rounds < (o.gate?.rounds ?? 1)) {
+    rounds++;
+    last = fixBrief(last, gate, rounds);
+    const fix = await run(write(last), "code");
+    reports.push(`## Fix round ${rounds} (work_mode code, bug_fix)\n\n${cut(fix.output.trim() || "(no output)", REPORT_CAP)}`);
+    gate = await runGate(cwd, baseline, changed(), o);
+    if (!fix.ok) break;
+  }
+  const ready = gate.notDone.length ? write(fixBrief(last, gate, rounds + 1)) : "";
+  return { ...out, text: [out.text, ...reports, gateText(gate, rounds, ready)].join("\n\n") };
+}
+
+/** The task's sessions as the plan says (runCoderTask without the gate). @param {Plan} plan @param {string} taskText
+ * @param {string} cwd @param {(taskText: string, step: "test" | "code" | "one") => Promise<SessionOutcome>} run
+ * @param {{ runCheck?: RunCheck, runMs?: number, chain?: boolean }} o @returns {Promise<{ kind: Plan["kind"], ok: boolean, text: string }>} */
+async function runPlan(plan, taskText, cwd, run, o) {
   if (plan.kind === "chain" && o.chain !== false) {
     const chain = new Chain(plan.brief, cwd, { ...o, format: plan.format, order: plan.order });
     const [first, second] = chain.steps;

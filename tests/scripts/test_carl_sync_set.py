@@ -251,6 +251,17 @@ class SetTest(unittest.TestCase):
         self.assertIn("CODER_REQUEST_CHECK takes reminder or on or off, not 'always'.",
                       self.run_set("CODER_REQUEST_CHECK=always").stderr)
 
+    def test_the_coder_loop_and_the_free_form_brief_live(self) -> None:
+        """The 23.4.3 addendum: CODER_RUN_GATE, CODER_FIX_ROUNDS and CODER_FREE_FORM; their defaults (on, 1, model) take
+        the line out; both clients read them at each coder task, so nothing restarts."""
+        r = json.loads(self.run_set("CODER_RUN_GATE=off", "CODER_FIX_ROUNDS=2", "CODER_FREE_FORM=on").stdout)
+        for line in ("CODER_RUN_GATE=off", "CODER_FIX_ROUNDS=2", "CODER_FREE_FORM=on"):
+            self.assertIn(line, self.env_lines())
+        self.assertEqual(r["restart"], [])
+        self.run_set("CODER_RUN_GATE=on", "CODER_FIX_ROUNDS=1", "CODER_FREE_FORM=model")
+        self.assertFalse(any(ln.startswith(("CODER_RUN_GATE", "CODER_FIX_ROUNDS", "CODER_FREE_FORM")) for ln in self.env_lines()))
+        self.assertIn("CODER_FIX_ROUNDS takes 0 or 1 or 2 or 3, not '5'.", self.run_set("CODER_FIX_ROUNDS=5").stderr)
+
     def test_a_failed_installer_is_reported(self) -> None:
         open(os.path.join(self.home, "fail"), "w").close()
         p = self.run_set("NO_REMINDER=1")

@@ -69,6 +69,7 @@ class ClientModel:
     think_main: str = ""         # the main session's thinking: off, on or a level ("": the default of its kind)
     think_coder: str = ""        # the coder's
     dash_coder: Optional[str] = None   # the dashboard's coder value when /carl's override of this computer replaced it
+    free_form: bool = False      # its main session may write the brief's free-form part (the catalogue's free_form_brief)
 
     def dashboard_coder(self) -> str:
         """The coder's thinking as the dashboard sets it (without this computer's override), as this model takes it."""
@@ -146,7 +147,7 @@ def parse_list(doc: Any, where: str = LIST_FILE) -> ModelList:
             if v != "" and v not in ROLE_VALUES[role]:
                 raise ValueError(f"{at}: {key} must be one of {', '.join(ROLE_VALUES[role])}")
             roles.append(v)
-        out.append(ClientModel(mid, label, ctx, thinking, off, roles[0], roles[1]))
+        out.append(ClientModel(mid, label, ctx, thinking, off, roles[0], roles[1], free_form=m.get("free_form") is True))
     default = doc.get("default")
     return ModelList(out, default if isinstance(default, str) and default in [m.id for m in out] else None)
 
