@@ -3,6 +3,30 @@
 All notable changes to CARL. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Dates are local dates on the development Mac (M3 Pro, 36 GB).
 
+## 1.20.1 - 2026-10-11
+
+Phase 23.5.1.2: llama.cpp's RAM cache with CARL's slot pinning, measured.
+
+### Fixed
+- **A session coming back from llama.cpp's RAM cache was read again in full when its conversation was short.**
+  llama.cpp looks in its RAM cache only when the slot a request lands in would keep less than half of its tokens
+  (llama.cpp #28276). That slot holds another session of the same agent, which shares the agent's prompt, so a session
+  shorter than about twice that prompt was read again: on the Qwen3.6-35B-A3B IQ3 (a hybrid model) the whole session,
+  19,687 of 19,689 tokens in OpenCode; on the Gemma 4 E4B its own part, 7,967 of 18,948. carl-cache now moves the
+  slot's conversation to the RAM cache first (a one-token request), so llama.cpp always looks there: 64 and 62 tokens.
+  This path is taken when a session was not saved before its slot was needed (the save rule "before a stop", or a
+  session under 4K tokens).
+
+### Measured
+- With long sessions the RAM cache already served this path: the A3B IQ3, 2 slots, llama.cpp 0.6.0: 64 tokens of
+  38,041 (OpenCode), 63 of 33,233 (Pi). The llama.cpp bug that skips the RAM cache for a request pinned to an empty
+  slot (#28139) does not happen in CARL's use: CARL never clears an idle slot.
+
+### Changed
+- As a guard against that bug, carl-cache puts a session that comes back from the RAM cache in a slot that holds a
+  conversation when there is one, not in an empty slot.
+- `tools/cache-matrix`: `--save` runs the matrix with another save rule.
+
 ## 1.20.0 - 2026-10-11
 
 Phase 23.5.1.1: what the disk cache did, counted.
