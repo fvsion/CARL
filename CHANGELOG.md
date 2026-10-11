@@ -3,6 +3,27 @@
 All notable changes to CARL. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Dates are local dates on the development Mac (M3 Pro, 36 GB).
 
+## 1.20.2 - 2026-10-11
+
+Phase 23.5.1.11: OpenCode 1.19, and OpenCode 2 said plainly.
+
+### Changed
+- **OpenCode 1.19.0 is supported** (released 2026-10-11): CARL's plugins, the cache and the coder's chain checked on
+  it end to end; the chain's background hold is on for it too.
+- **The setup installs the OpenCode and Pi versions CARL is tested with**, not npm's newest
+  (`client/client-versions.env`: OpenCode 1.19.0, Pi 1.1.0). An older one is updated to them; a newer one of the same
+  major version stays, and the setup says that CARL did not test it.
+- **OpenCode 2 is not supported yet, and CARL says so.** OpenCode 1.19 offers the move to OpenCode 2, which changes how
+  plugins work: with it, OpenCode showed "Plugin must export a default definition with an id and an effect or setup
+  function" for CARL's plugins. Now they load without an error (and do nothing there), the setup leaves OpenCode 2 as
+  it is and gives the command to go back (`npm install -g --prefix ~/.local opencode-ai@1.19.0`), and the Connect
+  tab warns in one line. Moving CARL to OpenCode 2 is the next phase.
+- **CARL's OpenCode plugins are in `~/.config/opencode/carl-plugins/`** (was `plugins/`, which OpenCode 2 loads by
+  itself). The next setup or `u` moves them; folders there that are not CARL's stay.
+- **The Connect tab's `u` is "Update Config and Install CARL Plugins"**: the configs with CARL's plugins and agents,
+  also for an OpenCode or Pi you installed yourself; it installs nothing. The setup section shows the OpenCode and Pi
+  versions on this Mac against the tested ones.
+
 ## 1.20.1 - 2026-10-11
 
 Phase 23.5.1.2: llama.cpp's RAM cache with CARL's slot pinning, measured.
