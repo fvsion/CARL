@@ -55,9 +55,10 @@ function recentSessions(sessions, cur, now, active) {
   return recent;
 }
 
-/** @type {TuiPluginModule & { id: string }} */
+/** @type {TuiPluginModule & { id: string, setup: () => void }} */
 const plugin = {
   id: "session-switcher:tui",
+  setup() {},   // OpenCode 2 loads only { id, setup | effect }; CARL's TUI is OpenCode 1's (tui)
   tui: async (api) => {
     /** @type {Map<string, SessionEntry>} */
     const sessions = new Map();

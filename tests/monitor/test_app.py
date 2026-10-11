@@ -404,7 +404,7 @@ class AppTest(unittest.TestCase):
         self.keys("2")
         text = " ".join(ANSI.sub("", self.screen()).split())
         for part in ("SET UP OPENCODE AND PI", "./carl.sh install", "[ Install on this Mac (i) ]",
-                     "[ Update the model lists (u) ]", "./carl.sh --vm", "Network this Mac only"):
+                     "[ Update Config and Install CARL Plugins (u) ]", "./carl.sh --vm", "Network this Mac only"):
             self.assertIn(part, text)
 
     def test_connect_install_asks_first_then_runs_and_shows_its_output(self) -> None:

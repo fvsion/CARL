@@ -77,8 +77,9 @@ class FakeServer:
 FAKE_NODE = """#!/bin/bash
 case "$1" in -p) echo 22.20.0 ;; -v|--version) echo v22.20.0 ;; esac
 """
-# npm view PKG version: FAKE_NPM_LATEST (no answer when it is empty); npm install -g --prefix P PKG@latest...:
-# writes P/bin/opencode and P/bin/pi that print FAKE_NPM_LATEST. Every call goes into FAKE_NPM_LOG.
+# npm view PKG version: FAKE_NPM_LATEST (no answer when it is empty); npm install -g --prefix P PKG@VERSION...:
+# writes P/bin/opencode and P/bin/pi that print VERSION (FAKE_NPM_LATEST for @latest). Every call goes into
+# FAKE_NPM_LOG.
 FAKE_NPM = """#!/bin/bash
 echo "npm $*" >> "$FAKE_NPM_LOG"
 if [[ "$1" == view ]]; then [[ -n "${FAKE_NPM_LATEST:-}" ]] || exit 1; echo "$FAKE_NPM_LATEST"; exit 0; fi
@@ -88,9 +89,25 @@ while [[ $# -gt 0 ]]; do case "$1" in -g) ;; --prefix) prefix="$2"; shift ;; *) 
 mkdir -p "$prefix/bin"
 for p in "${pkgs[@]}"; do
   case "$p" in opencode-ai@*) b=opencode ;; @earendil-works/pi-coding-agent@*) b=pi ;; *) continue ;; esac
-  printf '#!/bin/bash\\necho %s\\n' "${FAKE_NPM_LATEST:-1.2.0}" > "$prefix/bin/$b"; chmod +x "$prefix/bin/$b"
+  v="${p##*@}"; [[ "$v" == latest ]] && v="${FAKE_NPM_LATEST:-1.2.0}"
+  printf '#!/bin/bash\\necho %s\\n' "$v" > "$prefix/bin/$b"; chmod +x "$prefix/bin/$b"
 done
 """
+
+
+def tested_versions() -> Dict[str, str]:
+    """client/client-versions.env: the versions CARL is tested with (Phase 23.5.1.11)."""
+    out: Dict[str, str] = {}
+    with open(os.path.join(REPO, "client", "client-versions.env"), encoding="utf-8") as f:
+        for line in f:
+            if "=" in line and not line.startswith("#"):
+                k, v = line.strip().split("=", 1)
+                out[k] = v.strip('"')
+    return out
+
+
+TESTED = tested_versions()
+OC, PI = TESTED["OPENCODE_TESTED"], TESTED["PI_TESTED"]
 
 
 def write_exe(path: str, text: str) -> None:
@@ -359,14 +376,14 @@ class SetupTest(SetupCase):
         for part in ("CARL client setup (client package", f"The server: 127.0.0.1:{self.srv.port}",
                      "Clients: both. Options: coder auto, browser on, web search exa, LSP on.",
                      "Web search sends the search queries to exa, outside this computer.",
-                     "OpenCode: installed (version 1.2.0).", "Pi: installed (version 1.2.0).",
+                     f"OpenCode: installed (version {OC}).", f"Pi: installed (version {PI}).",
                      f"Smoke test: OK: the server answers at http://127.0.0.1:{self.srv.port}/v1. It has test-a.",
                      "Next: open a new terminal. Go to your project folder and run: opencode (or: pi)"):
             self.assertIn(part, out)
         self.assertNotIn("1. Which clients", p.stdout)                           # --yes: no question
         self.assertEqual([c for c in self.npm_calls() if c.startswith("npm install")],
-                         [f"npm install -g --prefix {self.home}/.local opencode-ai@latest "
-                          "@earendil-works/pi-coding-agent@latest"])
+                         [f"npm install -g --prefix {self.home}/.local opencode-ai@{OC} "
+                          f"@earendil-works/pi-coding-agent@{PI}"])                 # the tested versions, not npm's latest
         oc = json.loads(self.read(".config/opencode/opencode.json"))
         self.assertEqual(list(oc["provider"]["llamacpp"]["models"]), ["test-a"])
         self.assertIn(f"127.0.0.1:{self.srv.port}", oc["provider"]["llamacpp"]["options"]["baseURL"])
@@ -377,10 +394,10 @@ class SetupTest(SetupCase):
         self.assertIn("CLIENTS=both", self.read(".config/carl/client-install.env").splitlines())
         self.assertIn("carl-vm-client", self.read(".zshrc"))                    # ~/.local/bin on PATH
         self.assertNotIn(KEY, p.stdout + p.stderr)
-        # running it again changes nothing: the clients are up to date, no new install
+        # running it again changes nothing: the clients are the tested ones, no new install
         p = self.setup_run("--yes")
         self.assertEqual(p.returncode, 0, p.stderr)
-        self.assertIn("OpenCode: version 1.2.0, up to date.", " ".join(p.stdout.split()))
+        self.assertIn(f"OpenCode: version {OC}, the version CARL is tested with.", " ".join(p.stdout.split()))
         self.assertEqual(len([c for c in self.npm_calls() if c.startswith("npm install")]), 1)
 
     def test_an_update_keeps_your_config_and_makes_backups(self) -> None:
@@ -393,14 +410,16 @@ class SetupTest(SetupCase):
         oc["theme"] = "my-theme"
         with open(oc_path, "w", encoding="utf-8") as f:
             json.dump(oc, f)
-        # a new package (a new model on the server, which now runs it), unzipped over the old folder; newer clients
+        # a new package (a new model on the server, which now runs it), unzipped over the old folder; older clients
         self.srv.model = "test-b"
         self.install_package("test-a", "test-b", over=True)
-        p = self.setup_run("--yes", latest="1.3.0")
+        for b in ("opencode", "pi"):
+            write_exe(os.path.join(self.home, ".local", "bin", b), "#!/bin/bash\necho 1.0.1\n")
+        p = self.setup_run("--yes", latest="9.9.9")                             # npm's newest is never taken
         out = " ".join(p.stdout.split())
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
-        self.assertIn("OpenCode: updated from version 1.2.0 to 1.3.0.", out)
-        self.assertIn("Pi: updated from version 1.2.0 to 1.3.0.", out)
+        self.assertIn(f"OpenCode: updated from version 1.0.1 to {OC}.", out)
+        self.assertIn(f"Pi: updated from version 1.0.1 to {PI}.", out)
         self.assertIn("coder off, browser on, web search off", out)            # the choices of the last setup
         self.assertNotIn("Web search sends", out)
         oc = json.loads(self.read(".config/opencode/opencode.json"))
@@ -415,6 +434,23 @@ class SetupTest(SetupCase):
         env = self.read(".config/carl/client-install.env").splitlines()
         self.assertIn("WEB_SEARCH=off", env)
         self.assertIn("NO_CODER=1", env)
+
+    def test_a_newer_client_stays_and_opencode_2_is_named_and_left_alone(self) -> None:
+        """Phase 23.5.1.11: a newer version of the same major stays (CARL says it did not test it); OpenCode 2 (another
+        plugin system: CARL's OpenCode parts need OpenCode 1) is not changed, and the setup says how to go back."""
+        self.install_package()
+        os.makedirs(os.path.join(self.home, ".local", "bin"), exist_ok=True)
+        write_exe(os.path.join(self.home, ".local", "bin", "opencode"), "#!/bin/bash\necho 2.0.26\n")
+        newer = PI.rsplit(".", 1)[0] + "." + str(int(PI.rsplit(".", 1)[1]) + 1)
+        write_exe(os.path.join(self.home, ".local", "bin", "pi"), f"#!/bin/bash\necho {newer}\n")
+        p = self.setup_run("--yes")
+        out = " ".join(p.stdout.split())
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertEqual([c for c in self.npm_calls() if c.startswith("npm install")], [])     # neither changed
+        self.assertIn(f"OpenCode: version 2.0.26. CARL's parts for OpenCode need version 1 (CARL is tested with {OC}); "
+                      f"with this version they do nothing. CARL did not change it. To use CARL, install the tested one: "
+                      f"npm install -g --prefix ~/.local opencode-ai@{OC}", out)
+        self.assertIn(f"Pi: version {newer}, newer than the version CARL is tested with ({PI}). It is kept.", out)
 
     def test_one_client_and_options_from_the_command_line(self) -> None:
         self.install_package()

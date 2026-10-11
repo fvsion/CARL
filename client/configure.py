@@ -146,6 +146,10 @@ OUR_KEYS = ("/" + NAMES.key_file, "/" + OLD_NAMES.key_file, "/.config/mtplx/api-
 # Pieces of the MTPLX support removed in 1.2.0 (taken out of an earlier install).
 OLD_MTPLX_IDS = ("mtplx", "llm-deploy-mtplx")
 OLD_OC_PLUGIN = "plugins/mtplx-session-headers"
+# CARL's OpenCode plugin folders (Phase 23.5.1.11): not in plugins/, which OpenCode 2 loads by itself (every folder
+# there, beside the "plugin" lists: a second, failing copy); opencode.json and tui.json list them by path. A CARL
+# folder from before, in plugins/, is moved here (oc_plugins_moved).
+OC_PLUGIN_DIR = "carl-plugins"
 OLD_OC_PLUGIN_SIG = "MTPLXSessionHeaders"
 OLD_PI_EXT = "extensions/mtplx-request-policy.ts"
 OLD_PI_EXT_SIG = "Pi <-> MTPLX request bridge"
@@ -1310,12 +1314,34 @@ class Installer:
             else:
                 self.report.add("kept", f"{self.short(plug)} (not ours)")
 
+    def _oc_old_plugin(self, plist: list[Any], name: str, wanted: bool) -> None:
+        """A CARL plugin folder of an install from before 1.20.2 in ~/.config/opencode/plugins/ (OpenCode 2 loads every
+        folder there): its entries out of the list, the folder removed when it is CARL's (listed, or its id), else kept."""
+        old = os.path.join(self.o.oc_dir, "plugins", name)
+        entry = "file:" + old
+        gone = [x for x in plist if same_path(x, entry) or (isinstance(x, list) and x and same_path(x[0], entry))]
+        for x in gone:
+            plist.remove(x)
+        if self.fs.isdir(old):
+            # CARL's: listed as ours, or its id (a folder of that name that is not ours stays)
+            if gone or f'id: "{name}"' in (self.fs.read(os.path.join(old, "index.js")) or ""):
+                self.fs.rmtree(old)
+                if wanted:
+                    self.report.add("updated", f"OpenCode plugin {name} (moved to {OC_PLUGIN_DIR}/)")
+                else:
+                    self.report.add("removed", f"OpenCode plugin {name}")
+            else:
+                self.report.add("kept", f"{self.short(old)} (not ours)")
+
     def _oc_server_plugin(self, cfg: JsonObj, name: str, want_it: bool, provider_id: str, what: str,
                           extra: JsonObj | None = None) -> None:
-        """One of CARL's OpenCode server plugins: copied into plugins/, one entry in the plugin list
-        with our provider id and its other options (an entry of ours is replaced, other entries stay); out when
+        """One of CARL's OpenCode server plugins: copied into carl-plugins/ (OC_PLUGIN_DIR), one entry in the plugin
+        list with our provider id and its other options (an entry of ours is replaced, other entries stay); out when
         not wanted."""
-        dest = os.path.join(self.o.oc_dir, "plugins", name)
+        plist = cfg.get("plugin")
+        if isinstance(plist, list):
+            self._oc_old_plugin(plist, name, want_it)
+        dest = os.path.join(self.o.oc_dir, OC_PLUGIN_DIR, name)
         entry = "file:" + dest
         if not want_it:
             if merge_plugin_entry(cfg, entry, None, self.fs.isdir(dest), name, self.report):
@@ -1492,7 +1518,8 @@ class Installer:
                 ("subagents-sidebar", "OpenCode subagents sidebar", self.o.sidebar, (TUI_CORE,)),
                 ("session-switcher", "OpenCode session switcher", self.o.switcher, (TUI_CORE,)),
                 (PANEL, "OpenCode /carl panel", True, (PANEL_CORE, API_CORE, TUI_CORE))):
-            dest = os.path.join(oc, "plugins", name)
+            self._oc_old_plugin(tplug, name, want)
+            dest = os.path.join(oc, OC_PLUGIN_DIR, name)
             if want:
                 self.install_folder(os.path.join("opencode/plugins", name), dest, shared)
             if merge_tui_plugin(tplug, "file:" + dest, want, label, self.report):

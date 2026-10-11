@@ -305,6 +305,25 @@ def and_list(items: Sequence[str]) -> str:
     return items[0] if len(items) == 1 else f"{', '.join(items[:-1])} and {items[-1]}"
 
 
+def versions_text(versions: Sequence[Tuple[str, str, str, str]]) -> str:
+    """The Versions row: the installed OpenCode and Pi against the versions CARL is tested with ("" when unknown)."""
+    known = [(c, have, want) for c, have, want, _ in versions if want]
+    if not known:
+        return ""
+    if all(have == want for _, have, want in known):
+        return f"{', '.join(f'{c} {have}' for c, have, _ in known)}: the versions CARL is tested with"
+    return ", ".join(f"{c}: not installed" if not have else f"{c} {have} (tested)" if have == want
+                     else f"{c} {have} (tested: {want})" for c, have, want in known)
+
+
+def other_major(versions: Sequence[Tuple[str, str, str, str]]) -> List[Tuple[str, str, str, str]]:
+    """The clients on this Mac whose major version is not the one CARL's parts need (OpenCode 2)."""
+    return [x for x in versions if x[1] and x[3] and x[1].split(".")[0] != x[3]]
+
+
+NPM_PACKAGES = {"OpenCode": "opencode-ai", "Pi": "@earendil-works/pi-coding-agent"}
+
+
 def setup_lines(v: View, ui: UIState, here: List[Tuple[str, str]], stale: Sequence[Drift],
                 tw: int) -> Tuple[str, List[CardLine]]:
     """The collapsed summary and the steps: this Mac; a VM or another computer (1-3); by hand. Full adds the
@@ -325,14 +344,25 @@ def setup_lines(v: View, ui: UIState, here: List[Tuple[str, str]], stale: Sequen
     else:
         summary = "not set up"
         L.append("OpenCode and Pi on this Mac are not set up for this server.")
+    # under the first status line: the versions; above it: OpenCode 2 (user, 2026-10-11: one line, the command to go
+    # back), which also takes the title's summary
+    vt = versions_text(v.client_versions)
+    if vt:
+        L.insert(2, row("versions", vt))
+    for c, have, want, major in reversed(other_major(v.client_versions)):
+        summary = f"{YEL}⚠ {c} {have.split('.')[0]} not supported yet{R}"
+        L[1:1] = cwrap(f"{YEL}⚠ {c} {have.split('.')[0]} on this Mac: CARL needs {c} {major}. Run:{R} "
+                       f"{B}npm install -g --prefix ~/.local {NPM_PACKAGES.get(c, c.lower())}@{want}{R}", tw, "  ")
     if full(ui, "csetup") and here:
         L += [row(c, f"provider {p}") for c, p in here]
     if full(ui, "csetup"):              # advanced, not recommended: the dashboard is the only place to set it (23.4)
         L.append(row("New-file gate", ("off" if not v.gate else f"{v.gate}: the main agent's new file number "
                                        f"{v.gate} of a turn goes to the coder") + f"   {DIM}g changes it{R}"))
     if ui.install_ask:
-        what = ("installs OpenCode and Pi when they are missing or older (a download from npm). Then it writes "
-                "their configs" if ui.install_ask == "all" else "writes the OpenCode and Pi configs for this server")
+        what = ("installs OpenCode and Pi when they are missing or older than the versions CARL is tested with (a "
+                "download from npm). Then it writes their configs, with CARL's plugins and agents"
+                if ui.install_ask == "all" else "writes the OpenCode and Pi configs for this server, with CARL's "
+                "plugins and agents. It installs nothing")
         L += para(f"{YEL}Run ./carl.sh install{' --config-only' if ui.install_ask == 'config' else ''} now? It "
                   f"{what}.{R}", tw=tw)
         L.append(buttons("", [("Run it (y)", "insyes"), ("Cancel (n)", "insno")]))
@@ -340,7 +370,7 @@ def setup_lines(v: View, ui: UIState, here: List[Tuple[str, str]], stale: Sequen
         L.append(buttons("", [("Show the installer (i)", "insshow"), ("Stop it", "inscancel")]))
     else:
         first = "Install again (i)" if here else "Install on this Mac (i)"
-        L += button_rows("", [(first, "insall"), ("Update the model lists (u)", "insconfig")], tw)
+        L += button_rows("", [(first, "insall"), ("Update Config and Install CARL Plugins (u)", "insconfig")], tw)
     L += ["", heading("A VM or another computer", tw)]
     L += cwrap(f"1. Start the server for it: {CYN}./carl.sh --vm{R}", tw, "   ")
     L.append(row("   Network", f"{GRN}{v.host}{R}" if vm_ready else f"{YEL}this Mac only{R}"))

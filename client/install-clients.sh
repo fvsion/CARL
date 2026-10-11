@@ -62,7 +62,7 @@ Usage: ./install-clients.sh [both | opencode | pi]
 
 The script works on a Mac and in a Linux VM. It needs no sudo: everything goes into ~/.local.
 
-Both agents come from npm. Pi needs Node 22.19 or newer. If Node is missing or older, the script downloads Node 22 LTS from nodejs.org into ~/.local/lib/nodejs. It checks the SHA-256 sum of the download.
+Both agents come from npm, at the versions CARL is tested with (client-versions.env). Pi needs Node 22.19 or newer. If Node is missing or older, the script downloads Node 22 LTS from nodejs.org into ~/.local/lib/nodejs. It checks the SHA-256 sum of the download.
 
 The script adds ~/.local/bin to PATH in ~/.zshrc and ~/.bashrc, if these files exist. It makes a backup of each file first.
 
@@ -126,9 +126,14 @@ else
 fi
 
 # --- Agents ------------------------------------------------------------------
+# the versions CARL is tested with (client-versions.env, Phase 23.5.1.11), not npm's newest
+OPENCODE_TESTED=""; PI_TESTED=""
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=client-versions.env
+[[ -f "$here/client-versions.env" ]] && . "$here/client-versions.env"
 pkgs=()
-[[ "$WHAT" == both || "$WHAT" == opencode ]] && pkgs+=("opencode-ai@latest")
-[[ "$WHAT" == both || "$WHAT" == pi ]] && pkgs+=("@earendil-works/pi-coding-agent@latest")
+[[ "$WHAT" == both || "$WHAT" == opencode ]] && pkgs+=("opencode-ai@${OPENCODE_TESTED:-latest}")
+[[ "$WHAT" == both || "$WHAT" == pi ]] && pkgs+=("@earendil-works/pi-coding-agent@${PI_TESTED:-latest}")
 echo "npm install -g --prefix $PREFIX ${pkgs[*]}"
 npm install -g --prefix "$PREFIX" "${pkgs[@]}"
 hash -r

@@ -8,9 +8,10 @@
 
 const CODERS = new Set(["coder", "carl-coder"]);   // CARL's coder: "carl-coder" next to a user's own "coder"
 
-/** @type {import("@opencode-ai/plugin").PluginModule & { id: string }} */
+/** @type {import("@opencode-ai/plugin").PluginModule & { id: string, setup: () => void }} */
 export default {
   id: "carl-background",
+  setup() {},   // OpenCode 2 loads only { id, setup | effect }; CARL's hooks are OpenCode 1's (server)
   server: async () => ({
     "tool.execute.before": async (input, output) => {
       const args = /** @type {Record<string, unknown> | undefined} */ (output?.args);

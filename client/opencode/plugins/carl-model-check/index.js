@@ -11,9 +11,10 @@ import { serverModels, verdict } from "./carl-model-check.js";
 
 const CACHE_MS = 5000;
 
-/** @type {import("@opencode-ai/plugin").PluginModule & { id: string }} */
+/** @type {import("@opencode-ai/plugin").PluginModule & { id: string, setup: () => void }} */
 export default {
   id: "carl-model-check",
+  setup() {},   // OpenCode 2 loads only { id, setup | effect }; CARL's hooks are OpenCode 1's (server)
   server: async ({ client }, options) => {
     const ours = typeof options?.provider === "string" ? options.provider : "llamacpp";
     /** @type {Set<string>} */

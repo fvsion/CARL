@@ -83,6 +83,8 @@ class App:
         self._slot_names: Tuple[float, Tuple[str, ...], Dict[str, str]] = (0.0, (), {})
         # what the disk cache did (Phase 23.5.1.1): OpenCode's and Pi's events, read as the day files grow
         self.events = cachestats.EventLog(os.path.dirname(jobs.paths.config_file))
+        self._versions: Tuple[float, Tuple[Tuple[str, str, str, str], ...]] = (0.0, ())
+        self._versions_after: object = None             # the install the versions were read after
         self._events_at = 0.0
         self._status: JSONDict = {"state": "idle"}     # /carl/status: made in the loop, read by the API's thread
         self._clients_file = os.path.join(os.path.dirname(jobs.paths.config_file), "clients.json")
@@ -146,7 +148,22 @@ class App:
                     detail=ui.detail, drafter_size=fsio.file_size(md) if md else 0,
                     model_quant=str(m.get("quant") or "") if m else "", here=self.here_text(),
                     coder_here=self.coder_here(), cache_slots=self.cache_slots(d),
+                    client_versions=self.client_versions() if ui.tab == 1 else (),
                     gate=self.jobs.cache_conf().gate, llama=self.llama_check(d.pid))
+
+    def client_versions(self) -> Tuple[Tuple[str, str, str, str], ...]:
+        """OpenCode and Pi on this Mac against the versions CARL is tested with (the Connect tab; read again every
+        5 min and after an install: runs `opencode --version`)."""
+        done = self.ui.install is not None and self.ui.install.done
+        fresh_install = done and self._versions_after is not self.ui.install       # an install just ended: read again
+        if fresh_install:
+            self._versions_after = self.ui.install
+        if fresh_install or time.time() - self._versions[0] > 300:
+            try:
+                self._versions = (time.time(), tuple(fsio.client_versions(self.jobs.paths.repo, self.opts.home)))
+            except Exception:          # a client that hangs or cannot run: no row
+                self._versions = (time.time(), ())
+        return self._versions[1]
 
     def cache_events(self) -> List[cachestats.Event]:
         """The disk cache's events of the last two days (read again at most every 2 s)."""

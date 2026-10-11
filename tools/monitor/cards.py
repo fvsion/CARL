@@ -84,6 +84,8 @@ class View:
     reuse_from: str = ""                # where the busy request's reused tokens came from (Phase 23.5; mocked now)
     cache_slots: Dict[int, Tuple[str, str, str]] = field(default_factory=dict)   # slot -> (from, saved, session) (23.5.1.1)
     cache_column: bool = False          # the SLOTS card shows them (the Live tab at 160 columns and wider)
+    # OpenCode and Pi on this Mac: (client, installed, tested, tested major) (Phase 23.5.1.11, the Connect tab)
+    client_versions: Tuple[Tuple[str, str, str, str], ...] = ()
     selected: str = ""                  # the selected section (Tab): its title is drawn reversed
     gate: int = 0                       # config.json delegation.gate: carl-delegation's new-file gate (0 = off)
     llama: Optional[VersionCheck] = None    # the installed llama.cpp against the tested version (HEALTH)

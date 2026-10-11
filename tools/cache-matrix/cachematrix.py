@@ -815,7 +815,7 @@ def cmd_prepare(a: argparse.Namespace) -> int:
         say(f"ready after {srv.wait_ready():.0f} s; the client package and ./setup in {home} (some minutes)")
         src = hm.PackageSource(a.repo, setup.client_dir, conf, os.path.join(work, "dist"), setup.models_dir)
         hm.unpack_and_setup(hm.make_package(src), home, install=True, coder="on")
-        found = hm.pin_versions(home, hm.DEFAULT_OPENCODE, hm.DEFAULT_PI)
+        found = hm.pin_versions(home, a.opencode_version, a.pi_version)
         hm.write_marker(home, {"versions": found})
     finally:
         srv.stop()
@@ -894,6 +894,8 @@ def build_parser() -> argparse.ArgumentParser:
     common.add_argument("--slots", type=int, default=2)
     p = sub.add_parser("prepare", parents=[common], help="a new harness HOME with OpenCode and Pi")
     p.add_argument("--model", default="gemma-4-e4b")
+    p.add_argument("--opencode-version", default=hm.DEFAULT_OPENCODE, help="the OpenCode to pin (Phase 23.5.1.11: 1.19.0)")
+    p.add_argument("--pi-version", default=hm.DEFAULT_PI)
     p.set_defaults(fn=cmd_prepare)
     r = sub.add_parser("run", parents=[common], help="run the cells not done yet")
     r.add_argument("--out", required=True)

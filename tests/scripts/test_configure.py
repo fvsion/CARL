@@ -98,7 +98,7 @@ class ConfigureTests(unittest.TestCase):
         self.assertTrue(paths and all(x.startswith("file:" + real + "/") for x in paths), paths)
         tui = self.read_json(".config/opencode/tui.json")
         self.assertTrue(all(x.startswith("file:" + real + "/") for x in tui["plugin"]), tui["plugin"])
-        oc["plugin"].append(["file:" + link + "/.config/opencode/plugins/carl-cache", {"provider": "llamacpp"}])
+        oc["plugin"].append(["file:" + link + "/.config/opencode/carl-plugins/carl-cache", {"provider": "llamacpp"}])
         self.write_json(".config/opencode/opencode.json", oc)              # an old entry through the link
         self.assertEqual(self.run_configure().returncode, 0)
         cache = [x for x in self.read_json(".config/opencode/opencode.json")["plugin"]
@@ -132,10 +132,10 @@ class ConfigureTests(unittest.TestCase):
         self.assertEqual(prov["options"]["baseURL"], "http://192.168.42.1:8080/v1")
         self.assertEqual(prov["options"]["apiKey"], "{file:" + self.home + "/.config/carl/api-key}")
         self.assertEqual(set(oc["provider"]), {"llamacpp"})
-        check = self.path(".config/opencode/plugins/carl-model-check")
-        cache = self.path(".config/opencode/plugins/carl-cache")
-        bg = self.path(".config/opencode/plugins/carl-background")
-        deleg = self.path(".config/opencode/plugins/carl-delegation")
+        check = self.path(".config/opencode/carl-plugins/carl-model-check")
+        cache = self.path(".config/opencode/carl-plugins/carl-cache")
+        bg = self.path(".config/opencode/carl-plugins/carl-background")
+        deleg = self.path(".config/opencode/carl-plugins/carl-delegation")
         self.assertEqual(oc["plugin"], [["file:" + check, {"provider": "llamacpp"}],     # the model warnings
                                         ["file:" + cache, {"provider": "llamacpp",       # the prompt cache
                                                            "cacheApi": "http://192.168.42.1:8081"}],
@@ -150,7 +150,7 @@ class ConfigureTests(unittest.TestCase):
         for d in (cache, self.path(".pi/agent/extensions/carl-cache")):            # each carries the shared core
             self.assertTrue(os.path.isfile(os.path.join(d, "carl-cache.js")), d)
             self.assertTrue(os.path.isfile(os.path.join(d, "carl-panel.js")), d)
-        panel = self.path(".config/opencode/plugins/carl-panel")                   # /carl in OpenCode and in Pi
+        panel = self.path(".config/opencode/carl-plugins/carl-panel")                   # /carl in OpenCode and in Pi
         self.assertIn("file:" + panel, self.read_json(".config/opencode/tui.json")["plugin"])
         for d in (panel, self.path(".pi/agent/extensions/carl-panel")):
             self.assertTrue(os.path.isfile(os.path.join(d, "carl-panel.js")), d)
@@ -205,7 +205,7 @@ class ConfigureTests(unittest.TestCase):
 
     def delegation_options(self) -> Any:
         """carl-delegation's options in opencode.json."""
-        deleg = "file:" + self.path(".config/opencode/plugins/carl-delegation")
+        deleg = "file:" + self.path(".config/opencode/carl-plugins/carl-delegation")
         return next(x[1] for x in self.read_json(".config/opencode/opencode.json")["plugin"]
                     if isinstance(x, list) and x[0] == deleg)
 
@@ -448,22 +448,47 @@ class ConfigureTests(unittest.TestCase):
         self.write_json(".config/opencode/opencode.json", {"provider": {"llamacpp": {"npm": "mine", "models": {}}},
                                                            "plugin": ["/home/u/mine.js"]})
         self.assertEqual(self.run_configure().returncode, 0)
-        entry = "file:" + self.path(".config/opencode/plugins/carl-model-check")
+        entry = "file:" + self.path(".config/opencode/carl-plugins/carl-model-check")
         oc = self.read_json(".config/opencode/opencode.json")
         self.assertEqual(oc["plugin"][:2], ["/home/u/mine.js", [entry, {"provider": "carl"}]])  # ours is "carl" here
         p = self.run_configure("--model-check", "0", "--cache", "0", "--background", "0")
         self.assertEqual(p.returncode, 0, p.stderr)
-        deleg = "file:" + self.path(".config/opencode/plugins/carl-delegation")    # stays with the coder
+        deleg = "file:" + self.path(".config/opencode/carl-plugins/carl-delegation")    # stays with the coder
         self.assertEqual(self.read_json(".config/opencode/opencode.json")["plugin"],
                          ["/home/u/mine.js", [deleg, {"provider": "carl", "reminder": True,
                                                        "cacheApi": "http://192.168.42.1:8081", "coder": "coder",
                                                        "stateFile": self.path(".config/opencode/carl.json")}]])
-        self.assertFalse(os.path.exists(self.path(".config/opencode/plugins/carl-model-check")))
+        self.assertFalse(os.path.exists(self.path(".config/opencode/carl-plugins/carl-model-check")))
         self.assertIn("removed   OpenCode plugin carl-model-check", p.stdout)
         self.assertFalse(os.path.exists(self.path(".pi/agent/extensions/carl-model-check")))    # Pi's too (Phase 23.5)
         self.assertIn("removed   Pi extension carl-model-check", p.stdout)
         self.assertFalse(os.path.exists(self.path(".pi/agent/extensions/carl-cache")))
         self.assertIn("removed   Pi extension carl-cache", p.stdout)
+
+    def test_carls_plugins_move_out_of_plugins_where_opencode_2_loads_every_folder(self) -> None:
+        """Phase 23.5.1.11: CARL's OpenCode plugins go to ~/.config/opencode/carl-plugins/ (OpenCode 2 loads every folder in
+        plugins/ by itself); an install from before moves: its entries and its folders (CARL's: listed, or its id) go,
+        a folder of that name that is not CARL's stays."""
+        old_cache = self.path(".config/opencode/plugins/carl-cache")
+        self.write_text(".config/opencode/plugins/carl-cache/index.js", 'export default {\n  id: "carl-cache",\n};\n')
+        self.write_text(".config/opencode/plugins/session-switcher/index.js", "export default {};\n")   # not CARL's
+        self.write_json(".config/opencode/opencode.json", {"plugin": [["file:" + old_cache, {"provider": "llamacpp"}],
+                                                                    "my-own-plugin"]})
+        p = self.run_configure()
+        self.assertEqual(p.returncode, 0, p.stderr)
+        names = [x[0] if isinstance(x, list) else x for x in self.read_json(".config/opencode/opencode.json")["plugin"]]
+        self.assertNotIn("file:" + old_cache, names)
+        self.assertIn("file:" + self.path(".config/opencode/carl-plugins/carl-cache"), names)
+        self.assertIn("my-own-plugin", names)
+        self.assertFalse(os.path.exists(old_cache))
+        self.assertIn("updated   OpenCode plugin carl-cache (moved to carl-plugins/)", p.stdout)
+        self.assertTrue(os.path.exists(self.path(".config/opencode/plugins/session-switcher/index.js")))
+        self.assertIn("(not ours)", p.stdout)
+        tui = self.read_json(".config/opencode/tui.json")["plugin"]
+        self.assertTrue(all("/carl-plugins/" in x for x in tui), tui)
+        for d in os.listdir(self.path(".config/opencode/carl-plugins")):            # OpenCode 2 needs setup beside server
+            with open(self.path(f".config/opencode/carl-plugins/{d}/index.js"), encoding="utf-8") as f:
+                self.assertIn("setup() {}", f.read(), d)
 
     def test_the_phase_11_prefix_plugin_is_replaced(self) -> None:
         old = self.path(".config/opencode/plugins/carl-prefix-cache")
@@ -475,7 +500,7 @@ class ConfigureTests(unittest.TestCase):
         self.assertEqual(p.returncode, 0, p.stderr)
         names = [x[0] if isinstance(x, list) else x for x in self.read_json(".config/opencode/opencode.json")["plugin"]]
         self.assertNotIn("file:" + old, names)
-        self.assertIn("file:" + self.path(".config/opencode/plugins/carl-cache"), names)
+        self.assertIn("file:" + self.path(".config/opencode/carl-plugins/carl-cache"), names)
         self.assertFalse(os.path.exists(old) or os.path.exists(specs))
 
     def test_a_pi_extension_of_that_name_that_is_not_ours_stays(self) -> None:
@@ -737,10 +762,10 @@ class ConfigureTests(unittest.TestCase):
             self.assertNotIn(cfg.RULE_BEGIN, f.read())
         oc_cfg = self.read_json(".config/opencode/opencode.json")
         self.assertIn("plugins/carl-delegation", json.dumps(oc_cfg["plugin"]))
-        self.assertTrue(os.path.isfile(self.path(".config/opencode/plugins/carl-delegation/index.js")))
+        self.assertTrue(os.path.isfile(self.path(".config/opencode/carl-plugins/carl-delegation/index.js")))
         self.assertEqual(self.run_configure("--coder", "0").returncode, 0)
         self.assertNotIn("carl-delegation", json.dumps(self.read_json(".config/opencode/opencode.json")["plugin"]))
-        self.assertFalse(os.path.exists(self.path(".config/opencode/plugins/carl-delegation")))
+        self.assertFalse(os.path.exists(self.path(".config/opencode/carl-plugins/carl-delegation")))
 
     def test_reminder_setting_and_the_gate_from_the_dashboard(self) -> None:
         """The hand-off's settings in both clients: the reminder on by default, --reminder 0 turns it off; the new-file
@@ -751,14 +776,14 @@ class ConfigureTests(unittest.TestCase):
         self.assertEqual(entry[1], {"provider": "llamacpp", "reminder": True, "cacheApi": "http://192.168.42.1:8081",
                                     "coder": "coder", "stateFile": self.path(".config/opencode/carl.json")})
         self.assertEqual(self.read_json(".pi/agent/carl.json")["delegation"], {"reminder": True})
-        for d in (".config/opencode/plugins/carl-delegation", ".pi/agent/extensions/carl-delegation"):
+        for d in (".config/opencode/carl-plugins/carl-delegation", ".pi/agent/extensions/carl-delegation"):
             self.assertTrue(os.path.isfile(self.path(d + "/carl-delegation.js")), d)
             self.assertTrue(os.path.isfile(self.path(d + "/carl-brief.js")), d)     # the TOML brief (Phase 23.4.3)
             # the brief check as a command, next to it (Phase 23.4.4: a user's check by hand, agent-bench's)
             self.assertTrue(os.path.isfile(self.path(d + "/carl-brief-check.mjs")), d)
         self.assertTrue(os.path.isfile(self.path(".pi/agent/extensions/carl-delegation/index.ts")))
         # the chain (a test session, then a code session): OpenCode's carl-delegation and Pi's subagent tool run it
-        for d in (".config/opencode/plugins/carl-delegation", ".pi/agent/extensions/subagent"):
+        for d in (".config/opencode/carl-plugins/carl-delegation", ".pi/agent/extensions/subagent"):
             for f in ("carl-brief.js", "carl-brief-check.mjs", "carl-chain.js"):
                 self.assertTrue(os.path.isfile(self.path(d + "/" + f)), d + "/" + f)
         self.assertEqual(self.run_configure("--coder", "1", "--reminder", "0").returncode, 0)
@@ -825,7 +850,7 @@ class ConfigureTests(unittest.TestCase):
         self.assertNotIn('subagent_type "browser"', oc)
         self.assertFalse(self.read_json(".pi/agent/carl.json")["background_subagents"])
         self.assertNotIn("carl-background", json.dumps(self.read_json(".config/opencode/opencode.json")["plugin"]))
-        self.assertFalse(os.path.exists(self.path(".config/opencode/plugins/carl-background")))
+        self.assertFalse(os.path.exists(self.path(".config/opencode/carl-plugins/carl-background")))
 
     def test_users_own_coder_gives_carl_coder_in_pi(self) -> None:
         self.write_text(".pi/agent/agents/coder.md", "---\nname: coder\n---\nmy own agent\n")
@@ -1058,7 +1083,7 @@ class ConfigureTests(unittest.TestCase):
 
     def test_tui_plugins_carry_the_shared_helpers_and_go_with_their_switch(self) -> None:
         self.assertEqual(self.run_configure().returncode, 0)
-        plugins = self.path(".config/opencode/plugins")
+        plugins = self.path(".config/opencode/carl-plugins")
         for name in ("session-switcher", "subagents-sidebar"):
             self.assertTrue(os.path.isfile(os.path.join(plugins, name, "carl-tui.js")), name)
         p = self.run_configure("--switcher", "0", "--sidebar", "0")        # NO_SWITCHER=1 NO_SIDEBAR=1
@@ -1244,7 +1269,7 @@ class InstallerOnFakeFilesTests(unittest.TestCase):
         self.assertEqual(oc["model"], "llamacpp/qwen3.6-35b-a3b")
         self.assertIn("--headless", oc["mcp"]["carl-browser"]["command"])
         self.assertNotIn("chrome", oc["mcp"]["carl-browser"]["command"])
-        self.assertIn(self.HOME + "/.config/opencode/plugins/session-switcher/carl-tui.js", self.fs.files)
+        self.assertIn(self.HOME + "/.config/opencode/carl-plugins/session-switcher/carl-tui.js", self.fs.files)
         self.assertEqual(self.config(".pi/agent/settings.json")["defaultTools"], ["+grep", "+find", "+ls"])
         self.fs.writes.clear()
         again = self.run_installer()

@@ -122,3 +122,40 @@ class InstalledHereTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ClientVersionsTest(unittest.TestCase):
+    """Phase 23.5.1.11: the Connect tab's Versions row and the OpenCode 2 warning."""
+
+    def test_versions_text_and_other_major(self) -> None:
+        from monitor.views_connect import other_major, versions_text
+        ok = [("OpenCode", "1.19.0", "1.19.0", "1"), ("Pi", "1.1.0", "1.1.0", "1")]
+        self.assertEqual(versions_text(ok), "OpenCode 1.19.0, Pi 1.1.0: the versions CARL is tested with")
+        self.assertEqual(other_major(ok), [])
+        two = [("OpenCode", "2.0.26", "1.19.0", "1"), ("Pi", "1.1.0", "1.1.0", "1")]
+        self.assertEqual(versions_text(two), "OpenCode 2.0.26 (tested: 1.19.0), Pi 1.1.0 (tested)")
+        self.assertEqual([x[0] for x in other_major(two)], ["OpenCode"])
+        self.assertEqual(versions_text([("OpenCode", "", "1.19.0", "1")]), "OpenCode: not installed")
+        self.assertEqual(versions_text([]), "")
+
+    def test_the_tested_versions_file(self) -> None:
+        from monitor import fsio
+        repo = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        t = fsio.tested_versions(repo)
+        self.assertRegex(t["OPENCODE_TESTED"], r"^1\.\d+\.\d+$")
+        self.assertEqual((t["OPENCODE_MAJOR"], t["PI_MAJOR"]), ("1", "1"))
+        self.assertEqual(fsio.client_versions(os.path.join(repo, "no-such-checkout"), "/nonexistent"), [])
+
+    def test_the_setup_section_warns_about_opencode_2_in_one_line(self) -> None:
+        from monitor.fmt import ANSI, aligned
+        from monitor.state import UIState
+        from monitor.views_connect import setup_lines
+        from test_cards import view
+        v = view(client_versions=(("OpenCode", "2.0.26", "1.19.0", "1"), ("Pi", "1.1.0", "1.1.0", "1")))
+        summary, lines = setup_lines(v, UIState(), [("OpenCode", "llamacpp")], [], 120)
+        text = [ANSI.sub("", x if isinstance(x, str) else x.text) for x in aligned(lines)]
+        self.assertEqual(ANSI.sub("", summary), "⚠ OpenCode 2 not supported yet")
+        self.assertEqual(text[1], "⚠ OpenCode 2 on this Mac: CARL needs OpenCode 1. Run: npm install -g --prefix "
+                                  "~/.local opencode-ai@1.19.0")
+        self.assertIn("Versions    OpenCode 2.0.26 (tested: 1.19.0), Pi 1.1.0 (tested)", text)
+        self.assertIn("[ Update Config and Install CARL Plugins (u) ]", " ".join(text))

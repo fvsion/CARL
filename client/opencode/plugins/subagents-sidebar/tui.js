@@ -161,9 +161,10 @@ function runningDetail(s) {
   return s.status === "retry" ? "↳ retrying…" : s.tool ? `↳ ${s.tool}` : s.lastTool ? `↳ ${s.lastTool} ✓` : "↳ starting…";
 }
 
-/** @type {TuiPluginModule & { id: string }} */
+/** @type {TuiPluginModule & { id: string, setup: () => void }} */
 const plugin = {
   id: "subagents-sidebar:tui",
+  setup() {},   // OpenCode 2 loads only { id, setup | effect }; CARL's TUI is OpenCode 1's (tui)
   tui: async (api) => {
     /** @type {Map<string, Subagent>} */
     const subs = new Map();

@@ -93,7 +93,7 @@ export { RULE_BEGIN, RULE_END, withoutRule };
 export const HOLD_MARK = "[CARL] Held";
 /** The OpenCode versions on which the background hold was checked end to end (the <task …> message form; a throw in
  * chat.message drops the message and starts no turn). Another version: the foreground chain. */
-export const VERIFIED_VERSIONS = ["1.18.34", "1.18.35"];
+export const VERIFIED_VERSIONS = ["1.18.34", "1.18.35", "1.19.0"];   // 1.19.0: Phase 23.5.1.11 (checked end to end)
 const POLL_MS = 5_000;                                       // the code session's messages, besides session.idle
 const RECOVER_MS = 2_000;                                    // after the load: the undelivered chains of this project
 
@@ -392,9 +392,10 @@ export function parseTaskXml(text) {
   return m ? { id: m[1], state: m[2], summary: m[3] ?? "", text: m[5] } : null;
 }
 
-/** @type {import("@opencode-ai/plugin").PluginModule & { id: string }} */
+/** @type {import("@opencode-ai/plugin").PluginModule & { id: string, setup: () => void }} */
 export default {
   id: "carl-delegation",
+  setup() {},   // OpenCode 2 loads only { id, setup | effect }; CARL's hooks are OpenCode 1's (server)
   server: async (ctx, options) => {
     const opts = /** @type {Record<string, unknown>} */ (options ?? {});
     const reminder = opts.reminder !== false;

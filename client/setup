@@ -5,8 +5,9 @@
 # It asks one time which clients (OpenCode, Pi) and which options (the coder, the browser, web
 # search, LSP), with the last install's choices as the defaults (~/.config/carl/client-install.env:
 # the switches that the sync service applies again with each config from the dashboard); --yes
-# takes the defaults. Then it installs or updates OpenCode and Pi when they are missing or older
-# (install-clients.sh) and writes their configs (install.sh: backups first, your settings stay).
+# takes the defaults. Then it installs or updates OpenCode and Pi when they are missing or older than the versions
+# CARL is tested with (client-versions.env; install-clients.sh) and writes their configs (install.sh: backups first,
+# your settings stay).
 # Running it again is safe: an update is a new package unzipped over this folder, then ./setup.
 set -euo pipefail
 
@@ -14,6 +15,10 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LAST="$HOME/.config/carl/client-install.env"
 NPM_PKG_OPENCODE="opencode-ai"
 NPM_PKG_PI="@earendil-works/pi-coding-agent"
+# the versions CARL is tested with (Phase 23.5.1.11): installed and updated to, never npm's newest
+OPENCODE_TESTED=""; OPENCODE_MAJOR=""; PI_TESTED=""; PI_MAJOR=""
+# shellcheck source=client-versions.env
+[[ -f "$HERE/client-versions.env" ]] && . "$HERE/client-versions.env"
 
 # The width of the help page and the messages: COLUMNS, else the terminal's, else 80.
 out_width() {
@@ -62,7 +67,7 @@ Usage: ./setup [OPTION...]
 
 On another computer, unzip the client package from the server Mac (./carl.sh package), then run ./setup in its folder. On a Mac, a double click on setup.command does the same. On the server Mac, ./carl.sh install runs this setup.
 
-The setup asks one time which clients and which options you want. Press Enter to keep the value in brackets. Then it installs OpenCode and Pi when they are missing or older (into ~/.local, no sudo), and writes their configs. It keeps your own settings and makes a backup of each file before it changes it. At the end, it tells you what it did and if the server answers.
+The setup asks one time which clients and which options you want. Press Enter to keep the value in brackets. Then it installs OpenCode and Pi when they are missing or older than the versions CARL is tested with (client-versions.env; into ~/.local, no sudo), and writes their configs. It keeps your own settings and makes a backup of each file before it changes it. At the end, it tells you what it did and if the server answers.
 
 Options:
   -y, --yes\tTake the defaults. Ask no questions. Without a terminal, the setup does this too.
@@ -221,27 +226,24 @@ echo
 say "Clients: $d_clients. Options: coder $d_coder, browser $d_browser, web search $d_web$([[ "$d_clients" != pi ]] && echo ", LSP $d_lsp")."
 [[ "$d_web" == off ]] || say "Web search sends the search queries to $d_web, outside this computer. Everything else stays between this computer and the server."
 
-# ---- OpenCode and Pi: install or update when they are missing or older ---------------------------
+# ---- OpenCode and Pi: install or update when they are missing or older than tested ------------------
 export PATH="$HOME/.local/bin:$PATH"
 version_of() { "$1" --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n1 || true; }
-newest() {  # NPM-PACKAGE: the newest version on npm ("" when npm does not answer in 20 s)
-  command -v npm >/dev/null 2>&1 || return 0
-  npm view "$1" version --fetch-timeout=20000 --fetch-retries=0 2>/dev/null | tail -n1 | tr -d '[:space:]' || true
-}
 older() { [[ "$1" != "$2" && "$(printf '%s\n%s\n' "$1" "$2" | sort -V | head -n1)" == "$1" ]]; }
 label() { if [[ "$1" == pi ]]; then echo Pi; elif [[ "$1" == opencode ]]; then echo OpenCode; else echo "OpenCode and Pi"; fi; }
 chosen=(); [[ "$d_clients" != pi ]] && chosen+=(opencode); [[ "$d_clients" != opencode ]] && chosen+=(pi)
 todo=(); act=(); was=(); latest=()
 for c in "${chosen[@]}"; do
-  pkg="$NPM_PKG_OPENCODE"; [[ "$c" == pi ]] && pkg="$NPM_PKG_PI"
-  have=""; new=""; a=keep
+  pkg="$NPM_PKG_OPENCODE"; new="$OPENCODE_TESTED"; major="$OPENCODE_MAJOR"
+  [[ "$c" == pi ]] && { pkg="$NPM_PKG_PI"; new="$PI_TESTED"; major="$PI_MAJOR"; }
+  have=""; a=keep
   if command -v "$c" >/dev/null 2>&1; then have="$(version_of "$c")"; fi
   if (( DO_INSTALL == 0 )); then a=skip
   elif ! command -v "$c" >/dev/null 2>&1; then a=install
-  else
-    new="$(newest "$pkg")"
-    if [[ -z "$new" ]]; then a=unknown
-    elif [[ -n "$have" ]] && older "$have" "$new"; then a=update; fi
+  elif [[ -z "$have" || -z "$new" ]]; then a=unknown
+  elif [[ -n "$major" && "${have%%.*}" != "$major" ]]; then a=major       # OpenCode 2: another plugin system
+  elif older "$have" "$new"; then a=update
+  elif [[ "$have" != "$new" ]]; then a=newer
   fi
   [[ "$a" == install || "$a" == update ]] && todo+=("$c")
   act+=("$a"); was+=("${have:-unknown}"); latest+=("$new")
@@ -262,8 +264,10 @@ for c in "${chosen[@]}"; do
   case "${act[$i]}" in
     install) report+=("$(label "$c"): installed (version ${now:-unknown}).") ;;
     update) report+=("$(label "$c"): updated from version ${was[$i]} to ${now:-unknown}.") ;;
-    keep) report+=("$(label "$c"): version ${was[$i]}, up to date.") ;;
-    unknown) report+=("$(label "$c"): version ${was[$i]}. CARL cannot check for a newer version (npm does not answer).") ;;
+    keep) report+=("$(label "$c"): version ${was[$i]}, the version CARL is tested with.") ;;
+    newer) report+=("$(label "$c"): version ${was[$i]}, newer than the version CARL is tested with (${latest[$i]}). It is kept. If a CARL part does not work, install the tested one: npm install -g --prefix ~/.local $([[ "$c" == pi ]] && echo "$NPM_PKG_PI" || echo "$NPM_PKG_OPENCODE")@${latest[$i]}") ;;
+    major) report+=("$(label "$c"): version ${was[$i]}. CARL's parts for $(label "$c") need version ${latest[$i]%%.*} (CARL is tested with ${latest[$i]}); with this version they do nothing. CARL did not change it. To use CARL, install the tested one: npm install -g --prefix ~/.local $([[ "$c" == pi ]] && echo "$NPM_PKG_PI" || echo "$NPM_PKG_OPENCODE")@${latest[$i]}") ;;
+    unknown) report+=("$(label "$c"): version ${was[$i]}. CARL cannot read its version or the tested one; it is kept.") ;;
     skip) report+=("$(label "$c"): not changed (--no-install).") ;;
   esac
   i=$(( i + 1 ))

@@ -125,7 +125,7 @@ Use this procedure when the server and the clients run on the same Mac, for exam
    ```
    - It asks one time which clients (OpenCode, Pi or both) and which options you want: the coder subagent, the browser tools, web search and LSP. Press Enter to keep the value in brackets. The defaults are the choices of your last setup.
    - NOTE: web search sends the search queries to Exa (or Parallel), outside this computer.
-   - It installs OpenCode and Pi into `~/.local` (no sudo) when they are missing or older. Then it connects them to the server on this Mac.
+   - It installs OpenCode and Pi into `~/.local` (no sudo) when they are missing or older than the versions CARL is tested with. Then it connects them to the server on this Mac.
    - At the end, it tells you what it did, if the server answers, and the next step.
 3. Open a new terminal, so that `~/.local/bin` is on the `PATH`.
 4. Go to the folder of your project:
@@ -155,7 +155,7 @@ Use this procedure when the server and the clients run on the same Mac, for exam
 
 **From the dashboard.** The Connect tab (tab 2) does the same, with the choices of your last setup:
 1. Push `2` for the Connect tab.
-2. Push `i` (**[ Install on this Mac (i) ]**). Or push `u` (**[ Update the model lists (u) ]**) to write only the configs.
+2. Push `i` (**[ Install on this Mac (i) ]**). Or push `u` (**[ Update Config and Install CARL Plugins (u) ]**) to write the configs with CARL's plugins and agents, without installing OpenCode or Pi (for example your own OpenCode).
 3. Push `y` (**[ Run it (y) ]**) to confirm.
 
 The output of the setup shows in the tab.
@@ -193,7 +193,9 @@ The VM needs Python 3, curl and unzip.
 What `./setup` does on the other computer:
 - It reads the server's address and key from `remote.json` and `api-key` in the package. It asks no address.
 - It asks one time which clients and options you want, as on the server Mac. `./setup --yes` takes the defaults. `./setup --help` shows all options.
-- It installs OpenCode and Pi from npm (`opencode-ai`, `@earendil-works/pi-coding-agent`) into `~/.local`, without sudo, when they are missing or older.
+- It installs OpenCode and Pi from npm (`opencode-ai`, `@earendil-works/pi-coding-agent`) into `~/.local`, without sudo, when they are missing or older than the versions CARL is tested with (`client/client-versions.env`: OpenCode 1.19.0, Pi 1.1.0). It installs those versions, not npm's newest.
+  - A newer version of the same major version stays: the setup says that CARL did not test it.
+  - **OpenCode 2 is not supported yet.** CARL's OpenCode parts need OpenCode 1 (OpenCode 1.19 offers the move to OpenCode 2, which changes how plugins work). With OpenCode 2 they load but do nothing, and the setup leaves it as it is and says how to go back: `npm install -g --prefix ~/.local opencode-ai@1.19.0`.
   - They need Node 22.19 or newer. If Node is missing or older, the setup downloads Node 22 LTS (Linux or macOS build) from nodejs.org, checks its SHA-256, and puts it in `~/.local/lib/nodejs`.
   - It adds a `PATH` line (marked `# carl-vm-client`) to your `~/.zshrc` or `~/.bashrc`, if the file exists.
 - It writes the configs. It keeps your own settings and makes backups ([What the setup changes](#what-the-setup-changes)).
@@ -749,7 +751,7 @@ run_command = "python -m pytest tests/test_model.py"
 expected_result = "all tests pass"
 ```
 
-**CARL checks the brief.** Before the coder starts, CARL checks that the brief is complete. For example, each requirement must be in a check with a command, a code task must name at least one file to create or change, and a follow-up or a fix must say what exists now. A key of the older brief (such as `mode` or `goal`) is refused with the name of the new key. If something is missing, the coder does not start: the main agent gets the list of what to fix, and it sends the brief again. You see this as a failed call to the coder with `[CARL] Brief refused`. To check a brief yourself (for example one that you wrote for `/code`), run the same check by hand: `node ~/.config/opencode/plugins/carl-delegation/carl-brief-check.mjs brief.toml` (Pi: `~/.pi/agent/extensions/carl-delegation/carl-brief-check.mjs`). It prints `The brief is valid.` or each problem. With `--root PROJECT-FOLDER`, it also checks that the tests in `existing_tests` are there ([details](reference/delegation.md#the-coders-two-modes-and-the-brief)).
+**CARL checks the brief.** Before the coder starts, CARL checks that the brief is complete. For example, each requirement must be in a check with a command, a code task must name at least one file to create or change, and a follow-up or a fix must say what exists now. A key of the older brief (such as `mode` or `goal`) is refused with the name of the new key. If something is missing, the coder does not start: the main agent gets the list of what to fix, and it sends the brief again. You see this as a failed call to the coder with `[CARL] Brief refused`. To check a brief yourself (for example one that you wrote for `/code`), run the same check by hand: `node ~/.config/opencode/carl-plugins/carl-delegation/carl-brief-check.mjs brief.toml` (Pi: `~/.pi/agent/extensions/carl-delegation/carl-brief-check.mjs`). It prints `The brief is valid.` or each problem. With `--root PROJECT-FOLDER`, it also checks that the tests in `existing_tests` are there ([details](reference/delegation.md#the-coders-two-modes-and-the-brief)).
 
 **The code, then the tests, in separate sessions.** For a new feature (`work_mode = "code"` and `work_type = "new_feature"`), CARL runs the coder two times, each in a new session:
 1. **The code session** (`code`) writes the code from the brief. It cannot change the project's test files.
@@ -762,7 +764,7 @@ expected_result = "all tests pass"
 
 **Tests first, or no tests.** `/carl` > **Coder Subagent** > **Tests** changes this for your computer. `after code` (the default since 1.19.0) is the order above. `before code` is test-first: the test session writes the tests before there is code, at least one new test must fail first (a **red start**), and the code session gets the tests and the test session's report and cannot change the tests; a line `[CARL] Warning` says when no new test failed before the code, or when a test changed. **Use `before code` only with a full spec** (spec-kit or a similar tool): without a well-defined spec, tests written first rarely match what you meant, especially with smaller models. `/carl` says so when you choose it. `off`: one code session, no tests; the result says so, and the main agent or you ask the coder for tests (`tests-only`) when the work needs them.
 
-You see two coder sessions (in OpenCode: `…: code` and `…: tests`), but one result. In OpenCode, the two sessions run in the background only on the OpenCode versions that CARL checked (1.18.34 and 1.18.35). On other versions they run in the foreground: the main session waits for them, and a notice says so one time. Follow-ups and fixes (`follow_up`, `bug_fix`, also a stuck task) get one session, with no new tests. The tests in `existing_tests` are frozen for the coder: the result says whether it changed them. Details: [the chain](reference/delegation.md#the-chain-tests-first-in-a-separate-session).
+You see two coder sessions (in OpenCode: `…: code` and `…: tests`), but one result. In OpenCode, the two sessions run in the background only on the OpenCode versions that CARL checked (1.18.34, 1.18.35 and 1.19.0). On other versions they run in the foreground: the main session waits for them, and a notice says so one time. Follow-ups and fixes (`follow_up`, `bug_fix`, also a stuck task) get one session, with no new tests. The tests in `existing_tests` are frozen for the coder: the result says whether it changed them. Details: [the chain](reference/delegation.md#the-chain-tests-first-in-a-separate-session).
 
 **How the coder works:**
 - It works in one `work_mode` in each task. **code:** it writes the program code and runs the tests, but it does not change the tests. **tests-only:** it writes tests from the requirements (at least one for each requirement id) and does not change the program code.
@@ -1436,7 +1438,7 @@ The buttons of the Setup sub-tab:
 | Button | Key | Does |
 |---|---|---|
 | **[ Install on this Mac (i) ]** (**[ Install again (i) ]** when OpenCode and Pi are set up) | `i`, then `y` (**[ Run it (y) ]**) | Runs `./carl.sh install` (the setup, with the choices of your last setup, without questions) and shows its output in the card **INSTALLER**. `n` or Esc: no. `x` closes the output. |
-| **[ Update the model lists (u) ]** | `u`, then `y` | Runs `./carl.sh install --config-only` |
+| **[ Update Config and Install CARL Plugins (u) ]** | `u`, then `y` | Runs `./carl.sh install --config-only`: the configs, CARL's plugins and agents; it installs nothing |
 | **[ Make the client package (z) ]** | `z` | Runs the code of `./carl.sh package`. The card **CLIENT PACKAGE** shows the path of the zip, its size, the key warning and the next steps. Or it tells you why CARL made no package (for example: the server serves only this Mac). **[ Make it again (z) ]**. **[ Close (x) ]** or `x` closes the card. |
 | **[ Show it in the Finder (f) ]** | `f` | Shows the zip in the Finder. The button shows after `z`. |
 | **[ Send the config (P) ]** | `P` | Sends the client config to the computers that sync |
@@ -1721,7 +1723,7 @@ The footer shows the keys of the screen that you see. `?` shows all of them: the
 | `o` / `p` / `c` | Live and Connect: copy the OpenCode config / the Pi config / the curl test (`t` also copies the curl test) |
 | `a` | Live: start a stopped server |
 | `+` / `-` | Live: more / fewer lines in the LOG card (else the screen's height sets them: 3, 5 or 10; `--lines N` sets them at the start) |
-| `i` / `u`, then `y` | Connect tab: install OpenCode and Pi and their configs / update the model lists only (`n` or Esc: no). `x` closes the output of the setup. |
+| `i` / `u`, then `y` | Connect tab: install OpenCode and Pi and their configs / write the configs with CARL's plugins and agents, no install (`n` or Esc: no). `x` closes the output of the setup. |
 | `z` / `f` | Connect tab: make the client package for another computer / show it in the Finder |
 | `[` / `]` | Connect tab: the Setup and Clients sub-tabs. Settings tab: the previous / next panel. |
 | `P` | Connect tab: send the client config to the computers that sync |

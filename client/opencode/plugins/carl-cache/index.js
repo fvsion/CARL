@@ -68,9 +68,10 @@ function saveAtTheEnd(res, save) {
                       { status: res.status, statusText: res.statusText, headers: res.headers });
 }
 
-/** @type {import("@opencode-ai/plugin").PluginModule & { id: string }} */
+/** @type {import("@opencode-ai/plugin").PluginModule & { id: string, setup: () => void }} */
 export default {
   id: "carl-cache",
+  setup() {},   // OpenCode 2 loads only { id, setup | effect }; CARL's hooks are OpenCode 1's (server)
   server: async ({ client }, options) => {
     const ours = typeof options?.provider === "string" ? options.provider : "llamacpp";
     checkOnce();                  // without the sync service: a config the dashboard sent, applied once

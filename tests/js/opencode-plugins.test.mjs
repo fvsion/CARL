@@ -532,7 +532,8 @@ test("carl-delegation, the hold's gate: the version (SDK health, the test switch
   assert.deepEqual(delegationMod.selfCheck({}), ["session.create", "session.promptAsync", "session.messages", "session.get"]);
   assert.deepEqual(delegationMod.selfCheck(chainOpenCode().client), []);
   assert.deepEqual(delegationMod.holdGate("1.18.35", []), { ok: true, why: "OpenCode 1.18.35" });
-  assert.match(delegationMod.holdGate("1.19.0", []).why, /^OpenCode 1\.19\.0 is not a version that CARL checked the background hold on \(1\.18\.34, 1\.18\.35\)$/);
+  assert.deepEqual(delegationMod.holdGate("1.19.0", []), { ok: true, why: "OpenCode 1.19.0" });      // checked (Phase 23.5.1.11)
+  assert.match(delegationMod.holdGate("1.20.0", []).why, /^OpenCode 1\.20\.0 is not a version that CARL checked the background hold on \(1\.18\.34, 1\.18\.35, 1\.19\.0\)$/);
   assert.equal(delegationMod.holdGate("", []).ok, false);
   assert.match(delegationMod.holdGate("1.18.35", ["session.promptAsync"]).why, /lacks session\.promptAsync/);
   // a session's end from its messages (the code session's wait besides session.idle; the restart's check)
@@ -556,7 +557,7 @@ test("carl-delegation, the hold's gate: the version (SDK health, the test switch
 });
 
 test("carl-delegation, the chain's base: without the hold, the task runs in the foreground (any version); one notice", async () => {
-  for (const setup of [() => chainOpenCode({ version: "1.19.0" }),
+  for (const setup of [() => chainOpenCode({ version: "1.20.0" }),
                        () => (process.env.CARL_TEST_OPENCODE_VERSION = "0.0.0-test", chainOpenCode())]) {
     const oc = setup();
     const hooks = await delegation.server({ client: oc.client, directory: oc.dir }, { gate: false, coder: "coder" });
@@ -571,7 +572,7 @@ test("carl-delegation, the chain's base: without the hold, the task runs in the 
     await new Promise((r) => setTimeout(r, 10));
     assert.deepEqual(oc.logs.map((l) => l[0]), ["log", "toast"]);     // once
     assert.equal(oc.logs[0][1].level, "warn");
-    assert.match(oc.logs[0][1].message, /^CARL runs the coder's two-session chain \(tests and code\) in the foreground \(the background hold is off: OpenCode (1\.19\.0|0\.0\.0-test) is not a version/);
+    assert.match(oc.logs[0][1].message, /^CARL runs the coder's two-session chain \(tests and code\) in the foreground \(the background hold is off: OpenCode (1\.20\.0|0\.0\.0-test) is not a version/);
     const output = { metadata: { sessionId: "ses_test" }, output: delegationMod.taskXml({ id: "ses_test", state: "completed", text: testSession(oc.dir) }) };
     await hooks["tool.execute.after"]({ tool: "task", sessionID: "m", callID: "b1", args }, output);
     const res = delegationMod.parseTaskXml(output.output);

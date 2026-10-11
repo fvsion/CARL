@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import json
 import os
+import re
+import subprocess
 import tempfile
 import urllib.parse
 from typing import Dict, List, Optional, Tuple
@@ -157,3 +159,45 @@ def installed_here(base: str, home: str) -> List[Tuple[str, str]]:
             prov = st.get("providers")
             out.append((client, str(prov.get("llamacpp", "llamacpp") if isinstance(prov, dict) else "llamacpp")))
     return out
+
+
+# ---------------------------------------------------------------- the client versions (Phase 23.5.1.11)
+CLIENT_COMMANDS = (("OpenCode", "opencode", "OPENCODE"), ("Pi", "pi", "PI"))
+_VERSION = re.compile(r"\d+\.\d+\.\d+")
+
+
+def tested_versions(repo: str) -> Dict[str, str]:
+    """client/client-versions.env: KEY -> VALUE (OPENCODE_TESTED, OPENCODE_MAJOR, PI_TESTED, PI_MAJOR); {} when absent."""
+    out: Dict[str, str] = {}
+    try:
+        with open(os.path.join(repo, "client", "client-versions.env"), encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith("#") and "=" in line:
+                    k, v = line.split("=", 1)
+                    out[k.strip()] = v.strip().strip('"')
+    except OSError:
+        pass
+    return out
+
+
+def client_version(command: str, home: str, timeout: float = 5.0) -> str:
+    """The version a client on this Mac prints (`opencode --version`), found as the setup finds it (~/.local/bin
+    first); "" when it is not installed or does not answer."""
+    path = os.pathsep.join([os.path.join(home, ".local", "bin"), os.environ.get("PATH", "")])
+    try:
+        p = subprocess.run([command, "--version"], capture_output=True, text=True, timeout=timeout,
+                           env={**os.environ, "PATH": path}, stdin=subprocess.DEVNULL)
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    m = _VERSION.search(p.stdout or "")
+    return m.group(0) if m else ""
+
+
+def client_versions(repo: str, home: str) -> List[Tuple[str, str, str, str]]:
+    """(client, installed version or "", tested version, tested major) for OpenCode and Pi on this Mac."""
+    tested = tested_versions(repo)
+    if not tested:                     # no versions file (an older checkout): nothing to compare, nothing run
+        return []
+    return [(name, client_version(cmd, home), tested.get(f"{key}_TESTED", ""), tested.get(f"{key}_MAJOR", ""))
+            for name, cmd, key in CLIENT_COMMANDS]
