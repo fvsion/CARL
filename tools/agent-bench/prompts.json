@@ -2,6 +2,7 @@
   "schema": 1,
   "expect": {
     "large": "delegate",
+    "medium": "delegate",
     "stuck": "delegate",
     "small": "keep",
     "question": "keep"
@@ -188,6 +189,45 @@
         "hidden": [
           "_rules.py",
           "test_hidden_rules_test.py"
+        ]
+      }
+    },
+    {
+      "id": "medium-module",
+      "category": "medium",
+      "fixture": "pylib",
+      "extra": true,
+      "prompt": "Add an n-gram module to textstats. New file textstats/ngrams.py with two functions: ngrams(text, n) -> a list of tuples (the runs of n words in a row, in order, from the existing words(); an empty list when the text has fewer than n words; ValueError when n is less than 1), and top_ngrams(text, n, k=5) -> a list of (ngram, count) pairs (the k most common n-grams, most common first, ties in alphabetical order, like top_words). Write tests for both in tests/test_ngrams.py.",
+      "note": "Half a large task: one new or changed source file plus a test file. For a slow setup (the 2-bit Saluki 27B on a Mac at about 11 tok/s), where the large tasks do not finish in 90 minutes. Extra, so the baseline matrix keeps its prompts.",
+      "full": {
+        "hidden": [
+          "test_hidden_ngrams.py"
+        ]
+      }
+    },
+    {
+      "id": "medium-command",
+      "category": "medium",
+      "fixture": "pycli",
+      "extra": true,
+      "prompt": "Add a search command to notes: `notes search TEXT` prints the open notes whose text contains TEXT, ignoring case, one per line in the same format as `notes list`, and then a last line `N found` (for example `2 found`). `--all` also searches the notes that are done, and `--tag TAG` keeps only the notes with that tag. When nothing matches, it prints `0 found` and exits with code 1. Put it in notes/cli.py and add tests for it to tests/test_cli.py.",
+      "note": "Half a large task: one new or changed source file plus a test file. For a slow setup (the 2-bit Saluki 27B on a Mac at about 11 tok/s), where the large tasks do not finish in 90 minutes. Extra, so the baseline matrix keeps its prompts.",
+      "full": {
+        "hidden": [
+          "test_hidden_search.py"
+        ]
+      }
+    },
+    {
+      "id": "medium-change",
+      "category": "medium",
+      "fixture": "pylib",
+      "extra": true,
+      "prompt": "Change top_words in textstats/stats.py so it can leave words out. The new signature is top_words(text, n=10, *, stopwords=(), min_length=1). stopwords is an iterable of words to leave out, compared without case (\"The\" leaves out \"the\"). min_length leaves out the words that are shorter than that many characters. n=None gives all the words, and a negative n raises ValueError. The order stays as it is: most common first, ties in alphabetical order, and a call with only text and n gives the same result as now. Add tests for each of these to tests/test_stats.py.",
+      "note": "Half a large task: one new or changed source file plus a test file. For a slow setup (the 2-bit Saluki 27B on a Mac at about 11 tok/s), where the large tasks do not finish in 90 minutes. Extra, so the baseline matrix keeps its prompts.",
+      "full": {
+        "hidden": [
+          "test_hidden_topwords.py"
         ]
       }
     }

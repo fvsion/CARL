@@ -10,7 +10,7 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 from . import BENCH_DIR
 
 PROMPTS_FILE = os.path.join(BENCH_DIR, "prompts.json")
-CATEGORIES = ("large", "stuck", "small", "question")
+CATEGORIES = ("large", "medium", "stuck", "small", "question")   # medium: half a large task
 FIXTURES = ("pycli", "pylib", "webapp", "empty", "pyrules")
 _ID = re.compile(r"^[a-z0-9][a-z0-9-]{0,40}$")
 

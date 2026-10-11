@@ -29,17 +29,19 @@ class PromptsTest(unittest.TestCase):
         everything = prompts.load_prompts()
         ps = prompts.select(everything)                      # the baseline's 17: the extra prompts only when asked
         self.assertEqual(len(ps), 17)
-        for cat in prompts.CATEGORIES:                       # large: 4 + the 11.8 control (large-newpkg)
-            self.assertEqual(sum(1 for p in ps if p.category == cat), 5 if cat == "large" else 4, cat)
+        self.assertEqual(prompts.CATEGORIES, ("large", "medium", "stuck", "small", "question"))
+        sizes = {"large": 5, "medium": 0}                    # large: 4 + the 11.8 control; medium: extra only
+        for cat in prompts.CATEGORIES:
+            self.assertEqual(sum(1 for p in ps if p.category == cat), sizes.get(cat, 4), cat)
         extra = [p.id for p in everything if p.extra]        # V5's false positives: small requests with a new file
         self.assertEqual(extra, ["small-gitignore", "small-newtest", "rules-func", "rules-rename", "rules-flag",
-                                 "rules-test"])
-        self.assertEqual(len(prompts.select(everything, with_extra=True)), 23)
+                                 "rules-test", "medium-module", "medium-command", "medium-change"])
+        self.assertEqual(len(prompts.select(everything, with_extra=True)), 26)
         self.assertEqual([p.id for p in prompts.select(everything, ids=["small-newtest"])], ["small-newtest"])
         self.assertEqual(len(prompts.select(everything, categories=["small"])), 4)
         self.assertEqual({p.expect for p in ps if p.category in ("large", "stuck")}, {"delegate"})
         self.assertEqual({p.expect for p in ps if p.category in ("small", "question")}, {"keep"})
-        for p in ps:
+        for p in prompts.select(everything, with_extra=True):
             self.assertTrue(os.path.isdir(os.path.join(fixtures.FIXTURES_DIR, p.fixture)), p.id)
             for h in p.hidden:
                 self.assertTrue(os.path.isfile(os.path.join(fixtures.HIDDEN_DIR, p.fixture, h)), h)
@@ -47,6 +49,23 @@ class PromptsTest(unittest.TestCase):
         stuck = [p for p in ps if p.category == "stuck"]
         self.assertTrue(all("twice" in p.text for p in stuck))           # the user says the fix failed twice
         self.assertTrue(all("```" in p.text for p in stuck))             # and quotes the error
+
+    def test_the_medium_prompts(self) -> None:
+        """Half a large task for a slow model: one source file plus tests, a full run with hidden tests, delegated
+        (an implementation plus tests). Extra, so a running matrix keeps its prompts: --with-extra or the ids."""
+        everything = prompts.load_prompts()
+        self.assertEqual(prompts.select(everything, ["medium"]), [])
+        medium = prompts.select(everything, ["medium"], with_extra=True)
+        self.assertEqual([p.id for p in medium], ["medium-module", "medium-command", "medium-change"])
+        self.assertEqual({p.fixture for p in medium}, {"pylib", "pycli"})
+        for p in medium:
+            self.assertEqual((p.category, p.expect, p.extra, p.full), ("medium", "delegate", True, True), p.id)
+            self.assertIn("test", p.text)                                       # the request asks for tests
+            self.assertEqual(len(p.hidden), 1, p.id)
+            self.assertTrue(os.path.isfile(os.path.join(fixtures.HIDDEN_DIR, p.fixture, p.hidden[0])), p.id)
+        self.assertEqual(prompts.select(everything, ["medium"], full=True, with_extra=True), medium)
+        self.assertEqual([p.id for p in prompts.select(everything, ids=["medium-change"], full=True)],
+                         ["medium-change"])
 
     def test_select(self) -> None:
         ps = prompts.load_prompts()
@@ -63,7 +82,7 @@ class PromptsTest(unittest.TestCase):
         expect = {"large": "delegate"}
         self.assertEqual(len(prompts.parse_prompts({"expect": expect, "prompts": [one]})), 1)
         bads: List[Dict[str, Any]] = [{"prompts": []}, {"expect": expect, "prompts": [one, one]}]
-        for change in ({"category": "medium"}, {"fixture": "rust"}, {"prompt": " "}, {"full": {"hidden": ["../x.py"]}}):
+        for change in ({"category": "huge"}, {"fixture": "rust"}, {"prompt": " "}, {"full": {"hidden": ["../x.py"]}}):
             bads.append({"expect": expect, "prompts": [{**one, **change}]})
         for bad in bads:
             with self.assertRaises(ValueError):
@@ -496,6 +515,62 @@ class RulesFixtureTest(unittest.TestCase):
                 for hidden in ("test_hidden_rules_func.py", "test_hidden_rules_test.py"):
                     res = fixtures.check_hidden(repo, "pyrules", ["_rules.py", hidden])["hidden"]
                     self.assertEqual(res.passed, good, hidden + ": " + res.output[-400:])
+
+
+class MediumFixtureTest(unittest.TestCase):
+    """The medium prompts' hidden tests fail on the fresh fixture and pass on a reference solution."""
+
+    NGRAMS = ("from collections import Counter\nfrom textstats.tokenize import words\n\n\n"
+              "def ngrams(text, n):\n    if n < 1:\n        raise ValueError(n)\n    ws = words(text)\n"
+              "    return [tuple(ws[i:i + n]) for i in range(len(ws) - n + 1)]\n\n\n"
+              "def top_ngrams(text, n, k=5):\n"
+              "    return sorted(Counter(ngrams(text, n)).items(), key=lambda kv: (-kv[1], kv[0]))[:k]\n")
+    TOP_WORDS = ("def top_words(text, n=10, *, stopwords=(), min_length=1):\n    if n is not None and n < 0:\n"
+                 "        raise ValueError(n)\n    stop = {w.lower() for w in stopwords}\n"
+                 "    counts = Counter(w for w in words(text) if w not in stop and len(w) >= min_length)\n"
+                 "    return sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))[:n]\n\n\n"
+                 "def mean_word_length(")
+    SEARCH_ARGS = ('    s = sub.add_parser("search")\n    s.add_argument("text")\n    s.add_argument("--tag")\n'
+                   '    s.add_argument("--all", action="store_true")\n    return p\n')
+    SEARCH_RUN = ('    if args.command == "search":\n'
+                  '        found = [n for n in store.load_notes() if args.text.lower() in n.text.lower()\n'
+                  '                 and (args.all or not n.done) and (not args.tag or args.tag in n.tags)]\n'
+                  '        for n in found:\n            print(format_note(n))\n'
+                  '        print(f"{len(found)} found")\n        return 0 if found else 1\n    return 2\n')
+
+    def solve(self, repo: str, prompt_id: str) -> None:
+        def edit(rel: str, old: str, new: str) -> None:
+            path = os.path.join(repo, rel)
+            with open(path, encoding="utf-8") as f:
+                text = f.read()
+            self.assertIn(old, text, rel)
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(text.replace(old, new, 1))
+        if prompt_id == "medium-module":
+            with open(os.path.join(repo, "textstats", "ngrams.py"), "w", encoding="utf-8") as f:
+                f.write(self.NGRAMS)
+        elif prompt_id == "medium-change":
+            path = os.path.join(repo, "textstats", "stats.py")
+            with open(path, encoding="utf-8") as f:
+                text = f.read()
+            start, end = text.index("def top_words("), text.index("def mean_word_length(")
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(text[:start] + self.TOP_WORDS + text[end + len("def mean_word_length("):])
+        else:
+            edit("notes/cli.py", "    return p\n", self.SEARCH_ARGS)
+            edit("notes/cli.py", "    return 2\n", self.SEARCH_RUN)
+
+    def test_fail_before_pass_after(self) -> None:
+        medium = prompts.select(prompts.load_prompts(), ["medium"], with_extra=True)
+        self.assertEqual(len(medium), 3)
+        for p in medium:
+            for solved in (False, True):
+                with self.subTest(prompt=p.id, solved=solved), tempfile.TemporaryDirectory() as tmp:
+                    repo = fixtures.make_fresh(p.fixture, tmp)
+                    if solved:
+                        self.solve(repo, p.id)
+                    res = fixtures.check_hidden(repo, p.fixture, p.hidden)["hidden"]
+                    self.assertEqual(res.passed, solved, p.id + ": " + res.output[-400:])
 
 
 class CloneHomeTest(unittest.TestCase):

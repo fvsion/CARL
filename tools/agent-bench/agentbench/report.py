@@ -270,11 +270,11 @@ def tables(docs: Sequence[Mapping[str, Any]]) -> List[Table]:
         "(delegated) or a write of the main agent (self-write: write, edit, patch, or a shell command that writes "
         "files); the looks before it (read, grep, ls ...) do not decide. With no decisive action, the turn's end "
         f"is an answer; {ev.MAX_TOOLS} tool calls or {ev.MAX_SECONDS:.0f} s from the first model step with no "
-        "decisive action are undecided. Undecided counts as not delegated: wrong for a large or stuck request, "
-        f"right for a small request or a question. Pass: at least {PASS_MARK:.0f}% delegated on large and stuck "
-        f"requests and at least {PASS_MARK:.0f}% kept on small requests and questions. Errors do not count in the "
-        "shares. Times: from the first model step, in seconds. Measure first-tool: results of the older format "
-        "(strict only).")
+        "decisive action are undecided. Undecided counts as not delegated: wrong for a large, medium or stuck "
+        f"request, right for a small request or a question. Pass: at least {PASS_MARK:.0f}% delegated on large, "
+        f"medium and stuck requests and at least {PASS_MARK:.0f}% kept on small requests and questions. Errors do "
+        "not count in the shares. Times: from the first model step, in seconds. Measure first-tool: results of "
+        "the older format (strict only).")
     out = [main, cats, wrong, errs]
     full = [d for d in docs if d.get("mode") == "full"]
     if full:

@@ -11,6 +11,8 @@ CARL's rule (`client/agents/delegation.md`, and the coder's description in `clie
 - Give the task to `coder` when it is **large** (3 or more files, about 150 or more lines, a new module, CLI or package, an implementation plus tests, a feature in many steps) or when the agent is **stuck** (a fix failed two times).
 - Do the task itself when it is **small** (one file, one function) or a **question**.
 
+A **medium** request is half a large one: one new or changed source file plus its tests (about 60-120 lines in all). By the rule it is large ("an implementation plus tests"), so it expects the coder too. The medium requests are for a slow model (the 2-bit Saluki 27B on a Mac at about 11 tok/s writing), where the large full runs do not finish in 90 minutes; they still test the hand-off and the code that comes back.
+
 The main agent gives a task to the coder with these calls:
 
 | Client | The call |
@@ -50,14 +52,14 @@ A program that writes from the inside (for example `python3 -c "open('x', 'w')..
 
 The run stops when the practical decision is known (OpenCode: also when the step of the decisive tool has ended, at most 3 s later). A run of a different limit is a different measure (`practical-v2-t25-s480`, for example).
 
-A decision is right when it is `delegated` for a large or stuck request. For a small request or a question, every decision except `delegated` is right: `self`, `self-write`, `answer` and `undecided` (the main agent did not give the task away). Thus `undecided` is wrong for a large or stuck request. An `error` is not right and not wrong: the report counts it apart.
+A decision is right when it is `delegated` for a large, medium or stuck request. For a small request or a question, every decision except `delegated` is right: `self`, `self-write`, `answer` and `undecided` (the main agent did not give the task away). Thus `undecided` is wrong for a large, medium or stuck request. An `error` is not right and not wrong: the report counts it apart.
 
 ## 2. The parts
 
 | Path | What it is |
 |---|---|
 | `bench.py` | The CLI: `prepare`, `run`, `report`, `tokens`, `fetch`, `drop`, `variants` |
-| `prompts.json` | 16 requests, 4 for each category (large, stuck, small, question). Each has its fixture and the decision it expects. The large requests with hidden tests are also the full runs. |
+| `prompts.json` | The baseline's 17 requests: 5 large, 4 stuck, 4 small, 4 questions. Each has its fixture and the decision it expects. The large requests with hidden tests are also the full runs. The **extra** requests (added after the baseline) run only with `--with-extra` or their ids, so a running matrix keeps its prompts: 2 small ones, the `rules-*` requests (`pyrules`), and the 3 **medium** requests (`medium-module`, `medium-command`, `medium-change`), each with hidden tests. |
 | `fixtures/` | 3 small projects: `pycli` (a notes CLI with tests), `pylib` (a text statistics library with one failing test), `webapp` (a static to-do page). Each has a README. |
 | `hidden/` | The hidden tests of the full runs. The harness copies them into the project only after the run. |
 | `variants/` | One Python file for each variant (see section 7). `baseline.py` changes nothing. |
@@ -122,7 +124,7 @@ python3 tools/agent-bench/bench.py report ~/carl-phase23/baseline.jsonl         
 python3 tools/agent-bench/bench.py report ~/carl-phase23/baseline.jsonl --md --output baseline.md
 ```
 
-**The matrix.** The runs go model by model (one server start for each model): client, thinking, run, prompt. `--categories large,stuck` and `--prompts ID,ID` select prompts.
+**The matrix.** The runs go model by model (one server start for each model): client, thinking, run, prompt. `--categories large,stuck` and `--prompts ID,ID` select prompts. The categories are `large`, `medium`, `stuck`, `small` and `question`. The medium requests are extra: give `--categories medium --with-extra` (or their ids), for example `run --full --categories medium --with-extra` for their full runs.
 
 **Resumable.** Each run writes one line to the results file (JSONL) when it ends. A run that has a line is skipped. To continue after a stop, give the same command again. `--retry-errors` runs again the runs whose result is an error.
 
@@ -184,7 +186,7 @@ It counts the briefs whose `brief_tokens` is `null`, only in the lines of `--mod
 
 **A new measure, and the keep shares.** Only the large and stuck requests were run again at the new limits (the user's choice, 2026-10-06). A `practical-v2` group with no small requests or questions takes its keep shares from the same model, client, thinking and variant in `practical-v1`, and the table marks them `[practical-v1]`.
 
-**The report** has, for each model, client, thinking, variant and measure: the share of large and stuck requests that went to the coder (strict and practical), the share of small requests and questions that the main agent kept (strict and practical), the number of undecided runs and of errors, the median number of looks before a decisive action, the median times to the decision and to the first tool call, the median thinking tokens, and the pass mark for each measure (at least 90% and 90%). Then the practical share for each category, the wrong practical decisions (prompt, expected, got, first tool), the errors, and the full runs. `--md` gives Markdown.
+**The report** has, for each model, client, thinking, variant and measure: the share of large, medium and stuck requests that went to the coder (strict and practical), the share of small requests and questions that the main agent kept (strict and practical), the number of undecided runs and of errors, the median number of looks before a decisive action, the median times to the decision and to the first tool call, the median thinking tokens, and the pass mark for each measure (at least 90% and 90%). Then the practical share for each category, the wrong practical decisions (prompt, expected, got, first tool), the errors, and the full runs. `--md` gives Markdown.
 
 **The coder briefs** (the lines that have `briefs`), for each model, client, variant and mode (decision or full): the runs with a brief, the briefs sent and their formats, the share of runs whose first brief was valid (TOML and JSON only: a kv brief has no check), the share whose last brief was taken (the coder started), the refusals per run (mean and most), the median tokens of the first brief and of all briefs, and for full runs the hidden tests passed and the median minutes.
 
@@ -237,7 +239,7 @@ The tests need no model and no server:
 
 - `test_events.py`: the real event streams of OpenCode 1.18.34 and Pi 1.0.2 (in `tests/agent_bench/events/`) for each kind of decision (also: looks then the coder, looks then a write, a shell write, undecided), both measures, the limits, and the shell write rules with their negatives.
 - `test_library.py`: fetch and drop in temporary folders, with a fake catalogue and library.
-- `test_runner.py`: the prompts, the matrix and its resume, the report, the fixtures, the client commands, the variants, the fake server.
+- `test_runner.py`: the prompts (and the medium hidden tests: they fail on the fresh fixture and pass on a reference solution), the matrix and its resume, the report, the fixtures, the client commands, the variants, the fake server.
 - `test_briefs.py`: the coder briefs: the calls that give the coder a task, CARL's check through node, the refusals, a decision run that goes on after a refusal, the tokens (the fake server's `/tokenize`, `bench.py tokens`) and the report's table.
 - `test_variants.py`: each variant on a harness HOME made by `_support.make_variant_home` (CARL's rule, coder, `carl-delegation` entry, Pi's `carl.json` and subagent extension), again on its own output, and the baseline after it.
 - `test_server_flow.py`: the server start and stop with a fake launcher; the real `./carl.sh package` and `./setup --no-install` against the fake server.
