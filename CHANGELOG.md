@@ -3,6 +3,28 @@
 All notable changes to CARL. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Dates are local dates on the development Mac (M3 Pro, 36 GB).
 
+## 1.20.0 - 2026-10-11
+
+Phase 23.5.1.1: what the disk cache did, counted.
+
+### Added
+- **Settings > Caching, WHAT THE CACHE DID**: a table of what the disk cache did for OpenCode and Pi in the last
+  hour (`t`: today, since the server started): sessions and prompts restored, with their tokens and the time saved;
+  the tokens still in their slot; the sessions read again because nothing was saved, with the time it took; sessions
+  and prompts saved and what was written; retired files; and the tokens reused of all the tokens sent.
+- **The Live tab's SLOTS card, a Cache column** (on a terminal 160 columns or wider): for the session in each busy
+  slot, where its state came from (a session file, the agent's prompt, its slot, the RAM cache, or read in full), its
+  last save, and its name.
+- OpenCode's and Pi's carl-cache write what they do as events (`~/.config/carl/cache-events/`, kept two days); a
+  client on another computer sends them to the dashboard API (`POST /carl/cache/events`). No key or prompt text is in
+  them.
+
+### Fixed
+- **Two OpenCode or Pi processes on one Mac could read a session again and save it over a better file**: when one
+  process took a session's slot (saving it first), the other, on that session's next turn, still took the slot as
+  its own, read the session's prompt into it again and saved that over the file. It now sees that the file was saved
+  since it last used the slot, and restores it instead (found by the counters).
+
 ## 1.19.0 - 2026-10-11
 
 Phase 23.5.0: the coder's tests come after the code by default.
