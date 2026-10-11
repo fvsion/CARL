@@ -3,6 +3,31 @@
 All notable changes to CARL. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Dates are local dates on the development Mac (M3 Pro, 36 GB).
 
+## 1.17.1 - 2026-10-11
+
+The 1.17.0 addendum: the cache matrix's after run. No code change.
+
+### Measured
+The same 48 setups as before 1.17.0 (`tools/cache-matrix/`, the M3 Pro, llama.cpp 0.6.0), 1.17.0 against 1.16.0:
+no step or server error. The whole run: the Qwen3.6-35B-A3B IQ3 6,231 s -> 4,629 s, the Gemma 4 E4B 5,520 s ->
+4,465 s. Tokens read again (main sessions, the full cache):
+
+| Step | A3B IQ3, OpenCode | A3B IQ3, Pi | E4B, OpenCode | E4B, Pi |
+|---|---|---|---|---|
+| a session back after another took its slot | 66 -> 66 | 26,376 -> 65 | 63 -> 63 | 7,984 -> 61 |
+| a fork | 26,634 -> 264 | 26,571 -> 260 | 8,179 -> 252 | 8,167 -> 244 |
+| its slot taken after a client restart | 26,567 -> 64 | 26,508 -> 63 | 8,077 -> 62 | 8,073 -> 60 |
+| after a server restart | - | 26,571 -> 63-260 | - | 8,167 -> 60-244 |
+| the whole script | 426-504 s -> 276-355 s | 447-537 s -> 245-266 s | 142-229 s -> 104-185 s | 141-189 s -> 90-114 s |
+
+With the window cache (the E4B) nothing is saved or restored now, and a switch reads the session's own part only
+(~8K of ~18.8K; Pi going back: 14,334 -> 66). The subagent setups are unchanged: their long turns are new text.
+
+### Known issues
+- On a hybrid model (the Qwen3.6 35B-A3B), a session restored from its file is read again in full when the next
+  prompt does not start with all of its tokens (an edited or reverted message): llama.cpp 0.6.0 saves no checkpoints in
+  the file. Upstream llama.cpp #26004 adds them; CARL will be measured against it.
+
 ## 1.17.0 - 2026-10-10
 
 Phase 23.5: the cache, tested against what really runs (a matrix of 48 setups with the real OpenCode and Pi);
