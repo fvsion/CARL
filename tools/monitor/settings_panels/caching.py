@@ -1,5 +1,6 @@
 """The Caching panel: the disk cache (diskcache.py: saved prompts and saved sessions), its limit, when
-CARL saves, the shared storage, the cache of the Gemma models (sliding window), what the disk cache
+CARL saves, the shared storage, the cache of the Gemma models (sliding window), what the cache did (Phase 23.5.1.1:
+cachestats.py, a table over the last hour, today or since the start; t changes it), what the disk cache
 holds, and Clear; beside them (or under them) the Quick tip and the help. Every change is saved at
 once. Each part is a section with its own level; the page scrolls. Pure, except the clock (the
 files' ages)."""
@@ -10,6 +11,7 @@ from typing import List, Mapping, Optional, Sequence, Tuple
 
 from carl_core.domain.units import duration, file_size
 
+from ..cachestats import StatRow
 from ..cards import sections as register
 from ..diskcache import PROMPT, CacheConfig, CacheFile, describe, gb as gb_text, shared_saving, used
 from ..fmt import CYN, DIM, GRN, R, YEL, CardLine, Row, bar, buttons, home_short, row
@@ -19,7 +21,7 @@ from ..words import plural
 from .page import Part, body_height, help_part, layout, scrolled, section, side_width
 from .common import choice_line
 
-register(three=["cachedisk"], two=["caching", "cachetip", "cacheabout", "cachehow", "cacheexp", "cacheram"])
+register(three=["cachedisk"], two=["caching", "cachedid", "cachetip", "cacheabout", "cachehow", "cacheexp", "cacheram"])
 
 DISK_CHOICES = (2, 5, 10, 20, 50)                      # the Caching panel's disk limits (GB)
 AUTO_CHOICES = (30, 120, 300, 600)                    # save = auto: seconds of unsaved reading (default 120)
@@ -107,7 +109,7 @@ def file_rows(files: Sequence[CacheFile], shown: int, full: bool,
 
 def caching_panel(ui: UIState, conf: CacheConfig, files: Sequence[CacheFile], folder: str, cols: int,
                   home: str, api: str = "", height: int = 0, names: Optional[Mapping[str, str]] = None,
-                  window: str = "") -> List[Row]:
+                  window: str = "", did: Sequence[StatRow] = (), did_when: str = "") -> List[Row]:
     """The sections: CACHING (the settings), ON THE DISK (what it holds, Clear, the files); the Quick tip and
     the help beside them or under them. The page scrolls."""
     use = used(files)
@@ -138,6 +140,17 @@ def caching_panel(ui: UIState, conf: CacheConfig, files: Sequence[CacheFile], fo
             L += choice_line(ROW_LABELS[k], opts, cur, w - 4, 19, sel=k == key)
         return section(ui, "caching", "CACHING", f"{gb_text(use)} of {conf.disk_gb} GB", L, w, 2)
 
+    def did_section(w: int) -> List[Row]:
+        """WHAT THE CACHE DID: a table (user, 2026-10-11: "less prose and more table")."""
+        def cells(r: StatRow) -> str:
+            label = f"{DIM}{r.what:<21}{R}"                  # grey like the panel's other labels
+            if r.what == "All requests":
+                return f"{label}{'':>6}  {r.tokens}"
+            return f"{label}{r.count:>6}  {r.tokens:>8}  {r.time:<15}{r.written:>8}".rstrip()
+        L: List[CardLine] = [f"{DIM}{cells(StatRow('', 'Count', 'Tokens', 'Time', 'Written'))}{R}"]
+        L += [cells(r) for r in did]
+        return section(ui, "cachedid", "WHAT THE CACHE DID", f"{did_when}   {DIM}(t changes it){R}", L, w, 2)
+
     def disk_section(w: int) -> List[Row]:
         full = ui.levels.get("cachedisk", 1) == 2
         L: List[CardLine] = [row("used", f"{bar(use / conf.limit if conf.limit else 0, 18)}  {gb_text(use)} of "
@@ -160,7 +173,8 @@ def caching_panel(ui: UIState, conf: CacheConfig, files: Sequence[CacheFile], fo
     about = SAVE_HELP[conf.save].replace("AUTO", duration(conf.auto_s)) if key in ("save", "auto") else \
         SWA_HELP[conf.swa] if key == "swa" else MOVE_HELP[conf.move] if key == "move" else ROW_HELP[key]
     parts: List[Part] = [
-        Part("caching", settings_section), Part("cachedisk", disk_section),
+        Part("caching", settings_section), *([Part("cachedid", did_section)] if did else []),
+        Part("cachedisk", disk_section),
         help_part(ui, "cachetip", "QUICK TIP", [f"{CYN}Press ↑↓ to select a row and ← → to change it. CARL saves each "
                                                 f"change at once.{R}"]),
         help_part(ui, "cacheabout", f"ABOUT: {ROW_LABELS[key].upper()}", [about]),
@@ -174,7 +188,7 @@ def caching_panel(ui: UIState, conf: CacheConfig, files: Sequence[CacheFile], fo
         help_part(ui, "cacheram", "RAM CACHE", ["The server also keeps sessions in RAM while it runs. Set its size in "
                                                 "the RAM cache row of the Server panel."])]
     rows = layout(ui, parts, cols, side_width(cols), balance=True)
-    ui.keys = [("↑↓", "row"), ("← →", "change"), ("c", "clear")]
+    ui.keys = [("↑↓", "row"), ("← →", "change"), ("c", "clear")] + ([("t", "time")] if did else [])
     if len(rows) > h:
         ui.keys.append(("PgUp PgDn", "scroll"))
     ui.keys += [("Tab", "section"), ("L", "level"), ("[ ]", "panels")]

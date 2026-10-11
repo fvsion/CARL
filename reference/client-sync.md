@@ -38,6 +38,7 @@ The dashboard serves a small API while it runs (`tools/monitor/cacheapi.py`). It
 | `POST /carl/cache/claim`, `/release` | Take a slot for a request, or give it back |
 | `POST /carl/cache/record`, `/unrecord`, `GET /carl/cache/record` | Which session a slot holds |
 | `POST /carl/cache/save-recorded` | Save the recorded sessions of a model that stops (a router switch) |
+| `POST /carl/cache/events` | What the disk cache did on that computer (`{events: [...]}`), for the dashboard's counters ([Caching](caching.md#what-the-cache-did-the-counters)) |
 | `POST /carl/cache/unpack` | Make a saved session that is stored as changes (a patch) whole again, before a restore |
 | `GET /carl/client/config` | The pushed client config (with an ETag; 304 when the client has it) |
 | `GET /carl/client/events` | Server-sent events: `config` when you push a new config |

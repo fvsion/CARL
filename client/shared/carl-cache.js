@@ -46,8 +46,24 @@ const MISSING_MS = 60_000;           // a file the server did not have: not aske
 const SETTINGS_MS = 5_000;
 const OFF = new Set(["none", "minimal", "off", "disable", "disabled"]);
 const STATE_MODE = 0o600;            // the claim, turn and record files and the log: only this user
+// What the cache did (Phase 23.5.1.1, the counters): one JSON line per event in ~/.config/carl/cache-events/DAY.jsonl
+// (a client on this Mac; small appends are whole across processes), or POST /carl/cache/events (a client on another
+// computer). The dashboard counts them (tools/monitor/cachestats.py) and removes files older than two days.
+export const EVENTS_DIR = "cache-events";
 // a saved state's name as carl-cache.js and the dashboard make them (safeName parts): never a path
 const STATE_NAME = /^carl-(?:prefix|session)\+[A-Za-z0-9._+-]+\.bin$/;
+
+/** Today's events file's name: the local date, YYYY-MM-DD. */
+export function eventDay(now = new Date()) {
+  const p = (/** @type {number} */ n) => String(n).padStart(2, "0");
+  return `${now.getFullYear()}-${p(now.getMonth() + 1)}-${p(now.getDate())}`;
+}
+
+/** The session ID in a saved session's file name (carl-session+MODEL+KEY+SESSION.bin); "" for another file. @param {string} file */
+export function sessionOf(file) {
+  const parts = String(file).replace(/\.bin$/, "").split("+");
+  return parts.length === 4 && parts[0] === "carl-session" ? parts[3] : "";
+}
 
 /** @typedef {{ [key: string]: unknown }} JsonObject */
 /**
@@ -879,6 +895,8 @@ export class CarlCache {
           how = "its own, as recorded";
         }
       }
+      /** @type {{ from?: string, tokens?: number }} what fill() put in the slot (the counters) */
+      const filled = {};
       if (slot === undefined) {
         let pick;
         for (const c of await this.rankFree(model, slots, meta.session)) {
@@ -895,7 +913,7 @@ export class CarlCache {
           how = "pinned; the window cache";
         } else if (!(known && known.epoch === m.epoch) || known.saved || await this.savedSince(model, srv.router, m, meta, known)) {
           try {
-            base = await this.fill(out, model, srv.router, m, pick, meta, set);
+            base = await this.fill(out, model, srv.router, m, pick, meta, set, filled);
           } catch (e) {
             release();
             throw e;
@@ -908,6 +926,11 @@ export class CarlCache {
       this.owner.set(`${model}:${slot}`, id);
       this.log(`request: ${meta.agent} ${meta.session ?? "-"} -> slot ${slot} (${how})`);
       if (meta.session) {
+        const from = how.startsWith("its own") ? "slot" : how === "the RAM cache's" ? "ram" : how.startsWith("pinned") ? "window"
+          : filled.from ?? "read";
+        const history = arr(out.messages).filter((x) => obj(x).role === "user").length >= 2;
+        this.event({ e: "place", model, slot, session: meta.session, agent: meta.agent, sub: Boolean(meta.sub), from,
+                     tokens: filled.tokens ?? 0, history });
         this.sessions.set(id, { ...(known ?? {}), slot, epoch: m.epoch, model, router: srv.router, payload: out,
                                 at: Date.now(), sub: Boolean(meta.sub), base });
         await this.turn(model, slot, meta.session, true);
@@ -950,6 +973,8 @@ export class CarlCache {
       fs.unlinkSync(path);
       this.missing.delete(String(r.file));
       this.log(`${r.file}: saved from slot ${pick.id} before another session takes it (its record)`);
+      this.event({ e: "save", what: "session", model, slot: pick.id, session: sessionOf(String(r.file)), tokens: pick.n,
+                   bytes: this.sizeOf(String(r.file)), file: String(r.file) });
       this.wrote(String(r.file), "");
     } catch (e) {
       debugLog(`save from the record of slot ${pick.id}: ${errorText(e)}`);
@@ -961,17 +986,23 @@ export class CarlCache {
    * and saved when there is none).
    * @param {Payload} payload @param {string} model @param {boolean} router @param {ModelState} m
    * @param {Slot} pick @param {Meta} meta @param {Settings} set
+   * @param {{ from?: string, tokens?: number }} [info] filled in for the counters: where the tokens came from (session,
+   *   start: a longer session's start, prompt: the agent's prompt file, also when CARL read it itself) and how many
    * @returns {Promise<number | undefined>} the tokens put in
    */
-  async fill(payload, model, router, m, pick, meta, set) {
+  async fill(payload, model, router, m, pick, meta, set, info = {}) {
     const key = await this.serverKey(model, router, m);
     const before = this.owner.get(`${model}:${pick.id}`);
     const other = before ? this.sessions.get(before) : undefined;
-    if (before && other && other.epoch === m.epoch && set.sessions && set.save !== "stop" && pick.n >= MIN_SESSION_TOKENS) {
-      // another session of ours is in the slot: saved first (set back to the end of its last prompt, so its
-      // next prompt continues it), then put back from its file when it returns
-      const [, session, agent] = before.split("\n");
-      if (session && !other.sub && !NO_SAVE_AGENTS.has(agent)) await this.save(other, session, pick, m, true);
+    const [, prev, prevAgent] = before ? before.split("\n") : [];
+    // another session of ours that is still in the slot: not when another process saved it since (it took the slot
+    // and saved it from its record; Phase 23.5.1.1: found by the counters, the slot holds that process's session now)
+    const ours = before && other && other.epoch === m.epoch &&
+      !(await this.savedSince(model, router, m, { session: prev, agent: prevAgent ?? "", sub: Boolean(other.sub) }, other));
+    if (ours && other && set.sessions && set.save !== "stop" && pick.n >= MIN_SESSION_TOKENS) {
+      // saved first (set back to the end of its last prompt, so its next prompt continues it), then put back from its
+      // file when it returns
+      if (prev && !other.sub && !NO_SAVE_AGENTS.has(prevAgent)) await this.save(other, prev, pick, m, true);
     } else {
       await this.saveResident(model, router, pick, set);
     }
@@ -983,12 +1014,14 @@ export class CarlCache {
       ? await this.restore(model, router, pick.id, sessionFile(model, key, meta.session)) : undefined;
     if (got !== undefined) {
       this.log(`session ${meta.session}: restored into slot ${pick.id}`);
+      Object.assign(info, { from: "session", tokens: got });
       return got;
     }
     if (set.sessions && meta.session && !meta.sub) {
       const from = await this.startedBy(payload, model, router, key);
       if (from && await this.restore(model, router, pick.id, from.file) === from.n) {
         this.log(`session ${meta.session}: ${from.n} tokens of ${from.file} (its start) restored into slot ${pick.id}`);
+        Object.assign(info, { from: "start", tokens: from.n });
         return from.n;
       }
     }
@@ -998,6 +1031,7 @@ export class CarlCache {
     const got2 = await this.restore(model, router, pick.id, pf.file);
     if (got2 === pf.tokens.length) {
       this.log(`${meta.agent}'s prompt (${pf.tokens.length} tokens) restored into slot ${pick.id}`);
+      Object.assign(info, { from: "prompt", tokens: pf.tokens.length });
       return pf.tokens.length;
     }
     if (got2 !== undefined) this.retire(pf.file, `${got2} tokens restored, ${pf.tokens.length} expected`);
@@ -1010,7 +1044,10 @@ export class CarlCache {
     const secs = (Date.now() - t0) / 1000;
     m.speed = pf.tokens.length / Math.max(secs, 0.1);       // this model's read speed (the auto save rule)
     this.log(`${meta.agent}'s prompt (${pf.tokens.length} tokens) read in ${secs.toFixed(1)} s and saved`);
+    this.event({ e: "save", what: "prompt", model, agent: meta.agent, slot: pick.id, tokens: pf.tokens.length,
+                 bytes: this.sizeOf(pf.file), file: pf.file });
     this.wrote(pf.file, pf.file.slice(0, pf.file.lastIndexOf("+") + 1));
+    Object.assign(info, { from: "read", tokens: 0 });      // the prompt itself was read here: nothing restored
     return pf.tokens.length;
   }
 
@@ -1043,6 +1080,38 @@ export class CarlCache {
     this.missing.set(file, Date.now());
     if (this.local && this.dirExists() && isStateName(file)) removeState(this.dir, file);
     this.log(`${file} retired: ${why}`);
+    this.event({ e: "retire", file });
+  }
+
+  /**
+   * What the cache did, for the dashboard's counters (Phase 23.5.1.1): "place" (a request of a session put in a slot:
+   * from = slot | ram | window | session | start | prompt | read, tokens restored, history: the session had earlier
+   * turns), "save" (what = session | prompt, tokens, bytes on this Mac), "retire". Never a key or a prompt's text;
+   * any failure is ignored.
+   * @param {JsonObject} e
+   */
+  event(e) {
+    const line = { t: Math.round(Date.now()) / 1000, pid: process.pid, ...e };
+    if (this.local && this.dirExists()) {
+      try {
+        const dir = join(this.home, ".config", "carl", EVENTS_DIR);
+        fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+        fs.appendFileSync(join(dir, `${eventDay()}.jsonl`), JSON.stringify(line) + "\n", { mode: STATE_MODE });
+      } catch (err) {
+        debugLog(`event: ${errorText(err)}`);
+      }
+    } else if (this.remote()) {
+      void this.api("POST", "/carl/cache/events", { events: [line] });
+    }
+  }
+
+  /** A saved state's size on this Mac (0: not here). @param {string} file */
+  sizeOf(file) {
+    try {
+      return this.local ? fs.statSync(join(this.dir, file)).size : 0;
+    } catch {
+      return 0;
+    }
   }
 
   /**
@@ -1428,6 +1497,8 @@ export class CarlCache {
         await this.call("POST", `/slots/${s.id}?action=save`, { filename: r.file, model });
         fs.unlinkSync(join(this.dir, n));
         this.log(`${r.file}: saved from slot ${s.id} before ${model} stops`);
+        this.event({ e: "save", what: "session", model, slot: s.id, session: sessionOf(r.file), tokens: s.n,
+                     bytes: this.sizeOf(r.file), file: r.file });
       } catch (e) {                         // the next one
         debugLog(`save from record ${n}: ${errorText(e)}`);
       }
@@ -1456,6 +1527,7 @@ export class CarlCache {
     e.savedAt = Date.now();
     this.missing.delete(file);
     this.log(`session ${session}: ${e.savedN} tokens saved from slot ${e.slot}${settle ? " (its slot is needed)" : ""}`);
+    this.event({ e: "save", what: "session", model, slot: e.slot, session, tokens: e.savedN, bytes: this.sizeOf(file), file });
     this.wrote(file, "");
   }
 

@@ -17,7 +17,7 @@ from carl_core.domain.units import duration, file_size, memory, memory_pair, per
 
 from .cacheapi import Client
 from .fmt import (B, CYN, DIM, GRN, MAG, R, RED, YEL, Card, CardLine, Ln, Row, aligned, bar, button_rows, cwrap,
-                  draw_card, home_short, row, wrap)
+                  draw_card, fit, home_short, row, vlen, wrap)
 from .logbook import ROUTINE, TS, LogBook, RequestRecord, level_of, offset
 from .model import ServerData, SlotInfo, SlowStats, flag, flag_int
 from .words import plural, spec_name
@@ -82,6 +82,8 @@ class View:
     coder_here: str = ""                # the coder's model on this Mac: "main", PROVIDER/MODEL, "" (not set up; 23.4.5)
     next_start: List[CardLine] = field(default_factory=list)    # the SERVER card when no server runs (app.py)
     reuse_from: str = ""                # where the busy request's reused tokens came from (Phase 23.5; mocked now)
+    cache_slots: Dict[int, Tuple[str, str, str]] = field(default_factory=dict)   # slot -> (from, saved, session) (23.5.1.1)
+    cache_column: bool = False          # the SLOTS card shows them (the Live tab at 160 columns and wider)
     selected: str = ""                  # the selected section (Tab): its title is drawn reversed
     gate: int = 0                       # config.json delegation.gate: carl-delegation's new-file gate (0 = off)
     llama: Optional[VersionCheck] = None    # the installed llama.cpp against the tested version (HEALTH)
@@ -262,6 +264,24 @@ def ram_cache(v: View, d: ServerData, kv: Optional[KVInfo]) -> Optional[CacheSta
     return v.log.cache or CacheState(prompts=0, bytes=0, limit_bytes=kv.cache_ram, limit_tokens=0)
 
 
+CACHE_AT = 30                            # the Cache column starts here in a busy slot's block (Phase 23.5.1.1)
+
+
+def cache_beside(block: List[str], side: Tuple[str, str, str], w: int) -> List[CardLine]:
+    """A busy slot's block with the Cache column beside it: what the cache did for the session in that slot (where its
+    state came from, its last save, its name; cachestats.slot_column). The block's rows are aligned first (the
+    label column), so the Cache column lines up whatever the labels."""
+    left = aligned(block)
+    room = max(w - CACHE_AT - 9, 4)
+    right = [f"{B}Cache{R}", *(f"{DIM}{label:<9}{R}{value if vlen(value) <= room else fit(value, room)}"
+                               for label, value in zip(("From", "Saved", "Session"), side))]
+    out: List[CardLine] = []
+    for i, ln in enumerate(left):
+        text = str(ln)
+        out.append(text + " " * max(CACHE_AT - vlen(text), 1) + right[i] if i < len(right) else text)
+    return out
+
+
 def card_slots(v: View, d: ServerData, w: int = 66) -> Card:
     """Each slot's fill and what it does, and the RAM cache's (its sessions and memory, when the log says them); the
     busy request; at full the context memory, the recurrent state, the checkpoints, the RAM cache, how far it can grow
@@ -294,16 +314,16 @@ def card_slots(v: View, d: ServerData, w: int = 66) -> Card:
     for x in busy:                       # one block per busy slot: its own request
         if not x.prompt:
             continue
-        L.append("")
-        L.append(f"{B}slot {x.id}{R}   {slot_word(x)}")
-        L.append(row("request", f"{tokens(x.prompt)} tokens"))
-        L.append(row("reused", f"{tokens(x.cached)} ({percent(x.cached / x.prompt)})"
-                     + (f"   {DIM}from{R} {v.reuse_from}" if v.reuse_from else "")))
+        side = v.cache_slots.get(x.id) if v.cache_column else None
+        block = [f"{B}slot {x.id}{R}   {slot_word(x)}", row("request", f"{tokens(x.prompt)} tokens"),
+                 row("reused", f"{tokens(x.cached)} ({percent(x.cached / x.prompt)})"
+                     + (f"   {DIM}from{R} {v.reuse_from}" if v.reuse_from and not side else ""))]
         if x.decoded == 0:
-            L.append(row("read", tokens(x.processed)))
-            L.append(row("still to read", tokens(max(x.prompt - x.cached - x.processed, 0))))
+            block += [row("read", tokens(x.processed)), row("still to read", tokens(max(x.prompt - x.cached - x.processed, 0)))]
         else:
-            L.append(row("written", plural(x.decoded, "token")))
+            block.append(row("written", plural(x.decoded, "token")))
+        L.append("")
+        L += cache_beside(block, side, w - 4) if side else block
     if kv and kv.k != kv.v:
         L.append(f"{RED}⚠ K and V types differ ({kv.k}, {kv.v}): prompts read about 5 × more slowly.{R}")
     if d.shape and d.shape.get("swa_window"):

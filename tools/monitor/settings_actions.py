@@ -12,6 +12,7 @@ from carl_core.domain.units import file_size, memory
 from . import diskcache, fsio, system
 from .api import Endpoint
 from .arrange import FILTERS, SORTS
+from .cachestats import WINDOWS
 from .card_actions import CardActions
 from .fmt import R, RED, home_short, row
 from .jobs import ServerJobs
@@ -864,8 +865,8 @@ class SettingsActions:
         return True
 
     def cache_key(self, k: str) -> bool:
-        """The Caching panel: ↑↓ a row, ← → its value (saved at once), c clear (asks first), PgUp PgDn scroll
-        the page."""
+        """The Caching panel: ↑↓ a row, ← → its value (saved at once), c clear (asks first), t the time of WHAT THE
+        CACHE DID, PgUp PgDn scroll the page."""
         ui = self.ui
         if k in (UP, DOWN):
             ui.cache_row = (ui.cache_row + (1 if k == DOWN else -1)) % len(CACHE_ROWS)
@@ -877,6 +878,8 @@ class SettingsActions:
             self.action(f"cache:{key}" + ("" if k == RIGHT else ":prev"))
         elif k == "c":
             self.action("cache:clear")
+        elif k == "t":                               # WHAT THE CACHE DID: last hour, today, since the start
+            ui.cache_window = (ui.cache_window + 1) % len(WINDOWS)
         else:
             return False
         return True

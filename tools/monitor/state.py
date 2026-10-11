@@ -195,6 +195,7 @@ class UIState:
     mspeeds: bool = False           # Models panel: the list shows the speeds of each source (t)
     fit_scroll: int = 0             # Auto fit panel: lines scrolled off the top
     cache_row: int = 0              # Caching panel: the selected row
+    cache_window: int = 0           # Caching panel: WHAT THE CACHE DID's time (cachestats.WINDOWS; t changes it)
     router_row: int = 0             # Router panel: the selected model
     agents_row: int = 1             # Agents panel: the selected row (0 the model, 1 Main thinking, 2 Coder thinking)
     agents_model: str = ""          # Agents panel: the model shown ("": the running model, else the Server panel's)

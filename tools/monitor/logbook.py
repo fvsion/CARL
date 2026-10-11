@@ -14,7 +14,7 @@ import collections
 import re
 import time
 from dataclasses import dataclass
-from typing import Counter, Deque, Dict, Optional, Tuple
+from typing import Counter, Deque, Dict, List, Optional, Tuple
 
 from carl_core.domain.known_warnings import KNOWN
 from carl_core.domain.serverlog import CacheState, cache_state
@@ -32,6 +32,7 @@ _PROG_READ = re.compile(r"prompt processing, n_tokens =\s*(\d+)(?:, progress =\s
 _PROG_WRITE = re.compile(r"n_gen =\s*(\d+), tg =\s*([\d.]+) t/s(?:, tg_3s =\s*([\d.]+) t/s)?")
 _CANCEL = re.compile(r"stop: cancel task, id_task = (\d+)")
 LIVE_S = 10.0           # a progress line older than this (on the log's clock) is not "now"
+TALLY_MAX = 20_000      # answered requests kept for the cache counters (a busy day of agent work)
 _CHILD = re.compile(r"^\[(\d+)\] ")
 _SPAWN = re.compile(r"spawning server instance with name=\S+ on port (\d+)")
 # A router logs every request it forwards, the dashboard's own polls included (one line per
@@ -125,6 +126,9 @@ class LogBook:
         self.switches: Deque[Tuple[Optional[float], str]] = collections.deque(maxlen=8)   # a router's loads
         self.cache: Optional[CacheState] = None         # the RAM cache, from the last "cache state" line (-lv 4)
         self.last_t: Optional[float] = None             # the newest line's time (the log's clock)
+        # every answered request (not CARL's own): (its end, slot, prompt tokens, tokens read, seconds reading), for
+        # the cache counters (Phase 23.5.1.1, cachestats.py); log offsets, see tally()
+        self.answered: Deque[Tuple[float, int, int, int, float]] = collections.deque(maxlen=TALLY_MAX)
 
     def reset(self) -> None:
         """Forget everything read so far (a new or truncated log); start is kept."""
@@ -137,6 +141,7 @@ class LogBook:
         self.switches = collections.deque(maxlen=8)
         self.cache = None
         self.last_t = None
+        self.answered = collections.deque(maxlen=TALLY_MAX)
 
     def add(self, line: str) -> None:
         """Take in one log line (without its newline)."""
@@ -205,6 +210,9 @@ class LogBook:
                     c.pp = c.pp or c.live_pp
                     c.tg = c.tg or c.live_tg_avg
                 self.requests.append(c)
+                if not own_request(c) and c.t1 is not None:
+                    new = int(c.new)
+                    self.answered.append((c.t1, c.slot, max(int(c.ctx - c.gen), 0), new, new / c.pp if c.pp else 0.0))
                 del self.current[task]
 
     def last_answer(self) -> Optional[RequestRecord]:
@@ -248,6 +256,12 @@ class LogBook:
             elif c.live_pp is not None:
                 pp += c.live_pp
         return pp or None, tg or None
+
+    def tally(self) -> List[Tuple[float, int, int, int, float]]:
+        """The answered requests with wall-clock times (epoch seconds); none before the log's start is known."""
+        if not self.start:
+            return []
+        return [(self.start + t, slot, prompt, new, secs) for t, slot, prompt, new, secs in self.answered]
 
     def wall(self, off: Optional[float], ms: bool = False) -> str:
         """A log offset as the local wall-clock time (ms: with milliseconds, 13:10:53.265)."""

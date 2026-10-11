@@ -5,7 +5,9 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+import time
 import unittest
+from unittest import mock
 
 from mon_support import GIB, FakeStore
 from monitor.arrange import FILTERS
@@ -16,7 +18,7 @@ from monitor.cli import Options
 from monitor.collector import Collector
 from monitor.jobs import Paths, ServerJobs
 from monitor.keys import InputBuffer
-from monitor.model import ServerData
+from monitor.model import ServerData, SlotInfo
 from monitor.settings import Schema, SettingsService, net_choices
 from monitor.settings_view import SettingsView
 from monitor.state import SP_AGENTS, SP_CACHE, SP_FIT, SP_MODELS, SP_ROUTER, SP_SERVER, SP_TUNE, SUBPANELS, UIState
@@ -587,6 +589,44 @@ class AppTest(unittest.TestCase):
         self.assertEqual(len(self.app.view.autofit(self.ui, p, 100, 12)), 12)
         self.assertGreater(self.ui.fit_scroll, 0)
         self.assertEqual(len(rows), 12)
+
+    def cache_events(self) -> None:
+        """A settings folder with what the cache did: one session restored into slot 0 and saved."""
+        conf = os.path.join(self.tmp.name, "carl", "config.json")
+        self.app.jobs.paths = Paths(repo=self.tmp.name, logs=self.tmp.name, config_file=conf)
+        d = os.path.join(self.tmp.name, "carl", "cache-events")
+        os.makedirs(d, exist_ok=True)
+        now = time.time()
+        with open(os.path.join(d, time.strftime("%Y-%m-%d", time.localtime(now)) + ".jsonl"), "w") as f:
+            f.write(json.dumps({"e": "place", "t": now - 60, "slot": 0, "session": "s1", "agent": "build",
+                                "from": "session", "tokens": 38_000, "history": True}) + "\n")
+            f.write(json.dumps({"e": "save", "t": now - 30, "what": "session", "session": "s1", "tokens": 51_000,
+                                "bytes": 600_000_000}) + "\n")
+
+    def test_caching_panel_what_the_cache_did_and_t_changes_the_time(self) -> None:
+        """Phase 23.5.1.1: WHAT THE CACHE DID, a table over the last hour; t: today, since the start, the last hour."""
+        self.cache_events()
+        self.keys("5", "[")
+        self.assertEqual(self.ui.sp, SP_CACHE)
+        text = ANSI.sub("", self.screen())
+        self.assertIn("WHAT THE CACHE DID", text)
+        self.assertIn("last hour", text)
+        self.assertRegex(text, r"Restored sessions +1 +38K")
+        self.assertRegex(text, r"Saved sessions +1 .*600 MB")
+        for when in ("today", "since the start", "last hour"):
+            self.keys("t")
+            self.assertIn(when, ANSI.sub("", self.screen()))
+
+    def test_live_cache_column_only_from_160_columns(self) -> None:
+        """Phase 23.5.1.1 (user, 2026-10-11): the SLOTS card's Cache column at 160 and 200 columns, not at 130 or 100."""
+        self.cache_events()
+        self.ctl.data = ServerData(up=True, slots=True, busy=True, n_ctx=98304, cmd="llama-server -c 196608 --parallel 2",
+                                   slot_list=[SlotInfo(0, True, 5, 98304, 51100, 40200, 0, 412),
+                                              SlotInfo(1, False, 1, 98304, 0, 0, 0, 0)])
+        for cols, shown in ((200, True), (160, True), (130, False), (100, False)):
+            with mock.patch("shutil.get_terminal_size", return_value=os.terminal_size((cols, 60))):
+                text = ANSI.sub("", self.screen())
+            self.assertEqual("session file, 38K" in text, shown, cols)
 
     def test_caching_panel_saves_at_once_and_clears_after_a_question(self) -> None:
         conf = os.path.join(self.tmp.name, "carl", "config.json")

@@ -55,7 +55,7 @@ from typing import Callable, Dict, List, Optional, Tuple
 
 from carl_core.domain import runtime
 
-from . import clientsync, fsio, slotpack
+from . import cachestats, clientsync, fsio, slotpack
 from .diskcache import CacheConfig
 from .model import JSONDict, jdict
 
@@ -305,9 +305,9 @@ def check_slot(doc: JSONDict) -> Tuple[str, int]:
 
 def handle(state: CacheState, conf: Callable[[], CacheConfig], method: str, path: str, query: Dict[str, str],
            body: JSONDict, save_recorded: Callable[[str], int] = lambda model: 0, carl_dir: str = "",
-           etag: str = "", server_port: int = 0, status: Optional[JSONDict] = None) -> Reply:
+           etag: str = "", server_port: int = 0, status: Optional[JSONDict] = None, host: str = "") -> Reply:
     """One API call (pure, except the files and save_recorded): (status, JSON). etag: the client's
-    If-None-Match (the config version it has)."""
+    If-None-Match (the config version it has); host: the caller's address (the events it sends)."""
     try:
         if method == "GET" and path == "/carl/status":
             # the speeds for OpenCode's sidebar and Pi's status line (Phase 23.5 item 9): the dashboard's last snapshot
@@ -330,6 +330,12 @@ def handle(state: CacheState, conf: Callable[[], CacheConfig], method: str, path
             if not isinstance(model, str) or not model or len(model) > MAX_NAME:
                 return 400, {"error": "model"}
             return 200, {"saved": save_recorded(model)}
+        if method == "POST" and path == "/carl/cache/events":
+            # what the cache did on another computer (Phase 23.5.1.1, the counters): appended to this Mac's events
+            docs = body.get("events")
+            if not isinstance(docs, list) or not carl_dir:
+                return 400, {"error": "events"}
+            return 200, {"kept": cachestats.append(carl_dir, docs, host, state.folder)}
         if method == "GET" and path == "/carl/cache/settings":
             c = conf()
             doc: JSONDict = {"prefix": c.prefix, "sessions": c.sessions, "save": c.save, "auto_s": c.auto_s,
@@ -519,7 +525,8 @@ class CacheApi:
                         self._reply(400, {"error": "not JSON"})
                         return
                 self._reply(*handle(api.state, api.conf, method, url.path, query, body, api.save_recorded, api.carl_dir,
-                                    self.headers.get("If-None-Match", ""), api.server_port(), api.status()))
+                                    self.headers.get("If-None-Match", ""), api.server_port(), api.status(),
+                                    self.client_address[0]))
 
             def do_GET(self) -> None:
                 self._call("GET")

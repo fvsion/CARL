@@ -24,6 +24,8 @@ EVERY_SCREEN: List[Key] = [("1-5", "the tabs"), ("Tab Shift-Tab", "select a sect
                             "again now"), ("?", "this list"),
                            ("q", "quit (CARL asks first)")]
 TWO_COLUMNS = 100           # the Live tab puts its cards in two columns from this width
+CACHE_COLUMN = 160          # the SLOTS card shows the Cache column from this width (user, 2026-10-11: "only ... on 160
+                            # and 200 not on 130 and 100")
 THREE_COLUMNS = 190         # ... and in three from this one (three of 52 at 160 wrap more than two of 78)
 
 
@@ -61,6 +63,7 @@ def body_live(v: View, ui: UIState, d: ServerData, cols: int, height: int) -> Li
     rows.append(("", []))
     ncol = live_columns(cols)
     v.selected = ui.section
+    v.cache_column = cols >= CACHE_COLUMN
     if stopped:
         card = card_stopped(v, d)
         cw = (cols - 3) // 2 if ncol > 1 else cols - 1

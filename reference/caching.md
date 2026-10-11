@@ -196,6 +196,20 @@ The `cache` section of `config.json` (the Caching panel of the dashboard: **Disk
 - `NO_CACHE=1 ./carl.sh install --config-only` (`NO_CACHE=1 ./setup` on other computers) leaves the OpenCode plugin and the Pi extension out.
 - `./carl.sh cache show` lists the saved prompts and the saved sessions (sizes in GB and MB; `*` marks a session stored as the changes to its saved prompt). Each saved session shows its name next to its ID: the OpenCode title, or the Pi `/name` (else its first message). The Caching panel's file list shows the name too, with the ID in grey. `./carl.sh cache trim` applies the limit. `./carl.sh cache clear` removes each file.
 
+### What the cache did (the counters)
+
+Phase 23.5.1.1. The Caching panel's **WHAT THE CACHE DID** table and the Live tab's **Cache** column (SLOTS card, 160 columns and wider) come from three places:
+- **The clients' events.** carl-cache (`client/shared/carl-cache.js`, `event()`) writes one line for each thing it does:
+  - `place`: a request of a session put in a slot, with where its state came from (`slot`, `ram`, `window`, `session`, `start`, `prompt`, `read`), the tokens restored, and whether the session had earlier turns;
+  - `save`: a session or an agent's prompt saved, with its tokens and the bytes written;
+  - `retire`: a saved file that could not be restored whole.
+
+  A client on this Mac appends them to `~/.config/carl/cache-events/DAY.jsonl` (DAY is the local date; small appends stay whole across processes). A client on another computer sends them to the dashboard API (`POST /carl/cache/events`), which appends them to the same file with the client's address. An event never holds a key or a prompt's text.
+- **The server log.** The dashboard's log reader keeps each answered request's prompt tokens and the tokens it read, so the reused tokens. CARL's own requests are not counted. "Still in their slot" is the tokens reused less the tokens CARL restored. "Read again" takes the first request on that slot after the placement.
+- **The read speed.** The time saved is the restored tokens at the measured read speed of the requests in the same time span.
+
+The dashboard reads the files as they grow (`tools/monitor/cachestats.py`) and removes the day files older than two days in its minute check. "since the start" counts from the server's start (its log).
+
 ### When an agent's prompt changes
 
 - The client checks the prompt at each request. The check is a hash of the system text, the tools and the template fields, in memory. It sends no request to the server.

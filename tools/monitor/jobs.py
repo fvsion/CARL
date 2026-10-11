@@ -18,7 +18,7 @@ import zipfile
 from dataclasses import dataclass
 from typing import Callable, Dict, List, Mapping, Optional
 
-from . import api, clientsync, diskcache, fsio, slotpack, system
+from . import api, cachestats, clientsync, diskcache, fsio, slotpack, system
 from .cacheapi import CacheState, Registry
 from .collector import Collector
 from carl_core.adapters.client_package import make_package as make_client_package
@@ -153,6 +153,7 @@ class ServerJobs:
         folder = self.paths.slots
         diskcache.remove(folder, diskcache.legacy(folder))
         diskcache.reconcile(folder, time.time())     # what clients that went away left
+        cachestats.prune(os.path.dirname(self.paths.config_file))    # the counters' events older than two days
         if self.cache_conf().share:
             slotpack.tidy(folder)                   # new saves as patches against their prompt, copies gone
         gone = diskcache.over_budget(diskcache.listing(folder), self.cache_conf().limit, keep)

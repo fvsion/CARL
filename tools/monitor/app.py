@@ -17,7 +17,7 @@ from carl_core.domain import runtime
 from carl_core.domain.llamacpp import VersionCheck, check_version
 from carl_core.domain.units import duration, tokens
 
-from . import cli, clientsync, diskcache, fsio, sessionnames, system, uiprefs
+from . import cachestats, cli, clientsync, diskcache, fsio, sessionnames, system, uiprefs
 from .cacheapi import CacheApi, Registry
 from .api import Endpoint
 from .card_view import FORM_KEYS, TYPING_KEYS, draw_form
@@ -80,6 +80,10 @@ class App:
         self._api_tried = 0.0
         self._api_conf: Tuple[float, object] = (0.0, "auto")
         self._names: Tuple[float, Tuple[str, ...], Dict[str, str]] = (0.0, (), {})
+        self._slot_names: Tuple[float, Tuple[str, ...], Dict[str, str]] = (0.0, (), {})
+        # what the disk cache did (Phase 23.5.1.1): OpenCode's and Pi's events, read as the day files grow
+        self.events = cachestats.EventLog(os.path.dirname(jobs.paths.config_file))
+        self._events_at = 0.0
         self._status: JSONDict = {"state": "idle"}     # /carl/status: made in the loop, read by the API's thread
         self._clients_file = os.path.join(os.path.dirname(jobs.paths.config_file), "clients.json")
         self._errors: Tuple[str, float, List[str]] = ("", 0.0, [])    # the launcher's output: (path, mtime, error lines)
@@ -141,8 +145,44 @@ class App:
                     clients=tuple((self._api.registry if self._api else Registry(self._clients_file)).list()),
                     detail=ui.detail, drafter_size=fsio.file_size(md) if md else 0,
                     model_quant=str(m.get("quant") or "") if m else "", here=self.here_text(),
-                    coder_here=self.coder_here(),
+                    coder_here=self.coder_here(), cache_slots=self.cache_slots(d),
                     gate=self.jobs.cache_conf().gate, llama=self.llama_check(d.pid))
+
+    def cache_events(self) -> List[cachestats.Event]:
+        """The disk cache's events of the last two days (read again at most every 2 s)."""
+        carl_dir = os.path.dirname(self.jobs.paths.config_file)
+        if self.events.dir != cachestats.events_dir(carl_dir):     # another settings folder (set after the start)
+            self.events, self._events_at = cachestats.EventLog(carl_dir), 0.0
+        if time.time() - self._events_at > 2:
+            self._events_at = time.time()
+            try:
+                self.events.poll()
+            except Exception:           # a file that can't be read: what was read stays
+                pass
+        return self.events.events
+
+    def cache_slots(self, d: ServerData) -> Dict[int, Tuple[str, str, str]]:
+        """The SLOTS card's Cache column: for each busy slot, what the cache did for the session in it."""
+        busy = [x.id for x in d.slot_list if x.busy]
+        if not busy:
+            return {}
+        events = self.cache_events()
+        ids = tuple(sorted({str(e.get("session", "")) for e in events if e.get("e") == "place" and e.get("slot") in busy}))
+        if ids != self._slot_names[1] or time.time() - self._slot_names[0] > 10:
+            self._slot_names = (time.time(), ids, sessionnames.names(self.opts.home, ids))
+        out = {}
+        for s in busy:
+            col = cachestats.slot_column(events, s, d.alias or "", self._slot_names[2])
+            if col:
+                out[s] = col
+        return out
+
+    def cache_did(self) -> Tuple[List[cachestats.StatRow], str]:
+        """WHAT THE CACHE DID (the Caching panel): its rows for the chosen time, and that time in words."""
+        when = cachestats.WINDOWS[self.ui.cache_window % len(cachestats.WINDOWS)]
+        book = self.collector.tail.book
+        since = cachestats.window_start(when, time.time(), book.start)
+        return cachestats.table(self.cache_events(), book.tally(), since), when
 
     def llama_check(self, pid: Optional[int]) -> VersionCheck:
         """The installed llama.cpp against the tested version; read again when a new server process runs."""
@@ -520,8 +560,9 @@ class App:
                 folder = self.jobs.paths.slots
                 api = f"{self._api.host}:{self._api.port}" if self._api else ""
                 files = diskcache.listing(folder)
+                did, when = self.cache_did()
                 body = self.view.caching(ui, self.jobs.cache_conf(), files, folder, cols, api, height - 2,
-                                         self.session_names(files), self.window_model(d))
+                                         self.session_names(files), self.window_model(d), did, when)
             elif ui.sp == SP_MODELS:
                 mdir = self.store.models_dir()
                 body = self.view.models(ui, cols, height - 2, ModelsDir(mdir, disk_free(mdir)), d.alias)

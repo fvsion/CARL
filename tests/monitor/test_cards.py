@@ -89,6 +89,20 @@ class CardsTest(unittest.TestCase):
         self.assertNotIn("Context memory", body)                      # the types as a row: full only
         self.assertRegex(text(card_slots(view(detail="full"), d).lines), r"Context memory +q4_0 K, q8_0 V")
 
+    def test_slots_cache_column_beside_a_busy_slot_when_wide(self) -> None:
+        """Phase 23.5.1.1: the Cache column (what the cache did for the session in the slot) beside a busy slot's
+        block, only when the Live tab is 160 columns or wider (cache_column)."""
+        d = ServerData(cmd=CMD, shape=shape(), n_ctx=98304, busy=True,
+                       slot_list=[SlotInfo(0, True, 1, 98304, 51100, 40200, 0, 412)])
+        side = {0: ("session file, 38K", "51K, 2 min ago", "Fix the date test")}
+        wide = text(card_slots(view(cache_slots=side, cache_column=True), d, 78).lines)
+        self.assertRegex(wide, r"slot 0 .*writing +Cache")
+        self.assertRegex(wide, r"Request +49\.9K tokens +From +session file, 38K")
+        self.assertRegex(wide, r"Reused +39\.3K \(79%\) +Saved +51K, 2 min ago")
+        self.assertRegex(wide, r"Written +412 tokens +Session +Fix the date test")
+        self.assertNotIn("Cache", text(card_slots(view(cache_slots=side, cache_column=False), d, 63).lines))
+        self.assertNotIn("Cache", text(card_slots(view(cache_column=True), d, 78).lines))     # nothing known: no column
+
     def test_memory_in_gib(self) -> None:
         d = ServerData(up=True, slots=True, rss=int(0.7 * GIB), footprint=int(4.9 * GIB), shape=shape(), n_ctx=98304,
                        cmd=CMD)

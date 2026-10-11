@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { forgetPings, isCarl } from "../../client/shared/carl-api.js";
-import {
+import { EVENTS_DIR, eventDay, sessionOf,
   CarlCache, rankSlots, commonPrefix, isStateName, overBudget, prefixFile, relocate, sessionFile, splitOpenCode, splitPi,
   thinkingOff,
 } from "../../client/shared/carl-cache.js";
@@ -701,6 +701,34 @@ test("Phase 23.5: another process's session in the slot is saved from its record
   assert.equal(back.payload.id_slot, 0);
   assert.ok(srv.st.calls.some((x) => x.path.endsWith("?restore") && /\+s1\.bin$/.test(x.body.filename)),
             "not restored from the file the other process saved");
+}));
+
+test("Phase 23.5.1.1: the counters' events: each request placed, each save, in this Mac's events file", () => withSave("auto", async () => {
+  const h = home();
+  const srv = onDisk(fakeServer({ slots: 1 }), h);
+  const a = local(srv, h);
+  await send(a, request("hello"), { session: "s1", agent: "build" });
+  ran(srv, 0, 9000);
+  await a.after({ session: "s1", agent: "build" });
+  await new Promise((ok) => setTimeout(ok, 20));
+  const b = local(srv, h);
+  await send(b, request("other"), { session: "s2", agent: "build" });     // s1 saved from its record first
+  ran(srv, 0, 7000);
+  await send(a, request("back"), { session: "s1", agent: "build" });       // s1 back from its file
+  const file = join(h, ".config", "carl", EVENTS_DIR, `${eventDay()}.jsonl`);
+  const events = readFileSync(file, "utf8").trim().split("\n").map((l) => JSON.parse(l));
+  const places = events.filter((x) => x.e === "place");
+  assert.deepEqual(places.map((x) => [x.session, x.slot, x.agent, x.sub]),
+                   [["s1", 0, "build", false], ["s2", 0, "build", false], ["s1", 0, "build", false]]);
+  // back from the file the other process saved (9000 tokens): not read again and saved over by this process, which
+  // still had s1 as the slot's last session (found by these counters; fixed in fill())
+  assert.deepEqual([places[2].from, places[2].tokens], ["session", 9000]);
+  const saved = events.filter((x) => x.e === "save" && x.what === "session");
+  assert.deepEqual(saved.map((x) => [x.session, x.slot]), [["s1", 0]]);
+  assert.ok(events.every((x) => typeof x.t === "number" && x.pid === process.pid));
+  assert.ok(!JSON.stringify(events).includes("hello"));                   // never a prompt's text
+  assert.equal(sessionOf("carl-session+m+k+ses_1.bin"), "ses_1");
+  assert.equal(sessionOf("carl-prefix+m+build+abc.bin"), "");
 }));
 
 test("Phase 23.5: with the window cache (the launcher's server file) the request is pinned and nothing is read, restored or saved", () => withSave("turn", async () => {
