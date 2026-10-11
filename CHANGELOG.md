@@ -3,6 +3,20 @@
 All notable changes to CARL. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Dates are local dates on the development Mac (M3 Pro, 36 GB).
 
+## 1.18.0 - 2026-10-11
+
+### Added
+- **`saluki-27b`, a 27B for 16 GB Macs**: Underdog Saluki 27B 1.0, a 2-bit (IQ2-mix) Qwen3.8-27B, 7.9 GB, the plain
+  file without an MTP head. Two 48K slots fit a 16 GB Mac (9.89 GiB measured), so the main session keeps a coder
+  subagent. ~11.6 tok/s new text and 52-55 re-emitting code with n-gram (M3 Pro). CARL's code test: 13 of 18 tasks
+  with thinking off, 8 of 18 with it on (half of its answers thought past 16,000 tokens); the hidden tests passed in
+  every agent run with thinking off. Its catalogue window is 48K.
+
+### Changed
+- **Auto fit's hard code choice on 16 GB Macs is Saluki** (was the Gemma 4 12B): a model whose catalogue window
+  is below 96K tries each of Auto fit's setups at its own window, so Saluki's 2 x 48K competes with the 12B's
+  2 x 96K on quality rank.
+
 ## 1.17.1 - 2026-10-11
 
 The 1.17.0 addendum: the cache matrix's after run. No code change.
