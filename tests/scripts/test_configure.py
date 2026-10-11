@@ -323,17 +323,17 @@ class ConfigureTests(unittest.TestCase):
         self.assertEqual(self.run_configure("--coder-model", ext, "--coder-model-thinking", "a b").returncode, 2)
 
     def test_the_tests_setting(self) -> None:
-        """Phase 23.4.6, /carl's Tests (CODER_TESTS through --coder-tests): both state files keep coder_tests (before by
-        default), which OpenCode's carl-delegation (its stateFile option) and Pi's subagent extension read at each coder
+        """Phase 23.4.6, /carl's Tests (CODER_TESTS through --coder-tests): both state files keep coder_tests (after by
+        default since Phase 23.5.0), which OpenCode's carl-delegation (its stateFile option) and Pi's subagent extension read at each coder
         task; a value that is not one is refused."""
         self.assertEqual(self.run_configure("--coder", "1").returncode, 0)
         for f in (".config/opencode/carl.json", ".pi/agent/carl.json"):
-            self.assertEqual(self.read_json(f)["coder_tests"], "before", f)
+            self.assertEqual(self.read_json(f)["coder_tests"], "after", f)
         self.assertEqual(self.delegation_options()["stateFile"], self.path(".config/opencode/carl.json"))
-        p = self.run_configure("--coder", "1", "--coder-tests", "after")
+        p = self.run_configure("--coder", "1", "--coder-tests", "before")
         self.assertEqual(p.returncode, 0, p.stderr)
         for f in (".config/opencode/carl.json", ".pi/agent/carl.json"):
-            self.assertEqual(self.read_json(f)["coder_tests"], "after", f)
+            self.assertEqual(self.read_json(f)["coder_tests"], "before", f)
         self.assertNotIn("coderTests", self.delegation_options())              # read live from the state file
         self.assertEqual(self.run_configure("--coder-tests", "sometimes").returncode, 2)
 

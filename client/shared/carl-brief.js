@@ -1179,16 +1179,16 @@ export const requirementIds = (b) => b.requirements.map((r) => r.id).filter(Bool
 /** @param {Brief} b */
 export const checkIds = (b) => b.checks.map((c) => c.id).filter(Boolean);
 
-/** The Tests setting (Phase 23.4.6, /carl's Tests row): when CARL's test session runs. before: before the code
- * session (the default); after: after it; off: none. */
-export const TESTS_SETTINGS = ["before", "after", "off"];
+/** The Tests setting (Phase 23.4.6, /carl's Tests row): when CARL's test session runs. after: after the code session
+ * (the default since Phase 23.5.0: test-first needs a full spec); before: before it; off: none. */
+export const TESTS_SETTINGS = ["after", "before", "off"];
 
 /**
- * The Tests setting from a value of the client's state file: one of TESTS_SETTINGS, else "before" (the default).
+ * The Tests setting from a value of the client's state file: one of TESTS_SETTINGS, else "after" (the default).
  * @param {unknown} v @returns {"before" | "after" | "off"}
  */
 export function testsSetting(v) {
-  return TESTS_SETTINGS.includes(/** @type {string} */ (v)) ? /** @type {"before" | "after" | "off"} */ (v) : "before";
+  return TESTS_SETTINGS.includes(/** @type {string} */ (v)) ? /** @type {"before" | "after" | "off"} */ (v) : "after";
 }
 
 /**

@@ -63,6 +63,9 @@ mkdirSync(join(agentDir, "agents"), { recursive: true });
 writeFileSync(join(agentDir, "agents", "coder.md"), "---\nname: coder\ndescription: the coder\n---\nYou are **coder**.\n");
 writeFileSync(join(agentDir, "agents", "scout.md"), "---\nname: scout\ndescription: reads code\n---\nYou read.\n");
 process.env.PI_CODING_AGENT_DIR = agentDir;
+// most tests here check the test-first chain: Tests before code (the default is after code since Phase 23.5.0)
+const TEST_FIRST = JSON.stringify({ coder_tests: "before" });
+writeFileSync(join(agentDir, "carl.json"), TEST_FIRST);
 
 // The fake pi: the last argument is "Task: <brief>". work_mode tests-only writes tests/check.test.mjs, a node --test
 // file (FAKE_PI: red = it fails before the code, green = it passes, failtest = the session fails); work_mode code writes
@@ -225,7 +228,7 @@ test("Pi: parallel tasks refuse a brief that starts the chain, with one sentence
 test("Pi: the coder thinks as carl.json says for the session's model, in both sessions; other agents as the session", async () => {
   // Phase 23.4.4: the dashboard's Coder thinking, written by the installer as carl.json "thinking"
   const st = join(agentDir, "carl.json");
-  writeFileSync(st, JSON.stringify({ thinking: { coder: { "llamacpp/qwen3.8-27b": "off", "llamacpp/gemma-4-e4b": "high" } } }));
+  writeFileSync(st, JSON.stringify({ coder_tests: "before", thinking: { coder: { "llamacpp/qwen3.8-27b": "off", "llamacpp/gemma-4-e4b": "high" } } }));
   try {
     const session = { model: { provider: "llamacpp", id: "qwen3.8-27b" }, thinkingLevel: "low" };
     const coder = await call({ agent: "coder", task: BRIEF(), background: false }, "red", () => {}, session);
@@ -236,7 +239,7 @@ test("Pi: the coder thinks as carl.json says for the session's model, in both se
     const unlisted = await call({ agent: "coder", task: BRIEF("follow_up"), background: false }, "red", () => {}, other);
     assert.deepEqual(unlisted.log().map((r) => r.thinking), ["medium"]);                // no entry: the session's
   } finally {
-    rmSync(st);
+    writeFileSync(st, TEST_FIRST);
   }
 });
 
@@ -246,30 +249,30 @@ test("Pi: an external coder model (carl.json coder_model): both chain sessions o
   const session = { model: { provider: "llamacpp", id: "qwen3.8-27b" }, thinkingLevel: "low" };
   try {
     // model default: no --thinking (the session's level and CARL's table are not used for it)
-    writeFileSync(st, JSON.stringify({ coder_model: ext, thinking: { coder: { "llamacpp/qwen3.8-27b": "off" } } }));
+    writeFileSync(st, JSON.stringify({ coder_tests: "before", coder_model: ext, thinking: { coder: { "llamacpp/qwen3.8-27b": "off" } } }));
     const coder = await call({ agent: "coder", task: BRIEF(), background: false }, "red", () => {}, session);
     assert.deepEqual(coder.log().map((r) => [r.mode, r.model, r.thinking]), [["test", ext, null], ["code", ext, null]]);
     assert.ok(!coder.out.isError);
     assert.match(coder.text, /^\[CARL\] Chain: the coder ran in two new sessions/);    // the brief, the check, the chain as before
     // a level /carl set for that model
-    writeFileSync(st, JSON.stringify({ coder_model: ext, thinking: { coder: { [ext]: "max" } } }));
+    writeFileSync(st, JSON.stringify({ coder_tests: "before", coder_model: ext, thinking: { coder: { [ext]: "max" } } }));
     const max = await call({ agent: "coder", task: BRIEF("follow_up"), background: false }, "red", () => {}, session);
     assert.deepEqual(max.log().map((r) => [r.model, r.thinking]), [[ext, "max"]]);
     // other agents: the session's model and level, as before; "main": the session's model
     const scout = await call({ agent: "scout", task: "Look.", background: false }, "red", () => {}, session);
     assert.deepEqual(scout.log().map((r) => [r.model, r.thinking]), [["llamacpp/qwen3.8-27b", "low"]]);
-    writeFileSync(st, JSON.stringify({ coder_model: "main" }));
+    writeFileSync(st, JSON.stringify({ coder_tests: "before", coder_model: "main" }));
     const main = await call({ agent: "coder", task: BRIEF("follow_up"), background: false }, "red", () => {}, session);
     assert.deepEqual(main.log().map((r) => [r.model, r.thinking]), [["llamacpp/qwen3.8-27b", "low"]]);
   } finally {
-    rmSync(st, { force: true });
+    writeFileSync(st, TEST_FIRST);
   }
 });
 
 test("Pi: a provider failure fails the coder's task with the provider's error; no other model, no second run", async () => {
   const st = join(agentDir, "carl.json");
   const ext = "openrouter/example-coder-32b";
-  writeFileSync(st, JSON.stringify({ coder_model: ext }));
+  writeFileSync(st, JSON.stringify({ coder_tests: "before", coder_model: ext }));
   try {
     const session = { model: { provider: "llamacpp", id: "qwen3.8-27b" }, thinkingLevel: "low" };
     const one = await call({ agent: "coder", task: BRIEF("follow_up"), background: false }, "providerfail", () => {}, session);
@@ -282,7 +285,7 @@ test("Pi: a provider failure fails the coder's task with the provider's error; n
     assert.match(chain.text, /401 Unauthorized: the key has expired/);
     assert.deepEqual(chain.log().map((r) => [r.mode, r.model]), [["test", ext]]);
   } finally {
-    rmSync(st, { force: true });
+    writeFileSync(st, TEST_FIRST);
   }
 });
 
@@ -308,7 +311,10 @@ test("Pi: the Tests setting (carl.json coder_tests, read at each task): after co
     assert.match(off.text, /\n\n\[CARL\] Tests: the Tests setting is off on this computer, so CARL ran no test session/);
     const two = await call({ tasks: [{ agent: "coder", task: BRIEF() }, { agent: "scout", task: "Look." }], background: false });
     assert.doesNotMatch(two.text, /cannot run next to other parallel tasks/);         // off: no chain, so parallel is fine
+    rmSync(st);                                                                        // no carl.json: after code (23.5.0)
+    const none = await call({ agent: "coder", task: BRIEF(), background: false });
+    assert.deepEqual(none.log().map((r) => r.mode), ["code", "test"]);
   } finally {
-    rmSync(st);
+    writeFileSync(st, TEST_FIRST);
   }
 });

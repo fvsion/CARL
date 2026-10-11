@@ -47,8 +47,8 @@ Rules
   CARL writes only the model's name.
 - The Request Check (the 23.4.3 addendum; --request-check reminder|on|off: CODER_REQUEST_CHECK): both state files keep
   "request_check", which carl-delegation (OpenCode, through stateFile; Pi) reads at each coder task.
-- The Tests setting (Phase 23.4.6; --coder-tests before|after|off: CODER_TESTS, /carl's Tests row): when the chain's
-  test session runs. Both state files keep "coder_tests"; OpenCode's carl-delegation gets the option "stateFile" (its
+- The Tests setting (Phase 23.4.6; --coder-tests after|before|off: CODER_TESTS, /carl's Tests row; after by default
+  since Phase 23.5.0): when the chain's test session runs. Both state files keep "coder_tests"; OpenCode's carl-delegation gets the option "stateFile" (its
   carl.json) and Pi's subagent extension reads its own carl.json, each at every coder task (no restart).
 - The brief check as a command (client/shared/carl-brief-check.mjs, Phase 23.4.4): installed next to
   carl-brief.js wherever that goes (OpenCode carl-delegation, Pi carl-delegation and subagent).
@@ -151,7 +151,7 @@ OLD_PI_EXT = "extensions/mtplx-request-policy.ts"
 OLD_PI_EXT_SIG = "Pi <-> MTPLX request bridge"
 WEB_SEARCH = ("exa", "parallel", "off")
 CLIENTS = ("both", "opencode", "pi")
-CODER_TESTS = ("before", "after", "off")   # the Tests setting (23.4.6)
+CODER_TESTS = ("after", "before", "off")   # the Tests setting (23.4.6; after by default since 23.5.0)
 REQUEST_CHECK = ("reminder", "on", "off")  # the Request Check (23.4.3 addendum)
 FREE_FORM = ("model", "on", "off")          # the free-form brief (23.4.3 addendum)
 SEARCH_MCP = {"exa": "https://mcp.exa.ai/mcp", "parallel": "https://search.parallel.ai/mcp"}
@@ -226,7 +226,7 @@ class Options:
     clients: str = "both"     # both | opencode | pi: the configs to write (the other client's stay as they are)
     coder_model: str = ""     # an external model for the coder: PROVIDER/MODEL of the client ("": the main session's)
     coder_model_thinking: str = ""   # its variant (OpenCode) or thinking level (Pi); "": the model's own default
-    coder_tests: str = "before"   # the Tests setting (23.4.6): before | after | off (the chain's test session)
+    coder_tests: str = "after"    # the Tests setting (23.4.6): after | before | off (the chain's test session)
     request_check: str = "reminder"   # the Request Check (23.4.3 addendum): reminder | on | off
     run_gate: bool = True     # the Coder Loop's run gate (23.4.3 addendum)
     fix_rounds: int = 1       # its fix rounds, 0-3
@@ -347,8 +347,9 @@ def parse_args(argv: list[str]) -> Options:
                     help="/carl's Coder model: an external PROVIDER/MODEL of the client for the coder (main: none)")
     ap.add_argument("--coder-model-thinking", type=level_arg, default="",
                     help="the thinking of that model: a variant (OpenCode) or a thinking level (Pi)")
-    ap.add_argument("--coder-tests", choices=CODER_TESTS, default="before",
-                    help="/carl's Tests: the coder's test session before the code session, after it, or off")
+    ap.add_argument("--coder-tests", choices=CODER_TESTS, default="after",
+                    help="/carl's Tests: the coder's test session after the code session (the default), before it "
+                         "(test-first: needs a full spec), or off")
     ap.add_argument("--request-check", choices=REQUEST_CHECK, default="reminder",
                     help="/carl's Request Check: the brief must carry the literals of the user's request")
     ap.add_argument("--run-gate", type=switch_arg, default=True, help="/carl's Coder Loop: the run gate")

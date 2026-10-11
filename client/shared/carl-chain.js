@@ -6,8 +6,8 @@
 //
 // Revision 4 of the brief (docs/phase-plans/phase23.4.3/brief-v4-draft.md, "What CARL does").
 // A coder task with work_mode = "code", work_type = "new_feature", no [failed_attempt] / [[tried_fix]] and not a
-// continued task (testSessionDue), with the Tests setting "before" (the default; Phase 23.4.6: /carl's Tests row, the
-// client's state file "coder_tests", read at each task):
+// continued task (testSessionDue), with the Tests setting "before" (Phase 23.4.6: /carl's Tests row, the client's state
+// file "coder_tests", read at each task; test-first, for a full spec: the default is "after" since Phase 23.5.0):
 //   1. the test session: a fresh coder session in work_mode tests-only (testSessionBrief: without design_notes and
 //      known_file, so the tests come from the behaviour, not the implementation). It writes the tests and reports.
 //   2. the red start: at least one new test fails before any code. The test session's report decides, unless CARL
@@ -20,7 +20,9 @@
 //      [[test_session.failing_test]]). Its gates refuse every test-file write.
 //   5. one result for the main agent (chainText): the red start or the warning, "tests unchanged" or the changed
 //      test files, the test session's report, the code session's report.
-// The Tests setting "after" (Phase 23.4.6): the same two sessions the other way round (Chain with order "after"):
+// The Tests setting "after" (Phase 23.4.6; the default since Phase 23.5.0, user 2026-10-10: before code "doesn't really
+// work well especially with smaller models" without a very well defined spec): the same two sessions the other way
+// round (Chain with order "after"):
 //   1. the code session: a fresh coder session with the original brief (work_mode code; its gates refuse every
 //      test-file write). The project's test files are hashed before and after it.
 //   2. the test session: a fresh coder session with the test brief (testSessionBrief, as above). It writes tests from
@@ -69,10 +71,10 @@ const SKIP_DIRS = new Set([".git", ".hg", ".svn", "node_modules", ".venv", "venv
  * or bug_fix), or "one" (one session, as before; testsOff: a test session was due, but the Tests setting is off). A
  * text that is no complete brief is "one" (the brief check deals with it).
  * @param {string} taskText @param {boolean} [continued] the task continues an earlier one (OpenCode's task_id)
- * @param {unknown} [tests] the Tests setting (testsSetting: "before" unless "after" or "off")
+ * @param {unknown} [tests] the Tests setting (testsSetting: "after" unless "before" or "off")
  * @returns {Plan}
  */
-export function coderPlan(taskText, continued = false, tests = "before") {
+export function coderPlan(taskText, continued = false, tests = "after") {
   const { brief, format: f } = parseBrief(taskText);
   const format = f === "json" ? "json" : "toml";
   if (!brief || checkBrief(brief).length) return { kind: "one", brief: null, format };
@@ -86,14 +88,14 @@ export function coderPlan(taskText, continued = false, tests = "before") {
 
 /**
  * The Tests setting in a client's state file (carl.json "coder_tests", written by CARL's client setup from /carl's
- * Tests row): before, after or off; "before" when the file or the key is missing or not one of them. Read at each
+ * Tests row): after, before or off; "after" when the file or the key is missing or not one of them. Read at each
  * coder task, so a change needs no restart. @param {string} file @returns {"before" | "after" | "off"}
  */
 export function testsFrom(file) {
   try {
     return testsSetting(JSON.parse(readFileSync(file, "utf8"))?.coder_tests);
   } catch {
-    return "before";
+    return "after";
   }
 }
 
@@ -431,8 +433,8 @@ export function notRunLine(runs) {
 /**
  * One chain: build it with the brief and the order (coderPlan's), then firstTask() before the first session,
  * afterFirst() with its final message (it gives the second session's task), and end() with the second session's
- * final message (the one result). Order "before" (the default): the test session, then the code session; "after":
- * the code session, then the test session. o.format: the format of the main agent's brief (coderPlan's); the
+ * final message (the one result). Order "after" (the default): the code session, then the test session; "before":
+ * the test session, then the code session. o.format: the format of the main agent's brief (coderPlan's); the
  * sessions' briefs are written in it (default TOML).
  */
 export class Chain {
@@ -442,7 +444,7 @@ export class Chain {
     this.brief = brief;
     this.cwd = cwd;
     /** @type {Order} */
-    this.order = o.order === "after" ? "after" : "before";
+    this.order = o.order === "before" ? "before" : "after";
     /** @type {Format} */
     this.format = o.format === "json" ? "json" : "toml";
     this.write = o.format === "json" ? writeBriefJson : writeBrief;
@@ -666,7 +668,7 @@ export class Chain {
 
   /** A chain from its snapshot (a snapshot from before 23.4.6 has no order: "before"). @param {any} o @returns {Chain} */
   static from(o) {
-    const c = new Chain(o.brief, o.cwd, { format: o.format, order: o.order });
+    const c = new Chain(o.brief, o.cwd, { format: o.format, order: o.order === "after" ? "after" : "before" });
     c.before = o.before ?? {};
     c.frozen = o.frozen ?? {};
     c.written = o.written ?? [];
@@ -962,7 +964,7 @@ export function gateText(gate, rounds, brief = "") {
  * @param {(taskText: string, step: "test" | "code" | "one") => Promise<SessionOutcome>} run
  * @param {{ runCheck?: RunCheck, runMs?: number, chain?: boolean, tests?: unknown,
  *           gate?: { gate: boolean, rounds: number }, runArgv?: typeof runArgv, has?: (cmd: string) => boolean }} [o]
- *   chain: false runs every task as one session; tests: the Tests setting (default "before")
+ *   chain: false runs every task as one session; tests: the Tests setting (default "after")
  * @returns {Promise<{ kind: Plan["kind"], ok: boolean, text: string }>}
  */
 export async function runCoderTask(taskText, cwd, run, o = {}) {

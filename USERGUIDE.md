@@ -623,7 +623,7 @@ The coder subagent runs in the background, in OpenCode and in Pi.
 
 1. The main agent starts the coder and tells you what it does.
 2. The main session is then free. You can ask it other things while the coder works in the other slot.
-3. When the coder ends, its result comes back to the main session as a message. When CARL ran the tests first in their own session, this is one message for both sessions.
+3. When the coder ends, its result comes back to the main session as a message. When CARL ran the code and the tests in their own sessions, this is one message for both sessions.
    - In Pi, the message shows as `✓ Coder finished (42 s)` with the first 3 lines of the result. Push Ctrl+O to see all of it. A coder that failed shows `✗ Coder failed (…)`.
 4. The main agent then checks the result.
 
@@ -751,18 +751,18 @@ expected_result = "all tests pass"
 
 **CARL checks the brief.** Before the coder starts, CARL checks that the brief is complete. For example, each requirement must be in a check with a command, a code task must name at least one file to create or change, and a follow-up or a fix must say what exists now. A key of the older brief (such as `mode` or `goal`) is refused with the name of the new key. If something is missing, the coder does not start: the main agent gets the list of what to fix, and it sends the brief again. You see this as a failed call to the coder with `[CARL] Brief refused`. To check a brief yourself (for example one that you wrote for `/code`), run the same check by hand: `node ~/.config/opencode/plugins/carl-delegation/carl-brief-check.mjs brief.toml` (Pi: `~/.pi/agent/extensions/carl-delegation/carl-brief-check.mjs`). It prints `The brief is valid.` or each problem. With `--root PROJECT-FOLDER`, it also checks that the tests in `existing_tests` are there ([details](reference/delegation.md#the-coders-two-modes-and-the-brief)).
 
-**Tests first, in a separate session.** For a new feature (`work_mode = "code"` and `work_type = "new_feature"`), CARL runs the coder two times, each in a new session:
-1. **The test session** (`tests-only`) writes the tests from the requirements. It does not see the code session, so its tests do not bend to the code. It also does not get `design_notes` or the file list: the tests come from the behaviour, not from the planned code.
-2. At least one new test must fail before there is code (a **red start**). The test session's report says so. CARL also runs a check itself, one time, when it is a plain test runner or ruff on the project's files (`pytest`, `python -m pytest`, `node --test`, `npm test`, `go test`, `cargo test`, `ruff check`, `ruff format --check`). It never runs another command.
-3. **The code session** (`code`) writes the code. It gets the brief, the test files and the test session's report. It cannot change the tests.
-4. The main agent gets **one result**: both reports, and "Tests unchanged" or the test files that changed. A line `[CARL] Warning` says when no new test failed before the code, or when a test changed.
+**The code, then the tests, in separate sessions.** For a new feature (`work_mode = "code"` and `work_type = "new_feature"`), CARL runs the coder two times, each in a new session:
+1. **The code session** (`code`) writes the code from the brief. It cannot change the project's test files.
+2. **The test session** (`tests-only`) then writes tests from the requirements against that code. It does not get `design_notes` or the file list: the tests come from the behaviour, not from the planned code.
+3. CARL runs the brief's checks itself, one time after both sessions, when the command is a plain test runner or ruff on the project's files (`pytest`, `python -m pytest`, `node --test`, `npm test`, `go test`, `cargo test`, `ruff check`, `ruff format --check`). It never runs another command.
+4. The main agent gets **one result**: both reports and what the checks did. A new test that fails is a finding: the code or the test can be wrong, so the main agent decides and gives the fix to the coder.
 5. The main agent runs the checks itself before it answers you.
 
 **The run gate: CARL checks the coder's work.** Before a coder task (with `work_mode = "code"`), CARL runs the project's tests: pytest, `npm test` or `node --test`, `go test`, `cargo test`. After the task it checks the changed files (Python: compile, and ruff's error rules when ruff is installed; JavaScript: `node --check`; Go: `go vet`; Rust: `cargo check`), starts a new or changed `__main__.py` (`python -m PACKAGE --help`), and runs the tests again. The work is **not done** when a changed file does not compile or has errors, the program does not start, the tests do not run, or a test that passed before fails now. CARL then gives the coder a fix round by itself (a new session with a `bug_fix` brief: the failing command and its output), and checks again. When no fix round is left, the main agent gets `[CARL] Run gate: NOT DONE` with the output and a ready `bug_fix` brief. A new test that fails is not "not done": the code or the test can be wrong, so the main agent gets it as a finding and decides. A test that failed before the task is not counted against the coder. In OpenCode, a background task's result waits for the gate (on the OpenCode versions that CARL checked); on other versions the gate only checks, with no fix round. `/carl` > Coder Subagent > Coder Loop sets it ([The /carl panel](#carls-plugins-and-extensions)).
 
-**Tests after the code, or no tests.** `/carl` > **Coder Subagent** > **Tests** changes this for your computer. `before code` (the default) is the order above. `after code`: the code session runs first, then the test session writes the tests from the requirements against that code; CARL runs the checks after both, and failing new tests come back to the main agent as findings to give to the coder. `off`: one code session, no tests; the result says so, and the main agent or you ask the coder for tests (`tests-only`) when the work needs them.
+**Tests first, or no tests.** `/carl` > **Coder Subagent** > **Tests** changes this for your computer. `after code` (the default since 1.19.0) is the order above. `before code` is test-first: the test session writes the tests before there is code, at least one new test must fail first (a **red start**), and the code session gets the tests and the test session's report and cannot change the tests; a line `[CARL] Warning` says when no new test failed before the code, or when a test changed. **Use `before code` only with a full spec** (spec-kit or a similar tool): without a well-defined spec, tests written first rarely match what you meant, especially with smaller models. `/carl` says so when you choose it. `off`: one code session, no tests; the result says so, and the main agent or you ask the coder for tests (`tests-only`) when the work needs them.
 
-You see two coder sessions (in OpenCode: `…: tests` and `…: code`), but one result. In OpenCode, the two sessions run in the background only on the OpenCode versions that CARL checked (1.18.34 and 1.18.35). On other versions they run in the foreground: the main session waits for them, and a notice says so one time. Follow-ups and fixes (`follow_up`, `bug_fix`, also a stuck task) get one session, with no new tests. The tests in `existing_tests` are frozen for the coder: the result says whether it changed them. Details: [the chain](reference/delegation.md#the-chain-tests-first-in-a-separate-session).
+You see two coder sessions (in OpenCode: `…: code` and `…: tests`), but one result. In OpenCode, the two sessions run in the background only on the OpenCode versions that CARL checked (1.18.34 and 1.18.35). On other versions they run in the foreground: the main session waits for them, and a notice says so one time. Follow-ups and fixes (`follow_up`, `bug_fix`, also a stuck task) get one session, with no new tests. The tests in `existing_tests` are frozen for the coder: the result says whether it changed them. Details: [the chain](reference/delegation.md#the-chain-tests-first-in-a-separate-session).
 
 **How the coder works:**
 - It works in one `work_mode` in each task. **code:** it writes the program code and runs the tests, but it does not change the tests. **tests-only:** it writes tests from the requirements (at least one for each requirement id) and does not change the program code.
@@ -890,7 +890,7 @@ Check for a New Config
   Coder                               on
   Background Coder                    on
   Delegation Reminder                 on
-  Tests                    before code ›
+  Tests                     after code ›
   Request Check        single reminder ›
   Free-Form Brief            per model ›
   Coder Loop                        on ›
@@ -899,7 +899,7 @@ Check for a New Config
   ```
 
   - **Coder** turns the coder on or off.
-  - **Tests** opens its values: `before code` (the default: the test session, then the code session), `after code` (the code session, then the test session) and `off` (no test session). See [Tests first, in a separate session](#the-coder-subagent-opencode-and-pi). The choice is for this computer (`CODER_TESTS`). OpenCode and Pi use it at the next coder task: no restart.
+  - **Tests** opens its values: `after code` (the default: the code session, then the test session), `before code` (test-first: the test session, then the code session; a grey note says it needs a full spec, and choosing it gives a warning) and `off` (no test session). See [The code, then the tests](#the-coder-subagent-opencode-and-pi). The choice is for this computer (`CODER_TESTS`). OpenCode and Pi use it at the next coder task: no restart.
   - **Request Check** opens its values: `single reminder` (the default), `on` and `off`. Before the coder starts, CARL compares the coder's brief with your request: the exact things that you wrote (a command or text in backticks, a function with its return type, a file path, a `--flag`, an exit code, quoted text), from your messages since the last task the coder took. `single reminder`: when the brief lacks some of them, the coder does not start one time, and the main agent gets the list and where each one goes; the next brief goes through as it is. `on`: the coder starts only when the brief has each of them, or names it in `not_in_task` (not part of this task). `off`: no check. The choice is for this computer (`CODER_REQUEST_CHECK`); OpenCode and Pi use it at the next coder task: no restart.
   - **Free-Form Brief** opens its values: `per model` (the default), `on` and `off`. A strong main model may add its own words to the coder's brief (`detailed_brief`), as it would brief an engineer; the brief's other parts stay required. `per model`: a model that is not CARL's (a cloud or provider model) and CARL's larger models (the 35B-A3B and the 27B, Q4) may; small models never see it. The choice is for this computer (`CODER_FREE_FORM`); no restart.
   - **Coder Loop** opens its own list: **Run Gate** (on or off) and **Fix Rounds** (0 to 3, the default 1). With the run gate on, CARL checks the coder's work after each code session ([The run gate](#the-coder-subagent-opencode-and-pi)); Fix Rounds is how many times it sends failing work back to the coder by itself. Its state is the run gate's. For this computer (`CODER_RUN_GATE`, `CODER_FIX_ROUNDS`); no restart.
@@ -918,7 +918,7 @@ Check for a New Config
 | Coder Subagent > Coder | OpenCode, Pi | `NO_CODER` |
 | Coder Subagent > Background Coder | OpenCode, Pi (with the coder) | `NO_BACKGROUND_SUBAGENTS` |
 | Coder Subagent > Delegation Reminder | OpenCode, Pi (with the coder) | `NO_REMINDER` |
-| Coder Subagent > Tests | OpenCode, Pi (with the coder) | `CODER_TESTS` (`before`, `after` or `off`) |
+| Coder Subagent > Tests | OpenCode, Pi (with the coder) | `CODER_TESTS` (`after`, `before` or `off`) |
 | Coder Subagent > Request Check | OpenCode, Pi (with the coder) | `CODER_REQUEST_CHECK` (`reminder`, `on` or `off`) |
 | Coder Subagent > Free-Form Brief | OpenCode, Pi (with the coder) | `CODER_FREE_FORM` (`model`, `on` or `off`) |
 | Coder Subagent > Coder Loop > Run Gate | OpenCode, Pi (with the coder) | `CODER_RUN_GATE` (`on` or `off`) |

@@ -55,9 +55,10 @@
 // of the coder's requests to that model. Without coderVariant ("model default"), the request stays as it is: CARL's
 // coderThinking table is for CARL's models only, and nothing else of CARL's is sent to the external model.
 // Phase 23.4.6 (the Tests setting, /carl's Tests row): option "stateFile" names CARL's state file of this OpenCode
-// (carl.json); its "coder_tests" (before, after, off) is read at each coder task, so a change needs no restart. before
-// (the default, also without the file): the chain as above. after: the same two sessions the other way round: the task
-// tool runs the code session, the plugin then starts the test session, and CARL runs the checks after both. off: one
+// (carl.json); its "coder_tests" (after, before, off) is read at each coder task, so a change needs no restart. before:
+// the chain as above. after (the default since Phase 23.5.0, also without the file): the same two sessions the other
+// way round: the task tool runs the code session, the plugin then starts the test session, and CARL runs the checks
+// after both. off: one
 // session, and its result ends with TESTS_OFF. The held chain's record names its sessions first and second (the task
 // tool's and the plugin's); a record from before (test, code) is read the same.
 // The Request Check (the 23.4.3 addendum; carl-delegation.js RequestCheck): the user's messages of each main session
@@ -404,7 +405,7 @@ export default {
     const chains = opts.chain !== false;
     // the Tests setting (Phase 23.4.6): read at each coder task, so /carl's change needs no restart
     const stateFile = typeof opts.stateFile === "string" ? opts.stateFile : "";
-    const tests = () => (stateFile ? testsFrom(stateFile) : "before");
+    const tests = () => (stateFile ? testsFrom(stateFile) : "after");
     const gates_on = opts.gate !== false;                        // the run gate (agent-bench's measurements: false)
     const loop = () => (stateFile ? loopFrom(stateFile) : { gate: true, rounds: 1 });
     const requestSetting = () => (stateFile ? requestFrom(stateFile) : "reminder");

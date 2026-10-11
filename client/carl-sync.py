@@ -45,9 +45,10 @@ Usage: carl-sync.py COMMAND
                       variant (OpenCode) of that external model; default
                       removes it (the model's own default). A new
                       CODER_MODEL removes it too.
-                    CODER_TESTS: before (the default), after or off: when
-                      CARL's test session runs for new code. OpenCode and
-                      Pi read it at each coder task (no restart).
+                    CODER_TESTS: after (the default), before or off: when
+                      CARL's test session runs for new code (before:
+                      test-first, needs a full spec). OpenCode and Pi read
+                      it at each coder task (no restart).
                     CODER_REQUEST_CHECK: reminder (the default), on or off:
                       the check that the brief carries the literals of
                       your request (no restart).
@@ -113,7 +114,7 @@ SETTABLE = {**{k: ("1", "on") for k in OFF_SWITCHES}, "WEB_SEARCH": ("exa", "par
             "CODER_THINKING": (),      # MODEL:VALUE (THINKING_VALUES), per model: a map in one line
             "CODER_MODEL": (),         # PROVIDER/MODEL (CODER_MODEL_RE) or main (Phase 23.4.5)
             "CODER_MODEL_THINKING": (),    # a level or variant name (LEVEL_RE) or default
-            "CODER_TESTS": ("before", "after", "off"),    # the Tests setting (Phase 23.4.6)
+            "CODER_TESTS": ("after", "before", "off"),    # the Tests setting (Phase 23.4.6; default after: 23.5.0)
             "CODER_REQUEST_CHECK": ("reminder", "on", "off"),    # the Request Check (23.4.3 addendum)
             "CODER_RUN_GATE": ("on", "off"),                       # the Coder Loop's run gate (23.4.3 addendum)
             "CODER_FIX_ROUNDS": ("0", "1", "2", "3"),              # its fix rounds
@@ -420,7 +421,7 @@ def thinking_text(m: Dict[str, str], keep_default: bool = False) -> str:
 
 
 DEFAULTS = {"WEB_SEARCH": "exa", "CODER_THINKING": "", "CODER_MODEL": CODER_MODEL_MAIN,
-            "CODER_MODEL_THINKING": THINKING_DEFAULT, "CODER_TESTS": "before", "CODER_REQUEST_CHECK": "reminder",
+            "CODER_MODEL_THINKING": THINKING_DEFAULT, "CODER_TESTS": "after", "CODER_REQUEST_CHECK": "reminder",
             "CODER_RUN_GATE": "on", "CODER_FIX_ROUNDS": "1", "CODER_FREE_FORM": "model"}
 
 
@@ -466,7 +467,7 @@ def set_switches(want: Dict[str, str]) -> Json:
             merged = thinking_text({**thinking_map(before.get("CODER_THINKING", "")),
                                     **thinking_map(want["CODER_THINKING"], keep_default=True)})
             want = {**want, "CODER_THINKING": merged}     # "": no model left, the line goes
-        # the defaults have no line (main, default, before); a new coder model starts at its own thinking (model
+        # the defaults have no line (main, default, after); a new coder model starts at its own thinking (model
         # default)
         want = {k: ("" if (k, v) in (("CODER_MODEL", CODER_MODEL_MAIN), ("CODER_MODEL_THINKING", THINKING_DEFAULT),
                                      ("CODER_TESTS", DEFAULTS["CODER_TESTS"]),

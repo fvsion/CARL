@@ -29,7 +29,8 @@
 // nothing here reads them.
 //
 // Phase 23.4.6: Tests (after Delegation reminder, only while the coder is on): when CARL's test session runs for new
-// code: before code (the default), after code, off. `carl-sync.py set CODER_TESTS=VALUE`; the setup writes it into
+// code: after code (the default since Phase 23.5.0), before code (test-first: a grey note and a warning that it needs a
+// full spec), off. `carl-sync.py set CODER_TESTS=VALUE`; the setup writes it into
 // both state files (carl.json "coder_tests"), which the chain reads at each coder task: no restart in either client.
 // The 23.4.3 addendum: Request Check (after Tests): on, single reminder (the default), off; CODER_REQUEST_CHECK, carl.json
 // "request_check", read by carl-delegation at each coder task: no restart.
@@ -209,11 +210,11 @@ export function when(stamp, now = new Date()) {
 
 /**
  * @typedef {{ id: string, args: string[], busy: string, row?: string, want?: string, name?: string, did?: string,
- *             live?: Client[] }} Action
+ *             live?: Client[], warn?: boolean }} Action
  *   busy: the row's state while it runs ("turning off…"); a switch's action also has the row it changes, the state
  *   it asks for and the part's name in a sentence (the toast); did: the toast's first sentences instead of "CARL set
  *   NAME to WANT."; live: the clients that use the change without a restart (Pi reads the coder's thinking each time
- *   it starts the coder).
+ *   it starts the coder); warn: the toast is a warning (the change is done: Tests before code, Phase 23.5.0).
  * @typedef {object} Row
  * @property {string} id
  * @property {string} label
@@ -667,7 +668,7 @@ function requestRow(v) {
 
 /** The explanations of the Coder settings with values (at most two sentences each; Row.about). */
 const ABOUT = {
-  tests: "When CARL's separate test session writes tests for new code. Before code is test-first; off leaves tests to the main agent.",
+  tests: "When CARL's separate test session writes tests for new code. After code tests what the coder wrote; before code is test-first and needs a full spec (spec-kit or a similar tool).",
   request: "Checks that the coder's brief keeps the exact commands, names and formats of your request. A single reminder sends a brief back once; on sends it back until each one is there.",
   free: "Lets a strong main model add its own words to the coder's brief. Per model allows it for cloud models and CARL's larger models.",
   thinking: "How much the coder thinks with this model. Off suits a full spec only.",
@@ -730,28 +731,31 @@ function loopRow(gate, rounds) {
            rows: [gateRow, roundsRow] };
 }
 
-/** The Tests row's values and their words (Phase 23.4.6). */
-const TESTS = ["before", "after", "off"];
+/** The Tests row's values and their words (Phase 23.4.6; after code first, the default since Phase 23.5.0). */
+const TESTS = ["after", "before", "off"];
 /** @type {Record<string, string>} */
 const TESTS_WORDS = { before: "before code", after: "after code", off: "off" };
 
 /**
  * The Tests row (Phase 23.4.6): when CARL's test session runs for new code. CODER_TESTS=VALUE; both clients read it
- * at each coder task (live: no restart). @param {unknown} v the state file's coder_tests ("before" when missing)
+ * at each coder task (live: no restart). Before code (test-first) has a grey note, and choosing it is a warning: it
+ * needs a full spec (Phase 23.5.0, user 2026-10-10). @param {unknown} v the state file's coder_tests ("after" when
+ * missing)
  * @returns {Row}
  */
 function testsRow(v) {
-  const cur = TESTS.includes(/** @type {string} */ (v)) ? String(v) : "before";
+  const cur = TESTS.includes(/** @type {string} */ (v)) ? String(v) : "after";
   const name = "the coder's tests";
   /** @type {Record<string, Action>} */
   const actions = {};
   for (const t of TESTS.filter((x) => x !== cur)) {
     actions[t] = { id: `set:CODER_TESTS=${t}`, args: ["set", `CODER_TESTS=${t}`], busy: `switching to ${TESTS_WORDS[t]}…`,
-                   row: "tests", want: t, name, did: `CARL set ${name} to ${TESTS_WORDS[t]} on this computer.`,
-                   live: ["opencode", "pi"] };
+                   row: "tests", want: t, name,
+                   did: `CARL set ${name} to ${TESTS_WORDS[t]} on this computer.${t === "before" ? ` ${FULL_SPEC}` : ""}`,
+                   ...(t === "before" ? { warn: true } : {}), live: ["opencode", "pi"] };
   }
   return { id: "tests", label: "Tests", state: TESTS_WORDS[cur], value: cur, kind: "choice", values: TESTS,
-           titles: TESTS_WORDS, notes: {}, actions, about: ABOUT.tests };
+           titles: TESTS_WORDS, notes: { before: "needs a full spec" }, actions, about: ABOUT.tests };
 }
 
 /**
@@ -926,7 +930,7 @@ function parsed(out) {
 /**
  * What a toast or a notice says after an action ran (exit code from run(); -1: no carl-sync.py). A switch's
  * action also reads the row again, and `result` (what `carl-sync.py set` printed) says who must restart and the
- * server's slots. warn: a warning, not a plain success (the coder turned on with 1 slot).
+ * server's slots. warn: a warning, not a plain success (the coder turned on with 1 slot; an action marked warn).
  * @param {Action} action
  * @param {number} code
  * @param {Client} client
@@ -985,7 +989,7 @@ function switchOutcome(action, code, client, result, session) {
   // no client to restart (the change reaches them at once): no restart sentence
   const message = Array.isArray(result.restart) && !apps.length ? said
     : restartNotice(client, said, apps, result.new_terminal === true);
-  return oneSlot ? { ok: true, warn: true, message } : { ok: true, message };
+  return oneSlot || action.warn ? { ok: true, warn: true, message } : { ok: true, message };
 }
 
 /**

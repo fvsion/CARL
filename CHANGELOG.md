@@ -3,6 +3,22 @@
 All notable changes to CARL. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Dates are local dates on the development Mac (M3 Pro, 36 GB).
 
+## 1.19.0 - 2026-10-11
+
+Phase 23.5.0: the coder's tests come after the code by default.
+
+### Changed
+- **`/carl` > Coder Subagent > Tests is `after code` by default** (was `before code`): for a new feature the coder
+  writes the code first, then CARL's separate test session writes tests from the requirements against it; CARL runs
+  the checks after both, and a failing new test comes back to the main agent as a finding. Test-first needs a very
+  well-defined spec to work, especially with smaller models.
+- **`before code` (test-first) says it needs a full spec**: a grey note under the value ("needs a full spec"), the
+  explanation when the values open, and a warning when you choose it: "Use it only with a full spec (spec-kit or a
+  similar tool)."
+- A computer with no Tests choice of its own gets `after code` at its next setup or sync; a choice of `after code` or
+  `off` stays. To keep test-first, choose `before code` again in `/carl` (`CODER_TESTS=before`).
+- The main agent's rules (`delegation.md`) describe the code session first.
+
 ## 1.18.0 - 2026-10-11
 
 ### Added

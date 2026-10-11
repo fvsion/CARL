@@ -290,6 +290,12 @@ test("carl-delegation: the coder's own session keeps to its work_mode and its re
 
 // ------------------------------------------------------------------ the chain (Phase 23.4.3, item 3)
 
+/** A state file with Tests before code (test-first; the default is after code since Phase 23.5.0). */
+const TEST_FIRST = () => {
+  const f = join(mkdtempSync(join(tmpdir(), "carl-oc-tests-")), "carl.json");
+  writeFileSync(f, JSON.stringify({ coder_tests: "before" }));
+  return f;
+};
 const CHAIN_BRIEF = (type = "new_feature") => `work_mode = "code"
 work_type = "${type}"
 ${type === "new_feature" ? "" : 'existing_tests = ["tests/check.test.mjs"]\n'}task_summary = "Write the feature file."
@@ -373,7 +379,7 @@ const testSession = (dir, red = true) => {
 
 test("carl-delegation, the chain in the foreground: the task becomes the test session; then the code session; one output", async () => {
   const oc = chainOpenCode();
-  const hooks = await delegation.server({ client: oc.client, directory: oc.dir }, { gate: false, coder: "coder" });
+  const hooks = await delegation.server({ client: oc.client, directory: oc.dir }, { gate: false, coder: "coder", stateFile: TEST_FIRST() });
   oc.setHooks(hooks);
   const args = { subagent_type: "coder", description: "Feature", prompt: "```toml\n" + CHAIN_BRIEF() + "```", background: false };
   await hooks["tool.execute.before"]({ tool: "task", sessionID: "m", callID: "c1" }, { args });
@@ -448,7 +454,7 @@ test("carl-delegation, Tests after code (the state file, read at each task): the
 
 test("carl-delegation, the chain in the background: the test session's completion is held; one result comes later", async () => {
   const oc = chainOpenCode({ tamper: true });
-  const hooks = await delegation.server({ client: oc.client, directory: oc.dir }, { gate: false, coder: "coder" });
+  const hooks = await delegation.server({ client: oc.client, directory: oc.dir }, { gate: false, coder: "coder", stateFile: TEST_FIRST() });
   oc.setHooks(hooks);
   const args = { subagent_type: "coder", description: "Feature", prompt: CHAIN_BRIEF(), background: true };
   await hooks["tool.execute.before"]({ tool: "task", sessionID: "m", callID: "c2" }, { args });
@@ -481,7 +487,7 @@ test("carl-delegation, the chain in the background: the test session's completio
 
 test("carl-delegation, the chain: a failed test session's message says so in place; follow_up with existing_tests and chain: false", async () => {
   const oc = chainOpenCode();
-  const hooks = await delegation.server({ client: oc.client, directory: oc.dir }, { gate: false, coder: "coder" });
+  const hooks = await delegation.server({ client: oc.client, directory: oc.dir }, { gate: false, coder: "coder", stateFile: TEST_FIRST() });
   oc.setHooks(hooks);
   const bg = async (callID, prompt) => {
     const args = { subagent_type: "coder", description: "Feature", prompt, background: true };
@@ -681,8 +687,8 @@ test("carl-delegation, the hold is safe for the run gate: a held gate that OpenC
 test("carl-delegation, the hold is safe: a chain that OpenCode left undelivered is delivered at the next start", async () => {
   const dir = mkdtempSync(join(tmpdir(), "carl-oc-recover-"));
   const dead = spawnSync(process.execPath, ["-e", ""]).pid;          // an OpenCode process that is gone
-  const plan = chainMod.coderPlan(CHAIN_BRIEF());
-  const chain = new chainMod.Chain(plan.brief, dir);
+  const plan = chainMod.coderPlan(CHAIN_BRIEF(), false, "before");
+  const chain = new chainMod.Chain(plan.brief, dir, { order: plan.order });
   chain.testOutput = 'outcome_summary = "One test for R1."\ntask_status = "done"';
   chain.red = { red: true, why: "the test session's report has failing tests." };
   const snap = chain.snapshot();
@@ -733,7 +739,7 @@ test("carl-delegation, the hold is safe: a chain that OpenCode left undelivered 
 test("carl-delegation, the hold is safe: a record of another folder at the same path, another project or a session that is gone is dropped, not delivered", async () => {
   const dir = mkdtempSync(join(tmpdir(), "carl-oc-recover3-"));
   const dead = spawnSync(process.execPath, ["-e", ""]).pid;
-  const chain = new chainMod.Chain(chainMod.coderPlan(CHAIN_BRIEF()).brief, dir);
+  const chain = new chainMod.Chain(chainMod.coderPlan(CHAIN_BRIEF()).brief, dir, { order: "before" });
   const here = delegationMod.folderId(dir);
   const rec = (first, parent, extra = {}) => ({ v: 2, parent, first, stage: "held", description: `Task ${first}`, agent: "build",
                                                 directory: dir, folder: here, project: "prj_now", pid: dead, at: 1,
@@ -978,7 +984,7 @@ test("carl-delegation, the chain with an external coder model: both sessions on 
   // OpenCode's task tool starts the test session on the coder agent's model (agent.model, read in OpenCode 1.18.35)
   // and says so in its metadata; the plugin starts the code session with that model and the coder agent
   const oc = chainOpenCode();
-  const hooks = await delegation.server({ client: oc.client, directory: oc.dir }, { gate: false, coder: "coder", coderModel: "openrouter/example-coder-32b" });
+  const hooks = await delegation.server({ client: oc.client, directory: oc.dir }, { gate: false, coder: "coder", stateFile: TEST_FIRST(), coderModel: "openrouter/example-coder-32b" });
   oc.setHooks(hooks);
   const args = { subagent_type: "coder", description: "Feature", prompt: CHAIN_BRIEF(), background: false };
   await hooks["tool.execute.before"]({ tool: "task", sessionID: "m", callID: "e1" }, { args });
@@ -993,7 +999,7 @@ test("carl-delegation, the chain with an external coder model: both sessions on 
   assert.match(res.text, /Red start: CARL ran `node --test tests\/check\.test\.mjs` before the code: it failed \(exit 1\)\./);
   // without the model in the metadata (an older OpenCode): no model in the prompt, so OpenCode takes the agent's own
   const oc2 = chainOpenCode();
-  const hooks2 = await delegation.server({ client: oc2.client, directory: oc2.dir }, { gate: false, coder: "coder" });
+  const hooks2 = await delegation.server({ client: oc2.client, directory: oc2.dir }, { gate: false, coder: "coder", stateFile: TEST_FIRST() });
   oc2.setHooks(hooks2);
   const args2 = { subagent_type: "coder", description: "Feature", prompt: CHAIN_BRIEF(), background: false };
   await hooks2["tool.execute.before"]({ tool: "task", sessionID: "m", callID: "e2" }, { args: args2 });
@@ -1007,7 +1013,7 @@ test("carl-delegation, a provider failure: the coder's task fails with the provi
   const why = "401 Unauthorized: the key has expired (openrouter.ai)";
   // the code session's provider fails
   const oc = chainOpenCode({ fail: why });
-  const hooks = await delegation.server({ client: oc.client, directory: oc.dir }, { gate: false, coder: "coder", coderModel: "openrouter/example-coder-32b" });
+  const hooks = await delegation.server({ client: oc.client, directory: oc.dir }, { gate: false, coder: "coder", stateFile: TEST_FIRST(), coderModel: "openrouter/example-coder-32b" });
   oc.setHooks(hooks);
   const args = { subagent_type: "coder", description: "Feature", prompt: CHAIN_BRIEF(), background: false };
   await hooks["tool.execute.before"]({ tool: "task", sessionID: "m", callID: "f1" }, { args });

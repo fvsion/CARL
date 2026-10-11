@@ -399,7 +399,7 @@ test("the chain's helpers: files by action, ids, when a test session is due", ()
   assert.deepEqual(B.filesByAction(b), { create: ["notes/due.py"], change: ["notes/model.py"], read: ["notes/store.py"] });
   assert.deepEqual(B.requirementIds(b), ["R1", "R2"]);
   assert.deepEqual(B.checkIds(b), ["C1"]);
-  assert.equal(B.testsSetting(), "before");                                    // Phase 23.4.6 plugs in here
+  assert.equal(B.testsSetting(), "after");                                     // Phase 23.4.6 plugs in here (after: 23.5.0)
   assert.equal(B.testSessionDue(b), true);
   assert.equal(B.testSessionDue(b, true), false);                               // continues an earlier task
   assert.equal(B.testSessionDue({ ...b, workType: "follow_up" }), false);

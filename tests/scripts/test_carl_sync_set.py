@@ -224,20 +224,21 @@ class SetTest(unittest.TestCase):
         self.assertFalse(any(ln.startswith("CODER_MODEL_THINKING") for ln in self.env_lines()), self.env_lines())
 
     def test_coder_tests_live_in_both_clients(self) -> None:
-        """/carl's Tests (Phase 23.4.6): CODER_TESTS=after or off is kept; before (the default) takes the line out; both
-        clients read it at each coder task, so nothing restarts; another key with it still restarts as before."""
-        r = json.loads(self.run_set("CODER_TESTS=after").stdout)
-        self.assertIn("CODER_TESTS=after", self.env_lines())
-        self.assertEqual(self.installer_env()["CODER_TESTS"], "after")
-        self.assertEqual((r["changed"], r["restart"], r["new_terminal"]),
-                         ({"CODER_TESTS": {"from": "before", "to": "after"}}, [], False))
+        """/carl's Tests (Phase 23.4.6): CODER_TESTS=before or off is kept; after (the default since Phase 23.5.0) takes
+        the line out; both clients read it at each coder task, so nothing restarts; another key with it still restarts as
+        before."""
         r = json.loads(self.run_set("CODER_TESTS=before").stdout)
+        self.assertIn("CODER_TESTS=before", self.env_lines())
+        self.assertEqual(self.installer_env()["CODER_TESTS"], "before")
+        self.assertEqual((r["changed"], r["restart"], r["new_terminal"]),
+                         ({"CODER_TESTS": {"from": "after", "to": "before"}}, [], False))
+        r = json.loads(self.run_set("CODER_TESTS=after").stdout)
         self.assertFalse(any(ln.startswith("CODER_TESTS") for ln in self.env_lines()), self.env_lines())
         self.assertNotIn("CODER_TESTS", self.installer_env())
-        self.assertEqual((r["changed"], r["restart"]), ({"CODER_TESTS": {"from": "after", "to": "before"}}, []))
+        self.assertEqual((r["changed"], r["restart"]), ({"CODER_TESTS": {"from": "before", "to": "after"}}, []))
         r = json.loads(self.run_set("CODER_TESTS=off", "NO_REMINDER=1").stdout)
         self.assertEqual(r["restart"], ["opencode", "pi"])
-        self.assertIn("CODER_TESTS takes before or after or off, not 'never'.", self.run_set("CODER_TESTS=never").stderr)
+        self.assertIn("CODER_TESTS takes after or before or off, not 'never'.", self.run_set("CODER_TESTS=never").stderr)
 
     def test_coder_request_check_live_in_both_clients(self) -> None:
         """/carl's Request Check (the 23.4.3 addendum): CODER_REQUEST_CHECK=on or off is kept; reminder (the default) takes

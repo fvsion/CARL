@@ -505,8 +505,8 @@ function chainOn(): boolean {
 	}
 }
 
-// CARL: the Tests setting (Phase 23.4.6, /carl's Tests row): carl.json "coder_tests" (before, after, off), read at each
-// coder task as the chain switch, so a change needs no restart
+// CARL: the Tests setting (Phase 23.4.6, /carl's Tests row): carl.json "coder_tests" (after, before, off; after when
+// missing, the default since Phase 23.5.0), read at each coder task as the chain switch, so a change needs no restart
 function testsNow(): "before" | "after" | "off" {
 	return testsFrom(path.join(getAgentDir(), "carl.json"));
 }

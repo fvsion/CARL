@@ -714,7 +714,7 @@ test("OpenCode: Coder Subagent opens its list; Coder Thinking its values (● th
   assert.equal(sub.title, "Coder Subagent");
   assert.equal(sub.placeholder, undefined);                               // no search line in a sub-list
   assert.deepEqual(sub.options.map((o) => [o.title, o.footer]), [["Coder", "on"], ["Background Coder", "on"],
-    ["Delegation Reminder", "on"], ["Tests", "before code ›"], ["Request Check", "single reminder ›"], ["Free-Form Brief", "per model ›"], ["Coder Loop", "on ›"], ["Coder Thinking", "dashboard default ›"],
+    ["Delegation Reminder", "on"], ["Tests", "after code ›"], ["Request Check", "single reminder ›"], ["Free-Form Brief", "per model ›"], ["Coder Loop", "on ›"], ["Coder Thinking", "dashboard default ›"],
     ["Coder Model", "same as main"]]);
   const n = dialogs.length;
   sub.onSelect({ value: "coder-model" });                                 // one value: nothing opens
@@ -913,7 +913,7 @@ test("Pi: Pi's settings list; Coder Subagent opens its list in place (Esc back);
   assert.equal(screen()[2], "→ Coder Subagent  on ›");
   key("\r");                                                               // opens the list in the same place
   assert.deepEqual(screen(), ["Coder Subagent", "", "→ Coder  on", "  Background Coder  on", "  Delegation Reminder  on",
-                              "  Tests  before code ›", "  Request Check  single reminder ›", "  Free-Form Brief  per model ›", "  Coder Loop  on ›", "  Coder Thinking  dashboard default ›", "  Coder Model  same as main"]);
+                              "  Tests  after code ›", "  Request Check  single reminder ›", "  Free-Form Brief  per model ›", "  Coder Loop  on ›", "  Coder Thinking  dashboard default ›", "  Coder Model  same as main"]);
   key(DOWN, DOWN, DOWN, DOWN, DOWN, DOWN, DOWN, DOWN, "\r");                           // Coder Model: one value, nothing happens
   assert.equal(screen()[0], "Coder Subagent");
   assert.ok(screen().includes("→ Coder Model  same as main"), screen().join("\n"));
@@ -1063,7 +1063,7 @@ test("Coder Model: a choice runs carl-sync.py set CODER_MODEL; the toast says wh
     + "to openrouter.ai, and the model costs money. Restart OpenCode to use it." });     // 1 slot: no warning (no slot used)
   const sub = rowsAt(panel("opencode", OC_SESSION).rows, ["subagent"]);
   assert.deepEqual(sub.map((r) => [r.label, shownState(r)]), [["Coder", "on"], ["Background Coder", "on"],
-    ["Delegation Reminder", "on"], ["Tests", "before code ›"], ["Request Check", "single reminder ›"], ["Free-Form Brief", "per model ›"], ["Coder Loop", "on ›"], ["Coder Thinking", "model default ›"], ["Coder Model", `${OR} ›`]]);
+    ["Delegation Reminder", "on"], ["Tests", "after code ›"], ["Request Check", "single reminder ›"], ["Free-Form Brief", "per model ›"], ["Coder Loop", "on ›"], ["Coder Thinking", "model default ›"], ["Coder Model", `${OR} ›`]]);
   assert.match(panel("opencode", OC_SESSION).title, /^Restart OpenCode to use \d+ changes?\.$/);   // (1 in the TUI test)
   // back to same as main: the coder stays on (CODER=1); with 1 slot, the warning of the coder on the server
   fake({ files: { [join(OC, "opencode.json")]: ocWith() }, out: { ok: true, restart: ["opencode"], slots: 1 } });
@@ -1191,37 +1191,41 @@ test("Pi: Coder Model's values come from Pi's model registry; a choice says wher
 
 // ------------------------------------------------------------------ Tests (Phase 23.4.6)
 
-test("Tests: before code (the default), after code, off; set CODER_TESTS; no restart in either client", async () => {
+test("Tests: after code (the default), before code (a note, a warning), off; set CODER_TESTS; no restart in either client", async () => {
   stage(true);
+  const spec = "Use it only with a full spec (spec-kit or a similar tool).";
   for (const client of ["opencode", "pi"]) {
     const r = get(client, "tests");
-    assert.deepEqual([r.kind, r.state, r.value, r.label], ["choice", "before code", "before", "Tests"]);
-    assert.equal(shownState(r), "before code ›");
-    assert.deepEqual(r.values, ["before", "after", "off"]);
+    assert.deepEqual([r.kind, r.state, r.value, r.label], ["choice", "after code", "after", "Tests"]);
+    assert.equal(shownState(r), "after code ›");
+    assert.deepEqual(r.values, ["after", "before", "off"]);
     assert.deepEqual(r.titles, { before: "before code", after: "after code", off: "off" });
-    assert.deepEqual(r.notes, {});                                                       // no explanations
-    assert.deepEqual(Object.keys(r.actions), ["after", "off"]);
-    const a = r.actions.after;
-    assert.deepEqual([a.args, a.busy, a.row, a.want, a.live], [["set", "CODER_TESTS=after"], "switching to after code…", "tests",
-                                                                "after", ["opencode", "pi"]]);
-    assert.equal(a.did, "CARL set the coder's tests to after code on this computer.");
+    assert.deepEqual(r.notes, { before: "needs a full spec" });                         // the mock-up (23.5.0)
+    assert.equal(r.about, "When CARL's separate test session writes tests for new code. After code tests what the coder wrote; before code is test-first and needs a full spec (spec-kit or a similar tool).");
+    assert.deepEqual(Object.keys(r.actions), ["before", "off"]);
+    const a = r.actions.before;
+    assert.deepEqual([a.args, a.busy, a.row, a.want, a.live, a.warn], [["set", "CODER_TESTS=before"], "switching to before code…",
+                                                                        "tests", "before", ["opencode", "pi"], true]);
+    assert.equal(a.did, `CARL set the coder's tests to before code on this computer. ${spec}`);
+    assert.equal(r.actions.off.warn, undefined);
   }
-  // the state file's value; a value that is not one: before
+  // the state file's value; a value that is not one: after
   writeFileSync(join(OC, "carl.json"), JSON.stringify({ models: ONE, coder_tests: "off" }));
-  assert.deepEqual(Object.keys(get("opencode", "tests").actions), ["before", "after"]);
+  assert.deepEqual(Object.keys(get("opencode", "tests").actions), ["after", "before"]);
   assert.equal(get("opencode", "tests").state, "off");
+  assert.equal(get("opencode", "tests").actions.after.did, "CARL set the coder's tests to after code on this computer.");
   writeFileSync(join(OC, "carl.json"), JSON.stringify({ models: ONE, coder_tests: "never" }));
-  assert.equal(get("opencode", "tests").state, "before code");
-  // the toast as the mock-up; the title has no restart note (the chain reads it at each task)
+  assert.equal(get("opencode", "tests").state, "after code");
+  // the toast as the mock-up: before code is a warning; the title has no restart note (the chain reads it at each task)
   for (const [client, file] of [["opencode", join(OC, "carl.json")], ["pi", join(PI, "carl.json")]]) {
     stage(true);
     const st = JSON.parse(readFileSync(file, "utf8"));
     const title = panel(client).title;                                                 // earlier tests' changes
-    fake({ files: { [file]: JSON.stringify({ ...st, coder_tests: "after" }) }, out: { ok: true, restart: [] } });
-    const said = await act(get(client, "tests").actions.after, client);
-    assert.deepEqual(calls(), ["set CODER_TESTS=after"]);
-    assert.deepEqual(said, { ok: true, message: "CARL set the coder's tests to after code on this computer." });
-    assert.equal(get(client, "tests").state, "after code");
+    fake({ files: { [file]: JSON.stringify({ ...st, coder_tests: "before" }) }, out: { ok: true, restart: [] } });
+    const said = await act(get(client, "tests").actions.before, client);
+    assert.deepEqual(calls(), ["set CODER_TESTS=before"]);
+    assert.deepEqual(said, { ok: true, warn: true, message: `CARL set the coder's tests to before code on this computer. ${spec}` });
+    assert.equal(get(client, "tests").state, "before code");
     assert.equal(panel(client).title, title);                                          // not counted
   }
   stage(false);
