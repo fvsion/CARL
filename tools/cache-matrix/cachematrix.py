@@ -3,7 +3,7 @@
 in each setup CARL runs, with the real OpenCode and Pi and a real llama.cpp server.
 
     cachematrix.py prepare --home H --repo R --models-dir M --model gemma-4-e4b
-    cachematrix.py run --home H --repo R --models-dir M --out results.jsonl [--models ...] [--modes ...] ...
+    cachematrix.py run --home H --repo R --models-dir M --out results.jsonl [--models ...] [--modes ...] [--save stop] ...
     cachematrix.py report results.jsonl [--md]
 
 A cell is one setup: the model, single or router mode, the full or the window cache (cache.swa), the client's
@@ -19,6 +19,8 @@ The server and the clients share one settings folder (the harness HOME's ~/.conf
 both: the clients find the slots folder the server saves to. The dashboard does not run; before a server stop the
 harness saves the recorded sessions the way the dashboard's Stop does (diskcache.residents under the server's
 model name). The harness never uses port 8080 or your HOME (agent-bench's rules).
+--save sets the cache's save rule for the run (Phase 23.5.1.2: stop, so a session whose slot is taken is not saved and
+comes back from llama.cpp's RAM cache).
 """
 from __future__ import annotations
 
@@ -554,6 +556,8 @@ def start_server(e: Env, cell: Cell) -> None:
     conf = os.path.join(e.home, ".config", "carl")
     if cell.swa != "none":
         carl_config(a.repo, conf, "cache.swa", cell.swa)
+    if a.save:                       # Phase 23.5.1.2: another save rule (stop: a session whose slot is taken is not
+        carl_config(a.repo, conf, "cache.save", a.save)      # saved, so it comes back from llama.cpp's RAM cache)
     setup = MatrixSetup(repo=a.repo, model=cell.model, work=os.path.join(e.work, "server"), port=a.port,
                         models_dir=a.models_dir, slots=a.slots, conf=conf, mode=cell.mode,
                         extra_env={"SWA_MODE": cell.swa} if cell.swa != "none" else {})
@@ -695,7 +699,8 @@ def run_cell(e: Env, cell: Cell, env_base: Mapping[str, str], other: str) -> Dic
         drv.stop()
     files = Probe(e.server.log_file if e.server else "", cache_log, e.slots_dir).files()
     return {"cell": dataclasses.asdict(cell), "key": cell.key(), "client_model": model, "words": words, "steps": steps,
-            "files_at_end": files, "seconds": round(time.time() - t_cell, 1), "date": time.strftime("%Y-%m-%dT%H:%M:%S")}
+            "files_at_end": files, "seconds": round(time.time() - t_cell, 1), "date": time.strftime("%Y-%m-%dT%H:%M:%S"),
+            "save": e.a.save or "auto"}
 
 
 def _new_say(drv: Driver, names: Dict[str, str], label: str, text: str) -> str:
@@ -901,6 +906,8 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("--alias", default="cache-matrix-alias", help="the other name a client uses (single mode)")
     r.add_argument("--other-model", default="qwen3.8-9b", help="router mode: the model of the switch")
     r.add_argument("--keep-going", action="store_true")
+    r.add_argument("--save", default="", choices=("", "auto", "turn", "switch", "stop"),
+                   help="the cache's save rule for the run (default: CARL's, auto)")
     r.add_argument("--words", default="", help="MODEL=N,...: the long turn's words per model (default: the E4B "
                    f"4500, any other {BIG_WORDS})")
     r.set_defaults(fn=cmd_run)

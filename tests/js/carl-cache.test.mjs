@@ -405,6 +405,27 @@ test("save = stop: a session isn't saved when its slot is needed (it stays in th
   assert.equal(sessionSaves(srv).length, 0);
 }));
 
+test("Phase 23.5.1.2: back from the RAM cache, a session goes to a slot that holds a conversation, not an empty one (llama.cpp #28139)", () => withSave("stop", async () => {
+  const srv = fakeServer({ slots: 3 });
+  const c = cache(srv.fetch);
+  await send(c, request("hello"), { session: "a", agent: "build" });
+  ran(srv, 0, 9000);
+  await send(c, request("other"), { session: "b", agent: "build" });
+  ran(srv, 1, 8000);
+  srv.st.slots[0].n = 7000;                     // another process's session took slot 0 (a not saved: save = stop)
+  srv.st.slots[0].task = 99;
+  c.owner.delete("m:0");
+  srv.st.slots[2].n = 0;                        // slot 2 empty (llama.cpp cleared it)
+  srv.st.calls.length = 0;
+  const back = await send(c, request("again"), { session: "a", agent: "build" });
+  assert.notEqual(back.payload.id_slot, 2);    // not the empty slot: its RAM-cache lookup would be skipped
+  assert.equal(sessionSaves(srv).length, 0);
+  // the slot's conversation went to the RAM cache first (one token, nothing written): llama.cpp then looks for the
+  // session there, whatever share of the slot it would keep (llama.cpp #28276: only below half)
+  const pushed = srv.st.calls.filter((x) => x.path === "/completion" && JSON.stringify(x.body.prompt) === "[0]");
+  assert.deepEqual(pushed.map((x) => [x.body.id_slot, x.body.n_predict]), [[back.payload.id_slot, 0]]);
+}));
+
 test("on this Mac a turn leaves a record of the slot's session; a router switch saves it first", () => withSave("switch", async () => {
   const h = home();
   const srv = fakeServer({ router: true });

@@ -899,7 +899,15 @@ export class CarlCache {
       const filled = {};
       if (slot === undefined) {
         let pick;
-        for (const c of await this.rankFree(model, slots, meta.session)) {
+        // back from llama.cpp's RAM cache (its slot was taken and it was not saved): not into an empty slot while
+        // one holds a conversation (llama.cpp #28139: a request pinned to an empty slot skips the RAM cache's lookup;
+        // Phase 23.5.1.2: never seen in CARL's runs, where no idle slot is cleared, so a guard)
+        const toRam = !windowed && Boolean(known && known.epoch === m.epoch && !known.saved)
+          && !(await this.savedSince(model, srv.router, m, meta, known));
+        const ranked = await this.rankFree(model, slots, meta.session);
+        const order = toRam && ranked.some((s) => s.n > 0) ? [...ranked.filter((s) => s.n > 0), ...ranked.filter((s) => s.n === 0)]
+          : ranked;
+        for (const c of order) {
           if ((release = await this.tryClaim(model, c.id))) {
             pick = c;
             break;
@@ -911,7 +919,7 @@ export class CarlCache {
         // session took since its last save; else llama.cpp finds it in its RAM cache
         if (windowed) {
           how = "pinned; the window cache";
-        } else if (!(known && known.epoch === m.epoch) || known.saved || await this.savedSince(model, srv.router, m, meta, known)) {
+        } else if (!toRam) {
           try {
             base = await this.fill(out, model, srv.router, m, pick, meta, set, filled);
           } catch (e) {
@@ -920,6 +928,14 @@ export class CarlCache {
           }
           how = "filled";
         } else {
+          // the slot's conversation to the RAM cache first: then the slot keeps nothing of this request, and llama.cpp
+          // looks in its RAM cache (it does only when the slot would keep less than half its tokens: llama.cpp #28276;
+          // Phase 23.5.1.2, measured: the E4B read the session's own part again, 7,967 of 18,948 tokens)
+          try {
+            await this.toRamCache(model, srv.router, pick);
+          } catch (e) {
+            debugLog(`to the RAM cache: ${errorText(e)}`);
+          }
           how = "the RAM cache's";
         }
       }
@@ -1006,10 +1022,7 @@ export class CarlCache {
     } else {
       await this.saveResident(model, router, pick, set);
     }
-    if (pick.n > 0) {          // the slot's conversation goes to the RAM cache first (llama.cpp does that for a new task)
-      await this.call("POST", "/completion", { prompt: [0], n_predict: 0, cache_prompt: true, id_slot: pick.id,
-                                               ...this.withModel(model, router) }, 60_000);
-    }
+    await this.toRamCache(model, router, pick);
     const got = set.sessions && meta.session && !meta.sub
       ? await this.restore(model, router, pick.id, sessionFile(model, key, meta.session)) : undefined;
     if (got !== undefined) {
@@ -1049,6 +1062,19 @@ export class CarlCache {
     this.wrote(pf.file, pf.file.slice(0, pf.file.lastIndexOf("+") + 1));
     Object.assign(info, { from: "read", tokens: 0 });      // the prompt itself was read here: nothing restored
     return pf.tokens.length;
+  }
+
+  /**
+   * The slot's conversation to llama.cpp's RAM cache (a one-token request with nothing to write: llama.cpp keeps the
+   * slot's state in the RAM cache before a new task, as when another request takes the slot). The slot then holds
+   * that one token, so the next request shares nothing with it.
+   * @param {string} model @param {boolean} router @param {Slot} pick
+   */
+  async toRamCache(model, router, pick) {
+    if (pick.n > 0) {
+      await this.call("POST", "/completion", { prompt: [0], n_predict: 0, cache_prompt: true, id_slot: pick.id,
+                                               ...this.withModel(model, router) }, 60_000);
+    }
   }
 
   /**
