@@ -68,9 +68,9 @@ def mac(ram_gb: int, vm: bool = False) -> Budget:
 class RealCatalogueTest(unittest.TestCase):
     """The picks agreed for each Mac size (CARL prioritises speed: everyday = the 35B-A3B MoE)."""
 
-    # RAM GB -> (everyday pick, hard-code pick); None = nothing fits. All at 2 x 96K (q4_0).
+    # RAM GB -> (everyday pick, hard-code pick); None = nothing fits. All at 2 x 96K (q4_0), Saluki at its own 2 x 48K.
     EXPECTED: Dict[int, Tuple[Optional[str], Optional[str]]] = {
-        16: ("gemma-4-e4b", "gemma-4-12b"),                    # 10.0 GiB: the E4B is fast (everyday), the 12B better
+        16: ("gemma-4-e4b", "saluki-27b"),                     # 10.0 GiB: the E4B is fast (everyday), Saluki the 27B
         24: ("qwen3.6-35b-a3b-iq3", "qwen3.8-27b-iq3"),        # 16.0 GiB (both with n-gram: MTP does not fit)
         32: ("qwen3.6-35b-a3b", "qwen3.8-27b"),                # 24.0 GiB (estimate, 3/4 like a real M2 Max)
         36: ("qwen3.6-35b-a3b", "qwen3.8-27b"),                # 27.0 GiB
@@ -89,7 +89,7 @@ class RealCatalogueTest(unittest.TestCase):
                     if want:
                         self.assertIsNotNone(fit.plan)
                         self.assertEqual((fit.plan.slots, fit.plan.ctx, fit.plan.kv) if fit.plan else None,
-                                         (2, 98304, "q4_0"))
+                                         (2, 49152 if want == "saluki-27b" else 98304, "q4_0"))
                         self.assertFalse(fit.fallback)
 
     def test_this_mac_32gb_with_its_real_limit(self) -> None:
@@ -121,16 +121,33 @@ class RealCatalogueTest(unittest.TestCase):
     def test_16gb_the_12b_drops_mtp_the_e4b_keeps_it(self) -> None:
         """16 GB (10.0 GiB): the 12B's drafter and its draft context do not fit with 2 x 96K, so n-gram; the E4B
         keeps MTP."""
-        hard, everyday = auto_fit(real_catalogue(), mac(16), "hard-code"), auto_fit(real_catalogue(), mac(16))
+        no_saluki = [c for c in real_catalogue() if c.name != "saluki-27b"]
+        hard, everyday = auto_fit(no_saluki, mac(16), "hard-code"), auto_fit(real_catalogue(), mac(16))
         assert hard.plan and everyday.plan
         self.assertEqual((hard.plan.slots, hard.plan.ctx, hard.plan.spec.kind), (2, 98304, "ngram-mod"))
         self.assertEqual(everyday.plan.spec.kind, "draft-mtp,ngram-mod")
+
+    def test_16gb_saluki_holds_two_48k_slots(self) -> None:
+        """Saluki (23.4.4 item 1, the plain file: n-gram only) holds 2 x 48K on a 16 GB Mac (measured 9.89 GiB on the
+        M3 Pro, 2026-10-08). Its catalogue window (48K) counts as its first pass, so it is the hard code pick there
+        against the 12B's 2 x 96K (user, 2026-10-11); on its own window it ranks before the 12B."""
+        saluki = [c for c in real_catalogue() if c.name == "saluki-27b"]
+        fit = auto_fit(saluki, mac(16), "hard-code")
+        assert fit.plan
+        self.assertEqual((fit.name, fit.plan.slots, fit.plan.ctx, fit.plan.spec.kind),
+                         ("saluki-27b", 2, 49152, "ngram-mod"))
+        self.assertLessEqual(fit.plan.need, mac(16).allowed)
+        hard = auto_fit(real_catalogue(), mac(16), "hard-code")
+        self.assertEqual((hard.name, hard.tier), ("saluki-27b", 0))
+        self.assertIn("two slots of 48K tokens (the main session and a subagent; the window its catalogue entry is "
+                      "sized for)", hard.because())
+        self.assertEqual(hard.order_text(), "Auto fit takes the first setup in its order that fits: 2 slots × 48K tokens")
 
     def test_a_fast_small_dense_model_joins_the_everyday_family(self) -> None:
         """Without the fast mark the E4B is only a dense fallback, and the better-ranked 12B wins everyday too."""
         cands = real_catalogue()
         self.assertTrue(next(c for c in cands if c.name == "gemma-4-e4b").fast)
-        slow = [replace(c, fast=False) for c in cands]
+        slow = [replace(c, fast=False) for c in cands if c.name != "saluki-27b"]
         self.assertEqual(auto_fit(slow, mac(16), "everyday").name, "gemma-4-12b")
         fit = auto_fit(cands, mac(16), "everyday")
         self.assertFalse(fit.fallback)
@@ -185,7 +202,7 @@ class RealCatalogueTest(unittest.TestCase):
         self.assertIsNone(fit.pick)
         self.assertEqual([r.name for r in fit.rejected],
                          ["qwen3.8-27b", "qwen3.8-27b-q3", "qwen3.6-35b-a3b", "qwen3.8-27b-iq3", "qwen3.6-35b-a3b-iq3",
-                          "gemma-4-31b", "gemma-4-26b-a4b", "gemma-4-12b", "gemma-4-e4b", "qwen3.8-9b"])
+                          "gemma-4-31b", "gemma-4-26b-a4b", "saluki-27b", "gemma-4-12b", "gemma-4-e4b", "qwen3.8-9b"])
         self.assertIn("No stock model with a quality rank fits", fit.because())
         self.assertIn("nothing fits", fit.summary())
 

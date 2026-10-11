@@ -36,7 +36,7 @@ Commands with the label **Mac** run in the CARL folder on the Mac. Commands with
 
 | Item | Requirement |
 |---|---|
-| Mac | An **Apple Silicon** Mac. A 36 GB Mac runs all models of the catalogue. A 24 GB Mac runs the IQ3 and Q3 builds and the smaller Gemma 4 models ([Sharing with a friend](#sharing-with-a-friend)). A 16 GB Mac runs `gemma-4-e4b`, `gemma-4-12b` and `qwen3.8-9b`. |
+| Mac | An **Apple Silicon** Mac. A 36 GB Mac runs all models of the catalogue. A 24 GB Mac runs the IQ3 and Q3 builds and the smaller Gemma 4 models ([Sharing with a friend](#sharing-with-a-friend)). A 16 GB Mac runs `gemma-4-e4b`, `gemma-4-12b`, `saluki-27b` and `qwen3.8-9b`. |
 | Homebrew tools | [Homebrew](https://brew.sh), for `llama.cpp` (tested with 0.6.0, build 11429; with an older version, the start and the dashboard tell you to update it), `aria2`, `ansifilter` and `zstd` |
 | Python | `python3`. The first time that you use it, macOS offers to install it with the command-line developer tools. |
 | Swift | The `fit` command uses `swift` to read the exact GPU memory limit. It comes with the command-line developer tools (`xcode-select --install`). |
@@ -305,6 +305,7 @@ Use this procedure for clients that are not on the server Mac and not in the VMw
 | `orcarouter-27b-q3` (abliterated, 14.6 GB) | 1 × 64K with n-gram speculation. Its default context is 64K. |
 | `qwen3.8-9b` (5.8 GB), `gemma-4-e4b` (4.6 GB) and `gemma-4-12b` (7.2 GB) | 2 × 96K slots fit with MTP (the Gemma models with the window cache) |
 | `gemma-4-26b-a4b` (14.6 GB) | 2 × 64K slots with n-gram speculation and the window cache (Auto fit's order). |
+| `saluki-27b` (2-bit 27B, 7.9 GB) | 2 × 96K slots fit in ~12.1 GiB with n-gram speculation (it has no MTP head). |
 | `qwen3.8-27b`, `orcarouter-27b` (Q4) | They do not fit under the default limit. |
 | `qwen3.6-35b-a3b`, `heretic-35b-a3b` (Q4), `gemma-4-31b` | They do not fit. |
 
@@ -405,7 +406,8 @@ Each model has its own name on the server, and the clients list it under the sam
 | A 24 GB Mac, uncensored 27B with subagents (2 × 96K) | `./carl.sh llama --model orcarouter-27b-iq3` | `orcarouter-27b-iq3` |
 | A 24 GB Mac, uncensored 27B, better quality (1 slot) | `./carl.sh llama --model orcarouter-27b-q3` | `orcarouter-27b-q3` |
 | **A 16 GB Mac**, fast (Auto fit's everyday choice there) | `./carl.sh llama --model gemma-4-e4b` | `gemma-4-e4b` |
-| **A 16 GB Mac**, better code, slower (Auto fit's hard code choice there) | `./carl.sh llama --model gemma-4-12b` | `gemma-4-12b` |
+| **A 16 GB Mac**, a 27B with a coder subagent, slower (Auto fit's hard code choice there; 2 × 48K) | `./carl.sh llama --model saluki-27b` | `saluki-27b` |
+| **A 16 GB Mac**, the dense 12B (2 × 96K) | `./carl.sh llama --model gemma-4-12b` | `gemma-4-12b` |
 | 3–4 subagents at the same time on a small model | `./carl.sh llama --model qwen3.8-9b` | `qwen3.8-9b` |
 | Google's larger Gemma 4 ([Gemma 4](#gemma-4)) | `./carl.sh llama --model gemma-4-26b-a4b` (or `gemma-4-31b`) | the same name |
 
@@ -439,7 +441,7 @@ The catalogue has four Gemma 4 models from Google. Each one is Google's QAT buil
 | `gemma-4-26b-a4b` | 14.6 GB | The MoE (3.8B active), for fast everyday coding. 2 × 96K with the full cache fits a 36 GB Mac. On a 32 GB Mac it gets 2 slots with the window cache. |
 | `gemma-4-31b` | 18.0 GB | The dense 31B, for hard code when you can wait. It runs with the window cache on 32 and 36 GB Macs. |
 
-- **Ranks 6–9**, below the Qwen 27B and 35B-A3B builds: Qwen is better at agent coding in the published benchmarks. On 16 GB Macs Auto fit chooses the E4B (everyday) or the 12B (hard code).
+- **Ranks 6–9**, below the Qwen 27B and 35B-A3B builds: Qwen is better at agent coding in the published benchmarks. On 16 GB Macs Auto fit chooses the E4B (everyday); for hard code it chooses `saluki-27b` (a 2-bit 27B, 2 × 48K).
 - **Sliding window.** Most Gemma layers look only at the last 1,024 tokens (the E4B: 512).
   - With the **full cache**, those layers keep every token. CARL can restore saved sessions and prompts, but the cache uses much more memory.
   - With the **window cache**, they keep only the last window. It uses less memory, but CARL cannot restore saved sessions and prompts.
@@ -1765,11 +1767,11 @@ Auto fit chooses the best **stock** model that fits this Mac, with its slots and
 - **ALL MODELS.** For each model: `rank` (the quality rank), `weights` (GiB), the context memory `per 1K tokens` (MiB), and the `largest context` of each slot that fits, with q4 and with q8. For a Gemma model, the largest context is with the cache that Auto fit plans (your setting `cache.swa`). A note gives the context with the other cache. A legend under the table explains the columns.
 - At the end, a line for experts only: how to give the GPU more memory, with the risk first.
 
-`./carl.sh fit --ram 24` (or 16, 36, 64, …) shows a different Mac. The choices, all with 2 × 96K:
+`./carl.sh fit --ram 24` (or 16, 36, 64, …) shows a different Mac. The choices, all with 2 × 96K except Saluki (2 × 48K, its catalogue window):
 
 | RAM | everyday | hard code |
 |---|---|---|
-| 16 GB | `gemma-4-e4b` (no MoE build fits; the E4B is the fast small dense build) | `gemma-4-12b` (n-gram: MTP does not fit) |
+| 16 GB | `gemma-4-e4b` (no MoE build fits; the E4B is the fast small dense build) | `saluki-27b` (2 × 48K, n-gram) |
 | 24 GB | `qwen3.6-35b-a3b-iq3` (n-gram) | `qwen3.8-27b-iq3` (n-gram) |
 | 32 GB | `qwen3.6-35b-a3b` (n-gram: with MTP it needs 25.1 GiB) | `qwen3.8-27b` |
 | 36 GB and more | `qwen3.6-35b-a3b` | `qwen3.8-27b` |

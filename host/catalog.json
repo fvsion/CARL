@@ -598,6 +598,84 @@
       "rank": 4
     },
     {
+      "name": "saluki-27b",
+      "label": "Underdog Saluki 27B · IQ2 mix",
+      "family": "qwen3.8-27b",
+      "arch": "dense",
+      "thinking": "effort",
+      "params": "27B dense",
+      "quant": "IQ2-mix (GSQ-RCO)",
+      "abliterated": false,
+      "mtp": false,
+      "min_ram_gb": 16,
+      "tested": true,
+      "summary": "A 2-bit Qwen3.8-27B (7.9 GB) for 16 GB Macs: 2 × 48K, the main session and a coder.",
+      "description": "Underdog Saluki 27B 1.0 (ConwayResearch, Apache 2.0): Qwen3.8-27B at IQ2-mix, from ISTA-DASLab's GSQ-RCO quant, tuned to keep tool calls. The plain file, without an MTP head (MTP measured as a loss here: +1.6 to 2.2 GiB, no speed on new text). On a 16 GB Mac two 48K slots fit in 9.9 GiB, so the main session keeps a coder subagent. Dense and 27B: ~11.6 tok/s new text and ~80 tok/s prompt reading on an M3 Pro, about half that on a 16 GB Mac's base chip. Thinking is slow at these speeds: in CARL's code test it thought past 16,000 tokens in half of the tasks (thinking off: 13 of 18 passed, 34 s a task; thinking off suits a full spec, e.g. spec-kit).",
+      "tune": {
+        "kv": "q4_0",
+        "ctx": 49152,
+        "slots": "auto",
+        "temp": 0.6,
+        "top_p": 0.95,
+        "top_k": 20,
+        "min_p": 0,
+        "presence": 0,
+        "spec": "ngram-mod",
+        "spec_n": 1
+      },
+      "why": {
+        "kv": "q4_0 K and V like every catalogue model; never mix K and V types.",
+        "temp": "The model card's sampling: temperature 0.6, top_p 0.95, top_k 20.",
+        "spec": "n-gram only, 1 draft token: no memory, re-emitting code at 52-55 tok/s against 11.5 without (M3 Pro 36 GB, llama.cpp 0.6.0, 2026-10-08). MTP (the Kujira build with Qwen's head) added 1.6-2.2 GiB, gave no speed on new text (code +4%, prose -4% to -19%) and made 2 × 48K miss a 16 GB Mac (12.1 GiB).",
+        "ctx": "48K per slot (below the 96K floor on purpose): 2 × 48K fit a 16 GB Mac (9.89 GiB measured of its 10 GiB), and prompt reading is the limit: 75-89 tok/s on an M3 Pro (a 36K prompt in ~7.5 min), about half on a 16 GB Mac. Auto fit counts 2 × 48K as its first pass, so it is the hard code pick on 16 GB Macs. Auto-tune can size a larger window on a larger Mac.",
+        "slots": "auto: 2 slots (the main session and a coder subagent) from 16 GB up. In CARL's agent runs (2026-10-10, 2 × 48K, thinking off) it handed the large tasks to the coder in 4 of 6 and passed the hidden tests in 6 of 6; with 1 slot (no coder) 5 of 6."
+      },
+      "ctx_zones": {
+        "good": 98304,
+        "slow": 131072,
+        "very_slow": 163840
+      },
+      "speed": {"prose": 11.6, "code": 11.6, "edit": 52.0, "machine": "M3 Pro 36 GB", "date": "2026-10-08", "mode": "ngram-mod n=1"},
+      "measured": [
+        {
+          "machine": "M3 Pro 36 GB",
+          "date": "2026-10-08",
+          "decode": "11.6 tok/s new text, 52-55 re-emitting (n-gram); 9.5 after a 36K prompt",
+          "prefill": "75-89 tok/s (82 at 36K, 2 × 48K)"
+        }
+      ],
+      "hf": {
+        "repo": "ConwayResearch/Underdog-Saluki-27B-1.0",
+        "revision": "4f60eba09f4b6db63c72915d328d97e1d93edb8c",
+        "file": "Underdog-Saluki-27B-1.0-IQ2-mix.gguf",
+        "sha256": "4a673518b11b1c4445f9b9a9d3c40356f5ba39f6a6260dcb25f3fbfd475d9efb",
+        "bytes": 7898369152
+      },
+      "rank": 7,
+      "role": "Agent coding on a 16 GB Mac",
+      "good_for": [
+        "agent coding",
+        "hard code"
+      ],
+      "why_use": "The only 27B that fits a 16 GB Mac with a coder subagent (2 × 48K in 9.9 GiB). With thinking off it passed 13 of 18 of CARL's code tasks at the 9B's speed (34 s a task), and every hidden test in CARL's agent runs.",
+      "trade_offs": "2-bit: the vendor's own numbers only (SWE-bench Verified 30/50 against the full model's 33). Slow, like every dense 27B: ~11.6 tok/s, and a long prompt takes minutes to read on a 16 GB Mac. Long thinking is slow there: a task with a loose prompt can take 25 min.",
+      "pick_instead": [
+        {
+          "model": "gemma-4-12b",
+          "when": "small tasks, one at a time (18 of 18 in CARL's code test, thinking on)"
+        },
+        {
+          "model": "qwen3.8-27b-iq3",
+          "when": "on 24 GB and up (3-bit, less lossy)"
+        },
+        {
+          "model": "qwen3.6-35b-a3b-iq3",
+          "when": "on 24 GB and up: much faster"
+        }
+      ],
+      "hardware": "16 GB Macs (2 × 48K, 9.9 GiB); larger Macs have better picks"
+    },
+    {
       "name": "heretic-35b-a3b",
       "free_form_brief": true,
       "label": "Heretic 35B-A3B · Q4_K_M (abliterated)",

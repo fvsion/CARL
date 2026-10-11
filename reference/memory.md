@@ -41,15 +41,15 @@ macOS sets a maximum for the memory that the GPU can use (the GPU memory limit):
 
 What a start of each model gets on a 24 GB Mac (16.0 GiB), with Auto fit's order ([Auto fit's order](#auto-fits-order)):
 - The IQ3 35B and the IQ3 27B: 2 × 96K with n-gram (MTP does not fit). `qwen3.8-27b-q3`: 2 × 64K with n-gram. `orcarouter-27b-q3` (catalogue context 64K): 1 × 64K with n-gram.
-- `orcarouter-27b-q3` is the one exception to the 96K window of the catalogue. Its catalogue context is 64K, because 96K does not fit a 24 GB Mac. Larger Macs use the Q4 build.
+- `orcarouter-27b-q3` and `saluki-27b` are the exceptions to the 96K window of the catalogue. `orcarouter-27b-q3`'s catalogue context is 64K, because 96K does not fit a 24 GB Mac (larger Macs use the Q4 build). `saluki-27b`'s is 48K, for 16 GB Macs.
 - The Gemma models (window cache): the E4B and the 12B get 2 × 96K with MTP. The 26B-A4B gets 2 × 64K with n-gram. The 31B does not fit.
 - A start of `orcarouter-27b-q3` without an Auto-tune result shows a note: run `./carl.sh tune orcarouter-27b-q3`. Auto-tune selects 96K when it fits.
 
 **16 GB Macs** (~10.7 GiB GPU memory limit, estimate; a model can use 10.0 GiB, because CARL keeps 6 GiB free):
 - Auto fit chooses `gemma-4-e4b` (4.6 GB) for the everyday goal: 2 × 96K with MTP need 8.3 GiB with the window cache.
-- Auto fit chooses `gemma-4-12b` (7.2 GB) for the hard code goal: 2 × 96K need 8.6 GiB with n-gram and the window cache. With MTP they need 10.2 GiB: MTP does not fit.
+- Auto fit chooses `saluki-27b` (7.9 GB) for the hard code goal: 2 × 48K, its catalogue window, need 9.98 GiB with n-gram (measured: 9.89 GiB). The file with the MTP head (8.35 GB, not in the catalogue) and MTP needs 12.2 GiB (measured: 12.12 GiB): MTP does not fit.
+- `gemma-4-12b` (7.2 GB) fits 2 × 96K in 8.6 GiB with n-gram and the window cache (with MTP 10.2 GiB: MTP does not fit). Its quality rank (8) is below Saluki's (7).
 - `qwen3.8-9b` (5.8 GB) also fits with 2 × 96K (8.2 GiB with n-gram; 11.1 GiB with MTP). Its quality rank (10) is below the Gemma models.
-- Saluki (Phase 23.4.2): the file without the MTP head (7.9 GB) at 2 × 48K needs 9.98 GiB with n-gram (measured: 9.89 GiB). The file with the head (8.35 GB) and MTP needs 12.2 GiB (measured: 12.12 GiB): MTP does not fit.
 - No other catalogue model fits under the default limit. The IQ3 27B (10.2 GiB of weights) needs a raised limit (`sudo sysctl iogpu.wired_limit_mb=…`).
 - `./carl.sh fit --ram 16` shows the values.
 
@@ -137,6 +137,7 @@ On every Mac (user, 2026-10-09: "every Mac with 48K floor"), Auto fit and a star
 6. 1 slot × 48K tokens
 
 - Nothing below 48K. A model that fits none of them does not fit.
+- **A model with a smaller catalogue window** (`saluki-27b`: 48K, sized for 16 GB Macs) tries each setup at its own window: 2 slots × 48K is its first setup, so it competes with the others' 2 × 96K on quality rank.
 - **MTP goes first.** When a setup fits only without MTP, Auto fit uses n-gram only (MTP + n-gram keeps its n-gram part) before it removes a slot or makes the context smaller. `./carl.sh fit`, the Server panel and the start lines say so.
 - A start never gets a larger context than the model's own (its catalogue or header context). A context from your settings or from Auto-tune is not changed: then the launcher takes 2 slots when they fit, MTP goes before the second slot, and the check refuses a start that does not fit.
 - The memory that a model can use: the GPU memory limit, or the RAM minus the memory kept free, whichever is smaller (the launcher's slots too).
