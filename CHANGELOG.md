@@ -3,6 +3,15 @@
 All notable changes to CARL. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Dates are local dates on the development Mac (M3 Pro, 36 GB).
 
+## 1.20.4 - 2026-10-12
+
+Phase 23.5.1.4: the drive writes, measured.
+
+### Measured
+- **What the cache writes to the drive** (`reference/caching.md`, Drive writes): on the Qwen3.6-35B-A3B IQ3 with the
+  default cache settings, 24 agent coding tasks (83 min) wrote 0.78 GB of saved prompts and sessions, ~0.6 GB an
+  hour: ~4.5 GB for an 8-hour day of agent work, ~1.1 TB in a year of such days. The save rule stays as it is.
+
 ## 1.20.3 - 2026-10-12
 
 Phase 23.5.1.3: a session its client compacted, cached right.

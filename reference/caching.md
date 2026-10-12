@@ -169,6 +169,20 @@ The table gives the wait before the answer starts: with the cache, and without i
 | `auto` (35B): a new process found the session in its slot (record); a dashboard Stop saved it; the turn after the restart | under 1 s | ~17 s | 20, then 18 / 8.5K |
 | Restore of a 118 MB file (35B) / 29 MB (Gemma, 5K tokens) | 15–30 ms / 5 ms | | |
 
+### Drive writes (measured 2026-10-12)
+
+Phase 23.5.1.4. The M3 Pro, CARL 1.20.3, the Qwen3.6-35B-A3B IQ3 at 2 × 96K, the cache settings at their defaults (`cache.save = auto`), the coder on, OpenCode 1.19.0 and Pi 1.1.0. 24 agent tasks of the agent bench (medium coding tasks, 1–8 min each), 83 min in all. The bytes come from the saved files and from the drive's own write counter (all of the Mac).
+
+| | CARL's saves | The whole drive |
+|---|---|---|
+| In 83 min | 0.78 GB: 4 agent prompts (104–132 MB, each written once) and 2 sessions (160–168 MB) | 2.0 GB |
+| An hour | ~0.6 GB | ~1.5 GB |
+| An 8-hour day of agent work | ~4.5 GB | ~12 GB |
+| 250 such days | ~1.1 TB | ~3 TB |
+
+- An agent's prompt is written once, until the prompt changes. A session is written when the part not saved yet would take about 2 minutes to read again (`auto`). These sessions were short, so most were never saved: the A3B reads ~350–530 tokens/s here, so a session is saved about every 40–60K new tokens.
+- Apple does not publish its SSDs' endurance. Drives of 512 GB to 1 TB are commonly rated 300–600 TB written, so ~1 TB a year is a small part of it. CARL does not change the save rule for this.
+
 ### The disk limit
 
 - `cache.disk_gb` (default 10 GB) is the limit.
