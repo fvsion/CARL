@@ -66,11 +66,10 @@ def speculation_modes(has_mtp: bool, quick: bool, drafter: bool = False) -> List
     speculation comes from a separate drafter file (Gemma 4), which accepts more draft tokens than
     a Qwen MTP head: n = 1 to 4 (quick: 1 and 2; on the E4B n = 2 was best, 76.0 tok/s vs 69.0 at
     n = 1 and 72.1 at n = 4)."""
-    modes: List[Mode] = [("none", 1), ("ngram-mod", 2)]
+    # n-gram once: llama.cpp's ngram-mod does not read the guesses (--spec-draft-n-max is MTP's); its n=1 and n=2 rows
+    # measured the same setup (Phase 23.5.1.8)
+    modes: List[Mode] = [("none", 1), ("ngram-mod", 1)]
     if not has_mtp and not drafter:
-        # n-gram is the only speculation here: 1 draft too (it won on the Heretic IQ3, which has no
-        # MTP head: 51.5 / 48.5 / 96.1 tok/s prose / code / re-emit on an M2 Max)
-        modes.append(("ngram-mod", 1))
         return modes
     top = (2 if quick else 4) if drafter else (1 if quick else 2)
     for n in range(1, top + 1):
@@ -255,9 +254,9 @@ _SPEC_WORDS = {"none": "none", "ngram-mod": "n-gram", "draft-mtp": "MTP", "draft
 
 
 def spec_words(spec: str, n: int) -> str:
-    """A speculation mode in the glossary's words: MTP + n-gram, 2 guesses."""
+    """A speculation mode in the glossary's words: MTP + n-gram, 2 guesses (the guesses are MTP's: n-gram has none)."""
     name = _SPEC_WORDS.get(spec, spec)
-    return name if spec == "none" else f"{name}, {n} guess{'' if n == 1 else 'es'}"
+    return name if "draft-mtp" not in spec else f"{name}, {n} guess{'' if n == 1 else 'es'}"
 
 
 class AutoTuner:

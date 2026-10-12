@@ -25,9 +25,10 @@ def plural(n: float, word: str, many: Optional[str] = None) -> str:
 
 
 def spec_name(spec: object, n: object = None) -> str:
-    """A speculation mode in the glossary's words, with its guesses: 'MTP + n-gram, 1 guess'."""
+    """A speculation mode in the glossary's words, with MTP's guesses: 'MTP + n-gram, 1 guess'. n-gram alone has no
+    guesses to set (llama.cpp's ngram-mod drafts a long run it has seen: Phase 23.5.1.8): 'n-gram'."""
     name = SPEC_NAMES.get(str(spec), str(spec))
-    if n in (None, "") or str(spec) == "none":
+    if n in (None, "") or "draft-mtp" not in str(spec):
         return name
     return f"{name}, {plural(int(str(n)) if str(n).isdigit() else 1, 'guess', 'guesses')}"
 

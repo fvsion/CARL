@@ -176,6 +176,25 @@ class CardsTest(unittest.TestCase):
         self.assertEqual(table_row(body, "Read"), ["Read", "200", "–", "–"])
         self.assertIn("about 30 s left", live_sentence(d, 8080))
 
+    def test_speed_positions_follow_the_speculation(self) -> None:
+        """Phase 23.5.1.8: the Position row (was Guess): MTP's guesses; n-gram's points along its long run; both."""
+        from monitor.cards import draft_positions
+        have = range(96)
+        self.assertEqual(draft_positions("draft-mtp", 2, 64, have, 6), [1, 2])
+        self.assertEqual(draft_positions("ngram-mod", 1, 96, have, 6), [1, 8, 16, 32, 64, 96])
+        self.assertEqual(draft_positions("ngram-mod", 1, 64, have, 6), [1, 8, 16, 32, 64])          # llama.cpp's max
+        self.assertEqual(draft_positions("ngram-mod", 1, 32, have, 6), [1, 8, 16, 32])
+        self.assertEqual(draft_positions("draft-mtp,ngram-mod", 2, 64, have, 6), [1, 2, 16, 32, 64])
+        self.assertEqual(draft_positions("draft-mtp,ngram-mod", 4, 64, have, 4), [1, 2, 3, 4])      # a narrow card
+        self.assertEqual(draft_positions("ngram-mod", 1, 64, range(20), 6), [1, 8, 16])           # only counted ones
+        m = {"spec_decode_num_draft_tokens_total": 640, "spec_decode_num_accepted_tokens_total": 500,
+             "spec_decode_num_drafts_total": 10}
+        d = ServerData(up=True, slots=True, metrics=m, accepted_by_pos={i: 10 - i // 12 for i in range(96)},
+                       cmd="llama-server --spec-type ngram-mod --spec-ngram-mod-n-max 96")
+        body = text(card_speed(view(detail="full"), d).lines)
+        self.assertEqual(table_row(body, "Position"), ["Position", "1", "8", "16", "32", "64", "96"])
+        self.assertNotIn("Guess ", body)
+
     def test_averages_need_time_behind_them(self) -> None:
         """One 1-token reply measures ~1 µs of writing: no 1,000,000 tok/s average, nothing until 0.5 s."""
         m = {"prompt_tokens_total": 5000, "prompt_seconds_total": 6.5, "tokens_predicted_total": 1,

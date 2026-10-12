@@ -11,7 +11,7 @@ from typing import Dict, List, Optional, Tuple, cast
 
 from support import GIB, shape, with_window
 from carl_core.domain.autofit import (GOALS, SCOPES, Budget, Candidate, auto_fit, best_downloaded, candidate,
-                                      model_plan, order_note, plan_for, TIERS)
+                                      model_plan, order_note, plan_for, setups, TIERS)
 from carl_core.domain.fit import Spec, estimated_limit, need_bytes
 from carl_core.domain.gguf import ModelShape
 from carl_core.domain.settings import LLAMA_KEYS
@@ -375,3 +375,40 @@ class PassesTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class MeasuredModesTest(unittest.TestCase):
+    """Phase 23.5.1.8: Auto fit takes this Mac's Auto-tune result first, then the catalogue's table (tune.speeds); the
+    other measured MTP modes come before MTP goes."""
+
+    def model(self, local: Optional[dict] = None) -> ModelInfo:
+        m = {"name": "q", "family": "qwen3.6-35b-a3b", "arch": "moe", "rank": 3, "bytes": 14 * GIB,
+             "tune": {"spec": "draft-mtp,ngram-mod", "spec_n": 2,
+                      "speeds": [{"spec": "draft-mtp,ngram-mod", "n": 2, "score": 48.6},
+                                 {"spec": "draft-mtp,ngram-mod", "n": 1, "score": 56.2},
+                                 {"spec": "ngram-mod", "n": 1, "score": 53.9}]}}
+        if local is not None:
+            m["local"] = local
+        return cast(ModelInfo, m)
+
+    def test_the_catalogue_table_orders_the_mtp_modes(self) -> None:
+        c = candidate(self.model(), SHAPES["qwen3.6-35b-a3b"])
+        self.assertEqual(c.spec, Spec("draft-mtp,ngram-mod", 2, 0))
+        self.assertEqual([(s.kind, s.n) for s in c.mtp_modes], [("draft-mtp,ngram-mod", 1), ("draft-mtp,ngram-mod", 2)])
+        self.assertEqual([(s.kind, s.n, dropped) for s, dropped in setups(c)],
+                         [("draft-mtp,ngram-mod", 2, False), ("draft-mtp,ngram-mod", 1, False), ("ngram-mod", 2, True)])
+
+    def test_this_macs_auto_tune_comes_first(self) -> None:
+        local = {"tune": {"settings": {"spec": "draft-mtp", "spec_n": 1},
+                          "results": {"speculation": {"none:1": {"score": 40.0}, "draft-mtp:1": {"score": 50.0},
+                                                      "draft-mtp:2": {"score": 45.0}}}}}
+        c = candidate(self.model(local), SHAPES["qwen3.6-35b-a3b"])
+        self.assertEqual(c.spec, Spec("draft-mtp", 1, 0))
+        self.assertEqual([(s.kind, s.n) for s in c.mtp_modes], [("draft-mtp", 1), ("draft-mtp", 2)])
+
+    def test_no_table_no_other_modes(self) -> None:
+        m = self.model()
+        del m["tune"]["speeds"]                                  # type: ignore[misc]
+        c = candidate(m, SHAPES["qwen3.6-35b-a3b"])
+        self.assertEqual(c.mtp_modes, ())
+        self.assertEqual(len(setups(c)), 2)

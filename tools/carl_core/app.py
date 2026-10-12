@@ -478,6 +478,8 @@ class Carl:
         n = vals.get("spec_n", 1)
         spec = mtp_spec(str(vals.get("spec") or "none"), n if isinstance(n, int) else 1, shape, drafter)
         c = replace(candidate(m, shape), weights=weights, kv=str(vals.get("kv") or "q4_0"), spec=spec)
+        if "config" in (src.get("spec"), src.get("spec_n")):      # the user's own speculation: no other MTP mode
+            c = replace(c, mtp_modes=())
         budget = self.budget()
         ub = cfg.llama.get("ub")
         tier, plan = model_plan(c, budget.allowed, budget.swa_full, ctx, None if want == "auto" else int(want),
@@ -486,8 +488,10 @@ class Carl:
             return ""
         if plan.ctx != ctx:
             vals["ctx"], src["ctx"] = plan.ctx, "auto-fit"
-        if plan.dropped:
+        if plan.dropped or plan.spec != c.spec:       # MTP went, or another measured MTP mode fits (Phase 23.5.1.8)
             vals["spec"], src["spec"] = plan.spec.kind, "auto-fit"
+            if plan.spec.mtp:
+                vals["spec_n"], src["spec_n"] = plan.spec.n, "auto-fit"
         return order_note(m.get("name", ""), tier, plan, ctx)
 
     # ------------------------------------------------------------ Hugging Face + downloads

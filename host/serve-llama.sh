@@ -168,6 +168,13 @@ UB="${UB:-512}"                 # -ub physical batch; 512 measured best (90.5 vs
 SPEC="${SPEC:-draft-mtp,ngram-mod}"   # per model: catalogue / Auto-tune / config.json, "spec[:n]" accepted
 if [[ "$SPEC" == *:* ]]; then SPEC_N="${SPEC_N:-${SPEC##*:}}"; SPEC="${SPEC%%:*}"; fi
 SPEC_N="${SPEC_N:-1}"           # --spec-draft-n-max; 27B dense: MTP n>1 loses on Metal
+# n-gram's own settings (llama.cpp's ngram-mod; Phase 23.5.1.8): the lookup (the last tokens that must have been seen
+# before), the shortest draft it makes and the longest. The same as NGRAM in tools/carl_core/domain/fit.py. Measured
+# on the A3B IQ3 and the 27B IQ3 (2026-10-12): 32 / 16 / 96 beat llama.cpp's 24 / 48 / 64 (re-emit 5.1-5.4x against
+# 3.9-4.1x over no speculation; prose and new code the same)
+NGRAM_MATCH="${NGRAM_MATCH:-32}"
+NGRAM_MIN="${NGRAM_MIN:-16}"
+NGRAM_MAX="${NGRAM_MAX:-96}"
 # MTP speculation (draft-mtp) needs an MTP head in the model file (Qwen) or a separate drafter
 # (Gemma 4: DRAFT = its mtp-*.gguf, passed with -md; it shares the target's KV cache). carl.py
 # already falls back to n-gram for a configured SPEC; this covers a SPEC from the environment.
@@ -196,7 +203,7 @@ CKPT="${CKPT:-8}"; CKPT_STEP="${CKPT_STEP:-4096}"   # context checkpoints (hybri
 # LOG_FILE=none disables file logging (terminal output only).
 LOG_DIR="${LOG_DIR:-$HOME/models/logs}"
 LOG_FILE="${LOG_FILE:-$LOG_DIR/llama-server-$(date +%Y%m%d-%H%M%S).log}"
-for v in UB BATCH CKPT CKPT_STEP SPEC_N; do require_int "$v" "${!v}"; done
+for v in UB BATCH CKPT CKPT_STEP SPEC_N NGRAM_MATCH NGRAM_MIN NGRAM_MAX; do require_int "$v" "${!v}"; done
 [[ -z "${CACHE_RAM:-}" ]] || require_int CACHE_RAM "$CACHE_RAM"
 [[ -z "${RESERVE_GB:-}" ]] || require_int RESERVE_GB "$RESERVE_GB"
 
@@ -359,7 +366,12 @@ swa_args=()
 
 spec_args=()
 if [[ "$SPEC" != "none" ]]; then
-  spec_args=(--spec-type "$SPEC" --spec-draft-n-max "$SPEC_N")
+  # --spec-draft-n-max is read only by MTP (and Gemma's drafter); n-gram (ngram-mod) has its own settings and drafts
+  # only long runs it has seen before (Phase 23.5.1.8: CARL's guesses never reached it)
+  spec_args=(--spec-type "$SPEC")
+  [[ ",$SPEC," == *,draft-mtp,* ]] && spec_args+=(--spec-draft-n-max "$SPEC_N")
+  [[ ",$SPEC," == *,ngram-mod,* ]] && spec_args+=(--spec-ngram-mod-n-match "$NGRAM_MATCH" \
+    --spec-ngram-mod-n-min "$NGRAM_MIN" --spec-ngram-mod-n-max "$NGRAM_MAX")
 fi
 
 slot_args=()
@@ -401,9 +413,10 @@ fi
 if [[ "$SPEC" == none ]]; then
   echo "Speculation: none ($(source_of spec "" SPEC))."
 else
-  guesses="$SPEC_N guess$([[ "$SPEC_N" == 1 ]] || echo es)"
+  guesses=""   # MTP's guesses; n-gram has none of its own to set (Phase 23.5.1.8)
+  [[ ",$SPEC," == *,draft-mtp,* ]] && guesses=", $SPEC_N guess$([[ "$SPEC_N" == 1 ]] || echo es)"
   drafter=""; [[ ${#draft_args[@]} -gt 0 ]] && drafter=" The MTP drafter is $(basename "$DRAFT")."
-  echo "Speculation: $(spec_text "$SPEC"), $guesses (${SPEC_NOTE:-$(source_of spec "" SPEC)}).$drafter"
+  echo "Speculation: $(spec_text "$SPEC")$guesses (${SPEC_NOTE:-$(source_of spec "" SPEC)}).$drafter"
 fi
 if [[ "$SWA" == full ]]; then
   echo "Sliding window: full cache. CARL can restore saved sessions and prompts (cache.swa = ${SWA_MODE:-auto})."

@@ -34,7 +34,8 @@ class ScoringTest(unittest.TestCase):
 
     def test_n1_is_never_dropped(self) -> None:
         """One guess (n = 1) is always measured: it sometimes wins (user, 2026-10-04). MTP and MTP +
-        n-gram at n = 1 for an MTP head and for a drafter, quick and default; n-gram at n = 1 without MTP."""
+        n-gram at n = 1 for an MTP head and for a drafter, quick and default; n-gram once (its guesses are not
+        llama.cpp's ngram-mod settings: Phase 23.5.1.8)."""
         for has_mtp, drafter in ((True, False), (False, True), (True, True)):
             for quick in (True, False):
                 modes = t.speculation_modes(has_mtp, quick, drafter)
@@ -45,9 +46,11 @@ class ScoringTest(unittest.TestCase):
             self.assertIn(("ngram-mod", 1), t.speculation_modes(False, quick, False))
 
     def test_modes_and_depths(self) -> None:
-        self.assertEqual(t.speculation_modes(False, False), [("none", 1), ("ngram-mod", 2), ("ngram-mod", 1)])
-        self.assertEqual(t.speculation_modes(False, True), [("none", 1), ("ngram-mod", 2), ("ngram-mod", 1)])
+        self.assertEqual(t.speculation_modes(False, False), [("none", 1), ("ngram-mod", 1)])
+        self.assertEqual(t.speculation_modes(False, True), [("none", 1), ("ngram-mod", 1)])
         self.assertEqual(len(t.speculation_modes(True, True)), 4)
+        self.assertEqual(t.spec_words("ngram-mod", 2), "n-gram")
+        self.assertEqual(t.spec_words("draft-mtp,ngram-mod", 2), "MTP + n-gram, 2 guesses")
         self.assertEqual(t.speculation_modes(True, False)[-1], ("draft-mtp,ngram-mod", 2))
         self.assertEqual(t.read_depths("quick"), [8192, 32768])
 
@@ -144,7 +147,7 @@ def plan(limit: int, depth: t.Depth = "quick", base_ctx: int = 98304, nextn: int
 
 
 class AutoTunerTest(unittest.TestCase):
-    SPEEDS = {"none:1": 44.0, "ngram-mod:2": 46.0, "draft-mtp:1": 54.0, "draft-mtp,ngram-mod:1": 55.0,
+    SPEEDS = {"none:1": 44.0, "ngram-mod:1": 46.0, "draft-mtp:1": 54.0, "draft-mtp,ngram-mod:1": 55.0,
               "draft-mtp:2": 50.0, "draft-mtp,ngram-mod:2": 51.0}
 
     def test_full_run(self) -> None:
@@ -176,11 +179,12 @@ class AutoTunerTest(unittest.TestCase):
         with self.assertRaisesRegex(ConfigError, "a context of 16K tokens"):
             t.AutoTuner(FakeServer(self.SPEEDS), Steps()).run(plan(limit=int(14.3 * GIB)))
 
-    def test_no_mtp_head_measures_ngram_with_1_and_2_drafts(self) -> None:
+    def test_no_mtp_head_measures_ngram_once(self) -> None:
+        """llama.cpp's ngram-mod reads no guesses (Phase 23.5.1.8): one n-gram row."""
         server = FakeServer(dict(self.SPEEDS, **{"ngram-mod:1": 48.0}))
         rec = t.AutoTuner(server, Steps()).run(plan(limit=21 * GIB, nextn=0))
-        self.assertEqual(list(rec["results"]["speculation"]), ["none:1", "ngram-mod:2", "ngram-mod:1"])
-        self.assertEqual((rec["settings"]["spec"], rec["settings"]["spec_n"]), ("ngram-mod", 1))   # it won here
+        self.assertEqual(list(rec["results"]["speculation"]), ["none:1", "ngram-mod:1"])
+        self.assertEqual((rec["settings"]["spec"], rec["settings"]["spec_n"]), ("ngram-mod", 1))
 
 
 class LongTest(unittest.TestCase):

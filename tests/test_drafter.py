@@ -277,15 +277,14 @@ class FitTest(unittest.TestCase):
 class TuneModesTest(unittest.TestCase):
     def test_a_drafter_gets_mtp_at_one_to_four_drafts(self) -> None:
         modes = t.speculation_modes(False, False, drafter=True)
-        self.assertEqual(modes[:2], [("none", 1), ("ngram-mod", 2)])
+        self.assertEqual(modes[:2], [("none", 1), ("ngram-mod", 1)])
         self.assertEqual(modes[2:], [(s, n) for n in (1, 2, 3, 4) for s in ("draft-mtp", "draft-mtp,ngram-mod")])
         self.assertEqual(t.speculation_modes(False, True, drafter=True)[-1], ("draft-mtp,ngram-mod", 2))
-        self.assertNotIn(("ngram-mod", 1), modes)                  # n-gram alone at n=1 only without MTP
 
     def test_qwen_modes_unchanged(self) -> None:
         self.assertEqual(t.speculation_modes(True, False)[-1], ("draft-mtp,ngram-mod", 2))
         self.assertEqual(t.speculation_modes(True, True)[-1], ("draft-mtp,ngram-mod", 1))
-        self.assertEqual(t.speculation_modes(False, False), [("none", 1), ("ngram-mod", 2), ("ngram-mod", 1)])
+        self.assertEqual(t.speculation_modes(False, False), [("none", 1), ("ngram-mod", 1)])
 
     def test_plan_with_a_drafter(self) -> None:
         plan = t.TunePlan(shape=GEM_SHAPE, weights=4 * GIB + DRAFT_BYTES, limit=24 * GIB, base_ctx=98304,
@@ -294,7 +293,7 @@ class TuneModesTest(unittest.TestCase):
         self.assertEqual(plan.steps(), 1 + 10 + 2 + 1)
         no_drafter = t.TunePlan(shape=GEM_SHAPE, weights=4 * GIB, limit=24 * GIB, base_ctx=98304, depth="default",
                                 date="d", machine="m", llama_cpp="v", edit_source="")
-        self.assertEqual(no_drafter.modes(), [("none", 1), ("ngram-mod", 2), ("ngram-mod", 1)])
+        self.assertEqual(no_drafter.modes(), [("none", 1), ("ngram-mod", 1)])
 
 
 if __name__ == "__main__":
@@ -366,3 +365,18 @@ class CustomGemmaDrafterTest(unittest.TestCase):
         w2 = gemma12_world(local={"schema": 1, "models": {"fine": {"path": FINE_PATH, "source": "file",
                                                                     "draft": draft_ref()}}})
         self.assertNotIn("draft_offer", model(w2, "fine"))
+
+
+class NgramSettingsTest(unittest.TestCase):
+    """Phase 23.5.1.8: n-gram's own settings (llama.cpp's ngram-mod), the same in the launcher and the router; the
+    guesses go only with MTP."""
+
+    def test_the_launcher_and_the_router_agree(self) -> None:
+        import os
+        import re
+        from carl_core.domain.fit import NGRAM
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        with open(os.path.join(root, "host", "serve-llama.sh"), encoding="utf-8") as f:
+            sh = f.read()
+        got = {k.lower(): int(v) for k, v in re.findall(r'^NGRAM_(MATCH|MIN|MAX)="\$\{NGRAM_\w+:-(\d+)\}"', sh, re.M)}
+        self.assertEqual(got, NGRAM)

@@ -139,6 +139,7 @@ On every Mac (user, 2026-10-09: "every Mac with 48K floor"), Auto fit and a star
 - Nothing below 48K. A model that fits none of them does not fit.
 - **A model with a smaller catalogue window** (`saluki-27b`: 48K, sized for 16 GB Macs) tries each setup at its own window: 2 slots × 48K is its first setup, so it competes with the others' 2 × 96K on quality rank.
 - **MTP goes first.** When a setup fits only without MTP, Auto fit uses n-gram only (MTP + n-gram keeps its n-gram part) before it removes a slot or makes the context smaller. `./carl.sh fit`, the Server panel and the start lines say so.
+- **The speculation it starts from** (Phase 23.5.1.8): this Mac's Auto-tune result for the model, else the catalogue's. Before MTP goes, Auto fit tries the other MTP modes measured for the model, best score first: this Mac's Auto-tune results, else the catalogue's table (`tune.speeds`: each measured mode's prose, code and edit speed, its score, the Mac, the llama.cpp version and the date). MTP's memory hardly depends on its guesses, so this seldom changes the result.
 - A start never gets a larger context than the model's own (its catalogue or header context). A context from your settings or from Auto-tune is not changed: then the launcher takes 2 slots when they fit, MTP goes before the second slot, and the check refuses a start that does not fit.
 - The memory that a model can use: the GPU memory limit, or the RAM minus the memory kept free, whichever is smaller (the launcher's slots too).
 

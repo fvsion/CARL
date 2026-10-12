@@ -7,7 +7,7 @@ from __future__ import annotations
 import collections
 import os
 from dataclasses import dataclass, field, replace
-from typing import Callable, Dict, List, Optional, Sequence, Tuple
+from typing import Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from carl_core.domain.gguf import KV_BPE, kv_bytes_per_token
 from carl_core.domain.llamacpp import VersionCheck, health_rows
@@ -377,9 +377,21 @@ def _num(x: float, decimals: int = 0) -> str:
     return "–" if not x else f"{x:,.{decimals}f}"
 
 
+def draft_positions(mode: str, n: int, ngram_max: int, have: Iterable[int], room: int) -> List[int]:
+    """The draft positions (from 1) the speed card shows, by the speculation (Phase 23.5.1.8): MTP alone its guesses
+    (1 to n); n-gram alone points along its long run (1, 8, 16, 32, 64, 96, up to its maximum draft); MTP + n-gram
+    both (1 to n, then 16, 32, 64). Only positions the server counted (have: from 0), at most room."""
+    mtp, ngram = "draft-mtp" in mode, "ngram-mod" in mode
+    want = list(range(1, max(n, 1) + 1)) if mtp else [1]
+    if ngram:
+        want += [p for p in ((16, 32, 64) if mtp else (8, 16, 32, 64, 96)) if p <= ngram_max]
+    seen = set(have)
+    return sorted({p for p in want if p - 1 in seen})[:max(room, 1)]
+
+
 def card_speed(v: View, d: ServerData, w: int = 66) -> Card:
     """A table: read and write tok/s now, on average and in the last request; the share of correct guesses. At
-    full also the tokens per step, the guesses by position, the totals and the queue."""
+    full also the tokens per step, the drafts accepted by position, the totals and the queue."""
     m = d.metrics
     pp_avg, tg_avg = averages(d)
     writing = d.busy and d.decoded > 0
@@ -413,9 +425,11 @@ def card_speed(v: View, d: ServerData, w: int = 66) -> Card:
             L.append(row("per step", f"{acc / steps:.2f} tokens accepted"))
         pos = d.accepted_by_pos
         if pos and steps:
-            ks = sorted(pos)[:4]
-            L.append(f"{DIM}{'Guess':<{lw}}{R}" + "".join(f"{i + 1:>7}" for i in ks))
-            L.append(f"{DIM}{'Accepted':<{lw}}{R}" + "".join(f"{percent(pos[i] / steps):>7}" for i in ks))
+            ng_max = flag(d.cmd, "--spec-ngram-mod-n-max", default="64")     # llama.cpp's own (CARL passes 96)
+            ks = draft_positions(mode, int(n) if str(n).isdigit() else 1, int(ng_max) if str(ng_max).isdigit() else 64,
+                                 pos, (w - 4 - lw) // 7)
+            L.append(f"{DIM}{'Position':<{lw}}{R}" + "".join(f"{k:>7}" for k in ks))
+            L.append(f"{DIM}{'Accepted':<{lw}}{R}" + "".join(f"{percent(pos[k - 1] / steps):>7}" for k in ks))
         if r:
             took = (r.t1 or 0) - (r.t0 or 0)
             L.append(row("last request", duration(took)))

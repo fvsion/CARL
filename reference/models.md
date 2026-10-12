@@ -20,7 +20,7 @@ The catalogue is `host/catalog.json`. Each model is served under its CARL name (
 | `qwen3.8-27b-iq3` | unsloth Qwen3.8-27B UD-IQ3_XXS, 10.9 GB | The smallest stock 27B. For 24 GB Macs that need the dense 27B with 2 slots (2 × 96K fit), or a long context with 1 slot. It does not fit a 16 GB Mac under the default GPU memory limit (catalogue `min_ram_gb` 24). IQ3 loses more quality than Q3_K and Q4 in tool calls and edits: use it only when no larger build fits. ~10 tok/s on new text, 31 tok/s on an edit (M2 Max). |
 | `orcarouter-27b-iq3` | orcarouter Qwen3.8-27B IQ3_XXS imatrix (bartowski), 12.6 GB | Abliterated 27B: two 96K slots fit a 24 GB Mac |
 | `heretic-35b-a3b-iq3` | mradermacher i1-IQ3_XXS of llmfan46's Heretic 35B-A3B, 13.6 GB | Abliterated 35B-A3B for 24 GB Macs. **No MTP head**: n-gram speculation only. |
-| `saluki-27b` | ConwayResearch Underdog Saluki 27B 1.0 IQ2-mix (GSQ-RCO), 7.9 GB, no MTP head | Added on 2026-10-11 (Phase 23.4.4): a 2-bit Qwen3.8-27B for 16 GB Macs. 2 × 48K fit there (9.89 GiB measured on the M3 Pro), so the main session keeps a coder subagent. ~11.6 tok/s new text, 52–55 re-emitting with n-gram, 75–89 tok/s prompt reading (M3 Pro); about half on a 16 GB Mac's base chip. MTP (the Kujira build) was a loss: +1.6–2.2 GiB, no speed on new text. CARL's code test (2026-10-09): 13 of 18 tasks with thinking off (34 s a task), 8 of 18 with thinking on (9 answers cut off at 16,000 tokens). CARL's agent runs (2 × 48K): the hidden tests passed in 6 of 6 with thinking off. Its sampling is the model card's (0.6 / 0.95 / 20). Its catalogue window is 48K: Auto fit counts 2 × 48K as its first pass, and its quality rank (7) is above the 12B's, so it is the hard code choice on 16 GB Macs (user, 2026-10-11: no data shows the 12B better at agent coding with CARL's current hand-off). |
+| `saluki-27b` | ConwayResearch Underdog Saluki 27B 1.0 IQ2-mix (GSQ-RCO), 7.9 GB, no MTP head | Added on 2026-10-11 (Phase 23.4.4): a 2-bit Qwen3.8-27B for 16 GB Macs. 2 × 48K fit there (9.89 GiB measured on the M3 Pro), so the main session keeps a coder subagent. ~11.6 tok/s new text, 52–55 re-emitting with n-gram, 75–89 tok/s prompt reading (M3 Pro); about half on a 16 GB Mac's base chip. MTP (the Kujira build) was a loss: +1.6–2.2 GiB, no speed on new text. CARL's code test (2026-10-09): 13 of 18 tasks with thinking off (34 s a task), 8 of 18 with thinking on (9 answers cut off at 16,000 tokens). CARL's agent runs (2 × 48K): on the large tasks the hidden tests passed in 6 of 6 with thinking off and 4 of 6 at the default, and most runs hit the time limit; on the medium tasks (2026-10-11, CARL's default thinking, the coder's thinking off and on) 12 of 12, the main session writing 10 of the 12 itself in 6–19 min (a hand-off took 54–90 min at these speeds). Its sampling is the model card's (0.6 / 0.95 / 20). Its catalogue window is 48K: Auto fit counts 2 × 48K as its first pass, and its quality rank (7) is above the 12B's, so it is the hard code choice on 16 GB Macs (user, 2026-10-11: no data shows the 12B better at agent coding with CARL's current hand-off). |
 | `qwen3.8-9b` | empero-ai Qwen3.8-9B Distill Q4_K_M, 5.8 GB | A small model for 16 GB Macs, or for more subagents at the same time. Thinking on and off only. In CARL's code test (2026-10-04) it was less accurate than the Gemma 4 E4B, and half as fast, so Auto fit now chooses the E4B or the 12B on 16 GB Macs. |
 
 Auto fit uses the catalogue `rank` (the quality rank, 1 = best: published benchmarks and CARL's code test first, then the quantization), the `arch` (`moe` or `dense`) and `fast` (a small dense model that the everyday goal takes with the MoE builds: the E4B). It never chooses an abliterated model ([Auto fit](server.md#auto-fit-and-the-start-model)).
@@ -146,7 +146,7 @@ IQ3_M is a good choice only where no larger file fits, for example on a 24 GB Ma
 | none | 49 | 45 | 46 |
 | MTP, 1 guess | 47 | 44 | 46 |
 | MTP, 2 guesses | 40 | 41 | 49 |
-| n-gram (`ngram-mod`), 2 guesses | 47 | 42 | 117 |
+| n-gram (`ngram-mod`) | 47 | 42 | 117 |
 | **MTP + n-gram, 1 guess** | **49** | **50** | **93** |
 | MTP + n-gram, 2 guesses | 42 | 43 | 83 |
 
@@ -157,7 +157,7 @@ IQ3_M is a good choice only where no larger file fits, for example on a 24 GB Ma
 | none | 9.4 | 8.9 | 8.9 |
 | MTP, 1 guess | 9.7 | 9.8 | 11.0 |
 | MTP, 2 guesses | 8.9 | 9.4 | 11.3 |
-| n-gram (`ngram-mod`), 2 guesses | 9.8 | 9.6 | 21.5 |
+| n-gram (`ngram-mod`) | 9.8 | 9.6 | 21.5 |
 | **MTP + n-gram, 1 guess** | **10.0** | **9.8** | **31.1** |
 | MTP + n-gram, 2 guesses | 8.7 | 9.7 | 23.3 |
 

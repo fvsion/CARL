@@ -47,9 +47,9 @@ LLAMA_ADV = [                       # the full detail level's rows (More setting
     SettingRow("ckpt", "Checkpoints", ["8", "4", "16"], "llama:ckpt", "8"),
     SettingRow("ckstep", "Checkpoint step", ["4096", "1024", "2048", "8192"], "llama:ckpt_step", "4096"),
 ]
-SPEC_COMBOS = ["none|1", "ngram-mod|1", "ngram-mod|2", "ngram-mod|3", "draft-mtp|1", "draft-mtp|2", "draft-mtp|3",
-               "draft-mtp|4", "draft-mtp,ngram-mod|1", "draft-mtp,ngram-mod|2", "draft-mtp,ngram-mod|3",
-               "draft-mtp,ngram-mod|4"]          # the Speculation row: a mode and its guesses together
+SPEC_COMBOS = ["none|1", "ngram-mod|1", "draft-mtp|1", "draft-mtp|2", "draft-mtp|3", "draft-mtp|4",
+               "draft-mtp,ngram-mod|1", "draft-mtp,ngram-mod|2", "draft-mtp,ngram-mod|3",
+               "draft-mtp,ngram-mod|4"]          # the Speculation row: a mode and MTP's guesses together (n-gram has none)
 
 
 # Auto fit's goal and scope: chosen in the Auto fit panel (saved at once), not Server-panel rows.
@@ -140,9 +140,9 @@ SET_HELP = {
              "subagent at the same time), else 1. 3 or 4: more subagents at the same time. The list offers 3 and 4 only "
              "when they fit this Mac. More slots write more tokens in total, but each slot is slower.",
     "spec": "The server guesses tokens ahead and checks them: more speed, the same answer. n-gram copies text that is "
-            "in the context already (fast for edits). MTP: a small predictor guesses new text. Guesses: the tokens it "
-            "guesses for each step. Auto-tune measures the best choice.",
-    "specn": "The tokens the speculation guesses for each step. On Metal, more guesses do not make dense models faster.",
+            "in the context already, a long run at a time (fast for edits). MTP: a small predictor guesses new text. "
+            "Guesses: the tokens MTP guesses for each step (n-gram has none to set). Auto-tune measures the best choice.",
+    "specn": "The tokens MTP guesses for each step. On Metal, more guesses do not make dense models faster.",
     "cache": "The RAM cache: the server keeps sessions that leave a slot in RAM while it runs. When a session comes "
              "back, the server does not read it all again. auto: CARL sizes it from the free memory at each start.",
     "net": _NET_HELP,
@@ -247,8 +247,10 @@ def shown_value(key: str, v: object, long: bool = False) -> str:
 
 
 def spec_value(p: Pending) -> str:
-    """The Speculation row's value: the mode and its guesses ("draft-mtp|1")."""
-    return f"{p.get('spec', 'none')}|{p.get('specn', '1')}"
+    """The Speculation row's value: the mode and MTP's guesses ("draft-mtp|1"); n-gram alone and none: "|1" (n-gram has
+    no guesses to set: Phase 23.5.1.8)."""
+    spec = str(p.get("spec", "none"))
+    return f"{spec}|{p.get('specn', '1') if 'draft-mtp' in spec else '1'}"
 
 
 def parse_typed(key: str, text: str) -> Tuple[Optional[Value], str]:

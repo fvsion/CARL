@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
 from .errors import ConfigError
-from .fit import Spec, check_start, mtp_spec, prompt_cache_mib, start_plan, window_label
+from .fit import NGRAM, Spec, check_start, mtp_spec, prompt_cache_mib, start_plan, window_label
 from .gguf import ModelShape
 from .types import Settings
 
@@ -133,7 +133,11 @@ def preset_ini(preset: Preset, common: Common) -> str:
         out += [f"cache-type-k = {m.kv}", f"cache-type-v = {m.kv}", f"cache-ram = {m.cache_mib}"]
         out += [f"{k} = {_num(v)}" for k, v in m.sampling]
         if m.spec != "none":
-            out += [f"spec-type = {m.spec}", f"spec-draft-n-max = {m.spec_n}"]
+            out.append(f"spec-type = {m.spec}")
+            if "draft-mtp" in m.spec:                   # MTP's guesses; n-gram does not read it (Phase 23.5.1.8)
+                out.append(f"spec-draft-n-max = {m.spec_n}")
+            if "ngram-mod" in m.spec:                   # n-gram's own settings
+                out += [f"spec-ngram-mod-n-{k} = {v}" for k, v in NGRAM.items()]
             if m.draft and "draft-mtp" in m.spec:
                 out.append(f"spec-draft-model = {m.draft}")
         if m.template:

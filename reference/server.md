@@ -132,13 +132,24 @@ The catalogue (`tune.spec`, `tune.spec_n`) or the Auto-tune result sets the spec
 | 35B MoE (Q4, stock and Heretic) | MTP + n-gram | 2 |
 | Stock IQ3 builds (35B, 27B) | MTP + n-gram | 1 |
 | 9B Distill | MTP + n-gram | 1 |
-| Heretic 35B IQ3 (no MTP head) | n-gram only | 1 |
-| orcarouter 27B IQ3 | n-gram only | 2 (a tie with MTP + n-gram) |
+| Heretic 35B IQ3 (no MTP head) | n-gram only | – |
+| orcarouter 27B IQ3 | n-gram only (a tie with MTP + n-gram) | – |
 | Gemma 4 E4B, 12B, 26B-A4B, 31B (MTP drafter) | MTP + n-gram | 2 (measured: [Gemma 4](models.md#gemma-4)) |
 
 - More guesses help a MoE: with 3B active parameters, it costs little to verify more tokens.
 - 2 guesses lose on IQ quants ([IQ3 speculation](models.md#iq3-speculation-measured-2026-10-03)).
-- A custom model gets MTP + n-gram with 1 guess when its GGUF has an MTP head, MTP + n-gram with 2 guesses when it has an MTP drafter (Gemma 4), else n-gram with 2 guesses.
+- A custom model gets MTP + n-gram with 1 guess when its GGUF has an MTP head, MTP + n-gram with 2 guesses when it has an MTP drafter (Gemma 4), else n-gram.
+- **The guesses are MTP's.** llama.cpp's n-gram (`ngram-mod`) does not read `--spec-draft-n-max`: it drafts a run that it has seen in the context. CARL passes `--spec-draft-n-max` only with MTP (Phase 23.5.1.8; before 1.20.5 an n-gram's "guesses" changed nothing).
+- **n-gram's own settings** (`--spec-ngram-mod-n-match 32 --spec-ngram-mod-n-min 16 --spec-ngram-mod-n-max 96`, every model; `NGRAM_MATCH`, `NGRAM_MIN`, `NGRAM_MAX` in the environment): it drafts when the last 32 tokens were seen before, a run of 16 to 96 tokens. llama.cpp's own are 24, 48 and 64. Measured 2026-10-12 (M3 Pro, llama.cpp 0.6.0; prose, new code, re-emitting a file and an agent-style edit, at a short prompt and a 25K-token one):
+
+  | Model | n-gram setting | Re-emit (× no speculation) | Agent-style edit | Prose, new code |
+  |---|---|---|---|---|
+  | Qwen3.6-35B-A3B IQ3 | llama.cpp's 24 / 48 / 64 | 4.1 / 3.9 | 2.3 / 2.3 | 0.99–1.00 |
+  | | **CARL's 32 / 16 / 96** | **5.4 / 5.4** | 2.9 / 2.6 | 0.99–1.00 |
+  | Qwen3.8-27B IQ3 | llama.cpp's 24 / 48 / 64 | 4.1 / 3.9 | 2.4 / 2.7 | 0.98–0.99 |
+  | | **CARL's 32 / 16 / 96** | **5.1 / 5.3** | 2.7 / 2.7 | 0.98–0.99 |
+
+  The shortest draft matters most (16 instead of 48: n-gram drafts more often); a 32-token match makes fewer wrong drafts; 96 tokens accepts longer runs (128 adds nothing). n-gram does not change the speed of new text.
 - **A separate MTP drafter (Gemma 4).** The model file has no MTP head. The catalogue entry names a drafter file (`draft`). `tools/carl.py launch-env` gives `MTP_SOURCE=drafter` and `DRAFT=<the drafter's path>` when the drafter is downloaded. The launcher adds `-md "$DRAFT"` when `SPEC` contains `draft-mtp`, also when `SPEC` comes from the environment. The drafter uses the context memory of the model, so only its weights add memory: `llama-fit.py --plan` and `--check` get `--draft "$DRAFT"` and count them.
 - **No MTP available.** `MTP_SOURCE=none` means that the file has no MTP head and that no drafter is downloaded. If the speculation uses MTP, the start uses `ngram-mod` instead and tells you one time (`launch-env` for a configured `SPEC`, the launcher for a `SPEC` from the environment).
 - `DRAFT` and `MTP_SOURCE` always come from `tools/carl.py`. The launcher ignores them in the environment.

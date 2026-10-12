@@ -212,6 +212,8 @@ def cmd_run(a: argparse.Namespace) -> int:
                     count = bf.tokenizer(srv.url, ensure_key(s.key_file))      # the briefs' tokens
                     hm.refresh(package_source(a, s), home, coder=a.coder)
                     say("clients: configs written again for this model (./setup --no-install)")
+                    if hm.share_server_files(home, s.conf_dir, a.port):
+                        say("clients: the server's settings file and slots folder linked into the HOME (as on one Mac)")
                 coder = hm.coder_of(home)                  # --no-server: as the last setup left it
                 say(f"clients: {coder_text(coder)}")
                 changed = var.apply(home)

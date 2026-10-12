@@ -250,6 +250,20 @@ Phase 23.5.1.3, measured 2026-10-12 (M3 Pro, the Qwen3.6-35B-A3B IQ3, OpenCode 1
 - On this Mac, the client then removes the older prompt files of the same agent and model. The dashboard's limit removes them on the server for clients on other computers.
 - A saved session that started with the old prompt cannot continue from its file, because its first tokens are different now. llama.cpp reads the session again one time. The tidy step removes its patch, because the base is gone.
 
+### Why each agent's prompt is one file
+
+Phase 23.5.1.7, measured 2026-10-12 (CARL 1.20.3, OpenCode 1.19.0, Pi 1.1.0). A shared first part could be stored once, with each agent's prompt as the rest. The agents share too little for that:
+
+| Model | Agents | Their shared start |
+|---|---|---|
+| Qwen3.6-35B-A3B IQ3 (its template puts the tools first) | OpenCode's main agent (11,508 tokens, 132 MB) and its coder (8,384, 114 MB) | 2,982 tokens |
+| | Pi's main agent (6,624, 104 MB) and its coder (6,557, 104 MB) | 1,333 tokens |
+| | OpenCode's and Pi's | 32 tokens |
+| Gemma 4 12B (its template puts the system text first) | OpenCode's main agent (10,952) and its coder (7,934) | 8 tokens |
+
+- A hybrid Qwen model's file holds a fixed part (~66 MB on the A3B, its recurrent state) that no two prompts share, and ~5.8 KB a token. A shared part would save ~25 MB of the A3B's 455 MB.
+- It would save time only when an agent's prompt changes, and then ~3K tokens: 6–9 s, one time.
+
 ## How a saved state is built
 
 ### One sequence, in order

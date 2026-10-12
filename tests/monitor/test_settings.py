@@ -416,3 +416,18 @@ class StartQuestionTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class NgramGuessesTest(unittest.TestCase):
+    """Phase 23.5.1.8: llama.cpp's ngram-mod has no guesses to set (--spec-draft-n-max is MTP's): the Speculation row
+    offers n-gram once, and an older setting with n-gram guesses reads as n-gram."""
+
+    def test_ngram_has_no_guesses(self) -> None:
+        from monitor.settings import spec_value
+        from monitor.words import spec_name
+        self.assertEqual([c for c in SPEC_COMBOS if c.startswith("ngram-mod")], ["ngram-mod|1"])
+        self.assertEqual(spec_value({"spec": "ngram-mod", "specn": "3"}), "ngram-mod|1")
+        self.assertEqual(spec_value({"spec": "draft-mtp,ngram-mod", "specn": "2"}), "draft-mtp,ngram-mod|2")
+        self.assertEqual(spec_name("ngram-mod", "2"), "n-gram")
+        self.assertEqual(spec_name("draft-mtp,ngram-mod", "2"), "MTP + n-gram, 2 guesses")
+        self.assertEqual(spec_name("draft-mtp", "1"), "MTP, 1 guess")

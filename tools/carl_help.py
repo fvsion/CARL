@@ -391,8 +391,8 @@ def topics(cmd: str) -> Dict[str, List[Block]]:
                    ("--dry-run", "Measure and show the result, but do not save it.")]),
             ("h", "WHAT AUTO-TUNE DOES"),
             ("p", "1. It calculates the largest context that fits with 1 and 2 slots."),
-            ("p", "2. It measures each speculation mode: none, n-gram, and MTP and MTP + n-gram: with 1 and 2 guesses "
-                  "for a model with an MTP head (quick: 1), with 1 to 4 guesses for a model with an MTP drafter "
+            ("p", "2. It measures each speculation mode: none, n-gram, and MTP and MTP + n-gram: with 1 and 2 MTP "
+                  "guesses for a model with an MTP head (quick: 1), with 1 to 4 for a model with an MTP drafter "
                   "(quick: 1 and 2). Each mode writes prose, new code and an edit, "
                   "two times. A mode with more parts must be 3% faster to win."),
             ("p", "3. It measures the read speed at 8K, 32K and 64K tokens. The time to read a full context again "
@@ -441,7 +441,7 @@ def topics(cmd: str) -> Dict[str, List[Block]]:
                    ("KV_K, KV_V", "The type of each half of the context memory. Keep them the same: different "
                                   "types read prompts about 5 times more slowly."),
                    ("SPEC, SPEC_N", "The speculation mode (none, ngram-mod, draft-mtp, draft-mtp,ngram-mod) and "
-                                    "the number of guesses. Default: the settings of the model."),
+                                    "the number of MTP guesses. Default: the settings of the model."),
                    ("TEMP, TOP_P, TOP_K, MIN_P", "The sampling. Default: the settings of the model (Qwen: 1.0, 0.95, 20, 0 for "
                                                  "thinking; Gemma 4: 1.0, 0.95, 64, 0). PRESENCE=0 is the presence penalty."),
                    ("CACHE_RAM", "The size of the RAM cache in MiB. Default: the free memory, from 1 GiB to 8 GiB."),

@@ -674,5 +674,25 @@ class HeadlessPermissionsTest(unittest.TestCase):
         hm.headless_permissions(os.path.join(h, "nothing-here"))          # no config: nothing, no error
 
 
+class ShareServerFilesTest(unittest.TestCase):
+    """2026-10-12: the client HOME sees the server's settings file and slots folder, as on one Mac."""
+
+    def test_links_and_keeps_real_files(self) -> None:
+        from agentbench import home as hm
+        h, conf = tempfile.mkdtemp(), tempfile.mkdtemp()
+        os.makedirs(os.path.join(conf, "slots"))
+        with open(os.path.join(conf, "server-8097.json"), "w", encoding="utf-8") as f:
+            f.write("{}")
+        made = hm.share_server_files(h, conf, 8097)
+        carl = os.path.join(h, ".config", "carl")
+        self.assertEqual(sorted(os.path.basename(m) for m in made), ["server-8097.json", "slots"])
+        self.assertEqual(os.readlink(os.path.join(carl, "slots")), os.path.join(conf, "slots"))
+        self.assertEqual(hm.share_server_files(h, conf, 8097), [])                 # again: nothing to do
+        self.assertEqual(hm.share_server_files(h, conf, 9000), [])                 # no such server file
+        h2 = tempfile.mkdtemp()
+        os.makedirs(os.path.join(h2, ".config", "carl", "slots"))                  # a real folder stays
+        self.assertEqual([os.path.basename(m) for m in hm.share_server_files(h2, conf, 8097)], ["server-8097.json"])
+        self.assertFalse(os.path.islink(os.path.join(h2, ".config", "carl", "slots")))
+
 if __name__ == "__main__":
     unittest.main()

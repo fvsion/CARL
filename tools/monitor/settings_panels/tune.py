@@ -43,7 +43,7 @@ STEPS: List[CardLine] = [
     "result."]
 GUESSES: List[CardLine] = [
     "", f"{B}Guesses per mode{R}",
-    row("n-gram", "2 (1 too for a model with no MTP)"),
+    row("n-gram", "none to set (it copies a long run it has seen)"),
     row("MTP", "1 and 2 (quick: 1)"),
     row("MTP + n-gram", "1 and 2 (quick: 1)"),
     row("MTP drafter", "1 to 4 (quick: 1 and 2), for Gemma 4")]

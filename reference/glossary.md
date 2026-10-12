@@ -54,7 +54,7 @@
 |---|---|---|---|
 | **speculation** | The server guesses tokens ahead and checks them. More speed, the same answer. | spec, speculative decoding (simple) | `--spec-type` |
 | Modes: **none**, **n-gram**, **MTP**, **MTP + n-gram** | n-gram: copies text that is already in the context (fast for edits). MTP: a small predictor guesses new text. | ngram-mod, draft-mtp, draft-mtp,ngram-mod, MTP+n-gram | the llama.cpp names |
-| **guesses** | Tokens the speculation guesses for each step: `MTP + n-gram, 2 guesses`. | draft tokens, n=2, `:2`, spec_n | `--spec-draft-n-max 2` |
+| **guesses** | Tokens MTP guesses for each step: `MTP + n-gram, 2 guesses`. n-gram has none to set: llama.cpp's ngram-mod drafts a run that it has seen in the context (CARL: 16 to 96 tokens after a 32-token match). | draft tokens, n=2, `:2`, spec_n | `--spec-draft-n-max 2` |
 | **guesses accepted** | The % of guesses that were correct. | drafts accepted, draft acceptance | per draft |
 | **MTP head** | The MTP predictor inside the model file (Qwen). | nextn | — |
 | **MTP drafter** | The MTP predictor in a separate small file (Gemma 4). | draft model, drafter (alone in simple), mtp-*.gguf | the file, `-md` |

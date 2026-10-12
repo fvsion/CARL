@@ -10,7 +10,7 @@ import os
 import re
 import time
 from dataclasses import dataclass
-from typing import Any, Dict, Mapping, Optional
+from typing import Any, Dict, List, Mapping, Optional
 
 from .clients import client_env, client_version
 from .proc import run, tail
@@ -156,6 +156,27 @@ def headless_permissions(home: str) -> None:
     cfg["permission"] = {**perm, **HEADLESS_PERMISSIONS}
     with open(path, "w", encoding="utf-8") as f:
         json.dump(cfg, f, indent=2)
+
+
+def share_server_files(home: str, conf_dir: str, port: int) -> List[str]:
+    """The harness HOME's ~/.config/carl as on a Mac where the clients and the server share it: links to the server's
+    settings file (server-PORT.json: which models run the window cache) and its slots folder (the saved states, the
+    records, the cache events). Without them carl-cache did not know the Gemma 12B's server ran the window cache and
+    saved prompt files it could not use (2026-10-12, queue11). The links made (a real file or folder there stays)."""
+    made = []
+    carl = os.path.join(home, ".config", "carl")
+    os.makedirs(carl, exist_ok=True)
+    for name in (f"server-{port}.json", "slots"):
+        target, link = os.path.join(conf_dir, name), os.path.join(carl, name)
+        if not os.path.exists(target) or (os.path.exists(link) and not os.path.islink(link)):
+            continue
+        if os.path.islink(link):
+            if os.readlink(link) == target:
+                continue
+            os.unlink(link)
+        os.symlink(target, link)
+        made.append(link)
+    return made
 
 
 def coder_of(home: str) -> Dict[str, str]:

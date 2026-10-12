@@ -84,8 +84,10 @@ class Candidate:
     kv: str = "q4_0"
     opted_in: bool = True           # a custom model: its card's auto_fit (catalogue models: always)
     fast: bool = False              # a small dense build the everyday goal takes with the MoE builds
-    spec: Spec = NO_SPEC            # the catalogue's speculation (MTP only with a head or a drafter)
+    spec: Spec = NO_SPEC            # its speculation: this Mac's Auto-tune result, else the catalogue's (MTP only with
+                                    # a head or a drafter)
     window: int = 0                 # the catalogue's window when it is below the passes' (0: the passes')
+    mtp_modes: Tuple[Spec, ...] = ()   # the other MTP modes measured, best score first: tried before MTP goes
 
     def kind(self) -> str:
         """MoE, small dense or dense: what the result calls the build."""
@@ -98,6 +100,27 @@ class Candidate:
         return self.rank is not None and not self.abliterated and self.opted_in
 
 
+def measured_mtp(m: ModelInfo, shape: Optional[ModelShape]) -> Tuple[Spec, ...]:
+    """The MTP modes measured for a model, best score first (Phase 23.5.1.8): this Mac's Auto-tune result
+    (models.json models.NAME.tune.results.speculation, "spec:n" keys), else the catalogue's table (tune.speeds)."""
+    rows: List[Tuple[float, str, int]] = []
+    local = (((m.get("local") or {}).get("tune") or {}).get("results") or {}).get("speculation") or {}
+    for key, r in local.items():
+        spec, _, n = str(key).partition(":")
+        rows.append((float((r or {}).get("score") or 0), spec, int(n) if n.isdigit() else 1))
+    if not rows:
+        for r in (m.get("tune") or {}).get("speeds") or []:
+            n = r.get("n", 1)
+            rows.append((float(r.get("score") or 0), str(r.get("spec") or "none"),
+                         n if isinstance(n, int) and not isinstance(n, bool) else 1))
+    out: List[Spec] = []
+    for _, spec, n in sorted(rows, key=lambda x: -x[0]):
+        s = mtp_spec(spec, n, shape, draft_bytes(m))
+        if s.mtp and s not in out:
+            out.append(s)
+    return tuple(out)
+
+
 def candidate(m: ModelInfo, shape: Optional[ModelShape]) -> Candidate:
     """A model record (catalogue or custom) and its header shape as a candidate: its speculation from
     the catalogue (tune.spec, tune.spec_n), MTP with its head or its drafter (the drafter's weights count
@@ -105,6 +128,9 @@ def candidate(m: ModelInfo, shape: Optional[ModelShape]) -> Candidate:
     rank = m.get("rank")
     tune = m.get("tune") or {}
     kv = tune.get("kv", "q4_0")
+    own = ((m.get("local") or {}).get("tune") or {}).get("settings") or {}
+    if own.get("spec"):                  # this Mac's Auto-tune result first (user, 2026-10-12)
+        tune = {**tune, "spec": own.get("spec"), "spec_n": own.get("spec_n", 1)}
     n = tune.get("spec_n", 1)
     spec = mtp_spec(str(tune.get("spec") or "none"), n if isinstance(n, int) else 1, shape, draft_bytes(m))
     ctx = tune.get("ctx")
@@ -114,7 +140,7 @@ def candidate(m: ModelInfo, shape: Optional[ModelShape]) -> Candidate:
                      abliterated=bool(m.get("abliterated")), downloaded=m.get("status") == "downloaded",
                      weights=int(m.get("bytes", 0)), shape=shape, kv=kv if isinstance(kv, str) else "q4_0",
                      opted_in=not m.get("custom") or m.get("auto_fit") is True, fast=m.get("fast") is True,
-                     spec=spec, window=window)
+                     spec=spec, window=window, mtp_modes=measured_mtp(m, shape))
 
 
 @dataclass(frozen=True)
@@ -210,8 +236,13 @@ def own_tier(c: Candidate, tier: Tier) -> Tier:
 
 
 def setups(c: Candidate) -> Tuple[Tuple[Spec, bool], ...]:
-    """The speculation a candidate tries in each pass: its own, then without MTP (n-gram stays)."""
-    return ((c.spec, False), (c.spec.without_mtp(), True)) if c.spec.mtp else ((c.spec, False),)
+    """The speculation a candidate tries in each pass (the agreed order, 2026-10-12: MTP, then n-gram, then the window,
+    then one slot): its own; the other MTP modes measured, best first (another guess count needs other memory); then
+    without MTP (n-gram stays)."""
+    if not c.spec.mtp:
+        return ((c.spec, False),)
+    others = tuple((s, False) for s in c.mtp_modes if s != c.spec)
+    return ((c.spec, False),) + others + ((c.spec.without_mtp(), True),)
 
 
 def plan_for(c: Candidate, tier: Tier, allowed: float, swa_full: bool = True, ub: int = UBATCH) -> Optional[Plan]:

@@ -377,7 +377,7 @@ KEY_HELP: Dict[str, str] = {
     "models.NAME.slots": "The number of slots, or auto (2 slots when they fit).",
     "models.NAME.spec": "The speculation: none, ngram-mod (n-gram), draft-mtp (MTP) or draft-mtp,ngram-mod "
                         "(MTP + n-gram).",
-    "models.NAME.spec_n": "The number of guesses for each step of the speculation.",
+    "models.NAME.spec_n": "The number of MTP guesses for each step (n-gram does not use it).",
     "models.NAME.temp": "The sampling temperature.",
     "models.NAME.top_p": "The sampling top_p.",
     "models.NAME.top_k": "The sampling top_k.",

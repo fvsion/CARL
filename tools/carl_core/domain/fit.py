@@ -63,6 +63,10 @@ class Spec:
 
 
 NO_SPEC = Spec()
+# n-gram's own settings (llama.cpp's ngram-mod: --spec-ngram-mod-n-match / -n-min / -n-max; Phase 23.5.1.8): it drafts
+# only when the last `match` tokens were seen before, a run of `min` to `max` tokens. Measured on the A3B IQ3 and the
+# 27B IQ3: 32 / 16 / 96 (llama.cpp's own: 24 / 48 / 64). The launcher's defaults (host/serve-llama.sh NGRAM_*) are the same.
+NGRAM = {"match": 32, "min": 16, "max": 96}
 
 
 def mtp_spec(kind: str, n: int, shape: Optional[ModelShape], draft_bytes: int = 0) -> Spec:

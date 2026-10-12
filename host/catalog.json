@@ -393,7 +393,15 @@
         "min_p": 0,
         "presence": 0,
         "spec": "draft-mtp,ngram-mod",
-        "spec_n": 1
+        "spec_n": 1,
+        "speeds": [
+          {"spec": "none", "n": 1, "prose": 49, "code": 45, "edit": 46, "score": 46.76, "machine": "M2 Max 32 GB", "llama_cpp": "0.5.0 (11146)", "date": "2026-10-03"},
+          {"spec": "draft-mtp", "n": 1, "prose": 47, "code": 44, "edit": 46, "score": 45.58, "machine": "M2 Max 32 GB", "llama_cpp": "0.5.0 (11146)", "date": "2026-10-03"},
+          {"spec": "draft-mtp", "n": 2, "prose": 40, "code": 41, "edit": 49, "score": 42.07, "machine": "M2 Max 32 GB", "llama_cpp": "0.5.0 (11146)", "date": "2026-10-03"},
+          {"spec": "ngram-mod", "n": 1, "prose": 47, "code": 42, "edit": 117, "score": 53.92, "machine": "M2 Max 32 GB", "llama_cpp": "0.5.0 (11146)", "date": "2026-10-03"},
+          {"spec": "draft-mtp,ngram-mod", "n": 1, "prose": 49, "code": 50, "edit": 93, "score": 56.15, "machine": "M2 Max 32 GB", "llama_cpp": "0.5.0 (11146)", "date": "2026-10-03"},
+          {"spec": "draft-mtp,ngram-mod", "n": 2, "prose": 42, "code": 43, "edit": 83, "score": 48.59, "machine": "M2 Max 32 GB", "llama_cpp": "0.5.0 (11146)", "date": "2026-10-03"}
+        ]
       },
       "why": {
         "kv": "q4_0 K and V: measured +16% cold prompt reading and ~2 GB less memory than q8_0, same decode speed and 8/8 needle recall at 66K. Never mix K and V types: mixed q8_0/q4_0 reads prompts ~5x slower on Metal.",
@@ -467,7 +475,15 @@
         "min_p": 0,
         "presence": 0,
         "spec": "draft-mtp,ngram-mod",
-        "spec_n": 1
+        "spec_n": 1,
+        "speeds": [
+          {"spec": "none", "n": 1, "prose": 9.4, "code": 8.9, "edit": 8.9, "score": 9.1, "machine": "M2 Max 32 GB", "llama_cpp": "0.5.0 (11146)", "date": "2026-10-03"},
+          {"spec": "draft-mtp", "n": 1, "prose": 9.7, "code": 9.8, "edit": 11.0, "score": 9.99, "machine": "M2 Max 32 GB", "llama_cpp": "0.5.0 (11146)", "date": "2026-10-03"},
+          {"spec": "draft-mtp", "n": 2, "prose": 8.9, "code": 9.4, "edit": 11.3, "score": 9.54, "machine": "M2 Max 32 GB", "llama_cpp": "0.5.0 (11146)", "date": "2026-10-03"},
+          {"spec": "ngram-mod", "n": 1, "prose": 9.8, "code": 9.6, "edit": 21.5, "score": 11.37, "machine": "M2 Max 32 GB", "llama_cpp": "0.5.0 (11146)", "date": "2026-10-03"},
+          {"spec": "draft-mtp,ngram-mod", "n": 1, "prose": 10.0, "code": 9.8, "edit": 31.1, "score": 12.45, "machine": "M2 Max 32 GB", "llama_cpp": "0.5.0 (11146)", "date": "2026-10-03"},
+          {"spec": "draft-mtp,ngram-mod", "n": 2, "prose": 8.7, "code": 9.7, "edit": 23.3, "score": 11.07, "machine": "M2 Max 32 GB", "llama_cpp": "0.5.0 (11146)", "date": "2026-10-03"}
+        ]
       },
       "why": {
         "kv": "q4_0 K and V: measured +16% cold prompt reading and ~2 GB less memory than q8_0, same decode speed and 8/8 needle recall at 66K. Never mix K and V types: mixed q8_0/q4_0 reads prompts ~5x slower on Metal.",
@@ -657,7 +673,7 @@
         "agent coding",
         "hard code"
       ],
-      "why_use": "The only 27B that fits a 16 GB Mac with a coder subagent (2 × 48K in 9.9 GiB). With thinking off it passed 13 of 18 of CARL's code tasks at the 9B's speed (34 s a task), and every hidden test in CARL's agent runs.",
+      "why_use": "The only 27B that fits a 16 GB Mac with a coder subagent (2 × 48K in 9.9 GiB). In CARL's agent runs on medium tasks (OpenCode and Pi, CARL's default thinking) it got 12 of 12 right by the hidden tests, 6 to 19 minutes a task on an M3 Pro (a 16 GB Mac reads prompts about half as fast).",
       "trade_offs": "2-bit: the vendor's own numbers only (SWE-bench Verified 30/50 against the full model's 33). Slow, like every dense 27B: ~11.6 tok/s, and a long prompt takes minutes to read on a 16 GB Mac. Long thinking is slow there: a task with a loose prompt can take 25 min.",
       "pick_instead": [
         {
