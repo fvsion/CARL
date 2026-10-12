@@ -42,6 +42,8 @@ class EventsTest(unittest.TestCase):
         self.assertEqual(len(str(e["session"])), cs.MAX_TEXT)
         self.assertIsNone(cs.clean({"e": "place", "from": "elsewhere"}, NOW))           # not a known source
         self.assertIsNone(cs.clean({"e": "drop"}, NOW))
+        self.assertEqual(cs.clean({"e": "compact", "t": NOW, "session": "s1", "agent": "build", "model": "m"}, NOW),
+                         {"e": "compact", "t": NOW, "session": "s1", "agent": "build", "model": "m"})
         self.assertIsNone(cs.clean("x", NOW))
         self.assertEqual(cs.clean({"e": "retire", "t": NOW - 10 * 86400}, NOW)["t"], NOW)   # a far-off clock: now
 

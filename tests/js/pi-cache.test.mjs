@@ -79,3 +79,25 @@ test("Pi carl-cache: a request to CARL's provider is still prepared (the same ex
   assert.equal(await handlers.before_provider_request({ payload: payload() }, o), undefined);
   assert.deepEqual([seen, asked], [[], ["llamacpp/m"]]);
 });
+
+test("Phase 23.5.1.3: Pi's compaction request goes as the compaction agent's (no save, no prompt file); then the session's own again", async () => {
+  const c = ctx({ provider: "llamacpp", id: "m", baseUrl: "http://127.0.0.1:8080/v1" }, []);
+  const agents = [];
+  const proto = (await import(pathToFileURL(join(dir, "carl-cache.js")).href)).CarlCache.prototype;
+  const real = proto.before;
+  proto.before = async function (p, meta) { agents.push(meta.agent); return { payload: p, release: () => {} }; };
+  try {
+    await handlers.session_before_compact({}, c);
+    await handlers.before_provider_request({ payload: payload() }, c);   // the summary's request
+    await handlers.session_compact({}, c);
+    await handlers.before_provider_request({ payload: payload() }, c);
+    await handlers.session_before_compact({}, c);
+    await handlers.session_compact_failed({}, c);
+    await handlers.before_provider_request({ payload: payload() }, c);
+  } finally {
+    proto.before = real;
+  }
+  assert.deepEqual(agents, ["compaction", "pi", "pi"]);
+  // the compaction told to the cache: the session's next request is placed from its agent's prompt
+  assert.ok(globalThis.__carlCaches.get("http://127.0.0.1:8080/v1").compacting.has("s1"));
+});

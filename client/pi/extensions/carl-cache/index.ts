@@ -38,6 +38,22 @@ export default function carlCache(pi: ExtensionAPI) {
 	const agent = process.env.CARL_AGENT ? `pi-${process.env.CARL_AGENT}` : "pi";
 	let release = () => {};
 	let last: CarlCache | undefined;
+	// Pi's compaction (/compact, or the context nearly full): the summary now stands for the session's earlier turns, so its
+	// cached state starts again from its agent's prompt
+	// (Phase 23.5.1.3). Pi 1.1's summary request does not come through before_provider_request; one that does is the
+	// compaction agent's (no save, no prompt file of its own)
+	let compacting = false;
+	pi.on("session_before_compact", async () => {
+		compacting = true;
+		return undefined;
+	});
+	pi.on("session_compact", async (_event, ctx) => {
+		compacting = false;
+		for (const c of caches.values()) c.compactedBy(ctx.sessionManager.getSessionId());
+	});
+	pi.on("session_compact_failed", async () => {
+		compacting = false;
+	});
 
 	pi.on("before_provider_request", async (event, ctx) => {
 		const model = ctx.model;
@@ -53,7 +69,7 @@ export default function carlCache(pi: ExtensionAPI) {
 			last = cache;
 			const sm = ctx.sessionManager;
 			const r = await cache.before(obj(event.payload), {
-				session: sm.getSessionId(), agent, sub: !sm.getSessionFile(),
+				session: sm.getSessionId(), agent: compacting ? "compaction" : agent, sub: !sm.getSessionFile(),
 			});
 			release = r.release;
 			return r.payload;

@@ -173,6 +173,23 @@ export function commonPrefix(a, b) {
  * @param {T[]} slots
  * @returns {T[]}
  */
+/**
+ * The text of a request's first user message (its start: a client's compaction replaces it with the summary).
+ * @param {unknown} p
+ */
+export function firstUser(p) {
+  return JSON.stringify(arr(obj(p).messages).find((x) => obj(x).role === "user") ?? null);
+}
+
+/**
+ * Does the request start another conversation than the session's last one (the client compacted it, Phase 23.5.1.3:
+ * its first user message is the summary now)? Only a request with earlier turns tells (a client sends them all).
+ * @param {unknown} before the session's last request @param {unknown} now
+ */
+export function restarted(before, now) {
+  return arr(obj(now).messages).filter((x) => obj(x).role === "user").length >= 2 && firstUser(before) !== firstUser(now);
+}
+
 export function rankSlots(slots) {
   return slots.filter((s) => !s.busy).sort((a, b) => a.n - b.n || a.id - b.id);
 }
@@ -503,6 +520,8 @@ export class CarlCache {
     /** @type {Map<string, number>} saved states the server could not restore (not there for it): not asked for
      * again for MISSING_MS, or until a save writes them */
     this.missing = new Map();
+    /** @type {Set<string>} sessions their client compacted: the next request of each is placed from its agent's prompt */
+    this.compacting = new Set();
     /** @type {{ at: number, alias: string }} the model a single-model server runs (/props model_alias) */
     this.aliasCache = { at: 0, alias: "" };
     /** @type {Set<string>} models whose window cache was reported once */
@@ -875,7 +894,18 @@ export class CarlCache {
       const slots = await this.slots(model, srv.router);
       const m = this.model(model, slots);
       const id = `${model}\n${meta.session ?? ""}\n${meta.agent}`;
-      const known = meta.session ? this.sessions.get(id) : undefined;
+      let known = meta.session ? this.sessions.get(id) : undefined;
+      // compacted by its client (Phase 23.5.1.3): the same conversation, but the summary now stands for its earlier
+      // turns; its slot, the RAM cache and its file hold the turns before (a hybrid model keeps nothing of them), so
+      // its cached state starts again from its agent's prompt file. Known by the client's
+      // compaction request (OpenCode's compaction agent; Pi's, marked by its extension), else by its start
+      if (meta.session && meta.agent === "compaction") this.compactedBy(meta.session);
+      const done = meta.session && !NO_SAVE_AGENTS.has(meta.agent) && this.compacting.delete(meta.session);
+      if (known && meta.session && !meta.sub && (done || (!NO_SAVE_AGENTS.has(meta.agent) && restarted(known.payload, out)))) {
+        await this.compacted(model, srv.router, m, meta, slots);
+        this.sessions.delete(id);
+        known = undefined;
+      }
       let slot;
       let how = "its own";
       /** @type {(() => void) | undefined} */
@@ -959,6 +989,33 @@ export class CarlCache {
   }
 
   /**
+   * The client compacted this session (OpenCode: its compaction agent's request; Pi: its session_compact event, as
+   * Pi's summary request does not pass through its extension): its next request is placed from its agent's prompt.
+   * @param {string} session
+   */
+  compactedBy(session) {
+    if (session) this.compacting.add(session);
+  }
+
+  /**
+   * A session its client compacted: its file and its slot's record are of the conversation before the summary, so
+   * neither is used again (its next save writes the file anew).
+   * @param {string} model @param {boolean} router @param {ModelState} m @param {Meta} meta @param {Slot[]} slots
+   */
+  async compacted(model, router, m, meta, slots) {
+    const session = String(meta.session);
+    const file = sessionFile(model, await this.serverKey(model, router, m), session);
+    const rec = await this.recorded(model, file);
+    if (rec) await this.unrecord(model, rec.slot);
+    for (const s of slots) {
+      if (this.owner.get(`${model}:${s.id}`) === `${model}\n${session}\n${meta.agent}`) this.owner.delete(`${model}:${s.id}`);
+    }
+    if (!(this.local && this.dirExists()) || this.exists(file)) this.retire(file, "its session was compacted");
+    this.log(`session ${session}: compacted by its client (its cached state starts from its agent's prompt)`);
+    this.event({ e: "compact", model, session, agent: meta.agent });
+  }
+
+  /**
    * Was the session's file saved by someone else since this process last used it (another OpenCode or Pi took its
    * slot and saved it first, from the slot's record)? Then its slot holds another session now.
    * @param {string} model @param {boolean} router @param {ModelState} m @param {Meta} meta
@@ -1023,14 +1080,15 @@ export class CarlCache {
       await this.saveResident(model, router, pick, set);
     }
     await this.toRamCache(model, router, pick);
-    const got = set.sessions && meta.session && !meta.sub
-      ? await this.restore(model, router, pick.id, sessionFile(model, key, meta.session)) : undefined;
+    // a compaction's request (its own prompt, the conversation as text): nothing of the session's state fits it
+    const own = set.sessions && meta.session && !meta.sub && !NO_SAVE_AGENTS.has(meta.agent);
+    const got = own ? await this.restore(model, router, pick.id, sessionFile(model, key, meta.session)) : undefined;
     if (got !== undefined) {
       this.log(`session ${meta.session}: restored into slot ${pick.id}`);
       Object.assign(info, { from: "session", tokens: got });
       return got;
     }
-    if (set.sessions && meta.session && !meta.sub) {
+    if (own) {
       const from = await this.startedBy(payload, model, router, key);
       if (from && await this.restore(model, router, pick.id, from.file) === from.n) {
         this.log(`session ${meta.session}: ${from.n} tokens of ${from.file} (its start) restored into slot ${pick.id}`);
@@ -1101,10 +1159,12 @@ export class CarlCache {
     }
   }
 
-  /** A saved state that cannot be used: removed (this Mac), or not asked for again. @param {string} file @param {string} why */
+  /** A saved state that cannot be used: removed (this Mac, or by the dashboard's API), and not asked for again a while.
+   * @param {string} file @param {string} why */
   retire(file, why) {
     this.missing.set(file, Date.now());
     if (this.local && this.dirExists() && isStateName(file)) removeState(this.dir, file);
+    else if (this.remote() && isStateName(file)) void this.api("POST", "/carl/cache/retire", { file });
     this.log(`${file} retired: ${why}`);
     this.event({ e: "retire", file });
   }

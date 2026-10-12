@@ -281,6 +281,25 @@ class UnpackTest(unittest.TestCase):
             self.assertEqual(call("../x.bin"), 400)
 
 
+class RetireTest(unittest.TestCase):
+    """Phase 23.5.1.3: a remote client's unusable saved state is removed on the server's Mac."""
+
+    def test_retire_removes_the_state_and_its_packed_form(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            name = "carl-session+m+0123456789+ses_1.bin"
+            for n in (name, f"{name}.zst", "carl-prefix+m+build+abc.bin", "other.txt"):
+                with open(os.path.join(d, n), "w") as f:
+                    f.write("x")
+            st = CacheState(d)
+            call = lambda f: handle(st, lambda: CONF, "POST", "/carl/cache/retire", {}, {"file": f})   # noqa: E731
+            self.assertEqual(call(name), (200, {"removed": 2}))
+            self.assertEqual(call("carl-prefix+m+build+abc.bin"), (200, {"removed": 1}))
+            self.assertEqual(call(name), (200, {"removed": 0}))
+            for bad in ("../x.bin", "other.txt", "carl-session+../../etc.bin", 5):
+                self.assertEqual(call(bad)[0], 400, bad)
+            self.assertEqual(os.listdir(d), ["other.txt"])
+
+
 class SecurityTest(unittest.TestCase):
     """The state files are 0600; no key means nobody gets in; a bad body size is refused."""
 

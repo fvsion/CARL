@@ -25,7 +25,7 @@ from carl_core.domain.units import duration, file_size
 EVENTS_DIR = "cache-events"
 KEEP_S = 2 * 86400                  # events this old are dropped, and their day files removed
 DAY_FILE = re.compile(r"^(\d{4}-\d{2}-\d{2})\.jsonl$")
-KINDS = ("place", "save", "retire")
+KINDS = ("place", "save", "retire", "compact")          # compact: a client compacted a session (Phase 23.5.1.3)
 FROM = ("slot", "ram", "window", "session", "start", "prompt", "read")
 RESTORED = ("session", "start", "prompt")       # CARL put these tokens in the slot from a file
 MAX_TEXT = 200                       # a name or a file name in an event (a remote client's: cut)

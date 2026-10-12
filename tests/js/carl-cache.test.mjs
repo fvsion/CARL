@@ -752,6 +752,53 @@ test("Phase 23.5.1.1: the counters' events: each request placed, each save, in t
   assert.equal(sessionOf("carl-prefix+m+build+abc.bin"), "");
 }));
 
+test("Phase 23.5.1.3: a session its client compacted starts from its agent's prompt; its old file and record go", () => withSave("turn", async () => {
+  const h = home();
+  const srv = onDisk(fakeServer({ slots: 2 }), h);
+  const a = local(srv, h);
+  await send(a, request("hello"), { session: "s1", agent: "build" });
+  ran(srv, 0, 9000);
+  await a.after({ session: "s1", agent: "build" });                        // saved: s1's file on this Mac
+  const slotsDir = join(h, ".config", "carl", "slots");
+  const s1File = () => readdirSync(slotsDir).filter((n) => /^carl-session\+.*\+s1\.bin$/.test(n));
+  assert.equal(s1File().length, 1);
+  // the client's compaction: its own prompt, the conversation as text; s1's file is not restored for it
+  srv.st.calls.length = 0;
+  await send(a, { model: "m", messages: [{ role: "system", content: "Summarize the conversation." },
+                                         { role: "user", content: "[User]: hello ..." }] }, { session: "s1", agent: "compaction" });
+  assert.ok(!srv.st.calls.some((x) => x.path.endsWith("?restore") && /\+s1\.bin$/.test(x.body.filename)));
+  ran(srv, 0, 5000);
+  await a.after({ session: "s1", agent: "compaction" });                   // nothing saved for a compaction
+  assert.equal(sessionSaves(srv).length, 0);
+  // the next turn: the summary is the conversation now
+  srv.st.calls.length = 0;
+  const logs = [];
+  a.log = (m) => logs.push(m);
+  const next = await send(a, request("SUMMARY: we said hello"), { session: "s1", agent: "build" });
+  const restores = srv.st.calls.filter((x) => x.path.endsWith("?restore")).map((x) => x.body.filename);
+  assert.ok(restores.some((f) => /^carl-prefix\+m\+build\+/.test(f)), restores.join(", "));
+  assert.ok(!restores.some((f) => /\+s1\.bin$/.test(f)), "the file of the conversation before the compaction was restored");
+  assert.equal(s1File().length, 0);
+  assert.ok(logs.some((m) => /s1: compacted by its client/.test(m)), logs.join("\n"));
+  ran(srv, next.payload.id_slot, 7500);
+  await a.after({ session: "s1", agent: "build" });                        // saved anew, nothing below zero
+  assert.equal(s1File().length, 1);
+  assert.ok(!logs.some((m) => /-\d+ tokens not saved/.test(m)));
+  const events = readFileSync(join(h, ".config", "carl", EVENTS_DIR, `${eventDay()}.jsonl`), "utf8").trim().split("\n")
+    .map((l) => JSON.parse(l));
+  assert.deepEqual(events.filter((x) => x.e === "compact").map((x) => [x.session, x.agent]), [["s1", "build"]]);
+  // a turn that continues it is not a compaction
+  const more = request("SUMMARY: we said hello");
+  more.messages.push({ role: "assistant", content: "ok" }, { role: "user", content: "next" });
+  await send(a, more, { session: "s1", agent: "build" });
+  assert.equal(logs.filter((m) => /compacted by its client/.test(m)).length, 1);
+  // no compaction request seen (another client's compaction): a turn whose start is not the last one's
+  const again = request("SUMMARY 2");
+  again.messages.push({ role: "assistant", content: "ok" }, { role: "user", content: "next" });
+  await send(a, again, { session: "s1", agent: "build" });
+  assert.equal(logs.filter((m) => /compacted by its client/.test(m)).length, 2);
+}));
+
 test("Phase 23.5: with the window cache (the launcher's server file) the request is pinned and nothing is read, restored or saved", () => withSave("turn", async () => {
   const h = home();
   writeFileSync(join(h, ".config", "carl", "server-8080.json"), JSON.stringify({ version: 1, port: 8080, mode: "single",

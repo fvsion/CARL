@@ -26,6 +26,8 @@ and the client config they sync (clientsync.py; client/carl-sync.py):
                                               session takes another slot first)
   POST /carl/cache/unpack   {file}            make a conversation stored as a patch whole again, before
                                               a restore (slotpack.py)
+  POST /carl/cache/retire   {file}            remove a saved state that cannot be used (one restored short, or
+                                              the file of a session its client compacted; Phase 23.5.1.3)
   POST /carl/cache/save-recorded {model}      save the recorded sessions of a model about to stop
                                               (a router switch a remote client asks for)
 
@@ -67,6 +69,7 @@ CLAIM_STALE_S = 120
 TURN_STALE_S = 600       # a turn mark this old is a client that went away (carl-cache.js TURN_STALE_MS)
 SAFE = re.compile(r"[^A-Za-z0-9._-]")
 SESSION_FILE = re.compile(r"carl-session\+[A-Za-z0-9._+-]{1,300}\.bin")
+STATE_FILE = re.compile(r"carl-(?:prefix|session)\+[A-Za-z0-9._+-]{1,300}\.bin")
 
 
 def safe_name(s: str, n: int) -> str:
@@ -140,6 +143,19 @@ class CacheState:
             os.remove(self._record_path(model, slot))
         except OSError:
             pass
+
+    def retire(self, file: str) -> int:
+        """A saved state removed with its packed form and its patch's notes (as carl-cache.js removeState): the files
+        that were there."""
+        gone = 0
+        with self.lock:
+            for name in (file, f"{file}.zst", f"{file}.json"):
+                try:
+                    os.unlink(os.path.join(self.folder, name))
+                    gone += 1
+                except OSError:
+                    pass
+        return gone
 
     def _turn_path(self, model: str, slot: int) -> str:
         return os.path.join(self.folder, f".turn+{safe_name(model, 60)}+{slot}")
@@ -325,6 +341,11 @@ def handle(state: CacheState, conf: Callable[[], CacheConfig], method: str, path
             if not isinstance(ufile, str) or not SESSION_FILE.fullmatch(ufile):
                 return 400, {"error": "a session file name"}
             return (200, {"ok": True}) if slotpack.unpack(state.folder, ufile) else (404, {"error": "no such state"})
+        if method == "POST" and path == "/carl/cache/retire":
+            rfile = body.get("file")
+            if not isinstance(rfile, str) or not STATE_FILE.fullmatch(rfile):
+                return 400, {"error": "a saved state's name"}
+            return 200, {"removed": state.retire(rfile)}
         if method == "POST" and path == "/carl/cache/save-recorded":
             model = body.get("model")
             if not isinstance(model, str) or not model or len(model) > MAX_NAME:

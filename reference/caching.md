@@ -204,13 +204,28 @@ Phase 23.5.1.1. The Caching panel's **WHAT THE CACHE DID** table and the Live ta
 - **The clients' events.** carl-cache (`client/shared/carl-cache.js`, `event()`) writes one line for each thing it does:
   - `place`: a request of a session put in a slot, with where its state came from (`slot`, `ram`, `window`, `session`, `start`, `prompt`, `read`), the tokens restored, and whether the session had earlier turns;
   - `save`: a session or an agent's prompt saved, with its tokens and the bytes written;
-  - `retire`: a saved file that could not be restored whole.
+  - `retire`: a saved file that could not be restored whole, or the file of a session its client compacted;
+  - `compact`: a client compacted a session (Phase 23.5.1.3; kept, not shown yet).
 
   A client on this Mac appends them to `~/.config/carl/cache-events/DAY.jsonl` (DAY is the local date; small appends stay whole across processes). A client on another computer sends them to the dashboard API (`POST /carl/cache/events`), which appends them to the same file with the client's address. An event never holds a key or a prompt's text.
 - **The server log.** The dashboard's log reader keeps each answered request's prompt tokens and the tokens it read, so the reused tokens. CARL's own requests are not counted. "Still in their slot" is the tokens reused less the tokens CARL restored. "Read again" takes the first request on that slot after the placement.
 - **The read speed.** The time saved is the restored tokens at the measured read speed of the requests in the same time span.
 
 The dashboard reads the files as they grow (`tools/monitor/cachestats.py`) and removes the day files older than two days in its minute check. "since the start" counts from the server's start (its log).
+
+### When a client compacts a session
+
+Phase 23.5.1.3, measured 2026-10-12 (M3 Pro, the Qwen3.6-35B-A3B IQ3, OpenCode 1.19.0 and Pi 1.1.0). When OpenCode or Pi compacts a session, it is the same conversation, but a summary now stands for its earlier turns. The session's slot, llama.cpp's RAM cache and the session's file still hold those earlier turns. A hybrid Qwen model cannot keep any of it: what the model sees now differs from the cached state right after the agent's prompt, and a restored state has no checkpoints.
+
+- **carl-cache knows a compaction** from OpenCode's compaction-agent request for the session, or from Pi's `session_compact` event (Pi's summary request does not pass through its extension). A request with earlier turns whose first user message is not the last request's is taken as a compaction too.
+- **The session's cached state then starts again.** Its file and its slot's record are removed, its next turn starts from its agent's prompt file, and its counts start again. Its next save holds the compacted conversation.
+- **The compaction request itself** reads the whole conversation again (about 26.6K tokens, 60 s here). The client's compaction prompt is its own, so nothing of the slot's state fits it. Its request gets no session file.
+- **A client on another computer** has the file removed by the dashboard's API (`POST /carl/cache/retire`).
+
+| After the compaction (A3B IQ3) | Before (1.20.2) | Now |
+|---|---|---|
+| OpenCode: the first turn | 13,245 of 13,247 tokens read, 26.7 s | 1,559 of 13,068, 4.1 s |
+| Pi: the first turn | 7,483 of 7,485, 14.2 s | 835 of 7,457, 2.4 s |
 
 ### When an agent's prompt changes
 
