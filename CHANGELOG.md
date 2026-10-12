@@ -3,6 +3,23 @@
 All notable changes to CARL. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Dates are local dates on the development Mac (M3 Pro, 36 GB).
 
+## 1.20.3 - 2026-10-12
+
+Phase 23.5.1.3: a session its client compacted, cached right.
+
+### Fixed
+- **The first turn after OpenCode or Pi compacted a session was read again in full.** A summary now stands for the
+  session's earlier turns, but carl-cache still placed the session where its earlier turns were cached (its slot or
+  llama.cpp's RAM cache), which a hybrid model cannot use. carl-cache now knows the compaction (OpenCode's
+  compaction-agent request, Pi's `session_compact` event) and starts the session's cached state again from its
+  agent's saved prompt. Measured on the Qwen3.6-35B-A3B IQ3: OpenCode 13,245 tokens read (26.7 s) to 1,559 (4.1 s);
+  Pi 7,483 (14.2 s) to 835 (2.4 s).
+- **A compacted session's old file is removed** (it held the turns before the summary), also for a client on another
+  computer (the dashboard API's new `POST /carl/cache/retire`), and its count of tokens not saved yet no longer goes
+  below zero.
+- **A compaction's own request no longer restores the session's file** (its prompt is the client's compaction prompt:
+  nothing of it fits).
+
 ## 1.20.2 - 2026-10-11
 
 Phase 23.5.1.11: OpenCode 1.19, and OpenCode 2 said plainly.
