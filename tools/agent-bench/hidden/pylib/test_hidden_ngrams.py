@@ -1,7 +1,10 @@
 """Hidden check for the prompt medium-module (copied in only after the run)."""
+import importlib
 import unittest
 
-from textstats import ngrams as ng
+# the module itself: `from textstats import ngrams` gives the function when the package exports it (2026-10-12: all
+# four Saluki runs exported ngrams and top_ngrams from __init__.py, and this test read the function as the module)
+ng = importlib.import_module("textstats.ngrams")
 
 
 class HiddenNgramsTest(unittest.TestCase):

@@ -132,7 +132,30 @@ def unpack_and_setup(zip_path: str, home: str, install: bool, timeout: float = 1
         raise HomeError(f"./setup failed (code {code}):\n{tail(out, 40)}")
     if is_harness_home(home):
         write_marker(home, {"coder": coder, "coder_state": coder_state(out)})
+        headless_permissions(home)
     return out
+
+
+# OpenCode asks a person before a tool reaches outside the project (external_directory); nobody answers in the
+# harness, so a run waited to its limit (2026-10-11: Saluki's medium-command, /tmp/notes_demo.json, 57 min). In the
+# harness HOME only: refused at once, so the model gets the answer and goes on.
+HEADLESS_PERMISSIONS = {"external_directory": "deny"}
+
+
+def headless_permissions(home: str) -> None:
+    """The harness HOME's opencode.json "permission": HEADLESS_PERMISSIONS added (other keys kept)."""
+    path = os.path.join(home, ".config", "opencode", "opencode.json")
+    try:
+        with open(path, encoding="utf-8") as f:
+            cfg = json.load(f)
+    except (OSError, ValueError):
+        return
+    if not isinstance(cfg, dict):
+        return
+    perm = cfg.get("permission") if isinstance(cfg.get("permission"), dict) else {}
+    cfg["permission"] = {**perm, **HEADLESS_PERMISSIONS}
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(cfg, f, indent=2)
 
 
 def coder_of(home: str) -> Dict[str, str]:

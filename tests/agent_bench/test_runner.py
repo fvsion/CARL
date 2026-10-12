@@ -655,5 +655,24 @@ class ThinkingToTheLimitTest(unittest.TestCase):
         self.assertEqual(ev.classify(out.obs), ev.ERROR)
 
 
+
+class HeadlessPermissionsTest(unittest.TestCase):
+    """2026-10-11: OpenCode asks before a tool reaches outside the project; the harness HOME refuses it at once."""
+
+    def test_external_directory_is_denied_and_other_keys_stay(self) -> None:
+        from agentbench import home as hm
+        h = tempfile.mkdtemp()
+        oc = os.path.join(h, ".config", "opencode")
+        os.makedirs(oc)
+        with open(os.path.join(oc, "opencode.json"), "w", encoding="utf-8") as f:
+            json.dump({"model": "x", "permission": {"bash": "allow"}}, f)
+        hm.headless_permissions(h)
+        with open(os.path.join(oc, "opencode.json"), encoding="utf-8") as f:
+            cfg = json.load(f)
+        self.assertEqual(cfg["permission"], {"bash": "allow", "external_directory": "deny"})
+        self.assertEqual(cfg["model"], "x")
+        hm.headless_permissions(os.path.join(h, "nothing-here"))          # no config: nothing, no error
+
+
 if __name__ == "__main__":
     unittest.main()

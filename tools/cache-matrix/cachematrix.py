@@ -298,6 +298,7 @@ class Driver:
     def say(self, sid: str, text: str) -> str: ...
     def rename(self, sid: str, title: str) -> None: ...
     def fork(self, sid: str) -> str: ...
+    def compact(self, sid: str) -> str: ...
 
     def restart(self) -> None:
         self.stop()
@@ -358,6 +359,11 @@ class OpenCodeDriver(Driver):
 
     def fork(self, sid: str) -> str:
         return str(self._call("POST", f"/session/{sid}/fork", {})["id"])
+
+    def compact(self, sid: str) -> str:
+        """OpenCode's compaction (its compaction agent summarizes the session; /compact in the TUI)."""
+        ok = self._call("POST", f"/session/{sid}/summarize", {"providerID": cl.PROVIDER, "modelID": self.model})
+        return f"summarize: {ok}"
 
 
 class PiDriver(Driver):
@@ -465,6 +471,12 @@ class PiDriver(Driver):
         self._switch(sid)
         self._cmd({"type": "set_session_name", "name": title})
 
+    def compact(self, sid: str) -> str:
+        """Pi's /compact (RPC compact): its summary of the session replaces the conversation."""
+        self._switch(sid)
+        r = self._cmd({"type": "compact"})
+        return f"compact: {str(r.get('data') or '')[:80]}"
+
     def fork(self, sid: str) -> str:
         self._switch(sid)
         self._cmd({"type": "clone"})
@@ -476,6 +488,24 @@ class PiDriver(Driver):
 
 
 # ------------------------------------------------------------------------------------------------ the client configs
+PI_KEEP_RECENT = 200
+
+
+def pi_keep_recent(home: str, tokens: int = PI_KEEP_RECENT) -> bool:
+    """--compact: Pi keeps the last 20K tokens out of its summary (compaction.keepRecentTokens); the matrix's session is
+    one long first message and short turns, so Pi finds nothing to cut ("Nothing to compact"). Keep only the last turns."""
+    path = os.path.join(home, ".pi", "agent", "settings.json")
+    try:
+        with open(path, encoding="utf-8") as f:
+            doc = json.load(f)
+        doc.setdefault("compaction", {})["keepRecentTokens"] = tokens
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(doc, f, indent=2)
+        return True
+    except (OSError, ValueError, TypeError, AttributeError):
+        return False
+
+
 def add_alias(home: str, model: str, alias: str) -> List[str]:
     """A second name for the server's model in the clients' model lists (single mode answers any name)."""
     changed = []
@@ -677,6 +707,15 @@ def run_cell(e: Env, cell: Cell, env_base: Mapping[str, str], other: str) -> Dic
             step("server-restart", "A after a server restart (the dashboard's Stop saved it): restored from its file", srv)
             step("b-later", "B, whose slot the fork took after the client restart: restored from its file (saved when "
                  "its slot was taken)", lambda: drv.say(names["B"], SHORT))
+            if e.a.compact:             # Phase 23.5.1.3: a compaction, saved right
+                step("compact", "A compacted (the client's compaction): not the old saved session restored for it",
+                     lambda: drv.compact(names["A"]))
+                step("after-compact", "A's turn after the compaction: its new conversation (the summary) read once",
+                     lambda: drv.say(names["A"], SHORT))
+                step("compact-other", "another session takes a slot (A's, when it is the least full)",
+                     lambda: _new_say(drv, names, "D", long_prompt("D")))
+                step("compact-back", "A back: from its file of the compacted conversation, only the new message read",
+                     lambda: drv.say(names["A"], SHORT))
             if cell.mode == "router" and cell.match == "other":
                 step("switch", f"a session on {other} (the router switches; the sessions are saved first)",
                      lambda: _switch_say(e, drv, names, other, cell))
@@ -856,6 +895,8 @@ def cmd_run(a: argparse.Namespace) -> int:
                                        os.path.join(work, "dist"), a.models_dir)
                 hm.unpack_and_setup(hm.make_package(src), home, install=False, coder="on")
                 changed = add_alias(home, cell.model, a.alias)
+                if a.compact and pi_keep_recent(home):
+                    say(f"clients: Pi keeps the last {PI_KEEP_RECENT} tokens out of a compaction (--compact)")
                 say(f"clients: set up for {cell.model}; alias {a.alias} in {len(changed)} config(s)")
                 refreshed = (cell.model, cell.mode)
             say(f"[{n}/{len(todo)}] {cell.key()}")
@@ -908,6 +949,7 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("--alias", default="cache-matrix-alias", help="the other name a client uses (single mode)")
     r.add_argument("--other-model", default="qwen3.8-9b", help="router mode: the model of the switch")
     r.add_argument("--keep-going", action="store_true")
+    r.add_argument("--compact", action="store_true", help="add the compaction steps (Phase 23.5.1.3)")
     r.add_argument("--save", default="", choices=("", "auto", "turn", "switch", "stop"),
                    help="the cache's save rule for the run (default: CARL's, auto)")
     r.add_argument("--words", default="", help="MODEL=N,...: the long turn's words per model (default: the E4B "
