@@ -3,6 +3,18 @@
 All notable changes to CARL. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Dates are local dates on the development Mac (M3 Pro, 36 GB).
 
+## 1.20.6 - 2026-10-12
+
+Phase 23.5.1.10: the RAM cache across client processes.
+
+### Fixed
+- **A session in llama.cpp's RAM cache was read again by a new OpenCode or Pi process.** When a session's slot is
+  taken without a save (the save rule "before a stop", or a session under 4,096 tokens), its state goes to llama.cpp's
+  RAM cache. Only the process that ran it knew that; after a restart, the client put the agent's saved prompt in the slot
+  and llama.cpp skipped its RAM cache. carl-cache now leaves a note for every client process (on this Mac in the slots
+  folder; from another computer through the dashboard's API). Measured on the Qwen3.6-35B-A3B IQ3: OpenCode 26,436
+  tokens read again (79.9 s) to 64 (4.9 s); Pi 26,376 (71.8 s) to 63 (3.6 s).
+
 ## 1.20.5 - 2026-10-12
 
 Phase 23.5.1.8: n-gram speculation set right, and Auto fit from measured speculation; the 23.5.1.7 note; Saluki's agent results.
