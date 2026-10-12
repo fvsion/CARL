@@ -3,6 +3,37 @@
 All notable changes to CARL. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Dates are local dates on the development Mac (M3 Pro, 36 GB).
 
+## 1.20.5 - 2026-10-12
+
+Phase 23.5.1.8: n-gram speculation set right, and Auto fit from measured speculation; the 23.5.1.7 note; Saluki's agent results.
+
+### Changed
+- **n-gram speculation drafts more, and faster.** CARL now sets llama.cpp's n-gram (`ngram-mod`) settings for every
+  model: a 32-token match, drafts of 16 to 96 tokens (llama.cpp's own: 24, 48 and 64). Measured on the
+  Qwen3.6-35B-A3B IQ3 and the Qwen3.8-27B IQ3: re-emitting a file 5.1-5.4x faster than no speculation (was 3.9-4.1x),
+  an agent-style edit 2.6-2.9x (was 2.3-2.7x); new text unchanged (`reference/server.md`).
+- **Auto fit starts from this Mac's Auto-tune result** for a model, and before MTP goes it tries the other MTP modes
+  measured for it (this Mac's Auto-tune, else the catalogue's new `tune.speeds` table).
+
+- **`saluki-27b`'s card, from its agent runs** (the Phase 23.4.2 addendum): on medium coding tasks with hidden tests
+  (OpenCode and Pi, CARL's default thinking, the coder's thinking off and on) it got 12 of 12 right, the main session
+  writing 10 of them itself in 6-19 minutes on an M3 Pro (a hand-off took 54-90 minutes at its speed). The card no
+  longer says "every hidden test" with thinking-off numbers: at the default thinking the large tasks passed 4 of 6, and
+  most hit the time limit. A comparison with the Gemma 4 12B on the same tasks follows in an addendum.
+
+### Fixed
+- **n-gram had no guesses to set.** llama.cpp's n-gram never read CARL's guess count (`--spec-draft-n-max` is MTP's),
+  so "n-gram, 2 guesses" and Auto-tune's n-gram rows at 1 and 2 guesses were the same setup. CARL passes the guesses only
+  with MTP; the start lines, the Settings tab's Speculation row, the Live tab, Auto-tune and the help name guesses only
+  for MTP; Auto-tune measures n-gram once.
+- **The Live tab's speed card: "Guess" is now "Position"**, the drafts accepted at each draft position, chosen by the
+  speculation: MTP's guesses; n-gram's long run at 1, 8, 16, 32, 64 and 96; both for MTP + n-gram.
+
+### Measured
+- **Why each agent's prompt is one saved file** (`reference/caching.md`): the agents' prompts share too little
+  (OpenCode's main agent and coder 2,982 tokens on the A3B, Pi's 1,333, Gemma's 8) for a shared layer to save disk or
+  time.
+
 ## 1.20.4 - 2026-10-12
 
 Phase 23.5.1.4: the drive writes, measured.
