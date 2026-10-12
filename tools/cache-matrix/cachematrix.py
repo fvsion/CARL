@@ -20,7 +20,8 @@ both: the clients find the slots folder the server saves to. The dashboard does 
 harness saves the recorded sessions the way the dashboard's Stop does (diskcache.residents under the server's
 model name). The harness never uses port 8080 or your HOME (agent-bench's rules).
 --save sets the cache's save rule for the run (Phase 23.5.1.2: stop, so a session whose slot is taken is not saved and
-comes back from llama.cpp's RAM cache).
+comes back from llama.cpp's RAM cache). --ram-restart (Phase 23.5.1.10, with --save stop): after C takes A's slot (A goes to
+the RAM cache unsaved), a new client process continues A.
 """
 from __future__ import annotations
 
@@ -690,7 +691,11 @@ def run_cell(e: Env, cell: Cell, env_base: Mapping[str, str], other: str) -> Dic
             step("a2", "A in its own slot: only the new message read", lambda: drv.say(names["A"], SHORT))
             step("b1", "B in the other slot (the prompt from its file or the RAM)", lambda: _new_say(drv, names, "B", long_prompt("B")))
             step("c1", "C takes a slot; the session there saved first", lambda: _new_say(drv, names, "C", long_prompt("C")))
-            out = _evicted(steps[-1], names)
+            out = _evicted(steps[-1], names)            # whose slot C took (before the next step)
+            if e.a.ram_restart:         # Phase 23.5.1.10: A's slot taken unsaved (--save stop), then a new client process
+                step("ram-restart", "A after a client restart, its state only in llama.cpp's RAM cache (C took its slot "
+                     "unsaved): from there, only the new message read",
+                     lambda: (drv.restart(), drv.say(names["A"], SHORT))[1])
             step("back", f"{out} (its slot was taken) restored from its file: only the new message read",
                  lambda: drv.say(names[out], SHORT))
             step("client-restart", "A after a client restart: its slot (record) or its file",
@@ -950,6 +955,8 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("--other-model", default="qwen3.8-9b", help="router mode: the model of the switch")
     r.add_argument("--keep-going", action="store_true")
     r.add_argument("--compact", action="store_true", help="add the compaction steps (Phase 23.5.1.3)")
+    r.add_argument("--ram-restart", action="store_true",
+                   help="add the steps of a session in the RAM cache found by a new client process (Phase 23.5.1.10)")
     r.add_argument("--save", default="", choices=("", "auto", "turn", "switch", "stop"),
                    help="the cache's save rule for the run (default: CARL's, auto)")
     r.add_argument("--words", default="", help="MODEL=N,...: the long turn's words per model (default: the E4B "

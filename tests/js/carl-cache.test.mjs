@@ -1,7 +1,7 @@
 // client/shared/carl-cache.js: the pure parts, and before() / after() against a fake llama-server.
 // Run: node --test tests/js (tests/scripts/test_js.py runs it with the other suites).
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -797,6 +797,46 @@ test("Phase 23.5.1.3: a session its client compacted starts from its agent's pro
   again.messages.push({ role: "assistant", content: "ok" }, { role: "user", content: "next" });
   await send(a, again, { session: "s1", agent: "build" });
   assert.equal(logs.filter((m) => /compacted by its client/.test(m)).length, 2);
+}));
+
+test("Phase 23.5.1.10: a session that went to the RAM cache unsaved is found there by a new process", () => withSave("stop", async () => {
+  const h = home();
+  const srv = onDisk(fakeServer({ slots: 1 }), h);
+  const a = local(srv, h);
+  await send(a, request("hello"), { session: "s1", agent: "build" });
+  ran(srv, 0, 9000);
+  await a.after({ session: "s1", agent: "build" });                        // stop: recorded, not saved
+  await new Promise((ok) => setTimeout(ok, 20));
+  const b = local(srv, h);                                                 // another process takes the slot
+  await send(b, request("other"), { session: "s2", agent: "build" });
+  const slotsDir = join(h, ".config", "carl", "slots");
+  const marks = () => readdirSync(slotsDir).filter((n) => n.startsWith(".ram+") && n.includes("+s1.bin"));
+  assert.equal(marks().length, 1, "no RAM mark for s1");
+  ran(srv, 0, 7000);
+  srv.st.calls.length = 0;
+  const c = local(srv, h);                                                 // a new process (a restart): s1 again
+  const logs = [];
+  c.log = (m) => logs.push(m);
+  const more = request("hello");
+  more.messages.push({ role: "assistant", content: "ok" }, { role: "user", content: "next" });
+  await send(c, more, { session: "s1", agent: "build" });
+  assert.ok(logs.some((m) => /s1 -> slot 0 \(the RAM cache's\)/.test(m)), logs.join("\n"));
+  assert.ok(!srv.st.calls.some((x) => x.path.endsWith("?restore")), "a prompt file was restored instead");
+  assert.equal(marks().length, 0, "the mark stays once s1 is in a slot again");
+  // its own process lets it go unsaved too: marked
+  const d = local(srv, h);
+  await send(d, request("x"), { session: "s3", agent: "build" });
+  ran(srv, 0, 8000);
+  await d.after({ session: "s3", agent: "build" });
+  await send(d, request("y"), { session: "s4", agent: "build" });
+  assert.equal(readdirSync(slotsDir).filter((n) => n.startsWith(".ram+") && n.includes("+s3.bin")).length, 1);
+  // the server's task ids at or past the mark's: it counts; lower (the server restarted): it does not, and goes
+  const name = readdirSync(slotsDir).find((n) => n.startsWith(".ram+") && n.includes("+s3.bin"));
+  const mark = JSON.parse(readFileSync(join(slotsDir, name), "utf8"));
+  const e = local(srv, h);
+  assert.equal(await e.ramMarked("m", mark.file, mark.task + 5), true);
+  assert.equal(await e.ramMarked("m", mark.file, mark.task - 1), false);
+  assert.ok(!existsSync(join(slotsDir, name)));
 }));
 
 test("Phase 23.5: with the window cache (the launcher's server file) the request is pinned and nothing is read, restored or saved", () => withSave("turn", async () => {

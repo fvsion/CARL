@@ -28,6 +28,10 @@ and the client config they sync (clientsync.py; client/carl-sync.py):
                                               a restore (slotpack.py)
   POST /carl/cache/retire   {file}            remove a saved state that cannot be used (one restored short, or
                                               the file of a session its client compacted; Phase 23.5.1.3)
+  POST /carl/cache/ram      {model, file, task, at}   a session in llama.cpp's RAM cache, not saved (its slot was
+                                              taken; Phase 23.5.1.10): any client process takes the RAM path
+  GET  /carl/cache/ram?model=M&file=F         that note (404: none)
+  POST /carl/cache/unram    {model, file}     the note gone (the session is in a slot again, saved or compacted)
   POST /carl/cache/save-recorded {model}      save the recorded sessions of a model about to stop
                                               (a router switch a remote client asks for)
 
@@ -137,6 +141,26 @@ class CacheState:
             if doc.get("model") == model and doc.get("file") == file:
                 return {"slot": doc.get("slot"), "task": doc.get("task"), "base": doc.get("base") or 0}
         return None
+
+    def _ram_path(self, file: str) -> str:
+        return os.path.join(self.folder, f".ram+{file}.json")
+
+    def mark_ram(self, model: str, file: str, task: int, at: float) -> None:
+        fsio.write_private(self._ram_path(file), json.dumps({"model": model, "file": file, "task": task, "at": at}))
+
+    def ram_marked(self, model: str, file: str) -> Optional[JSONDict]:
+        try:
+            with open(self._ram_path(file), encoding="utf-8") as f:
+                doc = jdict(json.load(f))
+        except (OSError, ValueError):
+            return None
+        return doc if doc.get("model") == model and doc.get("file") == file else None
+
+    def unmark_ram(self, file: str) -> None:
+        try:
+            os.remove(self._ram_path(file))
+        except OSError:
+            pass
 
     def unrecord(self, model: str, slot: int) -> None:
         try:
@@ -372,6 +396,25 @@ def handle(state: CacheState, conf: Callable[[], CacheConfig], method: str, path
             if not tmodel or len(tmodel) > MAX_NAME:
                 return 400, {"error": "model"}
             return 200, {"turns": [{"slot": sl, "session": ses} for sl, ses in sorted(state.turn_marks(tmodel))]}
+        if path in ("/carl/cache/ram", "/carl/cache/unram"):
+            rmodel = query.get("model", "") if method == "GET" else body.get("model")
+            rfile = query.get("file", "") if method == "GET" else body.get("file")
+            if not (isinstance(rmodel, str) and rmodel and len(rmodel) <= MAX_NAME and isinstance(rfile, str)
+                    and SESSION_FILE.fullmatch(rfile)):
+                return 400, {"error": "model and a session file name"}
+            if method == "GET" and path == "/carl/cache/ram":
+                doc = state.ram_marked(rmodel, rfile)
+                return (200, doc) if doc else (404, {"error": "no note"})
+            if method == "POST" and path == "/carl/cache/unram":
+                state.unmark_ram(rfile)
+                return 200, {"ok": True}
+            if method == "POST":
+                task, at = body.get("task"), body.get("at")
+                if not (isinstance(task, int) and not isinstance(task, bool) and isinstance(at, (int, float))
+                        and not isinstance(at, bool)):
+                    return 400, {"error": "task and at"}
+                state.mark_ram(rmodel, rfile, task, float(at))
+                return 200, {"ok": True}
         if method == "GET" and path == "/carl/cache/record":
             model, file = query.get("model", ""), query.get("file", "")
             if not model or len(model) > MAX_NAME or not SESSION_FILE.fullmatch(file):

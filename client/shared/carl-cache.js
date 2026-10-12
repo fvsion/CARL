@@ -28,6 +28,8 @@ import { isCarl } from "./carl-api.js";
 
 export const MIN_PREFIX_TOKENS = 1024;   // a shorter prompt is quick to read: no file
 export const MIN_SESSION_TOKENS = 4096;  // a shorter conversation is quick to read again
+// a session that went to llama.cpp's RAM cache unsaved this long ago: maybe dropped since (the cache keeps the newest)
+export const RAM_MARK_MS = 3_600_000;
 export const MIN_FREE_BYTES = 10 * 1000 ** 3;  // no saves on this Mac below 10 GB of free disk
 export const DEFAULT_GB = 10;                // the disk limit (a 74K-token session on the 35B is ~1 GB)
 // When a session is saved: auto = when the part not saved yet would take autoS seconds to read again,
@@ -911,6 +913,8 @@ export class CarlCache {
       /** @type {(() => void) | undefined} */
       let release;
       let base = known?.base;
+      /** @type {string | undefined} a RAM mark of this session (another process let it go to the RAM cache) */
+      let ramMark;
       if (known && known.epoch === m.epoch) {      // its own slot, unless another session of ours ran there since
         const s = slots.find((x) => x.id === known.slot);
         if (s && !s.busy && this.owner.get(`${model}:${s.id}`) === id && !(await this.savedSince(model, srv.router, m, meta, known))
@@ -923,6 +927,8 @@ export class CarlCache {
           slot = s.id;
           base = rec.base;
           how = "its own, as recorded";
+        } else if (!windowed && (await this.ramMarked(model, file, m.maxTask))) {
+          ramMark = file;          // in llama.cpp's RAM cache, says another process (Phase 23.5.1.10)
         }
       }
       /** @type {{ from?: string, tokens?: number }} what fill() put in the slot (the counters) */
@@ -932,8 +938,8 @@ export class CarlCache {
         // back from llama.cpp's RAM cache (its slot was taken and it was not saved): not into an empty slot while
         // one holds a conversation (llama.cpp #28139: a request pinned to an empty slot skips the RAM cache's lookup;
         // Phase 23.5.1.2: never seen in CARL's runs, where no idle slot is cleared, so a guard)
-        const toRam = !windowed && Boolean(known && known.epoch === m.epoch && !known.saved)
-          && !(await this.savedSince(model, srv.router, m, meta, known));
+        const toRam = !windowed && (Boolean(ramMark) || (Boolean(known && known.epoch === m.epoch && !known.saved)
+          && !(await this.savedSince(model, srv.router, m, meta, known))));
         const ranked = await this.rankFree(model, slots, meta.session);
         const order = toRam && ranked.some((s) => s.n > 0) ? [...ranked.filter((s) => s.n > 0), ...ranked.filter((s) => s.n === 0)]
           : ranked;
@@ -971,6 +977,9 @@ export class CarlCache {
       }
       this.owner.set(`${model}:${slot}`, id);
       this.log(`request: ${meta.agent} ${meta.session ?? "-"} -> slot ${slot} (${how})`);
+      if (meta.session && !meta.sub && (ramMark || this.local)) {      // in a slot again: no RAM mark
+        await this.unmarkRam(model, ramMark ?? sessionFile(model, await this.serverKey(model, srv.router, m), meta.session));
+      }
       if (meta.session) {
         const from = how.startsWith("its own") ? "slot" : how === "the RAM cache's" ? "ram" : how.startsWith("pinned") ? "window"
           : filled.from ?? "read";
@@ -1007,6 +1016,7 @@ export class CarlCache {
     const file = sessionFile(model, await this.serverKey(model, router, m), session);
     const rec = await this.recorded(model, file);
     if (rec) await this.unrecord(model, rec.slot);
+    await this.unmarkRam(model, file);                  // the RAM cache holds the turns before the summary too
     for (const s of slots) {
       if (this.owner.get(`${model}:${s.id}`) === `${model}\n${session}\n${meta.agent}`) this.owner.delete(`${model}:${s.id}`);
     }
@@ -1036,11 +1046,15 @@ export class CarlCache {
    * or this one before a restart), saved before another session takes the slot, while the slot still holds it.
    * @param {string} model @param {boolean} router @param {Slot} pick @param {Settings} set
    */
-  async saveResident(model, router, pick, set) {
+  async saveResident(model, router, pick, set, m) {
     const path = this.recordPath(model, pick.id);
-    if (!path || !set.sessions || set.save === "stop" || pick.busy || pick.n < MIN_SESSION_TOKENS) return;
+    if (!path || !set.sessions || pick.busy) return;
     const r = obj(json(path));
     if (r.model !== model || int(r.task) !== pick.task || !isStateName(r.file) || !String(r.file).startsWith("carl-session+")) return;
+    if (set.save === "stop" || pick.n < MIN_SESSION_TOKENS) {         // not saved: to llama.cpp's RAM cache
+      if (m) await this.markRam(model, String(r.file), m.maxTask);
+      return;
+    }
     try {
       await this.call("POST", `/slots/${pick.id}?action=save`, { filename: r.file, ...this.withModel(model, router) });
       fs.unlinkSync(path);
@@ -1077,7 +1091,10 @@ export class CarlCache {
       // file when it returns
       if (prev && !other.sub && !NO_SAVE_AGENTS.has(prevAgent)) await this.save(other, prev, pick, m, true);
     } else {
-      await this.saveResident(model, router, pick, set);
+      if (ours && other && prev && !other.sub && !NO_SAVE_AGENTS.has(prevAgent) && set.sessions && pick.n > 0) {
+        await this.markRam(model, sessionFile(model, key, prev), m.maxTask);    // to the RAM cache, unsaved
+      }
+      await this.saveResident(model, router, pick, set, m);
     }
     await this.toRamCache(model, router, pick);
     // a compaction's request (its own prompt, the conversation as text): nothing of the session's state fits it
@@ -1552,6 +1569,75 @@ export class CarlCache {
     }
   }
 
+  /** @param {string} file */
+  ramPath(file) {
+    return this.local && this.dirExists() && isStateName(file) ? join(this.dir, `.ram+${file}.json`) : "";
+  }
+
+  /**
+   * A session whose slot another session takes without a save: its state is in llama.cpp's RAM cache (Phase
+   * 23.5.1.10). A note any client process reads (a new OpenCode or Pi process has no memory of it), with the server's
+   * highest task id then (a server restart starts them again).
+   * @param {string} model @param {string} file @param {number} task
+   */
+  async markRam(model, file, task) {
+    if (!isStateName(file) || !file.startsWith("carl-session+")) return;
+    const doc = { model, file, task, at: Date.now() };
+    const path = this.ramPath(file);
+    if (!path) {
+      if (this.remote()) await this.api("POST", "/carl/cache/ram", doc);
+      return;
+    }
+    try {
+      writeAtomic(path, JSON.stringify(doc));
+      this.log(`${file}: in llama.cpp's RAM cache (not saved; its slot is taken)`);
+    } catch (e) {
+      debugLog(`RAM mark ${path}: ${errorText(e)}`);
+    }
+  }
+
+  /**
+   * Is the session in llama.cpp's RAM cache, as far as CARL knows: marked, the server not restarted since (its task
+   * ids not lower), not saved since (no newer file), and not older than RAM_MARK_MS.
+   * @param {string} model @param {string} file @param {number} maxTask
+   */
+  async ramMarked(model, file, maxTask) {
+    const path = this.ramPath(file);
+    let r;
+    if (path) {
+      r = obj(json(path));
+    } else if (this.remote()) {
+      const res = await this.api("GET", `/carl/cache/ram?model=${encodeURIComponent(model)}&file=${encodeURIComponent(file)}`);
+      r = res.status === 200 ? obj(res.json) : {};
+    } else {
+      return false;
+    }
+    if (r.model !== model || r.file !== file) return false;
+    const at = Number(r.at) || 0;
+    if (int(r.task) > maxTask || Date.now() - at > RAM_MARK_MS) {
+      await this.unmarkRam(model, file);
+      return false;
+    }
+    if (path) {
+      try {
+        if (fs.statSync(join(this.dir, file)).mtimeMs > at) return false;       // saved since: its file
+      } catch { /* no file */ }
+    }
+    return true;
+  }
+
+  /** @param {string} model @param {string} file */
+  async unmarkRam(model, file) {
+    const path = this.ramPath(file);
+    if (!path) {
+      if (this.remote()) await this.api("POST", "/carl/cache/unram", { model, file });
+      return;
+    }
+    try {
+      fs.unlinkSync(path);
+    } catch { /* none */ }
+  }
+
   /**
    * Before the model stops (a router switch): save the sessions the clients on this Mac recorded in its
    * slots, each only if its slot still holds that state.
@@ -1612,6 +1698,7 @@ export class CarlCache {
     e.savedN = Number(obj(r).n_saved) || now.n;
     e.savedAt = Date.now();
     this.missing.delete(file);
+    await this.unmarkRam(model, file);
     this.log(`session ${session}: ${e.savedN} tokens saved from slot ${e.slot}${settle ? " (its slot is needed)" : ""}`);
     this.event({ e: "save", what: "session", model, slot: e.slot, session, tokens: e.savedN, bytes: this.sizeOf(file), file });
     this.wrote(file, "");

@@ -300,6 +300,28 @@ class RetireTest(unittest.TestCase):
             self.assertEqual(os.listdir(d), ["other.txt"])
 
 
+class RamNoteTest(unittest.TestCase):
+    """Phase 23.5.1.10: a client on another computer notes a session in llama.cpp's RAM cache through the API."""
+
+    def test_mark_read_unmark(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            st = CacheState(d)
+            name = "carl-session+m+0123456789+ses_1.bin"
+            call = lambda m, p, q, b: handle(st, lambda: CONF, m, p, q, b)   # noqa: E731
+            self.assertEqual(call("GET", "/carl/cache/ram", {"model": "m", "file": name}, {})[0], 404)
+            self.assertEqual(call("POST", "/carl/cache/ram", {}, {"model": "m", "file": name, "task": 7, "at": 1.5}),
+                             (200, {"ok": True}))
+            self.assertEqual(call("GET", "/carl/cache/ram", {"model": "m", "file": name}, {}),
+                             (200, {"model": "m", "file": name, "task": 7, "at": 1.5}))
+            self.assertEqual(call("GET", "/carl/cache/ram", {"model": "other", "file": name}, {})[0], 404)
+            for bad in ({"model": "m", "file": "../x.bin", "task": 1, "at": 1}, {"model": "m", "file": name, "task": "1", "at": 1},
+                        {"model": "", "file": name, "task": 1, "at": 1}):
+                self.assertEqual(call("POST", "/carl/cache/ram", {}, bad)[0], 400, bad)
+            self.assertEqual(call("POST", "/carl/cache/unram", {}, {"model": "m", "file": name}), (200, {"ok": True}))
+            self.assertEqual(call("GET", "/carl/cache/ram", {"model": "m", "file": name}, {})[0], 404)
+            self.assertEqual(os.listdir(d), [])
+
+
 class SecurityTest(unittest.TestCase):
     """The state files are 0600; no key means nobody gets in; a bad body size is refused."""
 
