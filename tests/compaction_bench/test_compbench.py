@@ -122,8 +122,8 @@ class ScoreTest(unittest.TestCase):
                "prompt_n": 30000, "read_ms": 60000}
         row = dict(row, session="s", index=1)
         table = cb.report([row, dict(row, method="mask:4:0.3")])
-        self.assertEqual(table[1], ["none", "1", "100%", "0%", "", "", "", "1.00", "0.50", "1.0", "100%", "0%", "30,000",
-                                    ""])
+        self.assertEqual(table[1], ["none", "1", "100%", "0%", "", "", "", "1.00", "0.50", "1.0", "100%", "0%", "0%",
+                                    "30,000", ""])
         self.assertEqual(table[2][-1], "60")         # the event's re-read: 30,000 tokens at the measured 500 tokens/s
         self.assertEqual(table[2][4:6], ["+0% (+0% to +0%)", "1.00"])
         self.assertEqual(len(table), 3)
@@ -291,6 +291,37 @@ class EventTest(unittest.TestCase):
         again = {"tool_calls": [call("9", "read", filePath="/w/pylib/textstats/tokenize.py")]}
         self.assertTrue(cb.repeated(out, again))
         self.assertFalse(cb.repeated(out, {"tool_calls": [call("9", "read", filePath="/w/pylib/textstats/x.py")]}))
+
+
+class ArgsTest(unittest.TestCase):
+    def test_old_edit_and_write_arguments(self) -> None:
+        """#4 (agreed 2026-10-13): an edit's or a write's strings become "[pruned: N lines]" (names, paths and other
+        arguments kept; Pi's edits[] too), in the old part with its results; never in the tail; under 80 tokens they
+        stay; a stub copied into the next call counts as imitated."""
+        self.assertEqual(cb.stub_args({"filePath": "/w/a.py", "oldString": "a\nb", "newString": "c", "replaceAll": True}),
+                         {"filePath": "/w/a.py", "oldString": "[pruned: 2 lines]", "newString": "[pruned: 1 lines]",
+                          "replaceAll": True})
+        self.assertEqual(cb.stub_args({"path": "a.py", "edits": [{"oldText": "x", "newText": "y\nz"}]}),
+                         {"path": "a.py", "edits": [{"oldText": "[pruned: 1 lines]", "newText": "[pruned: 2 lines]"}]})
+        t = long_session()
+        code = "\n".join(f"def f{n}(): return {n}" for n in range(60))
+        t.insert(2, {"role": "assistant", "content": "", "tool_calls": [call("w", "write", filePath="/w/pylib/new.py",
+                                                                                content=code)]})
+        t.insert(3, {"role": "tool", "tool_call_id": "w", "content": "Wrote file successfully."})
+        t.insert(4, {"role": "assistant", "content": "", "tool_calls": [call("s", "edit", filePath="/w/pylib/x.py",
+                                                                                oldString="a", newString="b")]})
+        t.insert(5, {"role": "tool", "tool_call_id": "s", "content": "Edit applied successfully."})
+        window = int(sum(cb.est_tokens(m) for m in t) / 0.7)
+        out = cb.event(t, 0, window, 1, 0.1, True, True)
+        self.assertEqual(json.loads(out[2]["tool_calls"][0]["function"]["arguments"]),
+                         {"filePath": "/w/pylib/new.py", "content": "[pruned: 60 lines]"})
+        self.assertEqual(out[4], t[4])                                # a small edit (under 80 tokens) stays
+        self.assertIn("def f0", t[2]["tool_calls"][0]["function"]["arguments"])        # the input untouched
+        self.assertEqual(out, cb.method_fn("mask:1:0.1+turn+ph=facts+args", window)(t))
+        with self.assertRaises(SystemExit):
+            cb.method_fn("mask:8:0.2+args")
+        self.assertTrue(cb.imitated({"tool_calls": [call("9", "edit", filePath="a", oldString="[pruned: 3 lines]")]}))
+        self.assertFalse(cb.imitated({"tool_calls": [call("9", "edit", filePath="a", oldString="x = 1")]}))
 
 
 class DriverTest(unittest.TestCase):

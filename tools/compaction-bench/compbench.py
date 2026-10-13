@@ -410,10 +410,37 @@ def placeholder(call: Mapping[str, Any], text: str, changed_after: bool, in_task
     return f"[pruned] {name} {target}: {_lines(text)} lines.".replace("  ", " ")
 
 
+ARG_STRINGS = ("oldString", "newString", "content", "oldText", "newText", "old_string", "new_string", "patch")
+
+
+def stub_args(args: Any) -> Any:
+    """#4 (agreed 2026-10-13): an edit's or a write's strings (OpenCode: oldString, newString, content; Pi: path,
+    content, edits[].oldText/newText) as "[pruned: N lines]"; every other argument, and every name, as it was."""
+    if isinstance(args, dict):
+        return {k: (f"[pruned: {len(v.splitlines()) or 1} lines]" if k in ARG_STRINGS and isinstance(v, str)
+                    else stub_args(v) if isinstance(v, (dict, list)) else v) for k, v in args.items()}
+    if isinstance(args, list):
+        return [stub_args(x) for x in args]
+    return args
+
+
+def _prune_args(m: JsonDict, j: int) -> None:
+    """The message's j-th tool call with its strings pruned (stub_args); the message's tool calls copied first."""
+    tcs = [dict(tc, function=dict(tc.get("function") or {})) for tc in m.get("tool_calls") or []]
+    fn = tcs[j]["function"]
+    try:
+        args = json.loads(fn.get("arguments") or "{}")
+    except ValueError:
+        return
+    fn["arguments"] = json.dumps(stub_args(args))
+    m["tool_calls"] = tcs
+
+
 def event(messages: Sequence[Mapping[str, Any]], extra: int, window: int, keep_calls: int, tail_share: float,
-          facts: bool) -> List[JsonDict]:
+          facts: bool, args: bool = False) -> List[JsonDict]:
     """The compaction event's prune (stage 1) on a request: its shape and the drain line (above). extra: the tokens
-    outside the messages (the tools). facts: the STE100 placeholders and their thresholds (#2), else the mask's line."""
+    outside the messages (the tools). facts: the STE100 placeholders and their thresholds (#2), else the mask's line.
+    args: old edit and write arguments pruned too (#4), with the results of their place in the order."""
     out = [dict(m) for m in messages]
     sizes = [est_tokens(m) for m in out]
     total = sum(sizes) + extra
@@ -454,12 +481,32 @@ def event(messages: Sequence[Mapping[str, Any]], extra: int, window: int, keep_c
         else:
             beyond.append(view)
     protected = kept_files | {err} if err is not None else set(kept_files)
-    old = [i for i in results if i < cur and i not in protected and i not in beyond]
-    mid = [i for i in results if cur < i < start and i not in protected and i not in beyond]
+    old: List[Tuple[int, int]] = [(i, -1) for i in results if i < cur and i not in protected and i not in beyond]
+    mid: List[Tuple[int, int]] = [(i, -1) for i in results if cur < i < start and i not in protected and i not in beyond]
+    if args:
+        # the edits after a kept view of a changing file are that file's current state with it (rule 4): they stay
+        views = {call_target(calls[v]): v for v in kept_files}
+        for i, m in enumerate(out[:start]):
+            if m.get("role") != "assistant":
+                continue
+            for j, c in enumerate(tool_calls(m)):
+                if c["name"].lower() not in WRITE_TOOLS or (call_target(c) in views and i > views[call_target(c)]):
+                    continue
+                size = int(len(json.dumps(c["args"])) / CHARS_PER_TOKEN)
+                if size >= MIN_PRUNE:
+                    (old if i < cur else mid).append((i, j))
+        old.sort()
+        mid.sort()
     names = _call_names(out)
-    for i in old + mid + beyond:
+    for i, j in old + mid + [(b, -1) for b in beyond]:
         if total <= DRAIN * window:
             break
+        if j >= 0:                                   # an edit's or a write's arguments (#4)
+            _prune_args(out[i], j)
+            new_size = est_tokens(out[i])
+            total -= sizes[i] - new_size
+            sizes[i] = new_size
+            continue
         text = msg_text(out[i])
         call = calls[i]
         kind = str(call.get("name") or "").lower()
@@ -482,20 +529,25 @@ Method = Callable[..., List[JsonDict]]
 
 def method_fn(spec: str, window: int = WINDOW) -> Method:
     """A method by name: none; mask:K:S (the first guard); mask:K:S+turn (the event's shape, S = the working tail's
-    share of the window, K its floor; the drain line); +ph=facts (the STE100 placeholders). The function takes the
-    messages and the tokens outside them (the tools)."""
+    share of the window, K its floor; the drain line); +ph=facts (the STE100 placeholders); +args (old edit and write
+    arguments). The function takes the messages and the tokens outside them (the tools)."""
     base, *mods = spec.split("+")
     parts = base.split(":")
     if parts[0] == "none" and not mods:
         return lambda ms, extra=0: [dict(m) for m in ms]
-    if parts[0] == "mask" and len(parts) == 3 and set(mods) <= {"turn", "ph=facts"} and (
-            "ph=facts" not in mods or "turn" in mods):
+    if parts[0] == "mask" and len(parts) == 3 and set(mods) <= {"turn", "ph=facts", "args"} and (
+            not set(mods) - {"turn"} or "turn" in mods):
         k, s = int(parts[1]), float(parts[2])
         if "turn" in mods:
-            facts = "ph=facts" in mods
-            return lambda ms, extra=0: event(ms, extra, window, k, s, facts)
+            facts, pargs = "ph=facts" in mods, "args" in mods
+            return lambda ms, extra=0: event(ms, extra, window, k, s, facts, pargs)
         return lambda ms, extra=0: mask(ms, k, s)
     raise SystemExit(f"error: no such method {spec!r} (none, mask:K:S, mask:K:S+turn, mask:K:S+turn+ph=facts)")
+
+
+def imitated(reply: Mapping[str, Any]) -> bool:
+    """The next step's call copies a stub (#4's risk: an edit whose old text is "[pruned: 3 lines]" fails)."""
+    return any("[pruned" in json.dumps(c["args"]) or "[cleared" in json.dumps(c["args"]) for c in tool_calls(reply))
 
 
 def repeated(short: Sequence[Mapping[str, Any]], reply: Mapping[str, Any]) -> bool:
@@ -933,6 +985,7 @@ def cmd_score(a: argparse.Namespace) -> int:
                        "next": score_next(nxt["message"], p["truth"]),
                        "same_as_none": score_next(nxt["message"], ref) if ref is not None else None,
                        "repeat": repeated(short, nxt["message"]),
+                       "imitated": imitated(nxt["message"]),
                        "context_after": sum(est_tokens(m) for m in short) + body_tokens({"tools": req.get("tools")}),
                        "reply": reply, "finish": nxt.get("finish"),
                        "probe": score_probe(parse_probe(msg_text(probe["message"])), full),
@@ -990,7 +1043,7 @@ def report(rows: Iterable[Mapping[str, Any]]) -> List[List[str]]:
     for r in rows:
         by.setdefault(str(r["method"]), []).append(r)
     head = ["method", "points", "next tool", "next target", "against none (95%)", "p", "same as none",
-            "files recall", "files precision", "invented", "errors recalled", "repeats", "prompt tokens",
+            "files recall", "files precision", "invented", "errors recalled", "repeats", "imitated", "prompt tokens",
             "event re-read s"]
     out = [head]
     mean = (lambda xs: sum(xs) / len(xs) if xs else 0.0)
@@ -1008,6 +1061,7 @@ def report(rows: Iterable[Mapping[str, Any]]) -> List[List[str]]:
                     f"{mean([r['probe']['invented'] for r in rs]):.1f}",
                     f"{mean([r['probe']['error'] for r in rs]):.0%}",
                     f"{mean([bool(r.get('repeat')) for r in rs]):.0%}",
+                    f"{mean([bool(r.get('imitated')) for r in rs]):.0%}",
                     f"{mean([(r.get('prompt_n') or 0) + (r.get('cache_n') or 0) for r in rs]):,.0f}",
                     "" if name == "none" or not speed else
                     f"{mean([(r.get('prompt_n') or 0) + (r.get('cache_n') or 0) for r in rs]) / speed:.0f}"])
