@@ -91,13 +91,15 @@ The RAM cache is lost when the server stops or when router mode changes the mode
 4. **Router mode:** the client loads a model that is not loaded (`POST /models/load`). It asks again while the router is busy with a different switch. Thus, the state can go in before the request. A title or summary request for a model that is not loaded goes to the loaded model. A switch for it would unload the session's model, and then load it again.
 5. **Title and summary requests** run with thinking off (`reasoning_effort: none`) and are not pinned. With thinking on, an OpenCode title on the 35B held a slot for 35 s, and `opencode run` waited for it.
 6. **A slot that a different session of the same process needs:** the client first sets the session in it back to the end of its last prompt and saves it. The session comes back from its file when it returns.
+   - This holds for every way a request takes a slot: filled from a file, or back from the RAM cache. Before 1.20.9, a request back from the RAM cache (a coder whose slot was taken, for example) took the least full slot without a save, and the main session there was read again later.
+   - A session that is not saved there (the save rule `stop`, or under the sizes in [After a turn](#after-a-turn)) gets a RAM note instead ([above](#the-ram-cache-and-checkpoints-measured-2026-10-02)).
    - Measured: OpenCode gave a task to its coder subagent while the other slot ran the title request.
    - Without this step, the next request of the main session read all 8,567 tokens. llama.cpp kept the coder's state (it shares the tool list of OpenCode) and not the main session's RAM copy. The hybrid model could not go back to the shared point.
    - With this step: 232 tokens. The whole run: 59 s before, 12 s after (with quick titles).
 
 ### After a turn
 
-The client saves after a reply that is not a tool call. It saves before the client sees the end, so `opencode run` and `pi -p` do not exit first. It saves only main sessions (not subagents, titles, summaries or compactions) of 4,096 tokens or more. `cache.save` sets when:
+The client saves after a reply that is not a tool call. It saves before the client sees the end, so `opencode run` and `pi -p` do not exit first. It saves main sessions of 4,096 tokens or more, and subagent sessions of 32,768 tokens or more (`SUB_SAVE_TOKENS`: OpenCode's coder can be sent back to its session; [the hand-off](delegation.md#a-coder-task-sent-back-to-its-session-opencode)). It does not save Pi's subagents (they have no session file and never come back), titles, summaries or compactions. The same sizes hold when a slot is needed (step 6 above). `cache.save` sets when:
 
 | `cache.save` | What occurs |
 |---|---|
@@ -235,6 +237,8 @@ Phase 23.5.1.3, measured 2026-10-12 (M3 Pro, the Qwen3.6-35B-A3B IQ3, OpenCode 1
 - **carl-cache knows a compaction** from OpenCode's compaction-agent request for the session, or from Pi's `session_compact` event (Pi's summary request does not pass through its extension). A request with earlier turns whose first user message is not the last request's is taken as a compaction too.
 - **The session's cached state then starts again.** Its file and its slot's record are removed, its next turn starts from its agent's prompt file, and its counts start again. Its next save holds the compacted conversation.
 - **The compaction request itself** reads the whole conversation again (about 26.6K tokens, 60 s here). The client's compaction prompt is its own, so nothing of the slot's state fits it. Its request gets no session file.
+- **The compaction runs in its session's own slot,** and the session stays there after it (1.20.9). Before, a coder's compaction could take the main session's slot, and the compacted session could go to a different slot while its old one kept the stale conversation. A subagent's compaction (the coder's) is known too.
+- **The compacted session is saved at the end of its first turn** (with `auto`, `turn` and `switch`; not with `stop`). Else its new start is read again in full when it next leaves its slot: the `auto` rule counts the restored prompt as saved.
 - **A client on another computer** has the file removed by the dashboard's API (`POST /carl/cache/retire`).
 
 | After the compaction (A3B IQ3) | Before (1.20.2) | Now |

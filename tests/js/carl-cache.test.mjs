@@ -293,6 +293,42 @@ test("subagents and short conversations are not saved; title requests are not pi
   assert.ok(![...srv.st.files.keys()].some((n) => n.startsWith("carl-session+")));
 });
 
+test("a coder session above 32K is saved before its slot is needed and restored when sent back; Pi's are not", async () => {
+  const srv = fakeServer({ slots: 1 });
+  const c = cache(srv.fetch);
+  await send(c, request("coder task"), { session: "k1", agent: "coder", sub: true });
+  ran(srv, 0, 40000);
+  srv.st.calls.length = 0;
+  await send(c, request("main"), { session: "main", agent: "build" });          // takes the coder's slot
+  const saved = srv.st.calls.filter((x) => x.path.endsWith("?save")).map((x) => x.body.filename);
+  assert.equal(saved.length, 1);
+  assert.match(saved[0], /^carl-session\+m\+[0-9a-f]{10}\+k1\.bin$/);
+  ran(srv, 0, 6000);
+  srv.st.calls.length = 0;
+  await send(c, request("follow-up"), { session: "k1", agent: "coder", sub: true });   // sent back (task_id)
+  assert.ok(srv.st.calls.some((x) => x.path.endsWith("?restore") && x.body.filename === saved[0]));
+
+  const pi = fakeServer({ slots: 1 });
+  const p = cache(pi.fetch);
+  await send(p, request("pi sub"), { session: "p1", agent: "coder", sub: true, once: true });
+  ran(pi, 0, 40000);
+  await p.after({ session: "p1", agent: "coder", sub: true, once: true });
+  await send(p, request("main"), { session: "main", agent: "build" });
+  assert.ok(![...pi.st.files.keys()].some((n) => n.includes("+p1.")));
+});
+
+test("a coder session above 32K is saved at the end of its turn like a main session (turn)", () => withSave("turn", async () => {
+  const srv = fakeServer();
+  const c = cache(srv.fetch);
+  await send(c, request("coder task"), { session: "k1", agent: "coder", sub: true });
+  ran(srv, 0, 20000);
+  await c.after({ session: "k1", agent: "coder", sub: true });
+  assert.ok(![...srv.st.files.keys()].some((n) => n.includes("+k1.")));          // 20K: read again instead
+  ran(srv, 0, 33000);
+  await c.after({ session: "k1", agent: "coder", sub: true });
+  assert.ok([...srv.st.files.keys()].some((n) => n.includes("+k1.")));
+}));
+
 test("a server restart (task ids start again) brings the session back from the disk", async () => {
   const srv = fakeServer();
   const c = cache(srv.fetch);
@@ -837,6 +873,79 @@ test("Phase 23.5.1.10: a session that went to the RAM cache unsaved is found the
   assert.equal(await e.ramMarked("m", mark.file, mark.task + 5), true);
   assert.equal(await e.ramMarked("m", mark.file, mark.task - 1), false);
   assert.ok(!existsSync(join(slotsDir, name)));
+}));
+
+test("Phase 23.5.3.2: the RAM path saves or marks the session in the slot it takes", () => withSave("stop", async () => {
+  const h = home();
+  const srv = onDisk(fakeServer({ slots: 1 }), h);
+  const a = local(srv, h);
+  const slotsDir = join(h, ".config", "carl", "slots");
+  const marked = (sid) => readdirSync(slotsDir).some((n) => n.startsWith(".ram+") && n.includes(`+${sid}.bin`));
+  await send(a, request("hello"), { session: "s1", agent: "build" });
+  ran(srv, 0, 9000);
+  await a.after({ session: "s1", agent: "build" });
+  await send(a, request("other"), { session: "s2", agent: "build" });       // s1 out, unsaved ("stop"): marked
+  ran(srv, 0, 7000);
+  await a.after({ session: "s2", agent: "build" });
+  assert.ok(marked("s1"));
+  const logs = [];
+  a.log = (m) => logs.push(m);
+  const more = request("hello");
+  more.messages.push({ role: "assistant", content: "ok" }, { role: "user", content: "next" });
+  await send(a, more, { session: "s1", agent: "build" });                  // s1 back by the RAM path: s2 out
+  assert.ok(logs.some((m) => /s1 -> slot 0 \(the RAM cache's\)/.test(m)), logs.join("\n"));
+  assert.ok(marked("s2"), "s2 was pushed out by the RAM path and neither saved nor marked");
+}));
+
+test("Phase 23.5.3.2: a compaction runs in its session's own slot, and the session stays there after it", () => withSave("turn", async () => {
+  const h = home();
+  const srv = onDisk(fakeServer({ slots: 3 }), h);
+  const a = local(srv, h);
+  const logs = [];
+  a.log = (m) => logs.push(m);
+  await send(a, request("main"), { session: "m1", agent: "build" });       // slot 0
+  ran(srv, 0, 9000);
+  await a.after({ session: "m1", agent: "build" });
+  const c1 = await send(a, request("coder"), { session: "c1", agent: "build", sub: true });
+  ran(srv, c1.payload.id_slot, 5000);
+  const main = (await send(a, request("main again"), { session: "m1", agent: "build" })).payload.id_slot;
+  const comp = await send(a, { model: "m", messages: [{ role: "system", content: "Summarize." }, { role: "user", content: "[User]: ..." }] },
+                          { session: "m1", agent: "compaction" });
+  assert.equal(comp.payload.id_slot, main, "the compaction left its session's slot");
+  ran(srv, main, 4000);
+  const after = await send(a, request("SUMMARY: so far"), { session: "m1", agent: "build" });
+  assert.equal(after.payload.id_slot, main, "after its compaction the session moved to another slot");
+  // a coder (subagent) compacted: its next turn starts from its agent's prompt (not the old conversation's slot)
+  await send(a, { model: "m", messages: [{ role: "system", content: "Summarize." }, { role: "user", content: "[User]: c" }] },
+             { session: "c1", agent: "compaction", sub: true });
+  srv.st.calls.length = 0;
+  await send(a, request("SUMMARY: coder"), { session: "c1", agent: "build", sub: true });
+  assert.ok(logs.some((m) => /c1: compacted by its client/.test(m)), logs.join("\n"));
+  assert.ok(srv.st.calls.some((x) => x.path.endsWith("?restore") && /^carl-prefix\+m\+build\+/.test(x.body.filename)));
+}));
+
+test("Phase 23.5.3.2: a session compacted just now is saved at the end of its first turn (auto)", () => withSave("auto", async () => {
+  const h = home();
+  const srv = onDisk(fakeServer({ slots: 1 }), h);
+  const a = local(srv, h);
+  await send(a, request("hello"), { session: "s1", agent: "build" });
+  a.models.get("m").speed = 1000;                 // the auto rule: 30 s+ of reading, far more than this turn adds
+  ran(srv, 0, 9000);
+  await a.after({ session: "s1", agent: "build" });
+  assert.equal(sessionSaves(srv).length, 0);
+  await send(a, { model: "m", messages: [{ role: "system", content: "Summarize." }, { role: "user", content: "[User]: ..." }] },
+             { session: "s1", agent: "compaction" });
+  ran(srv, 0, 5000);
+  await send(a, request("SUMMARY: so far"), { session: "s1", agent: "build" });
+  ran(srv, 0, 9200);
+  await a.after({ session: "s1", agent: "build" });
+  assert.equal(sessionSaves(srv).length, 1, "the new start after the compaction was not saved");
+  const more = request("SUMMARY: so far");
+  more.messages.push({ role: "assistant", content: "ok" }, { role: "user", content: "next" });
+  await send(a, more, { session: "s1", agent: "build" });
+  ran(srv, 0, 9300);
+  await a.after({ session: "s1", agent: "build" });
+  assert.equal(sessionSaves(srv).length, 1);      // once: then the rule again
 }));
 
 test("Phase 23.5: with the window cache (the launcher's server file) the request is pinned and nothing is read, restored or saved", () => withSave("turn", async () => {

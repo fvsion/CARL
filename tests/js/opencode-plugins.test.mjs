@@ -1039,3 +1039,28 @@ test("carl-delegation, a provider failure: the coder's task fails with the provi
   assert.ok(res2.text.includes(why), res2.text);
   assert.deepEqual(oc2.calls, []);                                                    // no code session
 });
+
+test("carl-delegation: a coder follow-up resumes its earlier session below 60% of the coder's window, else starts anew with a note (Phase 23.5.3.2)", async () => {
+  const sizes = { big: 70000, small: 20000 };
+  const client = {
+    session: {
+      get: async ({ path }) => ({ data: { id: path.id, title: path.id === "big" ? "Phase 1b: cli module: tests" : "x" } }),
+      messages: async ({ path }) => ({
+        data: path.id === "m"
+          ? [{ info: { role: "assistant", providerID: "llamacpp", modelID: "qwen3.6-35b-a3b-iq3", tokens: { input: 1 } }, parts: [] }]
+          : [{ info: { role: "assistant", tokens: { input: 1000, cache: { read: sizes[path.id] - 1000, write: 0 } }, time: { completed: 1 } },
+               parts: [{ type: "text", text: "All 24 tests pass." }] }],
+      }),
+    },
+    config: { get: async () => ({ data: { provider: { llamacpp: { models: { "qwen3.6-35b-a3b-iq3": { limit: { context: 98304 } } } } } } }) },
+  };
+  const hooks = await delegation.server({ client, directory: "/p" }, { coder: "coder", brief: false, chain: false, gate: false });
+  const big = { subagent_type: "coder", prompt: 'work_type = "follow_up"', task_id: "big" };
+  await hooks["tool.execute.before"]({ tool: "task", sessionID: "m", callID: "c1" }, { args: big });
+  assert.equal(big.task_id, undefined);                                    // 70K of 96K: a new coder session
+  assert.match(big.prompt, /^# CARL: a new coder session, not the earlier one \("Phase 1b: cli module: tests"\): its conversation \(70K tokens\) is over 60% of this coder's window \(98K\)\.\n# Its last result: All 24 tests pass\.\nwork_type = "follow_up"$/);
+  const small = { subagent_type: "coder", prompt: 'work_type = "follow_up"', task_id: "small" };
+  await hooks["tool.execute.before"]({ tool: "task", sessionID: "m", callID: "c2" }, { args: small });
+  assert.equal(small.task_id, "small");                                    // 20K: resumed as asked
+  assert.equal(small.prompt, 'work_type = "follow_up"');
+});

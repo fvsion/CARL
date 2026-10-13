@@ -70,6 +70,7 @@ export default function carlCache(pi: ExtensionAPI) {
 			const sm = ctx.sessionManager;
 			const r = await cache.before(obj(event.payload), {
 				session: sm.getSessionId(), agent: compacting ? "compaction" : agent, sub: !sm.getSessionFile(),
+				once: !sm.getSessionFile(),
 			});
 			release = r.release;
 			return r.payload;
@@ -89,9 +90,9 @@ export default function carlCache(pi: ExtensionAPI) {
 		const msg = event.message;
 		const sm = ctx.sessionManager;
 		if (!last || msg.role !== "assistant" || !(msg.stopReason === "stop" || msg.stopReason === "length")) return undefined;
-		// a subagent (no session file) saves nothing, but its turn ends too
+		// a subagent (no session file: never sent again) saves nothing, but its turn ends too
 		await last
-			.after({ session: sm.getSessionId(), agent, sub: !sm.getSessionFile() })
+			.after({ session: sm.getSessionId(), agent, sub: !sm.getSessionFile(), once: !sm.getSessionFile() })
 			.catch((e: unknown) => debugLog(`save after the reply: ${errorText(e)}`));
 		return undefined;
 	});

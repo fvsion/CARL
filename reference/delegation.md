@@ -251,6 +251,16 @@ Checked against the real OpenCode 1.18.35 with agent-bench's fake server (2026-1
 
 **Risks.** CARL runs a check's command itself (once, before the code session), outside the client's permission prompts, but only a plain test runner or ruff on the project's files (above): the project's tests run the project's code, as the coder's runs do. The OpenCode background hold depends on OpenCode 1.18's behaviour (the form of the `<task …>` message; a plugin error in `chat.message` stops the message without other effects): hence the version list. When OpenCode stops while a held chain runs, its result comes at the next start of OpenCode in that project.
 
+## A coder task sent back to its session (OpenCode)
+
+OpenCode's main agent can send a follow-up to a coder session it ran before (the `task` tool's `task_id`). The coder then goes on in that session, with its whole conversation. A long conversation fills the coder's window, and is read again in full when it is not in a slot or a file. On 2026-10-13 a follow-up went to a coder session that an external model had run up to 225K tokens.
+
+- **The limit:** 60% of the coder's window (`RESUME_MAX` in `carl-delegation`). The plugin reads the session's size from its last reply (the prompt tokens, read and cached) and the window from OpenCode's config of the coder's model (the Coder Model, else the main session's model).
+- **Over the limit:** the task starts a new coder session. The plugin removes `task_id` and puts a note before the task: which earlier session it is, its size against the window, and that session's last result. You see a toast and a log line.
+- **Under the limit:** the task goes on in the same session, as OpenCode does.
+- A coder session of 32K tokens or more is saved to the disk when its slot is needed, so a follow-up does not read it again ([caching](caching.md#after-a-turn)).
+- Pi has no follow-up to a subagent's session: each `subagent` call is a new session.
+
 ## The coder's thinking
 
 The main session and the coder have a thinking setting each, for each model (Phase 23.4.4): **Main thinking** and **Coder thinking** in the dashboard (Settings > Server). The coder also has its own temperature (0.6, OpenCode; not with an external coder model).

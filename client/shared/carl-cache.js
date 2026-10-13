@@ -28,6 +28,9 @@ import { isCarl } from "./carl-api.js";
 
 export const MIN_PREFIX_TOKENS = 1024;   // a shorter prompt is quick to read: no file
 export const MIN_SESSION_TOKENS = 4096;  // a shorter conversation is quick to read again
+// a subagent's session is saved only above this (Phase 23.5.3.2: OpenCode's coder can be sent back to its session;
+// most subagents are not, so a smaller one is read again rather than written to the disk)
+export const SUB_SAVE_TOKENS = 32768;
 // a session that went to llama.cpp's RAM cache unsaved this long ago: maybe dropped since (the cache keeps the newest)
 export const RAM_MARK_MS = 3_600_000;
 export const MIN_FREE_BYTES = 10 * 1000 ** 3;  // no saves on this Mac below 10 GB of free disk
@@ -42,6 +45,8 @@ const CLAIM_STALE_MS = 120_000;
 export const TURN_STALE_MS = 600_000;  // a turn mark this old is a client that went away (the dashboard ignores it)
 export const NO_PIN_AGENTS = new Set(["title", "summary"]);            // small one-off prompts
 export const NO_SAVE_AGENTS = new Set(["title", "summary", "compaction"]);
+/** The fewest tokens a session is saved at: a subagent's, SUB_SAVE_TOKENS. @param {boolean | undefined} sub */
+export const saveMin = (sub) => (sub ? SUB_SAVE_TOKENS : MIN_SESSION_TOKENS);
 const LOAD_WAIT_MS = 180_000;        // a switch takes 30 s to 2 min
 const LOAD_RETRY_MS = 5_000;
 const MISSING_MS = 60_000;           // a file the server did not have: not asked for again this long
@@ -467,13 +472,15 @@ function residentOf(r) {
 // ------------------------------------------------------------------ the cache
 
 /**
- * A request's marks: the session, the agent, and whether the session is a subagent's.
- * @typedef {{ session?: string, agent: string, sub?: boolean }} Meta
+ * A request's marks: the session, the agent, whether the session is a subagent's, and whether its client never sends
+ * it again (once: Pi's subagents, which have no session file).
+ * @typedef {{ session?: string, agent: string, sub?: boolean, once?: boolean }} Meta
  */
 /**
  * A session of this process as the cache last saw it.
  * @typedef {{ slot: number, epoch: number, model: string, router: boolean, payload: Payload,
- *             at: number, saved?: string, sub?: boolean, base?: number, savedN?: number, savedAt?: number }} SessionState
+ *             at: number, saved?: string, sub?: boolean, once?: boolean, base?: number, savedN?: number,
+ *             savedAt?: number, fresh?: boolean }} SessionState
  */
 /**
  * @typedef {{ epoch: number, maxTask: number, key?: string, stable: Map<string, boolean>,
@@ -903,10 +910,24 @@ export class CarlCache {
       // compaction request (OpenCode's compaction agent; Pi's, marked by its extension), else by its start
       if (meta.session && meta.agent === "compaction") this.compactedBy(meta.session);
       const done = meta.session && !NO_SAVE_AGENTS.has(meta.agent) && this.compacting.delete(meta.session);
-      if (known && meta.session && !meta.sub && (done || (!NO_SAVE_AGENTS.has(meta.agent) && restarted(known.payload, out)))) {
+      /** @type {number | undefined} the slot to take first: the session's own (Phase 23.5.3.2) */
+      let prefer;
+      let fresh = false;              // compacted just now: saved at the end of this turn (Phase 23.5.3.2)
+      // subagents too (Phase 23.5.3.2: a coder's next turn after its compaction read its whole new conversation)
+      if (known && meta.session && (done || (!NO_SAVE_AGENTS.has(meta.agent) && restarted(known.payload, out)))) {
         await this.compacted(model, srv.router, m, meta, slots);
         this.sessions.delete(id);
+        if (known.epoch === m.epoch) prefer = known.slot;      // back to its own slot (its old state goes)
+        fresh = true;
         known = undefined;
+      }
+      // a compaction's request runs in its session's own slot: the compaction replaces that state anyway, and no
+      // other session is pushed out for it (2026-10-13: a coder's compaction took the main session's slot)
+      if (NO_SAVE_AGENTS.has(meta.agent) && meta.session) {
+        for (const [k, s] of this.sessions) {
+          const [, sid, agent] = k.split("\n");
+          if (sid === meta.session && !NO_SAVE_AGENTS.has(agent) && s.epoch === m.epoch) prefer = s.slot;
+        }
       }
       let slot;
       let how = "its own";
@@ -919,7 +940,7 @@ export class CarlCache {
         const s = slots.find((x) => x.id === known.slot);
         if (s && !s.busy && this.owner.get(`${model}:${s.id}`) === id && !(await this.savedSince(model, srv.router, m, meta, known))
             && (release = await this.tryClaim(model, s.id))) slot = s.id;
-      } else if (meta.session && !meta.sub) {         // new to this process: still in a slot, says a record on this Mac?
+      } else if (meta.session && !meta.once) {        // new to this process: still in a slot, says a record on this Mac?
         const file = sessionFile(model, await this.serverKey(model, srv.router, m), meta.session);
         const rec = await this.recorded(model, file);
         const s = rec && slots.find((x) => x.id === rec.slot && x.task === rec.task && !x.busy);
@@ -938,11 +959,14 @@ export class CarlCache {
         // back from llama.cpp's RAM cache (its slot was taken and it was not saved): not into an empty slot while
         // one holds a conversation (llama.cpp #28139: a request pinned to an empty slot skips the RAM cache's lookup;
         // Phase 23.5.1.2: never seen in CARL's runs, where no idle slot is cleared, so a guard)
-        const toRam = !windowed && (Boolean(ramMark) || (Boolean(known && known.epoch === m.epoch && !known.saved)
+        const toRam = !windowed && !NO_SAVE_AGENTS.has(meta.agent)       // a compaction's prompt is in no saved state
+          && (Boolean(ramMark) || (Boolean(known && known.epoch === m.epoch && !known.saved)
           && !(await this.savedSince(model, srv.router, m, meta, known))));
         const ranked = await this.rankFree(model, slots, meta.session);
-        const order = toRam && ranked.some((s) => s.n > 0) ? [...ranked.filter((s) => s.n > 0), ...ranked.filter((s) => s.n === 0)]
-          : ranked;
+        const own = prefer === undefined ? undefined : ranked.find((s) => s.id === prefer);   // free, no other turn
+        const order = [...(own ? [own] : []),
+          ...(toRam && ranked.some((s) => s.n > 0) ? [...ranked.filter((s) => s.n > 0), ...ranked.filter((s) => s.n === 0)]
+            : ranked).filter((s) => s.id !== own?.id)];
         for (const c of order) {
           if ((release = await this.tryClaim(model, c.id))) {
             pick = c;
@@ -968,7 +992,7 @@ export class CarlCache {
           // looks in its RAM cache (it does only when the slot would keep less than half its tokens: llama.cpp #28276;
           // Phase 23.5.1.2, measured: the E4B read the session's own part again, 7,967 of 18,948 tokens)
           try {
-            await this.toRamCache(model, srv.router, pick);
+            await this.vacate(model, srv.router, m, pick, set);     // the session there saved or marked first
           } catch (e) {
             debugLog(`to the RAM cache: ${errorText(e)}`);
           }
@@ -977,7 +1001,7 @@ export class CarlCache {
       }
       this.owner.set(`${model}:${slot}`, id);
       this.log(`request: ${meta.agent} ${meta.session ?? "-"} -> slot ${slot} (${how})`);
-      if (meta.session && !meta.sub && (ramMark || this.local)) {      // in a slot again: no RAM mark
+      if (meta.session && !meta.once && (ramMark || this.local)) {      // in a slot again: no RAM mark
         await this.unmarkRam(model, ramMark ?? sessionFile(model, await this.serverKey(model, srv.router, m), meta.session));
       }
       if (meta.session) {
@@ -987,7 +1011,7 @@ export class CarlCache {
         this.event({ e: "place", model, slot, session: meta.session, agent: meta.agent, sub: Boolean(meta.sub), from,
                      tokens: filled.tokens ?? 0, history });
         this.sessions.set(id, { ...(known ?? {}), slot, epoch: m.epoch, model, router: srv.router, payload: out,
-                                at: Date.now(), sub: Boolean(meta.sub), base });
+                                at: Date.now(), sub: Boolean(meta.sub), once: Boolean(meta.once), base, fresh: fresh || Boolean(known?.fresh) });
         await this.turn(model, slot, meta.session, true);
       }
       return { payload: { ...out, id_slot: slot }, release: release ?? (() => {}) };
@@ -1032,7 +1056,7 @@ export class CarlCache {
    * @param {SessionState | undefined} known
    */
   async savedSince(model, router, m, meta, known) {
-    if (!known || !meta.session || meta.sub || !this.local || !this.dirExists()) return false;
+    if (!known || !meta.session || meta.once || !this.local || !this.dirExists()) return false;
     try {
       const st = fs.statSync(join(this.dir, sessionFile(model, await this.serverKey(model, router, m), meta.session)));
       return st.mtimeMs > Math.max(known.at, known.savedAt ?? 0);       // its own saves set savedAt
@@ -1079,27 +1103,55 @@ export class CarlCache {
    */
   async fill(payload, model, router, m, pick, meta, set, info = {}) {
     const key = await this.serverKey(model, router, m);
+    await this.vacate(model, router, m, pick, set);
+    const got = set.sessions && meta.session && !meta.once && !NO_SAVE_AGENTS.has(meta.agent)
+      ? await this.restore(model, router, pick.id, sessionFile(model, key, meta.session)) : undefined;
+    return this.fillRest(payload, model, router, m, pick, meta, set, info, key, got);
+  }
+
+  /**
+   * Before a request takes a slot (any path: filled, or back from the RAM cache): the session there is saved first
+   * when it is one of this process's (its next prompt continues it), else from its slot note (another process's);
+   * a session that is not saved (the save rule, or a short one) is marked as in the RAM cache. Then the slot's
+   * conversation goes to the RAM cache (Phase 23.5.3.2: the RAM path took a slot without this, 2026-10-13).
+   * @param {string} model @param {boolean} router @param {ModelState} m @param {Slot} pick @param {Settings} set
+   */
+  async vacate(model, router, m, pick, set) {
+    const key = await this.serverKey(model, router, m);
     const before = this.owner.get(`${model}:${pick.id}`);
     const other = before ? this.sessions.get(before) : undefined;
     const [, prev, prevAgent] = before ? before.split("\n") : [];
     // another session of ours that is still in the slot: not when another process saved it since (it took the slot
     // and saved it from its record; Phase 23.5.1.1: found by the counters, the slot holds that process's session now)
     const ours = before && other && other.epoch === m.epoch &&
-      !(await this.savedSince(model, router, m, { session: prev, agent: prevAgent ?? "", sub: Boolean(other.sub) }, other));
-    if (ours && other && set.sessions && set.save !== "stop" && pick.n >= MIN_SESSION_TOKENS) {
+      !(await this.savedSince(model, router, m, { session: prev, agent: prevAgent ?? "", once: Boolean(other.once) }, other));
+    // a session its client sends again: a main one, or a subagent's above SUB_SAVE_TOKENS
+    const kept = ours && other && prev && !other.once && !NO_SAVE_AGENTS.has(prevAgent) && set.sessions
+      && (!other.sub || pick.n >= SUB_SAVE_TOKENS);
+    if (ours && other && set.sessions && set.save !== "stop" && pick.n >= saveMin(other.sub)) {
       // saved first (set back to the end of its last prompt, so its next prompt continues it), then put back from its
       // file when it returns
-      if (prev && !other.sub && !NO_SAVE_AGENTS.has(prevAgent)) await this.save(other, prev, pick, m, true);
+      if (kept && prev) await this.save(other, prev, pick, m, true);
     } else {
-      if (ours && other && prev && !other.sub && !NO_SAVE_AGENTS.has(prevAgent) && set.sessions && pick.n > 0) {
+      if (kept && prev && pick.n > 0) {
         await this.markRam(model, sessionFile(model, key, prev), m.maxTask);    // to the RAM cache, unsaved
       }
       await this.saveResident(model, router, pick, set, m);
     }
     await this.toRamCache(model, router, pick);
+  }
+
+  /**
+   * fill()'s rest: the session's file restored (got), else the saved start of a longer session, else the agent's
+   * prompt file (read once and saved when there is none).
+   * @param {Payload} payload @param {string} model @param {boolean} router @param {ModelState} m @param {Slot} pick
+   * @param {Meta} meta @param {Settings} set @param {{ from?: string, tokens?: number }} info @param {string} key
+   * @param {number | undefined} got
+   * @returns {Promise<number | undefined>}
+   */
+  async fillRest(payload, model, router, m, pick, meta, set, info, key, got) {
     // a compaction's request (its own prompt, the conversation as text): nothing of the session's state fits it
     const own = set.sessions && meta.session && !meta.sub && !NO_SAVE_AGENTS.has(meta.agent);
-    const got = own ? await this.restore(model, router, pick.id, sessionFile(model, key, meta.session)) : undefined;
     if (got !== undefined) {
       this.log(`session ${meta.session}: restored into slot ${pick.id}`);
       Object.assign(info, { from: "session", tokens: got });
@@ -1369,7 +1421,8 @@ export class CarlCache {
   }
 
   /**
-   * A turn ended: save the session's conversation (main sessions; not subagents or one-off prompts).
+   * A turn ended: save the session's conversation (main sessions, and subagents' above SUB_SAVE_TOKENS; not Pi's
+   * subagents or one-off prompts).
    * @param {Meta} meta
    */
   async after(meta) {
@@ -1383,7 +1436,7 @@ export class CarlCache {
   /** @param {Meta} meta */
   async saveTurn(meta) {
     const set = await this.loadSettings();
-    if (!set.enabled || !set.sessions || meta.sub || !meta.session || NO_SAVE_AGENTS.has(meta.agent)) return;
+    if (!set.enabled || !set.sessions || meta.once || !meta.session || NO_SAVE_AGENTS.has(meta.agent)) return;
     /** @type {SessionState | undefined} */
     let e;
     for (const [k, v] of this.sessions) {        // the session's latest request (OpenCode's idle event names no agent)
@@ -1404,13 +1457,17 @@ export class CarlCache {
       }
       const m = this.model(model, slots);
       const s = slots.find((x) => x.id === e.slot);
-      if (!s || s.busy || e.epoch !== m.epoch || s.n < MIN_SESSION_TOKENS) {
+      if (!s || s.busy || e.epoch !== m.epoch || s.n < saveMin(e.sub)) {
         this.log(`after: session ${meta.session} not saved (slot ${e.slot}: ${s ? `${s.n} tokens${s.busy ? ", busy" : ""}` : "gone"})`);
         return;
       }
       const unsaved = s.n - Math.max(e.savedN ?? 0, e.base ?? 0);
       const mode = this.settings().save;
-      if (mode === "turn" || (mode === "auto" && unsaved >= (m.speed ?? READ_SPEED) * this.settings().autoS)) {
+      // just compacted: its new start is saved at the end of its first turn (it is read again in full otherwise;
+      // the auto rule counted the restored prompt as saved), except with "stop" (Phase 23.5.3.2, user, 2026-10-13)
+      if (mode === "turn" || (e.fresh && mode !== "stop")
+          || (mode === "auto" && unsaved >= (m.speed ?? READ_SPEED) * this.settings().autoS)) {
+        e.fresh = false;
         await this.save(e, meta.session, s, m, false);
         await this.unrecord(model, e.slot);
         return;

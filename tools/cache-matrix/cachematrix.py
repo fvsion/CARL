@@ -358,6 +358,22 @@ class OpenCodeDriver(Driver):
     def rename(self, sid: str, title: str) -> None:
         self._call("PATCH", f"/session/{sid}", {"title": title})
 
+    def new_child(self, parent: str, title: str) -> str:
+        """A child session of parent (as the task tool makes one for a subagent)."""
+        return str(self._call("POST", "/session", {"title": title, "parentID": parent})["id"])
+
+    def say_as(self, sid: str, text: str, agent: str) -> str:
+        body = {"parts": [{"type": "text", "text": text}], "model": {"providerID": cl.PROVIDER, "modelID": self.model},
+                "agent": agent}
+        variant = cl.opencode_variant("off")
+        if variant:
+            body["variant"] = variant
+        msg = self._call("POST", f"/session/{sid}/message", body) or {}
+        err = (msg.get("info") or {}).get("error")
+        if err:
+            return "error: " + json.dumps(err)[:300]
+        return "".join(str(p.get("text", "")) for p in msg.get("parts") or [] if p.get("type") == "text")[:200]
+
     def fork(self, sid: str) -> str:
         return str(self._call("POST", f"/session/{sid}/fork", {})["id"])
 
@@ -686,7 +702,11 @@ def run_cell(e: Env, cell: Cell, env_base: Mapping[str, str], other: str) -> Dic
 
     try:
         drv.start()
-        if not sub:
+        if e.a.scenario == "slots" and cell.client == "opencode" and not sub:
+            slots_scenario(drv, names, step, long_prompt, sub_agent_name(e.home))   # type: ignore[arg-type]
+        elif e.a.scenario == "ram" and cell.client == "opencode" and not sub:
+            ram_scenario(drv, names, step, long_prompt, sub_agent_name(e.home))     # type: ignore[arg-type]
+        elif not sub:
             step("a1", "the agent's prompt read once and saved; A in a slot", lambda: _new_say(drv, names, "A", long_prompt("A")))
             step("a2", "A in its own slot: only the new message read", lambda: drv.say(names["A"], SHORT))
             step("b1", "B in the other slot (the prompt from its file or the RAM)", lambda: _new_say(drv, names, "B", long_prompt("B")))
@@ -744,7 +764,130 @@ def run_cell(e: Env, cell: Cell, env_base: Mapping[str, str], other: str) -> Dic
     files = Probe(e.server.log_file if e.server else "", cache_log, e.slots_dir).files()
     return {"cell": dataclasses.asdict(cell), "key": cell.key(), "client_model": model, "words": words, "steps": steps,
             "files_at_end": files, "seconds": round(time.time() - t_cell, 1), "date": time.strftime("%Y-%m-%dT%H:%M:%S"),
-            "save": e.a.save or "auto"}
+            "save": e.a.save or "auto", "names": names,
+            "checks": [{"what": w, "ok": ok, "detail": d}
+                       for w, ok, d in {"slots": slots_check, "ram": ram_check}[e.a.scenario](steps, names)]
+            if e.a.scenario in ("slots", "ram") else []}
+
+
+def slots_scenario(drv: "OpenCodeDriver", names: Dict[str, str], step: Callable[[str, str, Callable[[], str]], None],
+                   long_prompt: Callable[[str], str], coder: str) -> None:
+    """Phase 23.5.3.2: the user's session of 2026-10-13 replayed with 3 slots: a main session and coder sessions
+    (children of it, the coder agent), compactions of the main and of a coder, a third coder, a client restart.
+    slots_check() reads the steps."""
+    def new_child(label: str) -> str:
+        names[label] = drv.new_child(names["M"], f"cache-matrix {label}")
+        return drv.say_as(names[label], long_prompt(label), coder)
+    step("main", "the main session in a slot", lambda: _new_say(drv, names, "M", long_prompt("M")))
+    step("coder1", "a coder in another slot", lambda: new_child("C1"))
+    step("coder2", "a second coder in the third slot", lambda: new_child("C2"))
+    step("main2", "the main session in its own slot", lambda: drv.say(names["M"], SHORT))
+    step("main-compact", "the main session's compaction runs in the main session's slot", lambda: drv.compact(names["M"]))
+    step("main-after", "the main session stays in its slot after the compaction; its new start saved after the turn",
+         lambda: drv.say(names["M"], SHORT))
+    step("coder1-compact", "the coder's compaction runs in the coder's slot", lambda: drv.compact(names["C1"]))
+    step("coder1-after", "the coder after its compaction: its slot, its agent's prompt restored",
+         lambda: drv.say_as(names["C1"], SHORT, coder))
+    step("coder3", "a third coder takes a slot: the session there saved or marked first", lambda: new_child("C3"))
+    step("main-back", "the main session again: its own slot, or restored from its file or the RAM cache",
+         lambda: drv.say(names["M"], SHORT))
+    step("client-restart", "the main session after a client restart: its slot (record) or its file",
+         lambda: (drv.restart(), drv.say(names["M"], SHORT))[1])
+
+
+def ram_scenario(drv: "OpenCodeDriver", names: Dict[str, str], step: Callable[[str, str, Callable[[], str]], None],
+                 long_prompt: Callable[[str], str], coder: str) -> None:
+    """Phase 23.5.3.2, fix 2 and the coders above 32K, on 3 slots. A request back from llama.cpp's RAM cache (a coder
+    under 32K, not saved when its slot was taken) takes the least full slot, a main session's: that session is saved
+    (or marked, save = stop) first. Then a coder above 32K pushed out of its slot: saved (marked), and sent back from its
+    file (the RAM cache). A slot's size decides which one a request takes (the least full), so: two long main sessions
+    (~38K tokens), a short coder (~9K), a short main session (~12K), a long coder (~37K). ram_check() reads the steps."""
+    def new_child(label: str, text: str) -> str:
+        names[label] = drv.new_child(names["A"], f"cache-matrix {label}")
+        return drv.say_as(names[label], text, coder)
+    step("a", "a long main session in a slot", lambda: _new_say(drv, names, "A", long_prompt("A")))
+    step("d", "a second long main session in another slot", lambda: _new_say(drv, names, "D", long_prompt("D")))
+    step("b", "a short coder in the third slot", lambda: new_child("B", SHORT))
+    step("c", "a short main session takes the coder's slot (the least full); the coder, under 32K, is not saved",
+         lambda: _new_say(drv, names, "C", SHORT))
+    step("b-back", "the coder back from the RAM cache takes C's slot (the least full): C saved (marked) first",
+         lambda: drv.say_as(names["B"], SHORT, coder))
+    step("c-back", "C back: from its file (the RAM cache), only the new part read", lambda: drv.say(names["C"], SHORT))
+    step("k", "a long coder (above 32K) takes the least full slot", lambda: new_child("K", long_prompt("K")))
+    step("e", "a short main session takes the long coder's slot: the coder saved (marked) first",
+         lambda: _new_say(drv, names, "E", SHORT))
+    step("k-back", "the long coder sent back: from its file (the RAM cache), only the new part read",
+         lambda: drv.say_as(names["K"], SHORT, coder))
+
+
+def ram_check(steps: Sequence[Mapping[str, Any]], names: Mapping[str, str]) -> List[Tuple[str, bool, str]]:
+    """ram_scenario()'s checks: (what, passed, detail)."""
+    by = {d["step"]: d for d in steps}
+    out: List[Tuple[str, bool, str]] = []
+
+    def kept(doc: Mapping[str, Any], sid: str) -> List[str]:     # the session saved or marked before its slot went
+        return [ln for ln in doc.get("cache_log") or [] if sid in ln
+                and ("its slot is needed" in ln or "saved from slot" in ln or "RAM cache (not saved" in ln)]
+    if "c" in by:
+        b = kept(by["c"], names.get("B", "?"))
+        out.append(("the short coder (under 32K) not saved when its slot is taken", not b, "; ".join(b)[:200] or "not saved"))
+    if "b-back" in by:
+        doc, b, c = by["b-back"], names.get("B", "?"), names.get("C", "?")
+        ram = any(f" {b} -> slot " in ln and "RAM cache" in ln for ln in doc["cache_log"])
+        took = kept(doc, c)
+        out.append(("the coder back by the RAM path; C saved or marked first", ram and bool(took),
+                    f"RAM path {ram}; " + ("; ".join(took)[:200] or "C neither saved nor marked")))
+    if "e" in by:
+        took = kept(by["e"], names.get("K", "?"))
+        out.append(("the long coder (above 32K) saved or marked when its slot is taken", bool(took),
+                    "; ".join(took)[:200] or "neither saved nor marked"))
+    for name in ("c-back", "k-back"):
+        if name in by:
+            s = by[name]["summary"]
+            ok = s["read"] is not None and s["ctx"] and s["read"] < 0.2 * s["ctx"]
+            out.append((f"{name}: only the new part read", bool(ok), f"read {s['read']} of {s['ctx']} ({s['how']})"))
+    return out
+
+
+def _slot_of(doc: Mapping[str, Any], sid: str) -> Optional[int]:
+    """The slot a step's request of session sid went to (the cache log's "request: AGENT SID -> slot N (...)")."""
+    for ln in doc.get("cache_log") or []:
+        if ln.startswith("request: ") and f" {sid} -> slot " in ln:
+            return int(ln.split(" -> slot ", 1)[1].split(" ", 1)[0])
+    return None
+
+
+def slots_check(steps: Sequence[Mapping[str, Any]], names: Mapping[str, str]) -> List[Tuple[str, bool, str]]:
+    """The scenario's checks: (what, passed, detail)."""
+    by = {d["step"]: d for d in steps}
+    m, c1 = names.get("M", "?"), names.get("C1", "?")
+    out: List[Tuple[str, bool, str]] = []
+    if "main2" in by and "main-compact" in by:
+        a, b = _slot_of(by["main2"], m), _slot_of(by["main-compact"], m)
+        out.append(("the main compaction in the main session's slot", a is not None and a == b, f"{a} -> {b}"))
+    if "main-after" in by:
+        a, b = _slot_of(by["main2"], m), _slot_of(by["main-after"], m)
+        out.append(("the main session back in its slot after the compaction", a is not None and a == b, f"{a} -> {b}"))
+        saved = any(m in f for f in by["main-after"]["files_written"])
+        out.append(("the main session's new start saved after its first turn", saved, ", ".join(by["main-after"]["files_written"])))
+    if "coder1" in by and "coder1-compact" in by:
+        a, b = _slot_of(by["coder1"], c1), _slot_of(by["coder1-compact"], c1)
+        out.append(("the coder's compaction in the coder's slot", a is not None and a == b, f"{a} -> {b}"))
+    if "coder1-after" in by:
+        log = by["coder1-after"]["cache_log"]
+        out.append(("the coder after its compaction: its agent's prompt restored", any("prompt" in ln and "restored" in ln for ln in log),
+                    "; ".join(ln for ln in log if "restored" in ln or "compacted" in ln)[:200]))
+    if "coder3" in by:
+        log = by["coder3"]["cache_log"]
+        took = [ln for ln in log if "saved from slot" in ln or "RAM cache (not saved" in ln or "its slot is needed" in ln]
+        out.append(("the third coder's slot: its session saved or marked first", bool(took) and bool(by["coder3"]["requests"]),
+                    "; ".join(took)[:200] or "no save or mark"))
+    for name in ("main-back", "client-restart"):
+        if name in by:
+            s = by[name]["summary"]
+            ok = s["read"] is not None and s["ctx"] and s["read"] < 0.2 * s["ctx"]
+            out.append((f"{name}: only the new part read", bool(ok), f"read {s['read']} of {s['ctx']}"))
+    return out
 
 
 def _new_say(drv: Driver, names: Dict[str, str], label: str, text: str) -> str:
@@ -914,6 +1057,8 @@ def cmd_run(a: argparse.Namespace) -> int:
                 if not a.keep_going:
                     append(a.out, doc)
                     return 1
+            for c in doc.get("checks") or []:            # --scenario slots, ram
+                say(f"   {'PASS' if c['ok'] else 'FAIL'}  {c['what']}: {c['detail']}")
             append(a.out, doc)
     finally:
         stop_server(e)
@@ -955,6 +1100,9 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("--other-model", default="qwen3.8-9b", help="router mode: the model of the switch")
     r.add_argument("--keep-going", action="store_true")
     r.add_argument("--compact", action="store_true", help="add the compaction steps (Phase 23.5.1.3)")
+    r.add_argument("--scenario", default="", choices=("", "slots", "ram"),
+                   help="slots: the main session and coders on 3 slots, their compactions; ram: a request back from the "
+                        "RAM cache takes a main session's slot, a coder above 32K pushed out (Phase 23.5.3.2; OpenCode)")
     r.add_argument("--ram-restart", action="store_true",
                    help="add the steps of a session in the RAM cache found by a new client process (Phase 23.5.1.10)")
     r.add_argument("--save", default="", choices=("", "auto", "turn", "switch", "stop"),

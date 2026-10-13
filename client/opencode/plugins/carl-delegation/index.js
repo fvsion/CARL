@@ -95,6 +95,7 @@ export const HOLD_MARK = "[CARL] Held";
  * chat.message drops the message and starts no turn). Another version: the foreground chain. */
 export const VERIFIED_VERSIONS = ["1.18.34", "1.18.35", "1.19.0"];   // 1.19.0: Phase 23.5.1.11 (checked end to end)
 const POLL_MS = 5_000;                                       // the code session's messages, besides session.idle
+export const RESUME_MAX = 0.6;    // a follow-up resumes the earlier coder session below this share of the coder's window
 const RECOVER_MS = 2_000;                                    // after the load: the undelivered chains of this project
 
 /** A coder task call that CARL follows: a chain (first: the task tool's session; second: the one the plugin starts),
@@ -482,10 +483,61 @@ export default {
         void client?.tui?.showToast?.({ body: { title: "CARL", message, variant: "info", duration: 12000 } })?.catch?.(() => {});
       } catch { /* no log, no toast */ }
     };
+    /** Each time: a coder follow-up started anew (OpenCode's log and a toast). @param {string} why */
+    const notice2 = (why) => {
+      try {
+        void client?.app?.log?.({ body: { service: "carl-delegation", level: "info", message: why } })?.catch?.(() => {});
+        void client?.tui?.showToast?.({ body: { title: "CARL", message: why, variant: "info", duration: 10000 } })?.catch?.(() => {});
+      } catch { /* no log, no toast */ }
+    };
     /** A session's messages. @param {string} id @returns {Promise<any[]>} */
     const messages = async (id) => {
       const r = await client.session.messages({ path: { id } });
       return /** @type {any[]} */ (Array.isArray(r) ? r : r?.data ?? []);
+    };
+    /**
+     * A follow-up that continues an earlier coder session (task_id): resumed while its conversation is under
+     * RESUME_MAX of the coder's window; else a fresh coder session gets the brief, with a note of the earlier one
+     * (Phase 23.5.3.2, user, 2026-10-13: a 60% limit; an external coder's session, far larger than the local
+     * coder's window, was resumed and compacted at once). The note ("" to resume): TOML comments before the brief.
+     * @param {string} old the task_id @param {string} main the main session
+     */
+    const resumeNote = async (old, main) => {
+      try {
+        const ms = await messages(old);
+        const last = [...ms].reverse().find((x) => x?.info?.role === "assistant" && x.info.tokens);
+        if (!last) return "";
+        const t = last.info.tokens;
+        const size = Number(t.input ?? 0) + Number(t.cache?.read ?? 0) + Number(t.cache?.write ?? 0);
+        const win = await coderWindow(main);
+        if (!win || size < RESUME_MAX * win) return "";
+        const s = await client.session.get({ path: { id: old } });
+        const title = String((s?.data ?? s)?.title ?? old);
+        const end = sessionEnd(ms);
+        const result = end.none ? "" : String(end.output ?? "").replace(/\s+/g, " ").trim().slice(0, 400);
+        const k = (/** @type {number} */ n) => `${Math.round(n / 1000)}K`;
+        return `# CARL: a new coder session, not the earlier one ("${title}"): its conversation (${k(size)} tokens) is over ` +
+          `${Math.round(RESUME_MAX * 100)}% of this coder's window (${k(win)}).\n` + (result ? `# Its last result: ${result}\n` : "");
+      } catch {
+        return "";                                              // not known: resumed as asked
+      }
+    };
+    /**
+     * The coder's window: its model's limit.context in OpenCode's config (the option coderModel, else the model the
+     * main session last answered with). 0 when not known.
+     * @param {string} main
+     */
+    const coderWindow = async (main) => {
+      let ref = typeof opts.coderModel === "string" ? opts.coderModel : "";
+      if (!ref) {
+        const info = [...(await messages(main))].reverse().find((x) => x?.info?.role === "assistant" && x.info.modelID)?.info;
+        ref = info ? `${info.providerID}/${info.modelID}` : "";
+      }
+      const cut = ref.indexOf("/");
+      if (cut < 0) return 0;
+      const c = await client.config.get();
+      const cfg = c?.data ?? c;
+      return Number(cfg?.provider?.[ref.slice(0, cut)]?.models?.[ref.slice(cut + 1)]?.limit?.context ?? 0);
     };
     /** The last assistant message of a session: its text, or its error. @param {string} id */
     const lastAnswer = async (id) => {
@@ -811,6 +863,15 @@ export default {
       "tool.execute.before": async (input, output) => {
         const tool = String(input?.tool ?? "");
         const args = /** @type {Record<string, unknown>} */ (output?.args ?? {});
+        const kind = String(args.subagent_type ?? "");
+        if (tool === "task" && args.task_id && input?.sessionID && (kind === coder || isCoderName(kind))) {
+          const note = await resumeNote(String(args.task_id), input.sessionID);      // too large to resume: anew
+          if (note) {
+            delete args.task_id;
+            args.prompt = note + String(args.prompt ?? "");
+            notice2(note.split("\n")[0].replace(/^# CARL: /, ""));
+          }
+        }
         if (briefs) {                                            // a coder task with an incomplete brief (and the turn's
           const o = { format: briefFormat, root: cwd,            // memory: no switch to tests-only after a refusal)
                       freeForm: input?.sessionID ? freeForm.get(input.sessionID) === true : false };
