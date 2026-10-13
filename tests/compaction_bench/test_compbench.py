@@ -372,6 +372,105 @@ class ThinkTest(unittest.TestCase):
         self.assertEqual(inline["content"], "\nDone.")
 
 
+def note_session() -> list:
+    """A session on a two-file project: read, a failing test, an edit, a new file, a passing run, a todo list, an
+    edit's diagnostic; then a second user turn."""
+    ok = "Edit applied successfully."
+    return [
+        {"role": "system", "content": "You are a coding agent."},
+        {"role": "user", "content": "Fix mean."},
+        {"role": "assistant", "content": "", "tool_calls": [call("1", "read", filePath="/w/pylib/textstats/stats.py")]},
+        {"role": "tool", "tool_call_id": "1", "content": "<path>/w/pylib/textstats/stats.py</path>\n<type>file</type>\n"
+         "<content>\n1: def mean(xs):\n2:     return sum(xs) / len(xs)\n\n(End of file - total 2 lines)\n</content>"},
+        {"role": "assistant", "content": "", "tool_calls": [call("2", "bash", command="python3 -m pytest -q")]},
+        {"role": "tool", "tool_call_id": "2", "content": "FAILED tests/test_stats.py::StatsTest::test_mean - "
+         "ZeroDivisionError: division by zero\n1 failed, 3 passed in 0.1s"},
+        {"role": "assistant", "content": "", "tool_calls": [call("3", "edit", filePath="/w/pylib/textstats/stats.py",
+                                                                 oldString="    return sum(xs) / len(xs)",
+                                                                 newString="    return sum(xs) / len(xs) if xs else 0.0")]},
+        {"role": "tool", "tool_call_id": "3", "content": ok},
+        {"role": "assistant", "content": "", "tool_calls": [call("4", "write", filePath="/w/pylib/textstats/ngrams.py",
+                                                                 content="class Ngrams:\n    def top(self):\n        return []\n")]},
+        {"role": "tool", "tool_call_id": "4", "content": "Wrote file successfully.\nLSP errors detected in this file:\n"
+                                                         "ERROR [3:9] Return type mismatch"},
+        {"role": "assistant", "content": "", "tool_calls": [call("5", "bash", command="python3 -m pytest -q")]},
+        {"role": "tool", "tool_call_id": "5", "content": "....\n4 passed in 0.1s"},
+        {"role": "assistant", "content": "", "tool_calls": [call("6", "todowrite", todos=[
+            {"content": "Fix mean", "status": "completed"}, {"content": "Add ngrams", "status": "in_progress"}])]},
+        {"role": "tool", "tool_call_id": "6", "content": "2 todos"},
+        {"role": "assistant", "content": "Done."},
+        {"role": "user", "content": "Now add tests for ngrams."},
+        {"role": "assistant", "content": "", "tool_calls": [call("7", "read", filePath="/w/pylib/textstats/ngrams.py")]},
+        {"role": "tool", "tool_call_id": "7", "content": "class Ngrams:\n    def top(self):\n        return []\n"},
+    ]
+
+
+class NoteTest(unittest.TestCase):
+    PROJECT = {"textstats/stats.py": "def mean(xs):\n    return sum(xs) / len(xs)\n",
+               "textstats/tokenize.py": "def words(t):\n    return t.split()\n", "README.md": "# x\n"}
+
+    def test_the_replay(self) -> None:
+        """The bench's stand-in for the disk: the fixture, then whole reads, writes and applied edits, in order."""
+        r = cb.Replay(note_session(), self.PROJECT)
+        self.assertEqual(r.state["textstats/stats.py"], "def mean(xs):\n    return sum(xs) / len(xs) if xs else 0.0\n")
+        self.assertEqual((r.status["textstats/stats.py"], r.status["textstats/ngrams.py"]), ("M", "C"))
+        self.assertEqual(r.edits["textstats/stats.py"], 1)
+        self.assertEqual(cb.read_text("x", {"offset": 10}), None)                      # a part is not the file
+        self.assertEqual(cb.diagnostics('Wrote file successfully.\nLSP errors detected in other files:\n<diagnostics '
+                                        'file="/w/pylib/notes/cli.py">\nERROR [96:28] Argument of type\n</diagnostics>',
+                                        "CHANGES.md"), {"notes/cli.py": ["ERROR [96:28] Argument of type"]})
+        gone = note_session() + [
+            {"role": "assistant", "content": "", "tool_calls": [call("8", "read", filePath="/w/pylib/store.py")]},
+            {"role": "tool", "tool_call_id": "8", "content": "Error: File not found: /w/pylib/store.py"}]
+        self.assertNotIn("store.py", cb.Replay(gone, self.PROJECT).status)
+
+    def test_the_note(self) -> None:
+        """2026-10-13, agreed: Files, Errors (open or fixed), Tests, Todo, Map, Working set; STE100; before the
+        current turn's user message; the reads of the files it holds pruned first."""
+        t = note_session()
+        note, held = cb.carl_note(t, self.PROJECT, 15, 98304, True, True, True)
+        self.assertTrue(note.startswith("[CARL note] This note shows the state of this session"))
+        self.assertIn("- textstats/stats.py: changed, 2 lines, 1 change", note)
+        self.assertIn("- textstats/ngrams.py: created, 3 lines, 1 change", note)
+        self.assertIn("- fixed: test_mean failed: ZeroDivisionError: division by zero", note)
+        self.assertIn("- open: textstats/ngrams.py: ERROR [3:9] Return type mismatch", note)
+        self.assertIn('Tests (the last run, "python3 -m pytest -q"): 4 tests passed. Fixed since an earlier failure: '
+                      "test_mean.", note)
+        self.assertIn("- [in_progress] Add ngrams", note)
+        self.assertIn("textstats/ngrams.py: class Ngrams 1, Ngrams.top 2", note)
+        self.assertIn("textstats/tokenize.py: words 1", note)
+        self.assertIn("Other files: README.md.", note)
+        self.assertIn("== textstats/stats.py (2 lines; 1 change in this session).\n1: def mean(xs):\n2:     return sum(xs) "
+                      "/ len(xs) if xs else 0.0", note)
+        self.assertEqual(held, ["textstats/ngrams.py", "textstats/stats.py"])
+        # a file whose current view is in the working tail is not copied again (2026-10-13: "Count a file once")
+        self.assertEqual(cb.tail_views(t, 16), {"textstats/ngrams.py"})
+        self.assertEqual(cb.carl_note(t, self.PROJECT, 15, 98304, True, True, False, start=16)[1], ["textstats/stats.py"])
+        self.assertEqual(cb.carl_note(t, self.PROJECT, 15, 98304, True, True, False, start=16, scope="turn")[1], [])
+        self.assertIn("1: class Ngrams:", note)
+        # too small to drain: the excess in the old part is stage 2's (the whole note stays); in the current turn (a
+        # coder-style session: one user message) the working set yields, then the map
+        small = cb.method_fn("mask:1:0.01+turn+notes+files", int(sum(cb.est_tokens(m) for m in t) / 0.5))(
+            t, 0, project=self.PROJECT)
+        self.assertIn("== textstats/stats.py", next(m["content"] for m in small if str(m["content"]).startswith("[C")))
+        coder = t[:15]
+        small = cb.method_fn("mask:1:0.01+turn+notes+files+map", int(sum(cb.est_tokens(m) for m in coder) / 0.5))(
+            coder, 0, project=self.PROJECT)
+        note = next(m["content"] for m in small if str(m["content"]).startswith("[C"))
+        self.assertNotIn("== textstats/", note)
+        self.assertNotIn("Map of the code", note)
+        self.assertIn("Files of this session:", note)
+        t[13] = dict(t[13], content="2 todos\n" + "todo detail line\n" * 400)       # room to prune in the old part
+        window = int(sum(cb.est_tokens(m) for m in t) / 0.5)
+        out = cb.method_fn("mask:1:0.01+turn+ph=facts+notes+files+map", window)(t, 0, project=self.PROJECT)
+        self.assertEqual(out[15]["content"][:11], "[CARL note]")                   # before the turn's user message
+        self.assertEqual(out[16], t[15])
+        self.assertEqual(out[3], t[3])                                # with ph=facts: under 80 tokens, it stays
+        out = cb.method_fn("mask:1:0.01+turn+notes+files", window)(t, 0, project=self.PROJECT)
+        self.assertEqual(out[3]["content"], "[pruned] read textstats/stats.py: 2 lines. The current contents of this "
+                                            "file are in the CARL note.")
+
+
 class DriverTest(unittest.TestCase):
     def test_pi_starts_at_the_thinking_level(self) -> None:
         """2026-10-13: the matrix's Pi driver starts Pi with thinking off; the bench's starts it at the level asked

@@ -490,14 +490,399 @@ def _set_thinking(m: JsonDict, new: str) -> None:
         m["content"] = (f"<think>\n{new}\n</think>" if new else "") + c.split("</think>", 1)[1]
 
 
+# -------------------------------------------------------------- the CARL note (#3, #7 and the map; agreed 2026-10-13)
+# One note right before the current turn's user message, written once per event (stable until the next one): Files
+# (the session file tree), Errors (open or fixed), Tests, Todo, Map (classes and functions with their lines: Python by
+# its parser, JS/TS by patterns, other files by name; "a generic + language support plugin" later), Working set (#7:
+# the current contents of the files in work, in the 10% budget, replacing rule 4's raw view). Live, CARL reads the
+# files from disk; the bench rebuilds them from the fixture and the session's whole reads, writes and edits.
+SKIP_DIRS = {"node_modules", ".git", "__pycache__", ".venv", "venv", "dist", "build", ".pytest_cache", ".mypy_cache",
+             ".ruff_cache", ".tox", "coverage", ".next"}
+NOTE_FACTS = 2000            # tokens: Files, Errors, Tests, Todo
+NOTE_MAP = 2000              # tokens: the map
+REGION = 20                  # a large file in the working set: its changed lines, this many lines around them
+WS_FILES = 5                 # the working set holds this many files at most (user, 2026-10-13: Claude Code's number)
+DOC_RE = re.compile(r"(\.(md|txt|rst)$|(^|/)(README|CHANGES|CHANGELOG|LICENSE)[^/]*$|(^|/)\.gitignore$)", re.I)
+CODE_EXT = (".py", ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx")
+JS_DEF_RE = re.compile(r"^\s*(?:export\s+)?(?:default\s+)?(?:async\s+)?(?:function\*?\s+(\w+)|class\s+(\w+)|"
+                       r"(?:const|let|var)\s+(\w+)\s*=\s*(?:async\s*)?(?:\([^)]*\)|\w+)\s*=>)")
+
+
+def _n(k: int, word: str) -> str:
+    return f"{k} {word}" + ("" if k == 1 else "s")
+
+
+def _skip(path: str) -> bool:
+    return not path or any(part in SKIP_DIRS for part in path.split("/"))
+
+
+def read_text(text: str, args: Mapping[str, Any]) -> Optional[str]:
+    """A read result's file text when it holds the whole file: OpenCode's numbered <content> (with its "End of file"),
+    else the plain text (Pi); None for a part (offset or limit)."""
+    if args.get("offset") or args.get("limit"):
+        return None
+    if "<content>" in text:
+        body = text.split("<content>", 1)[1].rsplit("</content>", 1)[0]
+        if "End of file" not in body:
+            return None
+        lines = [ln for ln in body.strip("\n").splitlines() if not ln.startswith("(End of file")]
+        return "\n".join(re.sub(r"^\d+: ?", "", ln, count=1) for ln in lines)
+    return text
+
+
+def _edit_pairs(args: Mapping[str, Any]) -> List[Tuple[str, str, bool]]:
+    """An edit call's (old, new, all) changes: OpenCode's oldString/newString/replaceAll, Pi's edits[]."""
+    if isinstance(args.get("edits"), list):
+        return [(str(e.get("oldText", "")), str(e.get("newText", "")), False) for e in args["edits"] if isinstance(e, dict)]
+    old = args.get("oldString", args.get("old_string"))
+    new = args.get("newString", args.get("new_string"))
+    return [(str(old), str(new or ""), bool(args.get("replaceAll")))] if isinstance(old, str) else []
+
+
+class Replay:
+    """The session's files as code reads them up to a point (the bench's stand-in for the disk): each file's contents
+    (the fixture's, then each whole read, write and applied edit, in order), its status (C created, M changed, R read,
+    D deleted), its number of edits and where the last was, the files whose edit could not be applied (unsure), and
+    the files only seen in listings."""
+
+    def __init__(self, messages: Sequence[Mapping[str, Any]], project: Mapping[str, str]) -> None:
+        self.state: Dict[str, str] = dict(project)
+        self.status: Dict[str, str] = {}
+        self.edits: Dict[str, int] = {}
+        self.last_edit: Dict[str, int] = {}
+        self.unsure: set = set()
+        self.listed: set = set()
+        results = {str(m.get("tool_call_id") or ""): msg_text(m) for m in messages if m.get("role") == "tool"}
+        for i, m in enumerate(messages):
+            if m.get("role") != "assistant":
+                continue
+            for tc, c in zip(m.get("tool_calls") or [], tool_calls(m)):
+                name, path = c["name"].lower(), call_target(c)
+                res = results.get(str((tc or {}).get("id") or ""), "")
+                if name in READ_TOOLS and path:
+                    if "<content>" not in res and re.match(r"\s*(Error|error:|ENOENT|File not found)", res):
+                        continue                         # a file that is not there
+                    text = read_text(res, c["args"])
+                    if text is not None:
+                        self.state[path] = text
+                        self.unsure.discard(path)
+                    self.status.setdefault(path, "R")
+                elif name in WRITE_TOOLS and path:
+                    if name == "write" or "content" in c["args"]:
+                        self.state[path] = str(c["args"].get("content", ""))
+                    elif re.search(r"success|applied", res, re.I):
+                        for old, new, every in _edit_pairs(c["args"]):
+                            cur = self.state.get(path)
+                            if cur is None or not old or old not in cur:
+                                self.unsure.add(path)
+                                continue
+                            self.state[path] = cur.replace(old, new) if every else cur.replace(old, new, 1)
+                    else:
+                        continue                         # a failed edit changed nothing
+                    self.status[path] = "M" if path in project or self.status.get(path) in ("M", "R") else "C"
+                    self.edits[path] = self.edits.get(path, 0) + 1
+                    self.last_edit[path] = i
+                elif name in COMMAND_TOOLS:
+                    rm = re.match(r"^rm\s+(?:-\w+\s+)*(.+)$", _cmd(c))
+                    if rm:
+                        for p in rm.group(1).split():
+                            q = norm_path(p)
+                            self.state.pop(q, None)
+                            self.status[q] = "D"
+                elif name in LIST_TOOLS:
+                    for ln in res.splitlines():
+                        q = norm_path(ln.strip().rstrip("/"))
+                        if q and "." in q.rsplit("/", 1)[-1]:
+                            self.listed.add(q)
+
+
+def error_ledger(messages: Sequence[Mapping[str, Any]], n: int = 8) -> List[str]:
+    """The errors of the session, most recent first, each open or fixed: a failed test is fixed when a later run of
+    the tests fails none (or the same command no longer fails it), a command's error when the same command later runs
+    without one, an edit's diagnostic when a later write or edit of that file reports none."""
+    calls = _calls(messages)
+    entries: List[JsonDict] = []
+    for i in sorted(calls):
+        c, text = calls[i], msg_text(messages[i])
+        name = c["name"].lower()
+        if name in COMMAND_TOOLS:
+            cmd = _cmd(c)
+            if TEST_CMD_RE.search(cmd):
+                failed = list(dict.fromkeys(re.findall(r"FAILED \S*::(\w+)", text)
+                                            + re.findall(r"^(?:FAIL|ERROR): (\w+)", text, re.M)))
+                done = bool(re.search(r"\d+ passed|Ran \d+ tests?", text)) and not failed \
+                    and not re.search(r"\d+ failed|FAILED|Error", text)
+                for e in entries:
+                    if e["kind"] == "test" and not e["fixed"] and (done or (e["cmd"] == cmd and e["key"] not in failed)):
+                        e["fixed"] = True
+                msg = next((m.group(0) for m in re.finditer(r"\w+(?:Error|Exception)(?::[^\n]{0,80})?", text)), "")
+                for f in failed:
+                    entries.append({"kind": "test", "key": f, "cmd": cmd, "i": i, "fixed": False,
+                                    "text": f"{f} failed" + (f": {msg}" if msg and len(failed) == 1 else "")})
+            else:
+                bad = bool(ERROR_RE.search(text))
+                for e in entries:
+                    if e["kind"] == "cmd" and e["key"] == cmd and not bad:
+                        e["fixed"] = True
+                if bad:
+                    line = last_error([{"role": "assistant", "tool_calls": [{"id": "x", "function": {
+                        "name": c["name"], "arguments": json.dumps(c["args"])}}]},
+                                       {"role": "tool", "tool_call_id": "x", "content": text}])
+                    entries.append({"kind": "cmd", "key": cmd, "cmd": cmd, "i": i, "fixed": False,
+                                    "text": f'"{cmd}": {line[:100]}'})
+        elif name in WRITE_TOOLS:
+            path = call_target(c)
+            by_file = diagnostics(text, path)
+            for e in entries:
+                if e["kind"] == "diag" and e["key"] == path and not by_file.get(path):
+                    e["fixed"] = True
+            for f, ds in by_file.items():
+                for d in ds[:2]:
+                    entries.append({"kind": "diag", "key": f, "cmd": "", "i": i, "fixed": False, "text": f"{f}: {d[:100]}"})
+    return [f"- {'fixed' if e['fixed'] else 'open'}: {e['text']}" for e in reversed(entries)][:n]
+
+
+DIAG_FILE_RE = re.compile(r'<diagnostics file="([^"]+)">(.*?)</diagnostics>', re.S)
+
+
+def diagnostics(text: str, path: str) -> Dict[str, List[str]]:
+    """A write or edit result's diagnostics by file: OpenCode names each file (<diagnostics file="...">: this file's,
+    and "LSP errors detected in other files"); without a name they are the edited file's."""
+    blocks = DIAG_FILE_RE.findall(text)
+    if blocks:
+        out: Dict[str, List[str]] = {}
+        for f, body in blocks:
+            ds = [ln.strip() for ln in body.splitlines() if DIAG_RE.search(ln)]
+            if ds:
+                out.setdefault(norm_path(f), []).extend(ds)
+        return out
+    ds = [ln.strip() for ln in text.splitlines() if DIAG_RE.search(ln)]
+    return {path: ds} if ds else {}
+
+
+def _tests_line(messages: Sequence[Mapping[str, Any]]) -> str:
+    """The last test run's outcome, and the tests that failed before and pass now."""
+    calls = _calls(messages)
+    runs = [i for i in sorted(calls) if calls[i]["name"].lower() in COMMAND_TOOLS and TEST_CMD_RE.search(_cmd(calls[i]))]
+    if not runs:
+        return ""
+    last = msg_text(messages[runs[-1]])
+    failing = set(re.findall(r"FAILED \S*::(\w+)", last))
+    before = {f for i in runs[:-1] for f in re.findall(r"FAILED \S*::(\w+)", msg_text(messages[i]))}
+    fixed = sorted(before - failing)
+    out = f'Tests (the last run, "{_cmd(calls[runs[-1]])}"): ' + (test_outcome(last) or "no result line.")
+    return out + (f" Fixed since an earlier failure: {', '.join(fixed[:8])}." if fixed else "")
+
+
+def _todo(messages: Sequence[Mapping[str, Any]]) -> List[str]:
+    """The last todo list the agent wrote (OpenCode's todowrite), as it wrote it."""
+    for m in reversed(messages):
+        for c in reversed(tool_calls(m)) if m.get("role") == "assistant" else []:
+            if "todo" in c["name"].lower() and isinstance(c["args"].get("todos"), list):
+                return [f"- [{t.get('status', '')}] {str(t.get('content', ''))[:120]}" for t in c["args"]["todos"]
+                        if isinstance(t, dict)]
+    return []
+
+
+def code_map(state: Mapping[str, str], near: Sequence[str], cap: int = NOTE_MAP) -> List[str]:
+    """The map: per code file, its classes and functions with their first lines (Python by its parser, JS/TS by
+    patterns), other files by name; the folders of the files in work first; cut at cap tokens."""
+    import ast
+    dirs = {p.rsplit("/", 1)[0] if "/" in p else "" for p in near}
+    files = sorted((p for p in state if not _skip(p)),
+                   key=lambda p: (0 if (p.rsplit("/", 1)[0] if "/" in p else "") in dirs else 1, p))
+    out: List[str] = []
+    others: List[str] = []
+    used = 0
+    for p in files:
+        defs: List[str] = []
+        if p.endswith(".py"):
+            try:
+                tree = ast.parse(state[p])
+            except (SyntaxError, ValueError):
+                tree = None
+            for node in (tree.body if tree else []):
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    defs.append(f"{node.name} {node.lineno}")
+                elif isinstance(node, ast.ClassDef):
+                    defs.append(f"class {node.name} {node.lineno}")
+                    defs += [f"{node.name}.{b.name} {b.lineno}" for b in node.body
+                             if isinstance(b, (ast.FunctionDef, ast.AsyncFunctionDef))]
+        elif p.endswith(CODE_EXT):
+            for n, ln in enumerate(state[p].splitlines(), 1):
+                mm = JS_DEF_RE.match(ln)
+                if mm:
+                    name = next(g for g in mm.groups() if g)
+                    defs.append(f"{'class ' if mm.group(2) else ''}{name} {n}")
+        else:
+            others.append(p)
+            continue
+        line = f"{p}: " + (", ".join(defs) if defs else "(no functions)")
+        cost = int(len(line) / CHARS_PER_TOKEN) + 1
+        if used + cost > cap:
+            out.append(f"... {len([f for f in files if f.endswith(CODE_EXT)]) - len(out)} more code files.")
+            break
+        out.append(line)
+        used += cost
+    if others:
+        out.append("Other files: " + ", ".join(others[:30]) + (f", ... {len(others) - 30} more." if len(others) > 30 else "."))
+    return out
+
+
+def _numbered(text: str, a: int = 1, b: Optional[int] = None) -> str:
+    lines = text.splitlines()
+    b = len(lines) if b is None else b
+    return "\n".join(f"{n}: {lines[n - 1]}" for n in range(a, b + 1))
+
+
+def working_set(rep: "Replay", order: Sequence[str], budget: float, messages: Sequence[Mapping[str, Any]]) -> Tuple[List[str], List[str]]:
+    """#7: the current contents of the files in work, in order, while they fit the budget (tokens); a file over 40% of
+    it as the regions around this session's changes. Returns the note's lines and the files it holds."""
+    out: List[str] = []
+    held: List[str] = []
+    room = budget
+    for p in order:
+        text = rep.state.get(p)
+        if text is None or p in held or _skip(p):
+            continue
+        n = len(text.splitlines())
+        flag = " CARL could not apply all the changes to this file. Read the file before you change it." \
+            if p in rep.unsure else ""
+        body = _numbered(text)
+        if len(body) / CHARS_PER_TOKEN > 0.4 * budget:       # a large file: the regions around its changes
+            marks = sorted({n_ for m in messages if m.get("role") == "assistant" for c in tool_calls(m)
+                            if call_target(c) == p for _o, new, _a in _edit_pairs(c["args"]) if new.strip()
+                            for n_ in [text[:text.find(new)].count("\n") + 1] if text.find(new) >= 0})
+            spans: List[List[int]] = []
+            for k in marks or [1]:
+                a, b = max(1, k - REGION), min(n, k + REGION)
+                if spans and a <= spans[-1][1] + 1:
+                    spans[-1][1] = max(spans[-1][1], b)
+                else:
+                    spans.append([a, b])
+            body = "\n".join(f"(lines {a}-{b} of {n})\n" + _numbered(text, a, b) for a, b in spans)
+        cost = len(body) / CHARS_PER_TOKEN + 20
+        if cost > room:
+            continue
+        out += [f"== {p} ({_n(n, 'line')}; {_n(rep.edits.get(p, 0), 'change')} in this session).{flag}", body]
+        held.append(p)
+        room -= cost
+    return out, held
+
+
+def tail_views(messages: Sequence[Mapping[str, Any]], start: int) -> set:
+    """The files whose current view is in the working tail: their last whole read is there (the edits after it are
+    too). The working set does not copy them again (2026-10-13: "Count a file once, and keep the tail's view")."""
+    calls = _calls(messages)
+    last: Dict[str, int] = {}
+    for i in sorted(calls):
+        c = calls[i]
+        if c["name"].lower() in READ_TOOLS and read_text(msg_text(messages[i]), c["args"]) is not None:
+            last[call_target(c)] = i
+    return {p for p, i in last.items() if i >= start}
+
+
+def carl_note(messages: Sequence[Mapping[str, Any]], project: Mapping[str, str], cur: int, window: int,
+              notes: bool, files: bool, cmap: bool, start: Optional[int] = None,
+              scope: str = "all") -> Tuple[str, List[str]]:
+    """The CARL note's text (STE100) for the messages before the event, and the files whose current contents it holds.
+    start: where the working tail begins (its files' views are not copied again); scope: the working set's files, all
+    (the current turn's changed files, then the most recently edited: code and tests before documents; at most
+    WS_FILES) or turn (the current turn's changed files only)."""
+    rep = Replay(messages, project)
+    changing = []                                     # the current turn's changed files, newest first
+    for m in reversed(messages[cur:]):
+        for c in reversed(tool_calls(m)) if m.get("role") == "assistant" else []:
+            t = call_target(c)
+            if c["name"].lower() in WRITE_TOOLS and t and t not in changing:
+                changing.append(t)
+    recent = sorted(rep.last_edit, key=lambda p: (bool(DOC_RE.search(p)), -rep.last_edit[p]))
+    order = changing + ([p for p in recent if p not in changing] if scope == "all" else [])
+    parts = ["[CARL note] This note shows the state of this session when CARL made a compaction. It is not a request."]
+    if notes:
+        touched = sorted(p for p in rep.status if not _skip(p))
+        lines = []
+        for p in touched:
+            st = rep.status[p]
+            n = len(rep.state.get(p, "").splitlines())
+            word = {"C": "created", "M": "changed", "R": "read", "D": "deleted"}[st]
+            lines.append(f"- {p}: {word}" + (f", {_n(n, 'line')}" if st != "D" else "")
+                         + (f", {_n(rep.edits[p], 'change')}" if rep.edits.get(p) else ""))
+        more: Dict[str, int] = {}
+        for p in sorted(rep.listed - set(touched)):
+            if not _skip(p):
+                d = p.rsplit("/", 1)[0] + "/" if "/" in p else "./"
+                more[d] = more.get(d, 0) + 1
+        lines += [f"- {d}: {k} more {'file' if k == 1 else 'files'} (seen in a listing)" for d, k in sorted(more.items())]
+        facts = ["Files of this session:", *lines]
+        errs = error_ledger(messages)
+        if errs:
+            facts += ["Errors (the most recent first):", *errs]
+        tl = _tests_line(messages)
+        if tl:
+            facts.append(tl)
+        todo = _todo(messages)
+        if todo:
+            facts += ["Todo (the last list):", *todo]
+        text, kept = "", []
+        for ln in facts:                              # cut at the cap
+            if len(text) + len(ln) > NOTE_FACTS * CHARS_PER_TOKEN:
+                kept.append("(more lines were cut.)")
+                break
+            kept.append(ln)
+            text += ln + "\n"
+        parts.append("\n".join(kept))
+    if cmap:
+        parts.append("Map of the code (use it to find code; read the file before you change it):\n"
+                     + "\n".join(code_map(rep.state, order)))
+    held: List[str] = []
+    if files:
+        seen = tail_views(messages, start) if start is not None else set()
+        ws, held = working_set(rep, [p for p in order if p not in seen][:WS_FILES], FILES_SHARE * window, messages)
+        if ws:
+            parts.append("The current contents of the files in work:\n" + "\n".join(ws))
+    return "\n\n".join(parts), held
+
+
 def event(messages: Sequence[Mapping[str, Any]], extra: int, window: int, keep_calls: int, tail_share: float,
-          facts: bool, args: bool = False, think: str = "", think_mid: bool = False) -> List[JsonDict]:
+          facts: bool, args: bool = False, think: str = "", think_mid: bool = False, notes: bool = False,
+          files: bool = False, cmap: bool = False, project: Optional[Mapping[str, str]] = None) -> List[JsonDict]:
+    """The event (_event). When it cannot reach the drain line, by where the excess is (agreed 2026-10-13): in the
+    old part, stage 2 summarizes it (not built yet: the bench keeps the whole note and the overrun); in the current
+    turn, the note's parts yield in turn (the working set down to the current turn's files, then the working set,
+    then the map), then the overrun is accepted (up to 55%)."""
+    users = [i for i, m in enumerate(messages) if m.get("role") == "user"]
+    cur = users[-1] if users else 0
+    steps = [("all", cmap)]
+    if files:
+        steps += [("turn", cmap), ("none", cmap)]
+    if cmap:
+        steps.append(("none", False))
+    out: List[JsonDict] = []
+    for scope, mp in steps:
+        out = _event(messages, extra, window, keep_calls, tail_share, facts, args, think, think_mid, notes,
+                     files and scope != "none", mp, project, scope)
+        size = sum(est_tokens(m) for m in out) + extra
+        if size <= DRAIN * window:
+            break
+        old = sum(est_tokens(m) for m in out[:cur] if m.get("role") != "system")      # the note sits at cur
+        if old >= size - DRAIN * window and (scope, mp) == steps[0]:
+            break                                    # the excess is in the old part: stage 2's (not the note's) job
+    return out
+
+
+def _event(messages: Sequence[Mapping[str, Any]], extra: int, window: int, keep_calls: int, tail_share: float,
+           facts: bool, args: bool = False, think: str = "", think_mid: bool = False, notes: bool = False,
+           files: bool = False, cmap: bool = False, project: Optional[Mapping[str, str]] = None,
+           scope: str = "all") -> List[JsonDict]:
     """The compaction event's prune (stage 1) on a request: its shape and the drain line (above). extra: the tokens
     outside the messages (the tools). facts: the STE100 placeholders and their thresholds (#2), else the mask's line.
     args: old edit and write arguments pruned too (#4), with the results of their place in the order. think: earlier
     thinking pruned (empty: removed; last: think_last()), the old part's first (before its results; Qwen's template
     drops it by default), the current turn's middle only with think_mid (else kept, the baseline), never the tail; no
-    size floor (user, 2026-10-13: "the 80 limit shouldn't apply here")."""
+    size floor (user, 2026-10-13: "the 80 limit shouldn't apply here"). notes, files, cmap: the CARL note's parts
+    (#3, #7, the map; project: the files before the session, for the bench's replay); with files, the working set's
+    current contents replace rule 4's raw view, and the older reads of those files go first."""
     out = [dict(m) for m in messages]
     sizes = [est_tokens(m) for m in out]
     total = sum(sizes) + extra
@@ -526,8 +911,12 @@ def event(messages: Sequence[Mapping[str, Any]], extra: int, window: int, keep_c
                 t = call_target(c)
                 if c["name"].lower() in WRITE_TOOLS and t and t not in changing:
                     changing.append(t)
+    note, held = ("", [])
+    if notes or files or cmap:
+        note, held = carl_note(out, project or {}, cur, window, notes, files, cmap, start, scope)
+        total += est_tokens({"content": note})
     kept_files, beyond, room = set(), [], FILES_SHARE * window
-    for path in changing:
+    for path in ([] if files else changing):
         view = next((i for i in reversed(results) if i < start and calls[i]["name"].lower() in READ_TOOLS
                      and call_target(calls[i]) == path), None)
         if view is None:
@@ -555,6 +944,13 @@ def event(messages: Sequence[Mapping[str, Any]], extra: int, window: int, keep_c
         old.sort()
         mid.sort()
     first: List[Tuple[int, int]] = []
+    superseded = set()
+    if held:                                          # the reads of the files the note holds: superseded, first
+        superseded = {i for i in results if i < start and calls[i]["name"].lower() in READ_TOOLS
+                      and call_target(calls[i]) in held and i not in protected}
+        first += [(i, -1) for i in sorted(superseded)]
+        old = [u for u in old if u[0] not in superseded]
+        mid = [u for u in mid if u[0] not in superseded]
     if think:
         for i, m in enumerate(out[:start]):
             if m.get("role") == "assistant" and thinking(m).strip():
@@ -587,7 +983,10 @@ def event(messages: Sequence[Mapping[str, Any]], extra: int, window: int, keep_c
         kind = str(call.get("name") or "").lower()
         if facts and (sizes[i] < MIN_PRUNE or (kind in LIST_TOOLS and sizes[i] < LIST_WHOLE)):
             continue
-        if facts:
+        if i in superseded:
+            new = (f"[pruned] read {call_target(call)}: {_lines(text)} lines. The current contents of this file are in "
+                   "the CARL note.")
+        elif facts:
             path = call_target(call)
             later = any(j > i and calls[j]["name"].lower() in WRITE_TOOLS and call_target(calls[j]) == path
                         for j in results)
@@ -596,6 +995,8 @@ def event(messages: Sequence[Mapping[str, Any]], extra: int, window: int, keep_c
             new = f"[cleared: the output of {names.get(i, 'a tool')}; call it again to see it]"
         out[i]["content"] = new
         total -= sizes[i] - est_tokens(out[i])
+    if note:
+        out.insert(cur if cur > 0 else min(1, len(out)), {"role": "user", "content": note})
     return out
 
 
@@ -605,13 +1006,14 @@ Method = Callable[..., List[JsonDict]]
 def method_fn(spec: str, window: int = WINDOW) -> Method:
     """A method by name: none; mask:K:S (the first guard); mask:K:S+turn (the event's shape, S = the working tail's
     share of the window, K its floor; the drain line); +ph=facts (the STE100 placeholders); +args (old edit and write
-    arguments); +think=empty or +think=last (earlier thinking), +thinkmid (the current turn's middle's too). The
-    function takes the messages and the tokens outside them (the tools)."""
+    arguments); +think=empty or +think=last (earlier thinking), +thinkmid (the current turn's middle's too); +notes,
+    +files, +map (the CARL note's parts). The function takes the messages, the tokens outside them (the tools) and,
+    for the note, the project's files before the session."""
     base, *mods = spec.split("+")
     parts = base.split(":")
     if parts[0] == "none" and not mods:
-        return lambda ms, extra=0: [dict(m) for m in ms]
-    known = {"turn", "ph=facts", "args", "think=empty", "think=last", "thinkmid"}
+        return lambda ms, extra=0, project=None: [dict(m) for m in ms]
+    known = {"turn", "ph=facts", "args", "think=empty", "think=last", "thinkmid", "notes", "files", "map"}
     if parts[0] == "mask" and len(parts) == 3 and set(mods) <= known and (not set(mods) - {"turn"} or "turn" in mods) \
             and not {"think=empty", "think=last"} <= set(mods) and ("thinkmid" not in mods or any(
                 x.startswith("think=") for x in mods)):
@@ -619,8 +1021,10 @@ def method_fn(spec: str, window: int = WINDOW) -> Method:
         if "turn" in mods:
             facts, pargs, mid = "ph=facts" in mods, "args" in mods, "thinkmid" in mods
             think = next((x.split("=", 1)[1] for x in mods if x.startswith("think=")), "")
-            return lambda ms, extra=0: event(ms, extra, window, k, s, facts, pargs, think, mid)
-        return lambda ms, extra=0: mask(ms, k, s)
+            nt, fl, mp = "notes" in mods, "files" in mods, "map" in mods
+            return lambda ms, extra=0, project=None: event(ms, extra, window, k, s, facts, pargs, think, mid, nt, fl,
+                                                            mp, project)
+        return lambda ms, extra=0, project=None: mask(ms, k, s)
     raise SystemExit(f"error: no such method {spec!r} (none, mask:K:S, mask:K:S+turn, mask:K:S+turn+ph=facts)")
 
 
@@ -1017,6 +1421,26 @@ def cmd_checkpoints(a: argparse.Namespace) -> int:
     return 0
 
 
+def fixture_files(out: str, session: str) -> Dict[str, str]:
+    """The project's text files before the session (its agent-bench fixture, from the session's done.json)."""
+    try:
+        with open(os.path.join(out, session, "done.json"), encoding="utf-8") as f:
+            fixture = str(json.load(f).get("fixture") or "")
+    except (OSError, ValueError):
+        return {}
+    root = os.path.join(TOOLS, "agent-bench", "fixtures", fixture)
+    files: Dict[str, str] = {}
+    for d, _dirs, names in os.walk(root):
+        for n in names:
+            path = os.path.join(d, n)
+            try:
+                with open(path, encoding="utf-8") as f:
+                    files[os.path.relpath(path, root).replace(os.sep, "/")] = f.read()
+            except (OSError, UnicodeDecodeError):
+                continue
+    return files
+
+
 def cmd_score(a: argparse.Namespace) -> int:
     from agentbench.server import CarlServer, ensure_key
     import cachematrix as cm
@@ -1043,6 +1467,7 @@ def cmd_score(a: argparse.Namespace) -> int:
                     if r["method"] == "none" and isinstance(r.get("reply"), dict):
                         refs[(r["session"], r["index"])] = r["reply"]
         asked: Dict[Tuple[str, int, str], Tuple[JsonDict, JsonDict]] = {}
+        projects: Dict[str, Dict[str, str]] = {}
         methods = cm.csv(a.methods)
         if "none" in methods:                        # none first: its reply is the reference of the others
             methods = ["none"] + [m for m in methods if m != "none"]
@@ -1052,7 +1477,10 @@ def cmd_score(a: argparse.Namespace) -> int:
             for spec in methods:
                 if (p["session"], p["index"], spec) in done:
                     continue
-                short = method_fn(spec, a.window)(full, body_tokens({"tools": req.get("tools")}))
+                if p["session"] not in projects:
+                    projects[p["session"]] = fixture_files(a.out, p["session"])
+                short = method_fn(spec, a.window)(full, body_tokens({"tools": req.get("tools")}),
+                                                  project=projects[p["session"]])
                 # the same request as another method's at this point (under the drain line, or nothing of that kind to
                 # prune): the same answers at temperature 0, so asked once
                 same = hashlib.sha256(json.dumps(short, sort_keys=True).encode()).hexdigest()

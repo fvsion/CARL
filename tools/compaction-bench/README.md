@@ -56,7 +56,12 @@ their place in the order; never in the tail, never the edits after a kept view o
 `+think=empty` or `+think=last` prunes earlier thinking: the old part's first (Qwen's template drops it by default; CARL
 keeps it for the cache), the current turn's middle only with `+thinkmid`, never the tail; `last` keeps
 "[pruned: N tokens]" and the block's last whole sentences up to ~50 tokens, else (a list) its last ~100 tokens.
-The score's `--window` sets the window. Each row also says whether the next step calls again what was pruned
+`+notes`, `+files` and `+map` add the CARL note
+before the current turn's user message: the session's files, the errors (open or fixed), the last test run, the todo
+list, a map of the code, and the current contents of up to 5 files in work (rebuilt from the fixture and the session's
+reads, writes and edits; a file whose current view is in the working tail is not copied); the reads it replaces go
+first. When the event still cannot reach the line and the excess is in the current turn, the working set yields, then
+the map. The score's `--window` sets the window. Each row also says whether the next step calls again what was pruned
 (repeats) and whether a call copies a stub (imitated). Two methods that make the same request at a point are asked
 once. **sample** writes the points where two methods chose differently side by side (the real next step, each
 method's, the thinking the second one changed), for a person to read. Sizes: a message's text, thinking and calls at
