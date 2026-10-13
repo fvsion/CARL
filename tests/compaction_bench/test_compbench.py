@@ -471,6 +471,21 @@ class NoteTest(unittest.TestCase):
                                             "file are in the CARL note.")
 
 
+class ContinuationTest(unittest.TestCase):
+    def test_a_cut_tool_call_in_the_templates_text(self) -> None:
+        """continuation/continue_test3.py: a tool call cut while streaming, rebuilt as the A3B template writes a call
+        (each parameter in its own block, the last one left open at the cut)."""
+        sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "tools",
+                                        "compaction-bench", "continuation"))
+        import continue_test3 as ct
+        cut = '{"filePath": "/w/a.py", "oldString": "def a():\\n    retu'
+        self.assertEqual(ct.partial_args(cut), [("filePath", "/w/a.py", True), ("oldString", "def a():\n    retu", False)])
+        self.assertEqual(ct.as_template("edit", cut, False), "<tool_call>\n<function=edit>\n<parameter=filePath>\n/w/a.py"
+                                                            "\n</parameter>\n<parameter=oldString>\ndef a():\n    retu")
+        self.assertEqual(ct.partial_args('{"n": 3, "s": "x\\'), [("n", "3", True), ("s", "x", False)])   # a cut escape
+        self.assertEqual(ct.partial_args('{"path'), [])
+
+
 class DriverTest(unittest.TestCase):
     def test_pi_starts_at_the_thinking_level(self) -> None:
         """2026-10-13: the matrix's Pi driver starts Pi with thinking off; the bench's starts it at the level asked

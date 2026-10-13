@@ -69,3 +69,22 @@ method's, the thinking the second one changed), for a person to read. Sizes: a m
 method when it is built.
 
 Tests: `python3 -m unittest discover -s tests/compaction_bench -t tests/compaction_bench`.
+
+## The continuation checks (`continuation/`)
+
+Can llama.cpp continue a reply that was cut where carl-compaction would cut it (a reply that runs into the window:
+CARL caps the output, compacts, and sends the partial reply back as the final assistant message)? Each script talks to
+a llama-server started as CARL starts it (`--jinja --reasoning-format deepseek`, CARL's chat template,
+`preserve_thinking`):
+
+```bash
+python3 tools/compaction-bench/continuation/continue_test.py  http://127.0.0.1:8199   # text, thinking, a tool call
+python3 tools/compaction-bench/continuation/continue_test2.py http://127.0.0.1:8199   # exact, raw tool calls, a long write
+python3 tools/compaction-bench/continuation/continue_test3.py http://127.0.0.1:8199 REQUEST.json ...   # streamed; real requests
+```
+
+`continue_test3.py` takes saved chat requests (a bench session's `chat-NNN.json`, with `_truth` optional), cuts each
+half-way through its next tool call while streaming, rebuilds the cut call in the template's own text from the
+streamed partial arguments, and checks that the same call comes back. Measured on llama.cpp 0.6.0 with the
+Qwen3.6-35B-A3B IQ3: the text continues exactly; a cut tool call (also a long write, and real 43-61K agent requests)
+comes back as the same call; a streamed continuation sends the part it was given again first.
