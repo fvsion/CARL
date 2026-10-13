@@ -122,8 +122,8 @@ class ScoreTest(unittest.TestCase):
                "prompt_n": 30000, "read_ms": 60000}
         row = dict(row, session="s", index=1)
         table = cb.report([row, dict(row, method="mask:4:0.3")])
-        self.assertEqual(table[1], ["none", "1", "100%", "0%", "", "", "", "1.00", "0.50", "1.0", "100%", "30,000",
-                                    "30,000", "60.0"])
+        self.assertEqual(table[1], ["none", "1", "100%", "0%", "", "", "", "1.00", "0.50", "1.0", "100%", "30,000", ""])
+        self.assertEqual(table[2][-1], "60")         # the event's re-read: 30,000 tokens at the measured 500 tokens/s
         self.assertEqual(table[2][4:6], ["+0% (+0% to +0%)", "1.00"])
         self.assertEqual(len(table), 3)
 
@@ -149,6 +149,80 @@ class ScoreTest(unittest.TestCase):
         two = {"tool_calls": [call("a", "read", filePath="/w/pylib/x.py"), call("b", "read", filePath="/w/pylib/y.py")]}
         one = {"tool_calls": [call("c", "read", filePath="/w/pylib/y.py")]}
         self.assertTrue(cb.score_next(one, two)["target"])
+
+
+class ErrorProbeTest(unittest.TestCase):
+    def test_the_error_in_any_form_and_from_a_diagnostic(self) -> None:
+        """2026-10-13: the answers that named the failure by its message, not its test or line, were missed; an edit's
+        LSP diagnostic is an error too; the probe lists every error, most recent first."""
+        t = transcript()[:4] + [
+            {"role": "assistant", "content": "", "tool_calls": [call("2", "bash", command="python3 -m pytest -q")]},
+            {"role": "tool", "tool_call_id": "2",
+             "content": "F\n____ test_longest ____\ntests/test_longest.py:8: AssertionError\n"
+                        "E       AssertionError: 'a' != 'ccc'\n1 failed"}]
+        keys = cb.error_keys(t)
+        self.assertIn("test_longest", keys)
+        said = cb.errors_said({"errors": [{"error": "AssertionError: 'a' != 'ccc' in longest_word", "fix": "max"}]})
+        self.assertTrue(cb.error_recalled(said, cb.last_error(t), keys))
+        self.assertFalse(cb.error_recalled("ZeroDivisionError", cb.last_error(t), keys))
+        lsp = t + [
+            {"role": "assistant", "content": "", "tool_calls": [call("3", "edit", filePath="/w/pylib/notes/cli.py")]},
+            {"role": "tool", "tool_call_id": "3", "content": "Edit applied.\nLSP errors detected in this file:\n"
+                                                             "ERROR [101:34] Cannot access attribute \"days_ago\""}]
+        self.assertEqual(cb.error_result(lsp), 7)
+        self.assertTrue(cb.error_recalled('ERROR [101:34] Cannot access attribute "days_ago" for class "date"',
+                                          cb.last_error(lsp), cb.error_keys(lsp)))
+        self.assertEqual(cb.errors_said({"last_error": "x"}), "x")                       # an older answer
+        self.assertTrue(cb.error_recalled("", "", []))                                    # none, and none said
+
+
+class CollectTest(unittest.TestCase):
+    def test_briefs_sizes_and_the_clients_own_compaction(self) -> None:
+        class P:
+            def __init__(self, text: str) -> None:
+                self.text = text
+        prompts = {"a": P("Do A."), "b": P("Do B.")}
+        self.assertEqual(cb.item_text("brief:a,b", prompts), cb.BRIEF + "1. Do A.\n\n2. Do B.")
+        self.assertEqual(cb.item_text("brief:Read it, then fix it.", prompts), cb.BRIEF + "1. Read it, then fix it.")
+        self.assertEqual(cb.item_text("a", prompts), "Do A.")
+        self.assertGreater(cb.body_tokens({"messages": transcript(), "tools": [{"x": "y" * 360}]}), 100)
+        with tempfile.TemporaryDirectory() as home:
+            for d, name, doc in ((".config/opencode", "opencode.json", {"provider": {}}),
+                                 (".pi/agent", "settings.json", {"defaultThinkingLevel": "low"})):
+                os.makedirs(os.path.join(home, d))
+                with open(os.path.join(home, d, name), "w", encoding="utf-8") as f:
+                    json.dump(doc, f)
+            self.assertEqual(len(cb.client_compaction_off(home)), 2)
+            self.assertEqual(cb.client_compaction_off(home), [])                          # already off
+            with open(os.path.join(home, ".config/opencode/opencode.json"), encoding="utf-8") as f:
+                self.assertEqual(json.load(f), {"provider": {}, "compaction": {"auto": False, "prune": False}})
+
+
+class DriverTest(unittest.TestCase):
+    def test_pi_starts_at_the_thinking_level(self) -> None:
+        """2026-10-13: the matrix's Pi driver starts Pi with thinking off; the bench's starts it at the level asked
+        (default: CARL's, the defaultThinkingLevel of the harness's settings.json)."""
+        sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "tools", "agent-bench"))
+        sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "tools", "cache-matrix"))
+        import cachematrix as cm
+        seen = []
+
+        class FakeChild:
+            def __init__(self, argv, *a, **k) -> None:
+                seen.append(argv)
+        was = cm.Child
+        cm.Child = FakeChild
+        try:
+            with tempfile.TemporaryDirectory() as home:
+                os.makedirs(os.path.join(home, ".pi", "agent"))
+                with open(os.path.join(home, ".pi", "agent", "settings.json"), "w", encoding="utf-8") as f:
+                    json.dump({"defaultThinkingLevel": "low"}, f)
+                cb._drivers("pi", home, home, {}, "m").start()
+                cb._drivers("pi", home, home, {}, "m", "off").start()
+        finally:
+            cm.Child = was
+        self.assertTrue(seen[0][-1].endswith("/m:low"), seen[0])
+        self.assertTrue(seen[1][-1].endswith("/m:off"), seen[1])
 
 
 if __name__ == "__main__":

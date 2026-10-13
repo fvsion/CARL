@@ -15,8 +15,14 @@ $B report ~/compact-runs --md
 
 - **prepare** makes a harness HOME (never yours; agent-bench's rules) with the tested OpenCode and Pi and the coder
   off: one main session does the work, so its context grows.
-- **collect** runs one session per client and script, with thinking as CARL sets it up (`--thinking off`: off). A script is a series of the agent bench's tasks on one fixture
-  project (`pylib`, `pycli`), each run to its end in the same session, then five follow-ups that read and run much (the whole suite, every changed file again, missing tests, a change list, every module once more): the tasks alone ended at 25-45K tokens. The clients talk to a capture proxy
+- **collect** runs one session per client and script, with thinking as CARL sets it up (`--thinking off`: off; Pi at
+  CARL's level, `low`). A script is a series of the agent bench's tasks on one fixture project (`pylib`, `pycli`,
+  `webapp`, `pyrules`), each run to its end in the same session, then follow-ups that read and run much (the whole
+  suite, every changed file again, missing tests, a change list, every module once more). `coder-pylib` and
+  `coder-pycli` are coder-style: a few tasks in one brief, worked through in one long tool loop; a follow-up brief only
+  under 60% of the window (CARL's rule for sending the coder back to its session). A session goes on with follow-ups
+  until its context reaches `--target` (74K: the 96K window's 35-75% band) and stops there. The clients' own
+  compaction and OpenCode's prune are turned off in the harness HOME, so a session grows as it is. The clients talk to a capture proxy
   (`tools/req-capture-proxy.py`) on the configured port; CARL's server runs 10 ports above it. Each chat request's
   body is saved (`chat-NNN.json`), so a session's requests are its transcript as the model got it, CARL's own
   rewrites included. A finished session has `done.json`; a second run skips it.
@@ -25,13 +31,15 @@ $B report ~/compact-runs --md
   next (the next request holds it). Eleven points tell only ~25-point differences apart; ~150-250 tell 10 points.
 - **score** sends, for each checkpoint and method, two requests to the same model (temperature 0, the session's tools
   kept): the next step, compared with the real one (the same tool; the same file, command or pattern), and a probe
-  that asks for a JSON answer (the files changed, the last error, the next step), compared with what code reads from
-  the whole transcript (the write and edit calls; the last failed tool result). Parallel calls count as a set. Each method is also
+  that asks for a JSON answer (the files changed, every error seen with its fix, most recent first, the next step),
+  compared with what code reads from the whole transcript (the write and edit calls; the last error: a failed command,
+  or an edit's diagnostic, named by its test, file:line or the start of its message, in any form). Parallel calls count as a set. Each method is also
   compared with the reply of `none` (the same model with the whole request, temperature 0). Paths in the answer that
   appear nowhere in the transcript count as invented. `--answer-tokens` (4,096) leaves room for thinking. The prompt tokens and the read time are kept. Results: `scores.jsonl`
   (a second run continues).
 - **report** gives one row per method: against `none` on the same points, the difference in the next-target rate with
-  a 95% interval from resampling whole sessions, and the exact McNemar p.
+  a 95% interval from resampling whole sessions, and the exact McNemar p; the prompt tokens, and the event's re-read:
+  a compaction is read again once, whole, at idle (not per turn), at the server's measured read speed.
 
 Methods: `none`; `mask:K:S` clears each tool result to one line ("[cleared: the output of read notes/store.py; call
 it again to see it]") except the newest K results, those in the last S share of the context, and the latest error.

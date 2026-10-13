@@ -66,20 +66,46 @@ FOLLOW_UPS = [
 # A script: the agent bench's tasks on one fixture project, one after the other in one session (questions first, as a
 # user does, then changes, a stuck bug and a large task: tool output of every kind), then the follow-ups. An item that
 # is not a prompt id is the text itself.
+# "brief:ID,ID,...": a coder-style turn (user, 2026-10-13: sessions where one turn runs a long tool loop): those tasks
+# in one message, worked through without stopping.
 SCRIPTS: Dict[str, Tuple[str, List[str]]] = {
     "pylib": ("pylib", ["question-review", "small-test", "stuck-zerodiv", "medium-change", "medium-module",
                         "large-module", "stuck-test", "small-newtest", "large-cli", *FOLLOW_UPS]),
     "pycli": ("pycli", ["question-explain", "small-rename", "small-flag", "medium-command", "stuck-keyerror",
                         "question-error", "large-feature", "small-gitignore", *FOLLOW_UPS]),
+    "webapp": ("webapp", ["question-where", "small-typo", "stuck-console", "large-refactor", *FOLLOW_UPS]),
+    "pyrules": ("pyrules", ["rules-func", "rules-rename", "rules-flag", "rules-test", *FOLLOW_UPS]),
+    "coder-pylib": ("pylib", ["brief:medium-change,medium-module,stuck-zerodiv,large-module",
+                              "brief:stuck-test,small-newtest,large-cli"]),
+    "coder-pycli": ("pycli", ["brief:small-rename,small-flag,medium-command,stuck-keyerror",
+                              "brief:large-feature,small-gitignore"]),
 }
+BRIEF = ("Work through every item below in order, without stopping to ask. After each item, run the whole test suite "
+         "and fix anything that fails before you go on. When all are done, reply with a short report.\n\n")
+# After a script, while the session is under --target: these, in turn (the sessions must reach the 96K window's
+# 35-75% band; user, 2026-10-13: "we need sessions that get up to the 96k")
+GROW = [
+    "Run the whole test suite verbosely and show me the full output. Fix anything that fails.",
+    "Read every test file in this project in full and list the behaviours that are not tested yet. Add tests for them.",
+    "Read every source file once more in full and look for edge cases that are not handled. Fix them, with tests.",
+    *FOLLOW_UPS,
+]
+TARGET = 74000           # a session stops once its context is this big (75% of 96K is ~73.7K)
+# A coder-style session gets a follow-up brief only under 60% of the window: CARL's rule for sending the coder back to
+# its session (carl-delegation RESUME_MAX, 1.20.9); above it the session grows only within its turn.
+RESUME_SHARE = 0.6
+# The probe (2026-10-13, agreed: "every error hit, most recent first, each with how it was fixed": the shape of the
+# summary's error section; the earlier "last error" question was read as "now" in 41 of 96 answers)
 PROBE = ("Stop for a moment and answer from what you know so far, without calling any tool. Reply with only a JSON "
          "object: {\"files_changed\": [the paths of every file you created or changed in this session], "
-         "\"last_error\": \"the exact text of the last failing test or error message you saw in this session, even if "
-         "you fixed it since; empty only if there was none\", \"next_step\": \"what you will do next, in one sentence\"}. "
-         "Paths relative to the project's root.")
+         "\"errors\": [every failing test or error message you saw in this session, most recent first, even if you "
+         "fixed it since, each as {\"error\": \"the test's name and the message, as exactly as you can\", \"fix\": "
+         "\"how it was fixed, or 'not fixed'\"}; [] only if there was none], "
+         "\"next_step\": \"what you will do next, in one sentence\"}. Paths relative to the project's root.")
 ERROR_RE = re.compile(r"(Traceback \(most recent call last\)|\w*Error\b|\w*Exception\b|\berror:|\bFAILED\b|"
                       r"\b\d+ failed\b|[Ee]xit code:? [1-9])")
 NAMED_ERROR_RE = re.compile(r"\w+(Error|Exception)\b|\berror:")
+DIAG_RE = re.compile(r"ERROR \[\d+:\d+\]")        # a diagnostic a tool reports (OpenCode's edit: the LSP's errors)
 PATH_RE = re.compile(r"(?<![\w/.-])((?:[\w.-]+/)*[\w.-]+\.(?:py|js|ts|json|md|toml|txt|cfg|ini|html|css|sh))\b")
 
 
@@ -168,19 +194,61 @@ def command_results(messages: Sequence[Mapping[str, Any]]) -> set:
     return {i for i, n in names.items() if n.split(" ")[0].lower() in COMMAND_TOOLS}
 
 
-def last_error(messages: Sequence[Mapping[str, Any]]) -> str:
-    """The last line that names an error (else the last that says one), of the last command result that has one."""
+def error_result(messages: Sequence[Mapping[str, Any]]) -> Optional[int]:
+    """The index of the last tool result that shows an error: a command's that says one, or a write tool's with a
+    diagnostic (OpenCode's edit reports the LSP's errors; a file read that shows `raise ValueError` is not one)."""
     commands = command_results(messages)
+    names = _call_names(messages)
     for i in range(len(messages) - 1, -1, -1):
         m = messages[i]
-        if m.get("role") != "tool" or i not in commands:
+        if m.get("role") != "tool":
             continue
         text = msg_text(m)
-        if ERROR_RE.search(text):
-            lines = [ln.strip() for ln in text.splitlines() if ERROR_RE.search(ln)]
-            named = [ln for ln in lines if NAMED_ERROR_RE.search(ln)]      # "ZeroDivisionError: ..." over "1 failed"
-            return (named or lines or [""])[-1]
-    return ""
+        if (i in commands and ERROR_RE.search(text)) or (
+                names.get(i, "").split(" ")[0].lower() in WRITE_TOOLS and DIAG_RE.search(text)):
+            return i
+    return None
+
+
+def last_error(messages: Sequence[Mapping[str, Any]]) -> str:
+    """The last line that names an error (else the last that says one), of the last result that shows one."""
+    i = error_result(messages)
+    if i is None:
+        return ""
+    text = msg_text(messages[i])
+    diags = [ln.strip() for ln in text.splitlines() if DIAG_RE.search(ln)]
+    if diags:
+        return diags[-1]
+    lines = [ln.strip() for ln in text.splitlines() if ERROR_RE.search(ln)]
+    named = [ln for ln in lines if NAMED_ERROR_RE.search(ln)]      # "ZeroDivisionError: ..." over "1 failed"
+    return (named or lines or [""])[-1]
+
+
+KEY_LINE_RE = re.compile(r"^\s*(FAIL:|ERROR:|_{3,})")
+MESSAGE_RE = re.compile(r"\b\w+(?:Error|Exception): (.{4,})|ERROR \[\d+:\d+\] (.{4,})")
+
+
+def _norm(s: str) -> str:
+    return re.sub(r"\s+", " ", s.lower().replace('"', "'")).strip()
+
+
+def error_keys(messages: Sequence[Mapping[str, Any]]) -> List[str]:
+    """What names the last error, in any form (2026-10-13: "AssertionError: 'a' != 'ccc'" is the same failure as
+    "tests/test_longest.py:8: AssertionError"): the failing tests' names, file:line, and the start of each error
+    message (the exception's or the diagnostic's), from the error lines of the last result that shows one."""
+    i = error_result(messages)
+    if i is None:
+        return []
+    keys: List[str] = []
+    for ln in msg_text(messages[i]).splitlines():
+        if not (ERROR_RE.search(ln) or KEY_LINE_RE.search(ln) or DIAG_RE.search(ln)):
+            continue
+        keys += re.findall(r"\btest_\w+", ln) + re.findall(r"[\w/.-]+\.py:\d+", ln)
+        for a, b in MESSAGE_RE.findall(ln):
+            msg = _norm(a or b)[:25]
+            if len(msg) >= 6:
+                keys.append(msg)
+    return list(dict.fromkeys(k if k.startswith("test_") or ".py:" in k else _norm(k) for k in keys))
 
 
 def all_paths(messages: Sequence[Mapping[str, Any]]) -> set:
@@ -210,8 +278,7 @@ def mask(messages: Sequence[Mapping[str, Any]], keep_calls: int, keep_share: flo
         tail = i
     tools = [i for i, m in enumerate(out) if m.get("role") == "tool"]
     keep = set(tools[-keep_calls:]) if keep_calls > 0 else set()
-    commands = command_results(out)
-    err = next((i for i in reversed(tools) if i in commands and ERROR_RE.search(msg_text(out[i]))), None)
+    err = error_result(out)
     names = _call_names(out)
     for i in tools:
         if i in keep or i >= tail or i == err:
@@ -350,33 +417,47 @@ def parse_probe(text: str) -> Optional[JsonDict]:
 ERROR_KEYS_RE = re.compile(r"\btest_\w+|[\w/.-]+\.py:\d+")
 
 
-def error_recalled(said: str, truth: str) -> bool:
-    """The last error named: the failing test, or the file and line, from the truth's line (a paraphrase of the rest
-    counts); no error and an empty answer agree."""
+def error_recalled(said: str, truth: str, keys: Sequence[str] = ()) -> bool:
+    """The last error named: any of its keys (error_keys: a failing test, file:line, the start of its message) in
+    what was said, else the failing test or file and line from the truth's line (a paraphrase of the rest counts);
+    no error and an empty answer agree."""
     if not truth:
         return not said.strip()
+    if keys:
+        low = _norm(said)
+        return any((k if k.startswith("test_") or ".py:" in k else _norm(k)) in (said if ".py:" in k else low)
+                   for k in keys)
     keys = ERROR_KEYS_RE.findall(truth)
     if keys:
         return any(k in said for k in keys)
     return bool(said) and (truth[:60] in said or said[:60] in truth)
 
 
+def errors_said(answer: Mapping[str, Any]) -> str:
+    """The errors an answer lists (each {error, fix} or a string; an older answer's last_error), as one text."""
+    errs = answer.get("errors")
+    if isinstance(errs, list):
+        return "\n".join(str(e.get("error", "")) if isinstance(e, dict) else str(e) for e in errs)
+    return str(answer.get("last_error") or "")
+
+
 def score_probe(answer: Optional[Mapping[str, Any]], full: Sequence[Mapping[str, Any]]) -> JsonDict:
     """The probe's answer against code's reading of the whole transcript up to the point."""
     want = files_changed(full)
     err = last_error(full)
+    keys = error_keys(full)
     known = all_paths(full)
     if answer is None:
         return {"parsed": False, "file_recall": 0.0, "file_precision": 0.0, "invented": 0, "error": False}
     got = [norm_path(str(p)) for p in (answer.get("files_changed") or []) if isinstance(p, str)]
     hit = [p for p in got if p in want]
     invented = [p for p in got if p not in known]
-    said = str(answer.get("last_error") or "")
+    said = errors_said(answer)
     return {"parsed": True,
             "file_recall": len(set(hit)) / len(want) if want else (1.0 if not got else 0.0),
             "file_precision": len(set(hit)) / len(set(got)) if got else (1.0 if not want else 0.0),
             "invented": len(set(invented)),
-            "error": error_recalled(said, err)}
+            "error": error_recalled(said, err, keys)}
 
 
 # ------------------------------------------------------------------------------------------------------- the server
@@ -437,12 +518,18 @@ def cmd_prepare(a: argparse.Namespace) -> int:
 def _drivers(client: str, home: str, cwd: str, env: Mapping[str, str], model: str,  # type: ignore[no-untyped-def]
              thinking: str = "default"):
     """The client's driver (cache-matrix's). thinking: default (the model's own, as CARL sets it up: on) or off. Pi
-    takes it from its settings (CARL's default level); OpenCode from the request's variant."""
+    at that level (default: CARL's, from its settings.json); OpenCode from the request's variant."""
     import cachematrix as cm
     from agentbench import clients as cl
     cm.TURN_LIMIT = TASK_LIMIT
     if client != "opencode":
-        return cm.PiDriver(home, cwd, env, model, False)
+        class Pi(cm.PiDriver):                    # the matrix's driver starts Pi with thinking off (2026-10-13: the
+            def start(self) -> None:              # thinking-on collection's Pi sessions ran off)
+                level = cl.pi_level(thinking, self.home)
+                self.child = cm.Child(["pi", "--mode", "rpc", "--model", f"{cl.PROVIDER}/{self.model}:{level}"],
+                                      self.cwd, self.env, stdin=True)
+                self.current = ""
+        return Pi(home, cwd, env, model, False)
 
     class OpenCode(cm.OpenCodeDriver):            # the matrix's driver sends thinking off; here it is a choice
         def say(self, sid: str, text: str) -> str:
@@ -459,6 +546,48 @@ def _drivers(client: str, home: str, cwd: str, env: Mapping[str, str], model: st
     return OpenCode(home, cwd, env, model, False, "")
 
 
+def body_tokens(body: Mapping[str, Any]) -> int:
+    """A request's size: its messages and its tools (chars / 3.6; matched the server's count, 39K against 40K)."""
+    return sum(est_tokens(m) for m in body.get("messages") or []) + int(len(json.dumps(body.get("tools") or []))
+                                                                         / CHARS_PER_TOKEN)
+
+
+def session_tokens(folder: str) -> int:
+    """The size of a session's newest chat request (its context now)."""
+    bodies = chain(load_bodies(folder))
+    return body_tokens(bodies[-1]) if bodies else 0
+
+
+def client_compaction_off(home: str) -> List[str]:
+    """The harness HOME's clients without their own compaction and prune, so a session grows as it is (OpenCode
+    prunes old tool results above 40K, Pi compacts at the window less 16K; research/clients.md). The files changed."""
+    changed = []
+    for path, key, value in ((os.path.join(home, ".config", "opencode", "opencode.json"), "compaction",
+                              {"auto": False, "prune": False}),
+                             (os.path.join(home, ".pi", "agent", "settings.json"), "compaction", {"enabled": False})):
+        try:
+            with open(path, encoding="utf-8") as f:
+                doc = json.load(f)
+        except (OSError, ValueError):
+            continue
+        if isinstance(doc, dict) and doc.get(key) != value:
+            doc[key] = value
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(doc, f, indent=2)
+            changed.append(path)
+    return changed
+
+
+def item_text(item: str, prompts: Mapping[str, Any]) -> str:
+    """A script item's message: a prompt's text, a coder-style brief (brief:ID,ID: those tasks in one message), or the
+    text itself."""
+    if item.startswith("brief:"):
+        rest = item[len("brief:"):]
+        ids = rest.split(",") if all(i in prompts for i in rest.split(",")) else [rest]     # else a text of its own
+        return BRIEF + "\n\n".join(f"{n}. {prompts[i].text if i in prompts else i}" for n, i in enumerate(ids, 1))
+    return prompts[item].text if item in prompts else item
+
+
 def cmd_collect(a: argparse.Namespace) -> int:
     import cachematrix as cm
     from agentbench import clients as cl, fixtures as fx, home as hm, prompts as pr
@@ -470,6 +599,8 @@ def cmd_collect(a: argparse.Namespace) -> int:
     work = a.home.rstrip("/") + "-work"
     setup = cm.MatrixSetup(repo=REPO, model=a.model, work=os.path.join(work, "server"), port=a.port + PROXY_GAP,
                            models_dir=os.path.abspath(a.models_dir), slots=1, conf=conf)
+    for path in client_compaction_off(home):
+        say(f"the client's own compaction off: {path}")
     srv = CarlServer(setup)
     srv.start()
     srv.wait_ready()
@@ -495,21 +626,35 @@ def cmd_collect(a: argparse.Namespace) -> int:
                     time.sleep(1)
                     drv.start()
                     sid = drv.new()
-                    for pid in ids:
+                    grow = [g for _ in range(a.max_grow // len(GROW) + 1) for g in GROW][:a.max_grow]
+                    for pid in [*ids, *grow]:
+                        size = session_tokens(folder)
+                        if size >= a.target:
+                            say(f"{name}: {size} tokens, at the target")
+                            break
+                        coder = script.startswith("coder-")
+                        if coder and pid in grow and size >= RESUME_SHARE * WINDOW:
+                            say(f"{name}: {size} tokens: no follow-up brief above 60% of the window (CARL's rule)")
+                            break
+                        if coder and pid in grow:
+                            pid = "brief:" + pid
+                        if pid in grow and pid == grow[0] and len(tasks) == len(ids):
+                            say(f"{name}: the script done at {size} tokens; follow-ups until {a.target}")
                         t0 = time.time()
                         try:
-                            reply = drv.say(sid, prompts[pid].text if pid in prompts else pid)
+                            reply = drv.say(sid, item_text(pid, prompts))
                         except Exception as e:  # noqa: BLE001  (one task's failure is data; the session goes on)
                             reply = f"error: {e}"
                         tasks.append({"task": pid[:60], "seconds": round(time.time() - t0, 1), "reply": reply[:200]})
-                        say(f"{name}: {pid[:40]} in {time.time() - t0:.0f} s")
+                        say(f"{name}: {pid[:40]} in {time.time() - t0:.0f} s ({session_tokens(folder)} tokens)")
                 finally:
                     drv.stop()
                     proxy.terminate()
                     proxy.wait(10)
                 with open(os.path.join(folder, "done.json"), "w", encoding="utf-8") as f:
                     json.dump({"client": client, "script": script, "fixture": fixture, "tasks": tasks,
-                               "model": a.model, "cwd": cwd, "thinking": a.thinking}, f, indent=1)
+                               "model": a.model, "cwd": cwd, "thinking": a.thinking,
+                               "tokens": session_tokens(folder)}, f, indent=1)
     finally:
         srv.stop()
     return 0
@@ -644,9 +789,10 @@ def report(rows: Iterable[Mapping[str, Any]]) -> List[List[str]]:
     for r in rows:
         by.setdefault(str(r["method"]), []).append(r)
     head = ["method", "points", "next tool", "next target", "against none (95%)", "p", "same as none",
-            "files recall", "files precision", "invented", "last error", "prompt tokens", "tokens read", "read s"]
+            "files recall", "files precision", "invented", "errors recalled", "prompt tokens", "event re-read s"]
     out = [head]
     mean = (lambda xs: sum(xs) / len(xs) if xs else 0.0)
+    speed = read_speed(rows)
     for name, rs in by.items():
         pr = paired(rows, name) if name != "none" else None
         same = [r["same_as_none"]["target"] for r in rs if isinstance(r.get("same_as_none"), dict)]
@@ -660,9 +806,19 @@ def report(rows: Iterable[Mapping[str, Any]]) -> List[List[str]]:
                     f"{mean([r['probe']['invented'] for r in rs]):.1f}",
                     f"{mean([r['probe']['error'] for r in rs]):.0%}",
                     f"{mean([(r.get('prompt_n') or 0) + (r.get('cache_n') or 0) for r in rs]):,.0f}",
-                    f"{mean([r.get('prompt_n') or 0 for r in rs]):,.0f}",
-                    f"{mean([(r.get('read_ms') or 0) / 1000 for r in rs]):.1f}"])
+                    "" if name == "none" or not speed else
+                    f"{mean([(r.get('prompt_n') or 0) + (r.get('cache_n') or 0) for r in rs]) / speed:.0f}"])
     return out
+
+
+def read_speed(rows: Sequence[Mapping[str, Any]]) -> float:
+    """The server's read speed (tokens/s): the median of the requests it read mostly anew. A compaction event is read
+    again once, whole, at idle (user, 2026-10-13: one re-read per event, not per turn), so the report gives that
+    time, not the bench's per-point reads (each point's pruned request differs from the cached one)."""
+    fast = sorted(r["prompt_n"] / (r["read_ms"] / 1000) for r in rows
+                  if (r.get("prompt_n") or 0) > 4000 and (r.get("read_ms") or 0) > 0
+                  and (r.get("cache_n") or 0) < 0.2 * r["prompt_n"])
+    return fast[len(fast) // 2] if fast else 0.0
 
 
 def cmd_report(a: argparse.Namespace) -> int:
@@ -693,6 +849,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     c.add_argument("--scripts", default=",".join(SCRIPTS))
     c.add_argument("--thinking", default="default", choices=("default", "off"),
                    help="default: the model's own, as CARL sets it up (on); off (the first runs, 2026-10-12)")
+    c.add_argument("--target", type=int, default=TARGET,
+                   help="a session stops once its context is this big; under it after the script, follow-ups")
+    c.add_argument("--max-grow", type=int, default=24, help="the follow-ups after the script, at most")
     c.set_defaults(fn=cmd_collect)
     k = sub.add_parser("checkpoints")
     k.add_argument("out")
