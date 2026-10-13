@@ -300,15 +300,214 @@ def _call_names(messages: Sequence[Mapping[str, Any]]) -> Dict[int, str]:
     return out
 
 
-def method_fn(spec: str) -> Callable[[Sequence[Mapping[str, Any]]], List[JsonDict]]:
-    """A method by name: none, mask:K:S."""
-    parts = spec.split(":")
-    if parts[0] == "none":
-        return lambda ms: [dict(m) for m in ms]
-    if parts[0] == "mask" and len(parts) == 3:
+def _calls(messages: Sequence[Mapping[str, Any]]) -> Dict[int, JsonDict]:
+    """Each tool result's index -> its call ({name, args}), from the assistant message before it."""
+    out: Dict[int, JsonDict] = {}
+    by_id: Dict[str, JsonDict] = {}
+    for i, m in enumerate(messages):
+        if m.get("role") == "assistant":
+            for tc, c in zip(m.get("tool_calls") or [], tool_calls(m)):
+                by_id[str((tc or {}).get("id") or "")] = c
+        elif m.get("role") == "tool":
+            out[i] = by_id.get(str(m.get("tool_call_id") or ""), {"name": "", "args": {}})
+    return out
+
+
+# ------------------------------------------------------------------------- the compaction event (23.5.2, #1 and #2)
+# Agreed with the user 2026-10-13 (design_and_analysis/compaction-decisions.md): one event, at idle or at the hard
+# trigger; the current turn's user message verbatim; a raw working tail of 20% of the window (at least the newest K
+# results; never a call without its result); the newest view of each file the current turn changes, in a budget of
+# 10% of the window; the event works until the context is under the drain line (40% of the window), removing the old
+# part's results first, then the current turn's middle, then the changing files beyond their budget.
+DRAIN = 0.4
+FILES_SHARE = 0.1
+MIN_PRUNE = 80                 # ph=facts: a result under this is never pruned (the placeholder would not be smaller)
+LIST_WHOLE = 300               # ph=facts: a search or listing under this stays whole
+READ_TOOLS = {"read", "view", "cat", "read_file"}
+LIST_TOOLS = {"glob", "grep", "find", "ls", "list", "search", "rg"}
+TEST_CMD_RE = re.compile(r"\b(pytest|unittest|tox|nox|npm (run )?test|yarn test|pnpm test|jest|vitest|go test|"
+                         r"cargo test|make (test|check)|ruff|mypy|flake8|eslint|tsc)\b")
+# a command that changes the project or the system: a fixed word list, not inference (the user: safe defaults)
+SIDE_RE = re.compile(r"(^|[;&|])\s*(rm|mv|cp|mkdir|rmdir|touch|chmod|chown|ln|tee|sed\s+-i|pip3?\s+install|"
+                     r"npm\s+(install|i|uninstall)|brew\s+install|git\s+(commit|push|checkout|switch|reset|add|rm|mv|"
+                     r"merge|rebase|stash|tag|clean|restore|apply|cherry-pick))\b|[^<>=2&]>{1,2}\s*[\w./~-]")
+EXIT_RE = re.compile(r"(?:exited with code|exit code:?)\s*(\d+)", re.I)
+TOTAL_LINES_RE = re.compile(r"total (\d+) lines")
+
+
+def _cmd(call: Mapping[str, Any]) -> str:
+    a = call.get("args") or {}
+    c = str(a.get("command") or a.get("cmd") or "").strip().replace("\n", " ")
+    c = re.sub(r"^cd [^&;]+(&&|;)\s*", "", c)                 # "cd PROJECT && pytest": the command is pytest
+    return c if len(c) <= 60 else c[:57] + "..."
+
+
+def _lines(text: str) -> int:
+    m = TOTAL_LINES_RE.search(text[-200:])
+    return int(m.group(1)) if m else len(text.rstrip("\n").splitlines())
+
+
+def test_outcome(text: str) -> str:
+    """A test run's outcome in STE100: the failed tests by name and the counts (pytest, unittest)."""
+    failed = list(dict.fromkeys(re.findall(r"FAILED \S*::(\w+)", text)
+                                + re.findall(r"^(?:FAIL|ERROR): (\w+)", text, re.M)))
+    nf = re.search(r"(\d+) failed", text)
+    np_ = re.search(r"(\d+) passed", text)
+    ran = re.search(r"Ran (\d+) tests?", text)
+    out = []
+    n_failed = int(nf.group(1)) if nf else len(failed)
+    if n_failed:
+        names = ", ".join(failed[:5]) + (", ..." if len(failed) > 5 else "")
+        out.append(f"{n_failed} {'test' if n_failed == 1 else 'tests'} failed" + (f": {names}." if names else "."))
+    if np_:
+        out.append(f"{np_.group(1)} tests passed.")
+    elif ran and not n_failed:
+        out.append(f"{ran.group(1)} tests passed.")
+    return " ".join(out)
+
+
+def placeholder(call: Mapping[str, Any], text: str, changed_after: bool, in_task: bool) -> str:
+    """A pruned result's placeholder, in STE100 (user, 2026-10-13: "say pruned instead of cleared"; "Write these in
+    STE100 simplified technical english for fidelity"): built by code from the call and its result, by kind."""
+    name = str(call.get("name") or "tool").lower()
+    target = call_target(call)
+    if name in READ_TOOLS:
+        head = f"[pruned] read {target}: {_lines(text)} lines."
+        if in_task:
+            return head + " You changed this file in this task. Read the file again before you change it."
+        if changed_after:
+            return head + " The file changed after this read. This data is old. Read the file again before you use it."
+        return head + " Read the file again to see its contents."
+    if name in COMMAND_TOOLS:
+        cmd = _cmd(call)
+        ex = EXIT_RE.findall(text)
+        head = f'[pruned] {name} "{cmd}":' + (f" exit {ex[-1]}." if ex else "")
+        if TEST_CMD_RE.search(cmd):
+            outcome = test_outcome(text)
+            if outcome:
+                return f"{head} {outcome} Do the tests again to see their status."
+        if SIDE_RE.search(" " + cmd):
+            return f"{head} This command changed the project. Do not do this command again."
+        if ERROR_RE.search(text):
+            err = last_error([{"role": "assistant", "tool_calls": [{"id": "x", "function": {"name": name,
+                              "arguments": json.dumps(call.get("args") or {})}}]},
+                              {"role": "tool", "tool_call_id": "x", "content": text}])
+            if err:
+                return f"{head} Error: {err[:120]}"
+        last = next((ln.strip() for ln in reversed(text.splitlines()) if ln.strip()), "")
+        return f'{head} Last line: "{last[:100]}".' if last else f"{head} No output."
+    if name in WRITE_TOOLS:
+        n_diag = len(DIAG_RE.findall(text))
+        if re.search(r"success|applied|wrote", text, re.I):
+            return (f"[pruned] {name} {target}: The change is done."
+                    + (f" The tool reported {n_diag} {'error' if n_diag == 1 else 'errors'}." if n_diag else ""))
+        first = next((ln.strip() for ln in text.splitlines() if ln.strip()), "")
+        return f'[pruned] {name} {target}: The change failed: "{first[:100]}".'
+    if name in LIST_TOOLS:
+        items = [norm_path(ln.strip()) for ln in text.splitlines() if ln.strip()]
+        return (f"[pruned] {name} \"{target}\": {len(items)} {'result' if len(items) == 1 else 'results'}. "
+                f"The first {min(10, len(items))}: {', '.join(items[:10])}.")
+    return f"[pruned] {name} {target}: {_lines(text)} lines.".replace("  ", " ")
+
+
+def event(messages: Sequence[Mapping[str, Any]], extra: int, window: int, keep_calls: int, tail_share: float,
+          facts: bool) -> List[JsonDict]:
+    """The compaction event's prune (stage 1) on a request: its shape and the drain line (above). extra: the tokens
+    outside the messages (the tools). facts: the STE100 placeholders and their thresholds (#2), else the mask's line."""
+    out = [dict(m) for m in messages]
+    sizes = [est_tokens(m) for m in out]
+    total = sum(sizes) + extra
+    if total <= DRAIN * window:
+        return out                                   # under the line: the event has nothing to do
+    users = [i for i, m in enumerate(out) if m.get("role") == "user"]
+    cur = users[-1] if users else 0                  # the current turn's user message
+    start, acc = len(out), 0                         # the working tail: its last tail_share of the window
+    for i in range(len(out) - 1, -1, -1):
+        if acc >= tail_share * window:
+            break
+        acc += sizes[i]
+        start = i
+    results = [i for i, m in enumerate(out) if m.get("role") == "tool"]
+    if keep_calls > 0 and len(results) >= keep_calls:
+        start = min(start, results[-keep_calls])
+    while start > 0 and out[start].get("role") == "tool":      # never a result without its call
+        start -= 1
+    calls = _calls(out)
+    err = error_result(out)
+    # the newest view of each file the current turn changes, outside the tail: newest-edited first, in the budget
+    changing: List[str] = []
+    for i in range(len(out) - 1, cur, -1):
+        if out[i].get("role") == "assistant":
+            for c in reversed(tool_calls(out[i])):
+                t = call_target(c)
+                if c["name"].lower() in WRITE_TOOLS and t and t not in changing:
+                    changing.append(t)
+    kept_files, beyond, room = set(), [], FILES_SHARE * window
+    for path in changing:
+        view = next((i for i in reversed(results) if i < start and calls[i]["name"].lower() in READ_TOOLS
+                     and call_target(calls[i]) == path), None)
+        if view is None:
+            continue
+        if sizes[view] <= room:
+            kept_files.add(view)
+            room -= sizes[view]
+        else:
+            beyond.append(view)
+    protected = kept_files | {err} if err is not None else set(kept_files)
+    old = [i for i in results if i < cur and i not in protected and i not in beyond]
+    mid = [i for i in results if cur < i < start and i not in protected and i not in beyond]
+    names = _call_names(out)
+    for i in old + mid + beyond:
+        if total <= DRAIN * window:
+            break
+        text = msg_text(out[i])
+        call = calls[i]
+        kind = str(call.get("name") or "").lower()
+        if facts and (sizes[i] < MIN_PRUNE or (kind in LIST_TOOLS and sizes[i] < LIST_WHOLE)):
+            continue
+        if facts:
+            path = call_target(call)
+            later = any(j > i and calls[j]["name"].lower() in WRITE_TOOLS and call_target(calls[j]) == path
+                        for j in results)
+            new = placeholder(call, text, later, i in beyond)
+        else:
+            new = f"[cleared: the output of {names.get(i, 'a tool')}; call it again to see it]"
+        out[i]["content"] = new
+        total -= sizes[i] - est_tokens(out[i])
+    return out
+
+
+Method = Callable[..., List[JsonDict]]
+
+
+def method_fn(spec: str, window: int = WINDOW) -> Method:
+    """A method by name: none; mask:K:S (the first guard); mask:K:S+turn (the event's shape, S = the working tail's
+    share of the window, K its floor; the drain line); +ph=facts (the STE100 placeholders). The function takes the
+    messages and the tokens outside them (the tools)."""
+    base, *mods = spec.split("+")
+    parts = base.split(":")
+    if parts[0] == "none" and not mods:
+        return lambda ms, extra=0: [dict(m) for m in ms]
+    if parts[0] == "mask" and len(parts) == 3 and set(mods) <= {"turn", "ph=facts"} and (
+            "ph=facts" not in mods or "turn" in mods):
         k, s = int(parts[1]), float(parts[2])
-        return lambda ms: mask(ms, k, s)
-    raise SystemExit(f"error: no such method {spec!r} (none, mask:K:S)")
+        if "turn" in mods:
+            facts = "ph=facts" in mods
+            return lambda ms, extra=0: event(ms, extra, window, k, s, facts)
+        return lambda ms, extra=0: mask(ms, k, s)
+    raise SystemExit(f"error: no such method {spec!r} (none, mask:K:S, mask:K:S+turn, mask:K:S+turn+ph=facts)")
+
+
+def repeated(short: Sequence[Mapping[str, Any]], reply: Mapping[str, Any]) -> bool:
+    """The next step calls again what the method pruned (the same read, the same command): a repeated action."""
+    calls = _calls(short)
+    gone = {(c["name"].lower(), call_target(c) if c["name"].lower() not in COMMAND_TOOLS else _cmd(c))
+            for i, c in calls.items() if msg_text(short[i]).startswith(("[pruned]", "[cleared"))}
+    for c in tool_calls(reply):
+        n = c["name"].lower()
+        if (n, call_target(c) if n not in COMMAND_TOOLS else _cmd(c)) in gone:
+            return True
+    return False
 
 
 # ----------------------------------------------------------------------------------------------- sessions and points
@@ -720,7 +919,7 @@ def cmd_score(a: argparse.Namespace) -> int:
             for spec in methods:
                 if (p["session"], p["index"], spec) in done:
                     continue
-                short = method_fn(spec)(full)
+                short = method_fn(spec, a.window)(full, body_tokens({"tools": req.get("tools")}))
                 nxt = ask(base, key, req, short, a.answer_tokens)
                 probe = ask(base, key, req, short + [{"role": "user", "content": PROBE}], a.answer_tokens)
                 reply = {"role": "assistant", "content": msg_text(nxt["message"])[:300],
@@ -733,6 +932,8 @@ def cmd_score(a: argparse.Namespace) -> int:
                        "read_ms": nxt["prompt_ms"],
                        "next": score_next(nxt["message"], p["truth"]),
                        "same_as_none": score_next(nxt["message"], ref) if ref is not None else None,
+                       "repeat": repeated(short, nxt["message"]),
+                       "context_after": sum(est_tokens(m) for m in short) + body_tokens({"tools": req.get("tools")}),
                        "reply": reply, "finish": nxt.get("finish"),
                        "probe": score_probe(parse_probe(msg_text(probe["message"])), full),
                        "probe_answer": msg_text(probe["message"])[:2000],
@@ -789,7 +990,8 @@ def report(rows: Iterable[Mapping[str, Any]]) -> List[List[str]]:
     for r in rows:
         by.setdefault(str(r["method"]), []).append(r)
     head = ["method", "points", "next tool", "next target", "against none (95%)", "p", "same as none",
-            "files recall", "files precision", "invented", "errors recalled", "prompt tokens", "event re-read s"]
+            "files recall", "files precision", "invented", "errors recalled", "repeats", "prompt tokens",
+            "event re-read s"]
     out = [head]
     mean = (lambda xs: sum(xs) / len(xs) if xs else 0.0)
     speed = read_speed(rows)
@@ -805,6 +1007,7 @@ def report(rows: Iterable[Mapping[str, Any]]) -> List[List[str]]:
                     f"{mean([r['probe']['file_precision'] for r in rs]):.2f}",
                     f"{mean([r['probe']['invented'] for r in rs]):.1f}",
                     f"{mean([r['probe']['error'] for r in rs]):.0%}",
+                    f"{mean([bool(r.get('repeat')) for r in rs]):.0%}",
                     f"{mean([(r.get('prompt_n') or 0) + (r.get('cache_n') or 0) for r in rs]):,.0f}",
                     "" if name == "none" or not speed else
                     f"{mean([(r.get('prompt_n') or 0) + (r.get('cache_n') or 0) for r in rs]) / speed:.0f}"])
@@ -863,6 +1066,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     s = sub.add_parser("score", parents=[common])
     s.add_argument("out")
     s.add_argument("--methods", default="none,mask:8:0.2")
+    s.add_argument("--window", type=int, default=WINDOW, help="the window the event's sizes are shares of")
     s.add_argument("--answer-tokens", type=int, default=4096,
                    help="the next step's and the probe's limit (thinking needs room; 512 cut a write's path)")
     s.set_defaults(fn=cmd_score)

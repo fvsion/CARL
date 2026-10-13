@@ -43,6 +43,14 @@ $B report ~/compact-runs --md
 
 Methods: `none`; `mask:K:S` clears each tool result to one line ("[cleared: the output of read notes/store.py; call
 it again to see it]") except the newest K results, those in the last S share of the context, and the latest error.
-CARL's own prune and summary are added as methods when they are built (23.5.2.2-.3).
+`mask:K:S+turn` is the compaction event's prune as agreed (2026-10-13): nothing under the drain line (40% of the
+window); above it, the old part's results first, then the current turn's middle, then the files the turn changes
+beyond their budget (10% of the window), until the context is under the line; the current turn's user message and a
+raw working tail (S of the window, at least the newest K results, never a call without its result) stay. `+ph=facts`
+gives the pruned results placeholders in STE100, built by code by kind (a read: its lines, and whether the file
+changed after; a test: the failed tests and the counts; a command with side effects: "Do not do this command
+again."; an edit: done or failed; a listing: the count and the first 10), and keeps results under 80 tokens and
+listings under 300. The score's `--window` sets the window. Each row also says whether the next step calls again what
+was pruned (repeats). CARL's own summary is added as a method when it is built.
 
 Tests: `python3 -m unittest discover -s tests/compaction_bench -t tests/compaction_bench`.

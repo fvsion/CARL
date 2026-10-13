@@ -122,7 +122,8 @@ class ScoreTest(unittest.TestCase):
                "prompt_n": 30000, "read_ms": 60000}
         row = dict(row, session="s", index=1)
         table = cb.report([row, dict(row, method="mask:4:0.3")])
-        self.assertEqual(table[1], ["none", "1", "100%", "0%", "", "", "", "1.00", "0.50", "1.0", "100%", "30,000", ""])
+        self.assertEqual(table[1], ["none", "1", "100%", "0%", "", "", "", "1.00", "0.50", "1.0", "100%", "0%", "30,000",
+                                    ""])
         self.assertEqual(table[2][-1], "60")         # the event's re-read: 30,000 tokens at the measured 500 tokens/s
         self.assertEqual(table[2][4:6], ["+0% (+0% to +0%)", "1.00"])
         self.assertEqual(len(table), 3)
@@ -196,6 +197,100 @@ class CollectTest(unittest.TestCase):
             self.assertEqual(cb.client_compaction_off(home), [])                          # already off
             with open(os.path.join(home, ".config/opencode/opencode.json"), encoding="utf-8") as f:
                 self.assertEqual(json.load(f), {"provider": {}, "compaction": {"auto": False, "prune": False}})
+
+
+def long_session() -> list:
+    """Two user turns: the old one reads two files and runs the tests; the current one reads and changes stats.py,
+    lists the project, runs the tests, then reads cli.py. Each read ~2,800 tokens (10K chars)."""
+    big = lambda name: "\n".join(f"{n}: line of {name}" + "x" * 60 for n in range(1, 140))   # noqa: E731
+    fail = "F.\nFAILED tests/test_stats.py::StatsTest::test_mean - AssertionError: 1 != 2\n1 failed, 1 passed in 0.1s"
+    return [
+        {"role": "system", "content": "You are a coding agent."},
+        {"role": "user", "content": "Review the project."},
+        {"role": "assistant", "content": "", "tool_calls": [call("1", "read", filePath="/w/pylib/textstats/tokenize.py")]},
+        {"role": "tool", "tool_call_id": "1", "content": big("tokenize")},
+        {"role": "assistant", "content": "", "tool_calls": [call("2", "read", filePath="/w/pylib/textstats/stats.py")]},
+        {"role": "tool", "tool_call_id": "2", "content": big("stats")},
+        {"role": "assistant", "content": "", "tool_calls": [call("3", "bash", command="cd /w/pylib && python3 -m pytest -q")]},
+        {"role": "tool", "tool_call_id": "3", "content": fail + "\n" + "." * 4000},
+        {"role": "assistant", "content": "Two notes."},
+        {"role": "user", "content": "Fix mean in stats.py."},
+        {"role": "assistant", "content": "", "tool_calls": [call("4", "read", filePath="/w/pylib/textstats/stats.py")]},
+        {"role": "tool", "tool_call_id": "4", "content": big("stats")},
+        {"role": "assistant", "content": "", "tool_calls": [call("5", "glob", pattern="**/*.py")]},
+        {"role": "tool", "tool_call_id": "5", "content": "\n".join(f"/w/pylib/textstats/m{n}.py" for n in range(400))},
+        {"role": "assistant", "content": "", "tool_calls": [call("6", "edit", filePath="/w/pylib/textstats/stats.py",
+                                                                 oldString="a", newString="b")]},
+        {"role": "tool", "tool_call_id": "6", "content": "Edit applied successfully."},
+        {"role": "assistant", "content": "", "tool_calls": [call("7", "bash", command="python3 -m pytest -q")]},
+        {"role": "tool", "tool_call_id": "7", "content": "..\n2 passed in 0.1s"},
+        {"role": "assistant", "content": "", "tool_calls": [call("8", "read", filePath="/w/pylib/textstats/cli.py")]},
+        {"role": "tool", "tool_call_id": "8", "content": big("cli")},
+    ]
+
+
+class EventTest(unittest.TestCase):
+    def test_the_shape_and_the_drain_line(self) -> None:
+        """2026-10-13, agreed: under the drain line nothing changes; above it the old part goes first, the current
+        turn's user message and the working tail stay, the newest view of a file the turn changes stays (budget)."""
+        t = long_session()
+        size = sum(cb.est_tokens(m) for m in t)
+        self.assertEqual(cb.event(t, 0, int(size / 0.39), 1, 0.2, True), t)            # under 40%: nothing
+        window = int(size / 0.7)                                                          # the event at ~70%
+        out = cb.event(t, 0, window, 1, 0.1, True)
+        self.assertTrue(out[3]["content"].startswith("[pruned] read textstats/tokenize.py: 139 lines."))
+        self.assertIn("The file changed after this read. This data is old.", out[5]["content"])
+        self.assertEqual(out[11]["content"], t[11]["content"])        # stats.py's newest view: the turn changes it
+        self.assertEqual(out[9], t[9])                                # the current turn's user message
+        self.assertEqual(out[19]["content"], t[19]["content"])        # the working tail (cli.py's read)
+        self.assertLessEqual(sum(cb.est_tokens(m) for m in out), 0.4 * window + 200)
+        self.assertEqual([m["role"] for m in out], [m["role"] for m in t])
+        self.assertEqual(t[3]["content"][:3], "1: ")                  # the input untouched
+
+    def test_a_changing_file_over_its_budget(self) -> None:
+        t = long_session()
+        window = int(sum(cb.est_tokens(m) for m in t) / 0.95)
+        out = cb.event(t, 0, window, 1, 0.05, True)                  # 10% of this window < one read: over the budget
+        self.assertIn("You changed this file in this task. Read the file again before you change it.", out[11]["content"])
+
+    def test_placeholders_in_ste100(self) -> None:
+        cmd = lambda c: {"name": "bash", "args": {"command": c}}           # noqa: E731
+        fail = "FAILED tests/test_stats.py::StatsTest::test_mean - AssertionError\n1 failed, 33 passed in 0.1s"
+        self.assertEqual(cb.placeholder(cmd("cd /w && python3 -m pytest -q"), fail + "\n\nCommand exited with code 1",
+                                        False, False),
+                         '[pruned] bash "python3 -m pytest -q": exit 1. 1 test failed: test_mean. 33 tests passed. '
+                         "Do the tests again to see their status.")
+        self.assertEqual(cb.placeholder(cmd("git commit -am x"), "[main 1a2b] x", False, False),
+                         '[pruned] bash "git commit -am x": This command changed the project. Do not do this command '
+                         "again.")
+        self.assertEqual(cb.placeholder(cmd("python3 -m notes list"), "a\n3 notes\n", False, False),
+                         '[pruned] bash "python3 -m notes list": Last line: "3 notes".')
+        self.assertTrue(cb.placeholder(cmd("python3 x.py"), "Traceback ...\nKeyError: 'due'", False, False)
+                        .endswith("Error: KeyError: 'due'"))
+        self.assertEqual(cb.placeholder({"name": "glob", "args": {"pattern": "*.py"}}, "/w/pylib/a.py\n/w/pylib/b.py",
+                                        False, False), '[pruned] glob "*.py": 2 results. The first 2: a.py, b.py.')
+        edit = {"name": "edit", "args": {"filePath": "/w/pylib/notes/cli.py"}}
+        self.assertEqual(cb.placeholder(edit, "Edit applied successfully.\n<diagnostics>\nERROR [3:1] x\nERROR [9:2] y",
+                                        False, False),
+                         "[pruned] edit notes/cli.py: The change is done. The tool reported 2 errors.")
+        self.assertEqual(cb.placeholder(edit, "edits[1].oldText must not be empty", False, False),
+                         '[pruned] edit notes/cli.py: The change failed: "edits[1].oldText must not be empty".')
+        self.assertEqual(cb.placeholder({"name": "webfetch", "args": {"url": "u"}}, "x\ny", False, False),
+                         "[pruned] webfetch u: 2 lines.")
+
+    def test_thresholds_methods_and_repeats(self) -> None:
+        t = long_session()
+        window = int(sum(cb.est_tokens(m) for m in t) / 0.7)
+        out = cb.event(t, 0, window, 1, 0.1, True)
+        self.assertEqual(out[15]["content"], t[15]["content"])        # an edit's result (under 80 tokens): never
+        plain = cb.method_fn("mask:1:0.1+turn", window)(t)
+        self.assertTrue(plain[3]["content"].startswith("[cleared: the output of read"))
+        self.assertEqual(cb.method_fn("mask:1:0.1+turn+ph=facts", window)(t), out)
+        with self.assertRaises(SystemExit):
+            cb.method_fn("mask:8:0.2+ph=facts")                       # the placeholders go with the event's shape
+        again = {"tool_calls": [call("9", "read", filePath="/w/pylib/textstats/tokenize.py")]}
+        self.assertTrue(cb.repeated(out, again))
+        self.assertFalse(cb.repeated(out, {"tool_calls": [call("9", "read", filePath="/w/pylib/textstats/x.py")]}))
 
 
 class DriverTest(unittest.TestCase):
