@@ -3,6 +3,14 @@
 All notable changes to CARL. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Dates are local dates on the development Mac (M3 Pro, 36 GB).
 
+## 1.20.10 - 2026-10-13
+
+### Changed
+- **The Live tab's Cache column says when a session will be saved.** Saved shows `not yet` for a session that will be
+  saved when it leaves its slot (coders from 32K tokens too, since 1.20.9), `no (under 32K)` for a shorter coder, and
+  `no (a subagent)` only for Pi's subagents, which are never saved. Before, every unsaved coder showed
+  `no (a subagent)`.
+
 ## 1.20.9 - 2026-10-13
 
 Phase 23.5.3.2: the disk cache keeps each session in its own slot, and a coder follow-up stays in its window.
