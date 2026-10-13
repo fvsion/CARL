@@ -3,6 +3,21 @@
 All notable changes to CARL. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Dates are local dates on the development Mac (M3 Pro, 36 GB).
 
+## 1.20.7 - 2026-10-13
+
+The Phase 23.4.2 addendum: the Gemma 4 12B is the hard code choice on 16 GB Macs.
+
+### Changed
+- **On a 16 GB Mac, Auto fit's hard code choice is `gemma-4-12b`** (2 × 96K, n-gram, the window cache), no longer
+  `saluki-27b`. On the same three medium agent tasks with hidden tests (OpenCode and Pi, CARL's default thinking, a
+  coder subagent, the tested client versions) both passed 6 of 6; the 12B handed 5 of 6 to the coder as CARL's rule
+  says, Saluki wrote all of them itself; the 12B also leads CARL's code test. `saluki-27b` stays in the catalogue
+  (quality rank 9) as a choice by hand.
+
+### Measured
+- **The compaction bench** (`tools/compaction-bench/`, Phase 23.5.2.1) scores right: paths from the project's root,
+  errors only from commands, an error counted by its failing test or file and line, the probe's answers kept.
+
 ## 1.20.6 - 2026-10-12
 
 Phase 23.5.1.10: the RAM cache across client processes.
