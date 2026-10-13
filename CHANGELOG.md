@@ -3,6 +3,37 @@
 All notable changes to CARL. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Dates are local dates on the development Mac (M3 Pro, 36 GB).
 
+## 1.20.9 - 2026-10-13
+
+Phase 23.5.3.2: the disk cache keeps each session in its own slot, and a coder follow-up stays in its window.
+
+### Fixed
+- **A compaction took another session's slot.** A coder's compaction could run in the main session's slot, and a
+  compacted session could go on in a different slot while its old one kept the stale conversation. A compaction now
+  runs in its session's own slot, and the session stays there after it. A subagent's compaction (the coder's) is
+  known too: before, the coder's next turn read its whole new conversation again.
+- **A session pushed out by a request back from the RAM cache was not saved.** That path took the least full slot
+  without saving the session there (or marking it as in the RAM cache), so that session was read again in full
+  later. Every way into a slot now saves or marks the session there first.
+- **A compacted session's new start was not saved.** It is now saved at the end of its first turn (save rules `auto`,
+  `turn` and `switch`).
+
+### Changed
+- **Coder sessions of 32K tokens or more are saved,** at the end of a turn by the save rule and when their slot is
+  needed, and restored when OpenCode's main agent sends the coder a follow-up (`task_id`). Shorter subagent sessions
+  are still read again; Pi's subagents (no session file) are never saved.
+- **A coder follow-up starts a new coder session when the earlier one is at 60% of the coder's window or more**
+  (OpenCode). The task gets a note with the earlier session's title, size and last result, and you see a toast. Before,
+  a follow-up could go on in a session an external coder model had grown to 225K tokens.
+
+### Measured
+- The cache matrix on this M2 Max (Qwen3.6-35B-A3B IQ3, 3 slots, OpenCode 1.19.0; `--scenario slots` and the new
+  `--scenario ram`), save rules `auto` and `stop`: a compaction stays in its session's slot (main 0 -> 0, the coder
+  1 -> 1); the coder's first turn after its compaction read 1,008 of 10,100 tokens; a request back from the RAM cache
+  saved (`auto`) or marked (`stop`) the main session in the slot it took, which then read 64-66 of 11,814; a 35.6K
+  coder pushed out and sent back read 28 of 35,583 (from its file; `stop`: 26, from the RAM cache), against ~26K read
+  again before.
+
 ## 1.20.8 - 2026-10-13
 
 Phase 23.5.3.1: the Live tab's speed card, cleaned up.
