@@ -7,7 +7,7 @@ from __future__ import annotations
 import collections
 import os
 from dataclasses import dataclass, field, replace
-from typing import Callable, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from carl_core.domain.gguf import KV_BPE, kv_bytes_per_token
 from carl_core.domain.llamacpp import VersionCheck, health_rows
@@ -39,7 +39,7 @@ def sections(three: Sequence[str] = (), two: Sequence[str] = ()) -> None:
     THREE_LEVELS.update(three)   # collapsed / simple / full
 NOLOG_TEXT = "No log file: the server writes to its terminal. Start it with ./carl.sh to see the log here."
 REQ_HEAD = (f"{'Started':8}  {'Context':>8}  {'New tokens':>10}  {'Read tok/s':>10}  {'Output':>6}  "
-            f"{'Write tok/s':>11}  {'Took':>6}  {'Guesses OK':>10}")
+            f"{'Write tok/s':>11}  {'Took':>6}  {'Guesses ACPT':>12}")
 STOPPED, LOADING, IDLE, READING, WRITING = "STOPPED", "LOADING", "IDLE", "READING", "WRITING"
 
 
@@ -377,21 +377,51 @@ def _num(x: float, decimals: int = 0) -> str:
     return "–" if not x else f"{x:,.{decimals}f}"
 
 
-def draft_positions(mode: str, n: int, ngram_max: int, have: Iterable[int], room: int) -> List[int]:
-    """The draft positions (from 1) the speed card shows, by the speculation (Phase 23.5.1.8): MTP alone its guesses
-    (1 to n); n-gram alone points along its long run (1, 8, 16, 32, 64, 96, up to its maximum draft); MTP + n-gram
-    both (1 to n, then 16, 32, 64). Only positions the server counted (have: from 0), at most room."""
+def per_step(mode: str, n: int, pos: Mapping[int, float], steps: float, acc: float) -> Tuple[str, List[str], List[str]]:
+    """The speed card's Per step table (Phase 23.5.3.1, from mock-ups): its label, header cells and value cells. MTP: a
+    column per guess (the share of the steps that kept it). n-gram: the steps that kept more than MTP's guesses (only
+    an n-gram run can), and the tokens such a step kept (tkn/run). n-gram alone counts per draft: every step is one.
+    Then the tokens accepted a step. pos: llama.cpp's accepted tokens by position (from 0), over all steps."""
     mtp, ngram = "draft-mtp" in mode, "ngram-mod" in mode
-    want = list(range(1, max(n, 1) + 1)) if mtp else [1]
+    k = max(n, 1) if mtp else 0
+    heads: List[str] = [str(i) for i in range(1, k + 1)]
+    vals = [percent(pos.get(i - 1, 0) / steps) for i in range(1, k + 1)]
     if ngram:
-        want += [p for p in ((16, 32, 64) if mtp else (8, 16, 32, 64, 96)) if p <= ngram_max]
-    seen = set(have)
-    return sorted({p for p in want if p - 1 in seen})[:max(room, 1)]
+        runs = pos.get(k, 0)                          # the steps that kept more than MTP's k guesses
+        tail = sum(c for i, c in pos.items() if i >= k)
+        heads += ["n-gram", "tkn/run"]
+        vals += [percent(runs / steps), f"{k + tail / runs:.0f}" if runs else "–"]
+    heads.append("tokens acpt")
+    per = acc / steps
+    vals.append(f"{per:.2f}" if per < 10 else f"{per:.1f}")
+    return ("Per draft" if ngram and not mtp else "Per step"), heads, vals
+
+
+def step_table(heads: Sequence[str], vals: Sequence[str]) -> Tuple[str, str]:
+    """The header and value rows: MTP's guesses 6 wide; n-gram and tkn/run close, split by " | " (the n-gram share
+    right-aligned against it); tokens acpt centred under its header."""
+    h = v = ""
+    i = 0
+    while i < len(heads):
+        if heads[i] == "n-gram":
+            h += f"{'n-gram':<6} | {'tkn/run':<7}   "
+            v += f"{vals[i]:>6} | {vals[i + 1]:<7}   "
+            i += 2
+        elif heads[i] == "tokens acpt":
+            h += heads[i]
+            v += f"{vals[i]:^11}"
+            i += 1
+        else:
+            h += f"{heads[i]:<6}"
+            v += f"{vals[i]:<6}"
+            i += 1
+    return h.rstrip(), v.rstrip()
 
 
 def card_speed(v: View, d: ServerData, w: int = 66) -> Card:
-    """A table: read and write tok/s now, on average and in the last request; the share of correct guesses. At
-    full also the tokens per step, the drafts accepted by position, the totals and the queue."""
+    """A table: read and write tok/s now, on average and in the last request; the share of guesses accepted. At full
+    also the speculation with that share at its right, the Per step table, the last request's time, the totals (two
+    rows) and the queue (Phase 23.5.3.1)."""
     m = d.metrics
     pp_avg, tg_avg = averages(d)
     writing = d.busy and d.decoded > 0
@@ -400,9 +430,10 @@ def card_speed(v: View, d: ServerData, w: int = 66) -> Card:
     live_pp, live_tg = v.log.live()         # the log's progress lines: every slot, whether or not a poll answered
     pp_now = live_pp or (d.pp_rate if reading else 0)
     tg_now = live_tg or (d.tg_rate if writing else 0)
-    # the table's label column lines up with the rows below it (aligned(): the longest label + 2)
-    lw = len("largest context" if v.full else "guesses OK") + 2
-    last = "Last" if w - 4 < 50 else "Last request"            # a narrow card: the short header
+    # the tables' label column lines up with the rows below them (aligned(): the longest label + 2)
+    lw = len("last request" if v.full else "guesses ACPT") + 2
+    inner = w - 4
+    last = "Last" if inner < 50 else "Last request"            # a narrow card: the short header
     lc = len(last) + 3
     head = f"{DIM}{'Tok/s':<{lw}}{'Now':>7}{'Average':>10}{last:>{lc}}{R}"
     L: List[CardLine] = [
@@ -413,33 +444,40 @@ def card_speed(v: View, d: ServerData, w: int = 66) -> Card:
     drafted = m.get("spec_decode_num_draft_tokens_total", 0)
     acc = m.get("spec_decode_num_accepted_tokens_total", 0)
     mode = flag(d.cmd, "--spec-type", default="none")
-    if drafted:
-        L.append(row("guesses OK", percent(acc / drafted)))
+    share = percent(acc / drafted) if drafted else ("–" if mode != "none" else "")
+    if not v.full:
+        L.append(row("guesses ACPT", share if drafted else ("off" if mode == "none" else f"{DIM}no guesses yet{R}")))
+        return Card("SPEED", f"write {speed(tg_avg)}" if tg_avg else "", L)
+    L.append("")
+    lab = (lambda name, value: f"{DIM}{name:<{lw}}{R}{value}")     # full detail: every row in the tables' column
+    n = flag(d.cmd, "--spec-draft-n-max", default="1")
+    name = spec_name(mode, n)
+    right = f"Guesses ACPT {share}" if mode != "none" else ""
+    gap = inner - lw - len(name) - len(right)
+    if right and gap >= 2:
+        L.append(f"{DIM}{'Speculation':<{lw}}{R}{name}{' ' * gap}{DIM}Guesses ACPT{R} {share}")
     else:
-        L.append(row("guesses OK", "off" if mode == "none" else f"{DIM}no guesses yet{R}"))
-    if v.full:
+        L.append(lab("Speculation", name))
+        if right:
+            L.append(lab("Guesses ACPT", share))
+    if mode != "none":
         steps = m.get("spec_decode_num_drafts_total", 0)
-        n = flag(d.cmd, "--spec-draft-n-max", default="1")
-        L.append(row("speculation", spec_name(mode, n)))
         if steps:
-            L.append(row("per step", f"{acc / steps:.2f} tokens accepted"))
-        pos = d.accepted_by_pos
-        if pos and steps:
-            ng_max = flag(d.cmd, "--spec-ngram-mod-n-max", default="64")     # llama.cpp's own (CARL passes 96)
-            ks = draft_positions(mode, int(n) if str(n).isdigit() else 1, int(ng_max) if str(ng_max).isdigit() else 64,
-                                 pos, (w - 4 - lw) // 7)
-            L.append(f"{DIM}{'Position':<{lw}}{R}" + "".join(f"{k:>7}" for k in ks))
-            L.append(f"{DIM}{'Accepted':<{lw}}{R}" + "".join(f"{percent(pos[k - 1] / steps):>7}" for k in ks))
-        if r:
-            took = (r.t1 or 0) - (r.t0 or 0)
-            L.append(row("last request", duration(took)))
-        if d.slots:
-            L.append("")
-            L.append(row("total read", tokens(m.get("prompt_tokens_total", 0))))
-            L.append(row("total reused", tokens(m.get("prompt_tokens_cached_total", 0))))
-            L.append(row("total written", tokens(m.get("tokens_predicted_total", 0))))
-            L.append(row("waiting", f"{m.get('requests_deferred', 0):.0f}"))
-            L.append(row("largest context", f"{tokens(m.get('n_tokens_max', 0))} tokens"))
+            label, heads, vals = per_step(mode, int(n) if str(n).isdigit() else 1, d.accepted_by_pos, steps, acc)
+            h, val = step_table(heads, vals)
+            L.append(f"{DIM}{label:<{lw}}{h}{R}")
+            L.append(" " * lw + val)
+        else:
+            L.append(lab("Per step", f"{DIM}no steps yet{R}"))
+    if r:
+        took = (r.t1 or 0) - (r.t0 or 0)
+        L.append(lab("Last request", duration(took)))
+    if d.slots:
+        L.append("")
+        L.append(f"{DIM}{'Totals':<{lw}}{'read':<9}{'reused':<9}written{R}")
+        L.append(" " * lw + f"{tokens(m.get('prompt_tokens_total', 0)):<9}"
+                 f"{tokens(m.get('prompt_tokens_cached_total', 0)):<9}{tokens(m.get('tokens_predicted_total', 0))}")
+        L.append(lab("Waiting", f"{m.get('requests_deferred', 0):.0f}"))
     return Card("SPEED", f"write {speed(tg_avg)}" if tg_avg else "", L)
 
 
@@ -674,7 +712,7 @@ REQ_FULL = f"  {'Slot':>4}  {'Reused from':<12}"
 def req_row(r: RequestRecord, wall: Callable[[Optional[float]], str]) -> str:
     """One request as a table row (REQ_HEAD); wall turns its start into a clock time."""
     took = r.t1 - r.t0 if r.t1 is not None and r.t0 is not None else None
-    acc = f"{RED}{'error':>10}{R}" if r.error else f"{percent(r.acc) if r.acc is not None else '–':>10}"
+    acc = f"{RED}{'error':>12}{R}" if r.error else f"{percent(r.acc) if r.acc is not None else '–':>12}"
     return (f"{wall(r.t0):8}  {tokens(r.ctx):>8}  {tokens(r.new):>10}  {(r.pp or 0):>10.0f}  "
             f"{tokens(r.gen):>6}  {(r.tg or 0):>11.1f}  {duration(took):>6}  {acc}")
 

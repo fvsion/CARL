@@ -176,24 +176,38 @@ class CardsTest(unittest.TestCase):
         self.assertEqual(table_row(body, "Read"), ["Read", "200", "–", "–"])
         self.assertIn("about 30 s left", live_sentence(d, 8080))
 
-    def test_speed_positions_follow_the_speculation(self) -> None:
-        """Phase 23.5.1.8: the Position row (was Guess): MTP's guesses; n-gram's points along its long run; both."""
-        from monitor.cards import draft_positions
-        have = range(96)
-        self.assertEqual(draft_positions("draft-mtp", 2, 64, have, 6), [1, 2])
-        self.assertEqual(draft_positions("ngram-mod", 1, 96, have, 6), [1, 8, 16, 32, 64, 96])
-        self.assertEqual(draft_positions("ngram-mod", 1, 64, have, 6), [1, 8, 16, 32, 64])          # llama.cpp's max
-        self.assertEqual(draft_positions("ngram-mod", 1, 32, have, 6), [1, 8, 16, 32])
-        self.assertEqual(draft_positions("draft-mtp,ngram-mod", 2, 64, have, 6), [1, 2, 16, 32, 64])
-        self.assertEqual(draft_positions("draft-mtp,ngram-mod", 4, 64, have, 4), [1, 2, 3, 4])      # a narrow card
-        self.assertEqual(draft_positions("ngram-mod", 1, 64, range(20), 6), [1, 8, 16])           # only counted ones
-        m = {"spec_decode_num_draft_tokens_total": 640, "spec_decode_num_accepted_tokens_total": 500,
-             "spec_decode_num_drafts_total": 10}
-        d = ServerData(up=True, slots=True, metrics=m, accepted_by_pos={i: 10 - i // 12 for i in range(96)},
-                       cmd="llama-server --spec-type ngram-mod --spec-ngram-mod-n-max 96")
+    def test_speed_per_step_follows_the_speculation(self) -> None:
+        """Phase 23.5.3.1 (from mock-ups): one column per MTP guess, then n-gram | tkn/run (the steps that kept more
+        than MTP's guesses, and their tokens), then tokens acpt; n-gram alone counts per draft."""
+        from monitor.cards import per_step, step_table
+        # 1,000 steps: MTP's guess kept at 830; 10 n-gram runs of 41 tokens (positions 2..41 at those 10 steps)
+        pos = {0: 840, **{i: 10 for i in range(1, 41)}}
+        acc = sum(pos.values())
+        label, heads, vals = per_step("draft-mtp,ngram-mod", 1, pos, 1000, acc)
+        self.assertEqual((label, heads), ("Per step", ["1", "n-gram", "tkn/run", "tokens acpt"]))
+        self.assertEqual(vals, ["84%", "1%", "41", "1.24"])
+        self.assertEqual(step_table(heads, vals),
+                         ("1     n-gram | tkn/run   tokens acpt", "84%       1% | 41           1.24"))
+        _, heads, vals = per_step("draft-mtp", 2, {0: 790, 1: 450}, 1000, 1240)
+        self.assertEqual((heads, vals), (["1", "2", "tokens acpt"], ["79%", "45%", "1.24"]))
+        label, heads, vals = per_step("ngram-mod", 1, {0: 14, **{i: 14 for i in range(1, 28)}}, 20, 392)
+        self.assertEqual((label, heads, vals), ("Per draft", ["n-gram", "tkn/run", "tokens acpt"], ["70%", "28", "19.6"]))
+        m = {"spec_decode_num_draft_tokens_total": 1700, "spec_decode_num_accepted_tokens_total": acc,
+             "spec_decode_num_drafts_total": 1000}
+        d = ServerData(up=True, slots=True, metrics=m, accepted_by_pos=pos,
+                       cmd="llama-server --spec-type draft-mtp,ngram-mod --spec-draft-n-max 1")
         body = text(card_speed(view(detail="full"), d).lines)
-        self.assertEqual(table_row(body, "Position"), ["Position", "1", "8", "16", "32", "64", "96"])
-        self.assertNotIn("Guess ", body)
+        self.assertRegex(body, r"Speculation +MTP \+ n-gram, 1 guess +Guesses ACPT 73%")
+        self.assertIn("Per step      1     n-gram | tkn/run   tokens acpt", body)
+        self.assertRegex(body, r"Totals +read +reused +written")
+        self.assertNotIn("Largest context", body)
+        self.assertNotIn("Position", body)
+        quiet = text(card_speed(view(detail="full"), ServerData(up=True, slots=True, metrics={},
+                                                               cmd="llama-server --spec-type ngram-mod")).lines)
+        self.assertIn("no steps yet", quiet)
+        off = text(card_speed(view(detail="full"), ServerData(up=True, slots=True, metrics={})).lines)
+        self.assertNotIn("Per step", off)
+        self.assertNotIn("Guesses ACPT", off)
 
     def test_averages_need_time_behind_them(self) -> None:
         """One 1-token reply measures ~1 µs of writing: no 1,000,000 tok/s average, nothing until 0.5 s."""
