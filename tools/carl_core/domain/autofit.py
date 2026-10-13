@@ -15,8 +15,8 @@ Within the goal's family the passes are, in order, on every Mac (user, 2026-10-0
 48K floor"; the first pass any candidate meets wins, the best rank within it):
   2 x 96K, 2 x 64K, 2 x 48K (the main session + a coder subagent), then 1 x 96K, 1 x 64K, 1 x 48K
 Nothing below 48K. A model whose catalogue window is smaller (Saluki: 48K, sized for 16 GB Macs) runs each pass
-at its own window: its full window counts as the first pass (user, 2026-10-11: Saluki is the hard code pick on a
-16 GB Mac, against the 12B's 2 x 96K). In each pass a model with MTP that fits only without it drops MTP (n-gram stays)
+at its own window: its full window counts as the first pass. The hard code pick on a 16 GB Mac is the Gemma 4 12B
+(user, 2026-10-13: "12b is clearly the better pick for default"; Saluki's rank is below it). In each pass a model with MTP that fits only without it drops MTP (n-gram stays)
 before Auto fit drops a slot or the window, and says so.
 The memory allowed is the smaller of the GPU limit and RAM minus the reserve for macOS and
 apps (more with the VM up), so a pick leaves the Mac usable. Pure: shapes, sizes and the

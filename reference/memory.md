@@ -47,8 +47,8 @@ What a start of each model gets on a 24 GB Mac (16.0 GiB), with Auto fit's order
 
 **16 GB Macs** (~10.7 GiB GPU memory limit, estimate; a model can use 10.0 GiB, because CARL keeps 6 GiB free):
 - Auto fit chooses `gemma-4-e4b` (4.6 GB) for the everyday goal: 2 × 96K with MTP need 8.3 GiB with the window cache.
-- Auto fit chooses `saluki-27b` (7.9 GB) for the hard code goal: 2 × 48K, its catalogue window, need 9.98 GiB with n-gram (measured: 9.89 GiB). The file with the MTP head (8.35 GB, not in the catalogue) and MTP needs 12.2 GiB (measured: 12.12 GiB): MTP does not fit.
-- `gemma-4-12b` (7.2 GB) fits 2 × 96K in 8.6 GiB with n-gram and the window cache (with MTP 10.2 GiB: MTP does not fit). Its quality rank (8) is below Saluki's (7).
+- `saluki-27b` (7.9 GB): 2 × 48K, its catalogue window, need 9.98 GiB with n-gram (measured: 9.89 GiB). The file with the MTP head (8.35 GB, not in the catalogue) and MTP needs 12.2 GiB (measured: 12.12 GiB): MTP does not fit.
+- Auto fit chooses `gemma-4-12b` (7.2 GB) for the hard code goal: 2 × 96K in 8.6 GiB with n-gram and the window cache (with MTP 10.2 GiB: MTP does not fit). Its quality rank (8) is above Saluki's (9) since 2026-10-13: on the medium agent tasks both passed every hidden test, and the 12B hands work to the coder as CARL's rule says.
 - `qwen3.8-9b` (5.8 GB) also fits with 2 × 96K (8.2 GiB with n-gram; 11.1 GiB with MTP). Its quality rank (10) is below the Gemma models.
 - No other catalogue model fits under the default limit. The IQ3 27B (10.2 GiB of weights) needs a raised limit (`sudo sysctl iogpu.wired_limit_mb=…`).
 - `./carl.sh fit --ram 16` shows the values.

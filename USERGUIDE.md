@@ -408,7 +408,7 @@ Each model has its own name on the server, and the clients list it under the sam
 | A 24 GB Mac, uncensored 27B with subagents (2 × 96K) | `./carl.sh llama --model orcarouter-27b-iq3` | `orcarouter-27b-iq3` |
 | A 24 GB Mac, uncensored 27B, better quality (1 slot) | `./carl.sh llama --model orcarouter-27b-q3` | `orcarouter-27b-q3` |
 | **A 16 GB Mac**, fast (Auto fit's everyday choice there) | `./carl.sh llama --model gemma-4-e4b` | `gemma-4-e4b` |
-| **A 16 GB Mac**, a 27B with a coder subagent, slower (Auto fit's hard code choice there; 2 × 48K) | `./carl.sh llama --model saluki-27b` | `saluki-27b` |
+| **A 16 GB Mac**, a 2-bit 27B with a coder subagent (2 × 48K; it writes the code itself more often than it hands it off) | `./carl.sh llama --model saluki-27b` | `saluki-27b` |
 | **A 16 GB Mac**, the dense 12B (2 × 96K) | `./carl.sh llama --model gemma-4-12b` | `gemma-4-12b` |
 | 3–4 subagents at the same time on a small model | `./carl.sh llama --model qwen3.8-9b` | `qwen3.8-9b` |
 | Google's larger Gemma 4 ([Gemma 4](#gemma-4)) | `./carl.sh llama --model gemma-4-26b-a4b` (or `gemma-4-31b`) | the same name |
@@ -443,7 +443,7 @@ The catalogue has four Gemma 4 models from Google. Each one is Google's QAT buil
 | `gemma-4-26b-a4b` | 14.6 GB | The MoE (3.8B active), for fast everyday coding. 2 × 96K with the full cache fits a 36 GB Mac. On a 32 GB Mac it gets 2 slots with the window cache. |
 | `gemma-4-31b` | 18.0 GB | The dense 31B, for hard code when you can wait. It runs with the window cache on 32 and 36 GB Macs. |
 
-- **Ranks 6–9**, below the Qwen 27B and 35B-A3B builds: Qwen is better at agent coding in the published benchmarks. On 16 GB Macs Auto fit chooses the E4B (everyday); for hard code it chooses `saluki-27b` (a 2-bit 27B, 2 × 48K).
+- **Ranks 6–9**, below the Qwen 27B and 35B-A3B builds: Qwen is better at agent coding in the published benchmarks. On 16 GB Macs Auto fit chooses the E4B (everyday); for hard code it chooses `gemma-4-12b` (2 × 96K, the window cache). `saluki-27b` (a 2-bit 27B, 2 × 48K) is the choice by hand.
 - **Sliding window.** Most Gemma layers look only at the last 1,024 tokens (the E4B: 512).
   - With the **full cache**, those layers keep every token. CARL can restore saved sessions and prompts, but the cache uses much more memory.
   - With the **window cache**, they keep only the last window. It uses less memory, but CARL cannot restore saved sessions and prompts.
@@ -1779,7 +1779,7 @@ Auto fit chooses the best **stock** model that fits this Mac, with its slots and
 
 | RAM | everyday | hard code |
 |---|---|---|
-| 16 GB | `gemma-4-e4b` (no MoE build fits; the E4B is the fast small dense build) | `saluki-27b` (2 × 48K, n-gram) |
+| 16 GB | `gemma-4-e4b` (no MoE build fits; the E4B is the fast small dense build) | `gemma-4-12b` (2 × 96K, n-gram, the window cache) |
 | 24 GB | `qwen3.6-35b-a3b-iq3` (n-gram) | `qwen3.8-27b-iq3` (n-gram) |
 | 32 GB | `qwen3.6-35b-a3b` (n-gram: with MTP it needs 25.1 GiB) | `qwen3.8-27b` |
 | 36 GB and more | `qwen3.6-35b-a3b` | `qwen3.8-27b` |
