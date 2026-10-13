@@ -88,3 +88,10 @@ half-way through its next tool call while streaming, rebuilds the cut call in th
 streamed partial arguments, and checks that the same call comes back. Measured on llama.cpp 0.6.0 with the
 Qwen3.6-35B-A3B IQ3: the text continues exactly; a cut tool call (also a long write, and real 43-61K agent requests)
 comes back as the same call; a streamed continuation sends the part it was given again first.
+
+`hold_server.py` and `hold_test.py`: do the clients wait for a reply that goes silent while CARL holds it (a
+compaction mid-reply)? The stand-in server (no model) streams "Part one.", holds the stream for N seconds, silent or
+with an SSE `: keep-alive` comment every 10 s, then sends "Part two."; the test runs a harness HOME's real OpenCode and
+Pi against it (`--home HARNESS_HOME --holds 130,330,630`). Measured (OpenCode 1.19.0, Pi 1.1.0): OpenCode waits through
+a silent 630 s; Pi drops a stream silent for ~300 s and sends the request again; with the keep-alives both wait the
+whole 630 s.
