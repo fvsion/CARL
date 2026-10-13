@@ -3,6 +3,18 @@
 All notable changes to CARL. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Dates are local dates on the development Mac (M3 Pro, 36 GB).
 
+## 1.20.8 - 2026-10-13
+
+Phase 23.5.3.1: the Live tab's speed card, cleaned up.
+
+### Changed
+- **Speculation reads as it works.** The Position row (positions 1, 16, 32, 64, mostly 0% with MTP + n-gram) is gone.
+  In its place a **Per step** table: one column per MTP guess (the share of the steps that kept it), then **n-gram |
+  tkn/run** (the share of the steps that kept more than MTP's guesses, which only an n-gram run can, and the tokens
+  such a step kept), then **tokens acpt** (the tokens accepted a step). With n-gram alone it is **Per draft**.
+- **Guesses ACPT** (was Guesses OK; the Requests tab's column too) sits at the right of the Speculation line; the totals are two rows; Largest
+  context is no longer on this card.
+
 ## 1.20.7 - 2026-10-13
 
 The Phase 23.4.2 addendum: the Gemma 4 12B is the hard code choice on 16 GB Macs.
