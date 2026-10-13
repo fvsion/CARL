@@ -232,10 +232,14 @@ FROM_TEXT = {"slot": "its slot", "ram": "the RAM cache", "window": "read (window
              "start": "a longer session's file", "read": "read in full"}
 
 
+SUB_SAVE_TOKENS = 32768        # carl-cache.js: a subagent's session is saved from this size (1.20.9)
+
+
 def slot_column(events: Sequence[Event], slot: int, model: str, names: Mapping[str, str],
-                now: Optional[float] = None) -> Optional[Tuple[str, str, str]]:
+                now: Optional[float] = None, tokens: int = 0) -> Optional[Tuple[str, str, str]]:
     """The SLOTS card's Cache column for the session in a slot: (from, saved, session), from the latest placement
-    on that slot (of that model, when it is known); None when there is none."""
+    on that slot (of that model, when it is known); None when there is none. tokens: the slot's now (a subagent's
+    session is saved only from SUB_SAVE_TOKENS; Pi's, marked once, never)."""
     now = time.time() if now is None else now
     place = next((e for e in reversed(events) if e["e"] == "place" and e.get("slot") == slot
                   and (not model or not e.get("model") or e.get("model") == model)), None)
@@ -256,6 +260,7 @@ def slot_column(events: Sequence[Event], slot: int, model: str, names: Mapping[s
     if save:
         saved = f"{big(int(save.get('tokens', 0)))}, {duration(max(now - float(save['t']), 0))} ago"   # type: ignore[call-overload,arg-type]
     else:
-        saved = "no (a subagent)" if place.get("sub") else "not yet"
+        saved = ("no (a subagent)" if place.get("once") else "no (under 32K)"
+                 if place.get("sub") and tokens < SUB_SAVE_TOKENS else "not yet")
     name = names.get(session) or (session[:12] + "…" if len(session) > 13 else session)
     return frm, saved, name

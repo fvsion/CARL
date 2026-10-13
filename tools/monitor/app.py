@@ -181,6 +181,7 @@ class App:
     def cache_slots(self, d: ServerData) -> Dict[int, Tuple[str, str, str]]:
         """The SLOTS card's Cache column: for each busy slot, what the cache did for the session in it."""
         busy = [x.id for x in d.slot_list if x.busy]
+        size = {x.id: x.prompt for x in d.slot_list}
         if not busy:
             return {}
         events = self.cache_events()
@@ -189,7 +190,7 @@ class App:
             self._slot_names = (time.time(), ids, sessionnames.names(self.opts.home, ids))
         out = {}
         for s in busy:
-            col = cachestats.slot_column(events, s, d.alias or "", self._slot_names[2])
+            col = cachestats.slot_column(events, s, d.alias or "", self._slot_names[2], tokens=size.get(s) or 0)
             if col:
                 out[s] = col
         return out

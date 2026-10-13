@@ -1008,7 +1008,8 @@ export class CarlCache {
         const from = how.startsWith("its own") ? "slot" : how === "the RAM cache's" ? "ram" : how.startsWith("pinned") ? "window"
           : filled.from ?? "read";
         const history = arr(out.messages).filter((x) => obj(x).role === "user").length >= 2;
-        this.event({ e: "place", model, slot, session: meta.session, agent: meta.agent, sub: Boolean(meta.sub), from,
+        this.event({ e: "place", model, slot, session: meta.session, agent: meta.agent, sub: Boolean(meta.sub),
+                     ...(meta.once ? { once: true } : {}), from,
                      tokens: filled.tokens ?? 0, history });
         this.sessions.set(id, { ...(known ?? {}), slot, epoch: m.epoch, model, router: srv.router, payload: out,
                                 at: Date.now(), sub: Boolean(meta.sub), once: Boolean(meta.once), base, fresh: fresh || Boolean(known?.fresh) });

@@ -133,7 +133,11 @@ class TableTest(unittest.TestCase):
         names = {"s3": "Fix the date test"}
         self.assertEqual(cs.slot_column(self.EVENTS, 0, "", names, NOW), ("its slot", "51K, 3 min ago",
                                                                           "Fix the date test"))
-        self.assertEqual(cs.slot_column(self.EVENTS, 1, "", names, NOW), ("coder prompt, 9.9K", "no (a subagent)", "s2"))
+        self.assertEqual(cs.slot_column(self.EVENTS, 1, "", names, NOW), ("coder prompt, 9.9K", "no (under 32K)", "s2"))
+        # 1.20.9: a coder from 32K is saved when its slot is needed; Pi's subagents (once) never
+        self.assertEqual(cs.slot_column(self.EVENTS, 1, "", names, NOW, tokens=37000)[1], "not yet")
+        once = [dict(e, once=True) for e in self.EVENTS]
+        self.assertEqual(cs.slot_column(once, 1, "", names, NOW, tokens=37000)[1], "no (a subagent)")
         self.assertIsNone(cs.slot_column(self.EVENTS, 2, "", names, NOW))
         ev = [{"e": "place", "t": NOW, "slot": 0, "session": "ses_abcdefghijklmnop", "from": "read", "model": "m"}]
         self.assertEqual(cs.slot_column(ev, 0, "m", {}, NOW), ("read (a new session)", "not yet", "ses_abcdefgh…"))
