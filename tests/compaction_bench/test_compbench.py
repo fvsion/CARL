@@ -41,6 +41,17 @@ class TranscriptTest(unittest.TestCase):
         self.assertIn("textstats/stats.py", cb.all_paths(t))
         self.assertEqual(cb.call_target(cb.tool_calls(t[4])[0]), "python3")
         self.assertEqual(cb.norm_path("./textstats/stats.py"), "textstats/stats.py")
+        self.assertEqual(cb.norm_path("/Users/u/cb-work/projects/opencode-pycli/pycli-iyew2b0/notes/notes/store.py"),
+                         "notes/store.py")                                # collect's copy of the project
+
+    def test_an_error_is_a_commands_not_a_file_reads(self) -> None:
+        t = transcript() + [
+            {"role": "assistant", "content": "", "tool_calls": [call("5", "read", filePath="/w/pylib/textstats/cli.py")]},
+            {"role": "tool", "tool_call_id": "5", "content": "    raise ValueError('no such file')"}]
+        self.assertEqual(cb.last_error(t), "E   ZeroDivisionError: division by zero")
+        out = cb.mask(t, keep_calls=0, keep_share=0.0)
+        self.assertIn("ZeroDivisionError", out[5]["content"])             # the command's error stays
+        self.assertTrue(out[11]["content"].startswith("[cleared"))        # the read that shows a raise does not
 
 
 class MaskTest(unittest.TestCase):
@@ -98,12 +109,19 @@ class ScoreTest(unittest.TestCase):
         self.assertEqual((bad["file_recall"], bad["invented"], bad["error"]), (0.0, 1, False))
         self.assertFalse(cb.score_probe(cb.parse_probe("no json here"), t)["parsed"])
 
+    def test_the_error_named_by_its_test_or_line(self) -> None:
+        truth = "FAILED tests/test_store.py::StoreTest::test_mark_done - AssertionError: False..."
+        self.assertTrue(cb.error_recalled("test_mark_done failed: mark_done returned False", truth))
+        self.assertFalse(cb.error_recalled("a ZeroDivisionError", truth))
+        self.assertTrue(cb.error_recalled("the assert at tests/test_longest.py:8", "tests/test_longest.py:8: AssertionError"))
+        self.assertTrue(cb.error_recalled("", ""))
+
     def test_report(self) -> None:
         row = {"method": "none", "next": {"tool": True, "target": False},
                "probe": {"file_recall": 1.0, "file_precision": 0.5, "invented": 1, "error": True},
                "prompt_n": 30000, "read_ms": 60000}
         table = cb.report([row, dict(row, method="mask:4:0.3")])
-        self.assertEqual(table[1], ["none", "1", "100%", "0%", "1.00", "0.50", "1.0", "100%", "30,000", "60.0"])
+        self.assertEqual(table[1], ["none", "1", "100%", "0%", "1.00", "0.50", "1.0", "100%", "30,000", "30,000", "60.0"])
         self.assertEqual(len(table), 3)
 
 

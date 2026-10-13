@@ -9,14 +9,14 @@ B="python3 tools/compaction-bench/compbench.py"
 $B prepare --home ~/bench-compact --models-dir ~/models/gguf             # OpenCode and Pi, the coder off
 $B collect --home ~/bench-compact --out ~/compact-runs --models-dir ~/models/gguf
 $B checkpoints ~/compact-runs
-$B score --home ~/bench-compact --out ~/compact-runs --methods none,mask:4:0.3,mask:8:0.3 --models-dir ~/models/gguf
+$B score ~/compact-runs --home ~/bench-compact --methods none,mask:4:0.3,mask:8:0.3 --models-dir ~/models/gguf
 $B report ~/compact-runs --md
 ```
 
 - **prepare** makes a harness HOME (never yours; agent-bench's rules) with the tested OpenCode and Pi and the coder
   off: one main session does the work, so its context grows.
 - **collect** runs one session per client and script. A script is a series of the agent bench's tasks on one fixture
-  project (`pylib`, `pycli`), each run to its end in the same session. The clients talk to a capture proxy
+  project (`pylib`, `pycli`), each run to its end in the same session, then five follow-ups that read and run much (the whole suite, every changed file again, missing tests, a change list, every module once more): the tasks alone ended at 25-45K tokens. The clients talk to a capture proxy
   (`tools/req-capture-proxy.py`) on the configured port; CARL's server runs 10 ports above it. Each chat request's
   body is saved (`chat-NNN.json`), so a session's requests are its transcript as the model got it, CARL's own
   rewrites included. A finished session has `done.json`; a second run skips it.

@@ -54,18 +54,29 @@ WINDOW = 98304
 AT = (0.4, 0.55, 0.7)
 TASK_LIMIT = 1800.0                 # one task of a script, at most (the A3B: 2-8 min a medium task)
 PROXY_GAP = 10                      # the server runs at the clients' port + this; the proxy at the clients' port
+# Follow-ups after the tasks, as a user asks at the end of a piece of work: they read and run much (the first run,
+# 2026-10-12, ended at 25-45K tokens with the tasks alone: the 55% and 70% points were never reached)
+FOLLOW_UPS = [
+    "Run the whole test suite and show me the full output. Fix anything that fails.",
+    "Read every file you changed in this session again, in full, and check it for mistakes. Fix what you find.",
+    "Add tests for every function you added in this session that has no test yet, then run the whole suite.",
+    "Write CHANGES.md: every change you made in this session, file by file, with the reason for each.",
+    "Show me the full contents of each module in this project once more and tell me which parts are untested.",
+]
 # A script: the agent bench's tasks on one fixture project, one after the other in one session (questions first, as a
-# user does, then changes, a stuck bug and a large task: tool output of every kind)
+# user does, then changes, a stuck bug and a large task: tool output of every kind), then the follow-ups. An item that
+# is not a prompt id is the text itself.
 SCRIPTS: Dict[str, Tuple[str, List[str]]] = {
     "pylib": ("pylib", ["question-review", "small-test", "stuck-zerodiv", "medium-change", "medium-module",
-                        "large-module", "large-cli"]),
+                        "large-module", "stuck-test", "small-newtest", "large-cli", *FOLLOW_UPS]),
     "pycli": ("pycli", ["question-explain", "small-rename", "small-flag", "medium-command", "stuck-keyerror",
-                        "large-feature", "small-gitignore"]),
+                        "question-error", "large-feature", "small-gitignore", *FOLLOW_UPS]),
 }
 PROBE = ("Stop for a moment and answer from what you know so far, without calling any tool. Reply with only a JSON "
          "object: {\"files_changed\": [the paths of every file you created or changed in this session], "
-         "\"last_error\": \"the exact text of the last error you saw, or empty\", \"next_step\": \"what you will do "
-         "next, in one sentence\"}")
+         "\"last_error\": \"the exact text of the last failing test or error message you saw in this session, even if "
+         "you fixed it since; empty only if there was none\", \"next_step\": \"what you will do next, in one sentence\"}. "
+         "Paths relative to the project's root.")
 ERROR_RE = re.compile(r"(Traceback \(most recent call last\)|\w*Error\b|\w*Exception\b|\berror:|\bFAILED\b|"
                       r"\b\d+ failed\b|[Ee]xit code:? [1-9])")
 NAMED_ERROR_RE = re.compile(r"\w+(Error|Exception)\b|\berror:")
@@ -116,9 +127,16 @@ def call_target(call: Mapping[str, Any]) -> str:
     return ""
 
 
+PROJECT_RE = re.compile(r"^.*?/projects/[^/]+/[^/]+/[^/]+/")      # collect's copy: projects/SESSION/FIXTURE-xxxx/ROOT/
+
+
 def norm_path(p: str) -> str:
-    """A path as the probe compares it: from the project's root down (the fixture's absolute folder dropped)."""
+    """A path as the probe compares it: from the project's root down (the absolute folder of collect's copy dropped,
+    else an agent-bench fixture's)."""
     p = p.strip().strip("`'\"")
+    m = PROJECT_RE.match(p if p.startswith("/") else "/" + p)
+    if m:
+        return (p if p.startswith("/") else "/" + p)[m.end():]
     for marker in ("/pylib/", "/pycli/", "/webapp/", "/pyrules/", "/empty/"):
         if marker in p:
             return p.split(marker, 1)[1]
@@ -141,10 +159,21 @@ def files_changed(messages: Sequence[Mapping[str, Any]]) -> List[str]:
     return out
 
 
+COMMAND_TOOLS = {"bash", "shell", "run", "exec", "command", "terminal"}
+
+
+def command_results(messages: Sequence[Mapping[str, Any]]) -> set:
+    """The indexes of the results of commands (a file read that shows `raise ValueError` is not an error)."""
+    names = _call_names(messages)
+    return {i for i, n in names.items() if n.split(" ")[0].lower() in COMMAND_TOOLS}
+
+
 def last_error(messages: Sequence[Mapping[str, Any]]) -> str:
-    """The last line that names an error (else the last that says one), of the last tool result that has one."""
-    for m in reversed(messages):
-        if m.get("role") != "tool":
+    """The last line that names an error (else the last that says one), of the last command result that has one."""
+    commands = command_results(messages)
+    for i in range(len(messages) - 1, -1, -1):
+        m = messages[i]
+        if m.get("role") != "tool" or i not in commands:
             continue
         text = msg_text(m)
         if ERROR_RE.search(text):
@@ -181,7 +210,8 @@ def mask(messages: Sequence[Mapping[str, Any]], keep_calls: int, keep_share: flo
         tail = i
     tools = [i for i, m in enumerate(out) if m.get("role") == "tool"]
     keep = set(tools[-keep_calls:]) if keep_calls > 0 else set()
-    err = next((i for i in reversed(tools) if ERROR_RE.search(msg_text(out[i]))), None)
+    commands = command_results(out)
+    err = next((i for i in reversed(tools) if i in commands and ERROR_RE.search(msg_text(out[i]))), None)
     names = _call_names(out)
     for i in tools:
         if i in keep or i >= tail or i == err:
@@ -291,6 +321,20 @@ def parse_probe(text: str) -> Optional[JsonDict]:
     return doc if isinstance(doc, dict) else None
 
 
+ERROR_KEYS_RE = re.compile(r"\btest_\w+|[\w/.-]+\.py:\d+")
+
+
+def error_recalled(said: str, truth: str) -> bool:
+    """The last error named: the failing test, or the file and line, from the truth's line (a paraphrase of the rest
+    counts); no error and an empty answer agree."""
+    if not truth:
+        return not said.strip()
+    keys = ERROR_KEYS_RE.findall(truth)
+    if keys:
+        return any(k in said for k in keys)
+    return bool(said) and (truth[:60] in said or said[:60] in truth)
+
+
 def score_probe(answer: Optional[Mapping[str, Any]], full: Sequence[Mapping[str, Any]]) -> JsonDict:
     """The probe's answer against code's reading of the whole transcript up to the point."""
     want = files_changed(full)
@@ -306,7 +350,7 @@ def score_probe(answer: Optional[Mapping[str, Any]], full: Sequence[Mapping[str,
             "file_recall": len(set(hit)) / len(want) if want else (1.0 if not got else 0.0),
             "file_precision": len(set(hit)) / len(set(got)) if got else (1.0 if not want else 0.0),
             "invented": len(set(invented)),
-            "error": (not err and not said.strip()) or bool(err and said and (err[:60] in said or said[:60] in err))}
+            "error": error_recalled(said, err)}
 
 
 # ------------------------------------------------------------------------------------------------------- the server
@@ -407,18 +451,18 @@ def cmd_collect(a: argparse.Namespace) -> int:
                     for pid in ids:
                         t0 = time.time()
                         try:
-                            reply = drv.say(sid, prompts[pid].text)
+                            reply = drv.say(sid, prompts[pid].text if pid in prompts else pid)
                         except Exception as e:  # noqa: BLE001  (one task's failure is data; the session goes on)
                             reply = f"error: {e}"
-                        tasks.append({"task": pid, "seconds": round(time.time() - t0, 1), "reply": reply[:200]})
-                        say(f"{name}: {pid} in {time.time() - t0:.0f} s")
+                        tasks.append({"task": pid[:60], "seconds": round(time.time() - t0, 1), "reply": reply[:200]})
+                        say(f"{name}: {pid[:40]} in {time.time() - t0:.0f} s")
                 finally:
                     drv.stop()
                     proxy.terminate()
                     proxy.wait(10)
                 with open(os.path.join(folder, "done.json"), "w", encoding="utf-8") as f:
                     json.dump({"client": client, "script": script, "fixture": fixture, "tasks": tasks,
-                               "model": a.model}, f, indent=1)
+                               "model": a.model, "cwd": cwd}, f, indent=1)
     finally:
         srv.stop()
     return 0
@@ -472,11 +516,14 @@ def cmd_score(a: argparse.Namespace) -> int:
                     continue
                 short = method_fn(spec)(full)
                 nxt = ask(base, key, req, short, 512)
-                probe = ask(base, key, req, short + [{"role": "user", "content": PROBE}], 400)
+                probe = ask(base, key, req, short + [{"role": "user", "content": PROBE}], 800)
                 row = {"session": p["session"], "index": p["index"], "fraction": p["fraction"], "method": spec,
-                       "tokens_full": p["tokens"], "prompt_n": nxt["prompt_n"], "read_ms": nxt["prompt_ms"],
+                       "tokens_full": p["tokens"], "prompt_n": nxt["prompt_n"], "cache_n": nxt["cache_n"],
+                       "read_ms": nxt["prompt_ms"],
                        "next": score_next(nxt["message"], p["truth"]),
                        "probe": score_probe(parse_probe(msg_text(probe["message"])), full),
+                       "probe_answer": msg_text(probe["message"])[:2000],
+                       "next_got": tool_calls(nxt["message"])[:1] or msg_text(nxt["message"])[:300],
                        "seconds": nxt["seconds"] + probe["seconds"]}
                 with open(results, "a", encoding="utf-8") as f:
                     f.write(json.dumps(row) + "\n")
@@ -492,7 +539,7 @@ def report(rows: Iterable[Mapping[str, Any]]) -> List[List[str]]:
     for r in rows:
         by.setdefault(str(r["method"]), []).append(r)
     head = ["method", "points", "next tool", "next target", "files recall", "files precision", "invented",
-            "last error", "prompt tokens", "read s"]
+            "last error", "prompt tokens", "tokens read", "read s"]
     out = [head]
     mean = (lambda xs: sum(xs) / len(xs) if xs else 0.0)
     for name, rs in by.items():
@@ -502,6 +549,7 @@ def report(rows: Iterable[Mapping[str, Any]]) -> List[List[str]]:
                     f"{mean([r['probe']['file_precision'] for r in rs]):.2f}",
                     f"{mean([r['probe']['invented'] for r in rs]):.1f}",
                     f"{mean([r['probe']['error'] for r in rs]):.0%}",
+                    f"{mean([(r.get('prompt_n') or 0) + (r.get('cache_n') or 0) for r in rs]):,.0f}",
                     f"{mean([r.get('prompt_n') or 0 for r in rs]):,.0f}",
                     f"{mean([(r.get('read_ms') or 0) / 1000 for r in rs]):.1f}"])
     return out
