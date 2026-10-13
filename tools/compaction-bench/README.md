@@ -50,7 +50,17 @@ raw working tail (S of the window, at least the newest K results, never a call w
 gives the pruned results placeholders in STE100, built by code by kind (a read: its lines, and whether the file
 changed after; a test: the failed tests and the counts; a command with side effects: "Do not do this command
 again."; an edit: done or failed; a listing: the count and the first 10), and keeps results under 80 tokens and
-listings under 300. The score's `--window` sets the window. Each row also says whether the next step calls again what
-was pruned (repeats). CARL's own summary is added as a method when it is built.
+listings under 300. `+args` prunes old edit and write arguments (an edit's old and new
+text, a write's content, as "[pruned: N lines]"; the call, its path and the argument names stay), with the results of
+their place in the order; never in the tail, never the edits after a kept view of a file the turn changes.
+`+think=empty` or `+think=last` prunes earlier thinking: the old part's first (Qwen's template drops it by default; CARL
+keeps it for the cache), the current turn's middle only with `+thinkmid`, never the tail; `last` keeps
+"[pruned: N tokens]" and the block's last whole sentences up to ~50 tokens, else (a list) its last ~100 tokens.
+The score's `--window` sets the window. Each row also says whether the next step calls again what was pruned
+(repeats) and whether a call copies a stub (imitated). Two methods that make the same request at a point are asked
+once. **sample** writes the points where two methods chose differently side by side (the real next step, each
+method's, the thinking the second one changed), for a person to read. Sizes: a message's text, thinking and calls at
+3.35 characters a token, the tools at 4.0 (measured against the A3B's tokenizer). CARL's own summary is added as a
+method when it is built.
 
 Tests: `python3 -m unittest discover -s tests/compaction_bench -t tests/compaction_bench`.

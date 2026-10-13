@@ -324,6 +324,54 @@ class ArgsTest(unittest.TestCase):
         self.assertFalse(cb.imitated({"tool_calls": [call("9", "edit", filePath="a", oldString="x = 1")]}))
 
 
+class ThinkTest(unittest.TestCase):
+    def test_the_remnant(self) -> None:
+        """2026-10-13 (user): "the last 50 tokens when it is a whole sentence the last 100 when it's a list of other
+        format"."""
+        prose = "First I looked at the store. " * 20 + "The KeyError comes from a missing due key. I will add a default."
+        out = cb.think_last(prose)
+        self.assertTrue(out.startswith(f"[pruned: {int(len(prose) / cb.CHARS_PER_TOKEN)} tokens] "))
+        self.assertTrue(out.endswith("The KeyError comes from a missing due key. I will add a default."))
+        self.assertLessEqual(len(out.split("] ", 1)[1]), cb.THINK_SENTENCES * cb.CHARS_PER_TOKEN)
+        lst = "Plan:\n" + "\n".join(f"- step {n}: check module {n}" for n in range(60))
+        tail = cb.think_last(lst).split("] ", 1)[1]
+        self.assertTrue(tail.startswith("- step ") and tail.endswith("check module 59"))
+        self.assertLessEqual(len(tail), cb.THINK_OTHER * cb.CHARS_PER_TOKEN)
+        self.assertEqual(cb.est_tokens({"role": "assistant", "content": "", "reasoning_content": "x" * 335}), 100)
+
+    def test_old_thinking_first_the_current_turn_kept_never_the_tail(self) -> None:
+        t = long_session()
+        why = "I compare the two files. " * 40 + "So I will read stats.py next."
+        for i in (2, 4, 16, 18):                     # two in the old part, two in the current turn
+            t[i] = dict(t[i], reasoning_content=why)
+        window = int(sum(cb.est_tokens(m) for m in t) / 0.405)         # just over the line: the thinking alone drains it
+        out = cb.event(t, 0, window, 1, 0.05, True, True, "last")
+        self.assertTrue(out[2]["reasoning_content"].startswith("[pruned: "))
+        self.assertTrue(out[2]["reasoning_content"].endswith("So I will read stats.py next."))
+        self.assertEqual(out[3]["content"], t[3]["content"])          # the old results wait: the thinking went first
+        self.assertEqual(out[16]["reasoning_content"], why)          # the current turn's: kept (the baseline)
+        empty = cb.event(t, 0, int(sum(cb.est_tokens(m) for m in t) / 0.9), 1, 0.05, True, True, "empty", True)
+        self.assertEqual(empty[2]["reasoning_content"], "")
+        self.assertEqual(empty[16]["reasoning_content"], "")         # +thinkmid: the current turn's middle too
+        self.assertEqual(empty[18]["reasoning_content"], why)        # the tail: never
+        self.assertEqual(cb.method_fn("mask:1:0.05+turn+ph=facts+args+think=last", window)(t), out)
+        for bad in ("mask:8:0.2+turn+thinkmid", "mask:8:0.2+turn+think=last+think=empty", "mask:8:0.2+think=last"):
+            with self.assertRaises(SystemExit):
+                cb.method_fn(bad)
+        row = lambda m, ok: {"session": "s", "index": 0, "fraction": 0.62, "method": m,       # noqa: E731
+                             "next": {"target": ok, "want": "read textstats/stats.py"}, "next_got": []}
+        page = "\n".join(cb.sample([row("mask:1:0.05+turn+ph=facts+args", True),
+                                    row("mask:1:0.05+turn+ph=facts+args+think=last", False)],
+                                   {"s": [{"messages": t}]}, "mask:1:0.05+turn+ph=facts+args",
+                                   "mask:1:0.05+turn+ph=facts+args+think=last", window=window))
+        self.assertIn("the real next step: read textstats/stats.py", page)
+        self.assertIn("kept: [pruned: ", page)
+        inline = {"role": "assistant", "content": "<think>\n" + why + "\n</think>\nDone."}
+        self.assertEqual(cb.thinking(inline).strip(), why.strip())
+        cb._set_thinking(inline, "")
+        self.assertEqual(inline["content"], "\nDone.")
+
+
 class DriverTest(unittest.TestCase):
     def test_pi_starts_at_the_thinking_level(self) -> None:
         """2026-10-13: the matrix's Pi driver starts Pi with thinking off; the bench's starts it at the level asked

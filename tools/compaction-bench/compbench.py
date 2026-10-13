@@ -31,6 +31,7 @@ of the context, and the latest error: the two-way guard of the user's decision, 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -49,7 +50,11 @@ sys.path.insert(0, os.path.join(TOOLS, "agent-bench"))
 sys.path.insert(0, TOOLS)
 
 JsonDict = Dict[str, Any]
-CHARS_PER_TOKEN = 3.6
+# Measured against the A3B's tokenizer (2026-10-13, thinking on: the rendered template, /tokenize): a message's text,
+# thinking and call arguments 3.34-3.41 chars a token, the tools 4.0. The first value, 3.6 without the thinking, gave
+# 78.9K for a request of 98.4K.
+CHARS_PER_TOKEN = 3.35
+TOOLS_CHARS_PER_TOKEN = 4.0
 WINDOW = 98304
 AT = (0.4, 0.55, 0.7)
 TASK_LIMIT = 1800.0                 # one task of a script, at most (the A3B: 2-8 min a medium task)
@@ -262,7 +267,9 @@ def all_paths(messages: Sequence[Mapping[str, Any]]) -> set:
 
 # --------------------------------------------------------------------------------------------------------- the methods
 def est_tokens(m: Mapping[str, Any]) -> int:
-    return int(len(msg_text(m) + json.dumps(m.get("tool_calls") or [])) / CHARS_PER_TOKEN)
+    """A message's tokens: its text, its thinking and its calls."""
+    return int(len(msg_text(m) + str(m.get("reasoning_content") or "") + json.dumps(m.get("tool_calls") or []))
+               / CHARS_PER_TOKEN)
 
 
 def mask(messages: Sequence[Mapping[str, Any]], keep_calls: int, keep_share: float) -> List[JsonDict]:
@@ -436,11 +443,61 @@ def _prune_args(m: JsonDict, j: int) -> None:
     m["tool_calls"] = tcs
 
 
+THINK_SENTENCES = 50          # +think=last: the last whole sentences up to ~50 tokens (user, 2026-10-13) ...
+THINK_OTHER = 100             # ... else (a list or another format) the last ~100 tokens
+SENTENCE_END_RE = re.compile(r"[.!?][\"')\]`*]*$")
+
+
+def think_last(text: str) -> str:
+    """A pruned thinking block's remnant (+think=last; user, 2026-10-13: "the last 50 tokens when it is a whole
+    sentence the last 100 when it's a list of other format"): "[pruned: N tokens]" and the block's end, which often
+    holds its decision."""
+    t = text.strip()
+    n = int(len(t) / CHARS_PER_TOKEN)
+    if SENTENCE_END_RE.search(t):
+        room = int(THINK_SENTENCES * CHARS_PER_TOKEN)
+        sents = re.split(r"(?<=[.!?])\s+", t)
+        keep = [sents.pop()]
+        while sents and len(" ".join([sents[-1], *keep])) <= room:
+            keep.insert(0, sents.pop())
+        end = " ".join(keep)
+        if len(end) > room:                          # one long sentence: its end, from a word
+            end = end[-room:].split(" ", 1)[-1]
+    else:
+        room = int(THINK_OTHER * CHARS_PER_TOKEN)
+        end = t[-room:]
+        if len(t) > room:
+            end = end.split("\n", 1)[1] if "\n" in end[:-1] else end.split(" ", 1)[-1]   # from a line, else a word
+    return f"[pruned: {n} tokens] {end.strip()}"
+
+
+def thinking(m: Mapping[str, Any]) -> str:
+    """An assistant message's thinking: reasoning_content, else a <think> block in its text."""
+    r = m.get("reasoning_content")
+    if isinstance(r, str) and r.strip():
+        return r
+    c = m.get("content")
+    if isinstance(c, str) and "</think>" in c:
+        return c.split("</think>", 1)[0].split("<think>")[-1]
+    return ""
+
+
+def _set_thinking(m: JsonDict, new: str) -> None:
+    if isinstance(m.get("reasoning_content"), str) and m["reasoning_content"].strip():
+        m["reasoning_content"] = new
+    else:
+        c = str(m.get("content") or "")
+        m["content"] = (f"<think>\n{new}\n</think>" if new else "") + c.split("</think>", 1)[1]
+
+
 def event(messages: Sequence[Mapping[str, Any]], extra: int, window: int, keep_calls: int, tail_share: float,
-          facts: bool, args: bool = False) -> List[JsonDict]:
+          facts: bool, args: bool = False, think: str = "", think_mid: bool = False) -> List[JsonDict]:
     """The compaction event's prune (stage 1) on a request: its shape and the drain line (above). extra: the tokens
     outside the messages (the tools). facts: the STE100 placeholders and their thresholds (#2), else the mask's line.
-    args: old edit and write arguments pruned too (#4), with the results of their place in the order."""
+    args: old edit and write arguments pruned too (#4), with the results of their place in the order. think: earlier
+    thinking pruned (empty: removed; last: think_last()), the old part's first (before its results; Qwen's template
+    drops it by default), the current turn's middle only with think_mid (else kept, the baseline), never the tail; no
+    size floor (user, 2026-10-13: "the 80 limit shouldn't apply here")."""
     out = [dict(m) for m in messages]
     sizes = [est_tokens(m) for m in out]
     total = sum(sizes) + extra
@@ -497,10 +554,28 @@ def event(messages: Sequence[Mapping[str, Any]], extra: int, window: int, keep_c
                     (old if i < cur else mid).append((i, j))
         old.sort()
         mid.sort()
+    first: List[Tuple[int, int]] = []
+    if think:
+        for i, m in enumerate(out[:start]):
+            if m.get("role") == "assistant" and thinking(m).strip():
+                if i < cur:
+                    first.append((i, -2))
+                elif think_mid:
+                    mid.append((i, -2))
+        mid.sort()
     names = _call_names(out)
-    for i, j in old + mid + [(b, -1) for b in beyond]:
+    for i, j in first + old + mid + [(b, -1) for b in beyond]:
         if total <= DRAIN * window:
             break
+        if j == -2:                                  # a thinking block
+            new_think = "" if think == "empty" else think_last(thinking(out[i]))
+            if len(new_think) >= len(thinking(out[i])):
+                continue
+            _set_thinking(out[i], new_think)
+            new_size = est_tokens(out[i])
+            total -= sizes[i] - new_size
+            sizes[i] = new_size
+            continue
         if j >= 0:                                   # an edit's or a write's arguments (#4)
             _prune_args(out[i], j)
             new_size = est_tokens(out[i])
@@ -530,17 +605,21 @@ Method = Callable[..., List[JsonDict]]
 def method_fn(spec: str, window: int = WINDOW) -> Method:
     """A method by name: none; mask:K:S (the first guard); mask:K:S+turn (the event's shape, S = the working tail's
     share of the window, K its floor; the drain line); +ph=facts (the STE100 placeholders); +args (old edit and write
-    arguments). The function takes the messages and the tokens outside them (the tools)."""
+    arguments); +think=empty or +think=last (earlier thinking), +thinkmid (the current turn's middle's too). The
+    function takes the messages and the tokens outside them (the tools)."""
     base, *mods = spec.split("+")
     parts = base.split(":")
     if parts[0] == "none" and not mods:
         return lambda ms, extra=0: [dict(m) for m in ms]
-    if parts[0] == "mask" and len(parts) == 3 and set(mods) <= {"turn", "ph=facts", "args"} and (
-            not set(mods) - {"turn"} or "turn" in mods):
+    known = {"turn", "ph=facts", "args", "think=empty", "think=last", "thinkmid"}
+    if parts[0] == "mask" and len(parts) == 3 and set(mods) <= known and (not set(mods) - {"turn"} or "turn" in mods) \
+            and not {"think=empty", "think=last"} <= set(mods) and ("thinkmid" not in mods or any(
+                x.startswith("think=") for x in mods)):
         k, s = int(parts[1]), float(parts[2])
         if "turn" in mods:
-            facts, pargs = "ph=facts" in mods, "args" in mods
-            return lambda ms, extra=0: event(ms, extra, window, k, s, facts, pargs)
+            facts, pargs, mid = "ph=facts" in mods, "args" in mods, "thinkmid" in mods
+            think = next((x.split("=", 1)[1] for x in mods if x.startswith("think=")), "")
+            return lambda ms, extra=0: event(ms, extra, window, k, s, facts, pargs, think, mid)
         return lambda ms, extra=0: mask(ms, k, s)
     raise SystemExit(f"error: no such method {spec!r} (none, mask:K:S, mask:K:S+turn, mask:K:S+turn+ph=facts)")
 
@@ -798,9 +877,10 @@ def _drivers(client: str, home: str, cwd: str, env: Mapping[str, str], model: st
 
 
 def body_tokens(body: Mapping[str, Any]) -> int:
-    """A request's size: its messages and its tools (chars / 3.6; matched the server's count, 39K against 40K)."""
+    """A request's size: its messages and its tools (est_tokens; the tools at TOOLS_CHARS_PER_TOKEN). 98.5K for a
+    request the server counted 98.4K."""
     return sum(est_tokens(m) for m in body.get("messages") or []) + int(len(json.dumps(body.get("tools") or []))
-                                                                         / CHARS_PER_TOKEN)
+                                                                         / TOOLS_CHARS_PER_TOKEN)
 
 
 def session_tokens(folder: str) -> int:
@@ -962,6 +1042,7 @@ def cmd_score(a: argparse.Namespace) -> int:
                 for r in map(json.loads, f):
                     if r["method"] == "none" and isinstance(r.get("reply"), dict):
                         refs[(r["session"], r["index"])] = r["reply"]
+        asked: Dict[Tuple[str, int, str], Tuple[JsonDict, JsonDict]] = {}
         methods = cm.csv(a.methods)
         if "none" in methods:                        # none first: its reply is the reference of the others
             methods = ["none"] + [m for m in methods if m != "none"]
@@ -972,8 +1053,15 @@ def cmd_score(a: argparse.Namespace) -> int:
                 if (p["session"], p["index"], spec) in done:
                     continue
                 short = method_fn(spec, a.window)(full, body_tokens({"tools": req.get("tools")}))
-                nxt = ask(base, key, req, short, a.answer_tokens)
-                probe = ask(base, key, req, short + [{"role": "user", "content": PROBE}], a.answer_tokens)
+                # the same request as another method's at this point (under the drain line, or nothing of that kind to
+                # prune): the same answers at temperature 0, so asked once
+                same = hashlib.sha256(json.dumps(short, sort_keys=True).encode()).hexdigest()
+                if (p["session"], p["index"], same) in asked:
+                    nxt, probe = asked[(p["session"], p["index"], same)]
+                else:
+                    nxt = ask(base, key, req, short, a.answer_tokens)
+                    probe = ask(base, key, req, short + [{"role": "user", "content": PROBE}], a.answer_tokens)
+                    asked[(p["session"], p["index"], same)] = (nxt, probe)
                 reply = {"role": "assistant", "content": msg_text(nxt["message"])[:300],
                          "tool_calls": nxt["message"].get("tool_calls") or []}
                 if spec == "none":
@@ -1078,6 +1166,49 @@ def read_speed(rows: Sequence[Mapping[str, Any]]) -> float:
     return fast[len(fast) // 2] if fast else 0.0
 
 
+def sample(rows: Sequence[Mapping[str, Any]], reqs: Mapping[str, List[JsonDict]], a: str, b: str, n: int = 20,
+           window: int = WINDOW) -> List[str]:
+    """Points where methods a and b chose a different next step, side by side, for a person to read (user,
+    2026-10-13: the thinking prune's rationale is not scored well by code): the true next step, each method's, and the
+    thinking blocks b changed (the end of the original, and what b kept)."""
+    by = {(r["session"], r["index"], r["method"]): r for r in rows}
+    points = sorted({(r["session"], r["index"]) for r in rows if r["method"] == a})
+    out = [f"# {a} against {b}", ""]
+    shown = 0
+    for sess, idx in points:
+        ra, rb = by.get((sess, idx, a)), by.get((sess, idx, b))
+        if not ra or not rb or ra["next"]["target"] == rb["next"]["target"]:
+            continue
+        req = reqs[sess][idx]
+        full = req["messages"]
+        short = method_fn(b, window)(full, body_tokens({"tools": req.get("tools")}))
+        out += [f"## {sess} request {idx} ({ra.get('fraction', 0):.0%})", "",
+                f"- the real next step: {ra['next'].get('want', '')}",
+                f"- {a}: {json.dumps(ra.get('next_got'))[:200]} ({'right' if ra['next']['target'] else 'wrong'})",
+                f"- {b}: {json.dumps(rb.get('next_got'))[:200]} ({'right' if rb['next']['target'] else 'wrong'})", ""]
+        changed = [(i, thinking(full[i]), thinking(short[i])) for i in range(len(full))
+                   if full[i].get("role") == "assistant" and thinking(full[i]) != thinking(short[i])]
+        for i, before, after in changed[-3:]:
+            out += [f"thinking at message {i} ({int(len(before) / CHARS_PER_TOKEN)} tokens), its end:", "",
+                    "> " + before.strip()[-400:].replace("\n", "\n> "), "", "kept: " + (after or "(nothing)"), ""]
+        shown += 1
+        if shown >= n:
+            break
+    return out
+
+
+def cmd_sample(a: argparse.Namespace) -> int:
+    with open(os.path.join(a.out, "scores.jsonl"), encoding="utf-8") as f:
+        rows = [json.loads(x) for x in f]
+    text = "\n".join(sample(rows, sessions(a.out), a.a, a.b, a.n, a.window)) + "\n"
+    if a.md_out:
+        with open(a.md_out, "w", encoding="utf-8") as f:
+            f.write(text)
+    else:
+        print(text)
+    return 0
+
+
 def cmd_report(a: argparse.Namespace) -> int:
     with open(os.path.join(a.out, "scores.jsonl"), encoding="utf-8") as f:
         table = report(map(json.loads, f))
@@ -1124,6 +1255,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     s.add_argument("--answer-tokens", type=int, default=4096,
                    help="the next step's and the probe's limit (thinking needs room; 512 cut a write's path)")
     s.set_defaults(fn=cmd_score)
+    sm = sub.add_parser("sample", help="points where two methods chose differently, side by side, to read")
+    sm.add_argument("out")
+    sm.add_argument("--a", required=True)
+    sm.add_argument("--b", required=True)
+    sm.add_argument("--n", type=int, default=20)
+    sm.add_argument("--window", type=int, default=WINDOW)
+    sm.add_argument("--md-out", default="")
+    sm.set_defaults(fn=cmd_sample)
     r = sub.add_parser("report")
     r.add_argument("out")
     r.add_argument("--md", action="store_true")
