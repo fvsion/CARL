@@ -280,6 +280,27 @@ class Checkpoint:
     truth: JsonDict               # the assistant message the model wrote next with the whole context
 
 
+def truth_after(reqs: Sequence[JsonDict], i: int) -> Optional[JsonDict]:
+    """The assistant message that followed request i (the next request of the session holds it)."""
+    n = len(reqs[i]["messages"])
+    return next((m for m in reqs[i + 1]["messages"][n:] if m.get("role") == "assistant"), None)
+
+
+def points_in_range(session: str, reqs: Sequence[JsonDict], window: int, lo: float, hi: float,
+                    every: int = 1) -> List[Checkpoint]:
+    """Every request whose context fills lo..hi of the window (every Nth), each with its truth: many points from one
+    session (the options research, 2026-10-13: 11 points tell only ~25-point differences apart)."""
+    out: List[Checkpoint] = []
+    for i in range(len(reqs) - 1):
+        size = sum(est_tokens(m) for m in reqs[i]["messages"])
+        if not lo * window <= size <= hi * window:
+            continue
+        truth = truth_after(reqs, i)
+        if truth is not None:
+            out.append(Checkpoint(session, i, round(size / window, 3), size, truth))
+    return out[::max(every, 1)]
+
+
 def checkpoints(session: str, reqs: Sequence[JsonDict], window: int, at: Sequence[float]) -> List[Checkpoint]:
     sizes = [sum(est_tokens(m) for m in r["messages"]) for r in reqs]
     out: List[Checkpoint] = []
@@ -300,14 +321,19 @@ def checkpoints(session: str, reqs: Sequence[JsonDict], window: int, at: Sequenc
 
 # ----------------------------------------------------------------------------------------------------------- scoring
 def score_next(got: Mapping[str, Any], truth: Mapping[str, Any]) -> JsonDict:
-    """The next step against the truth: the same tool, the same target (file, command, pattern)."""
+    """The next step against the truth: the same tool and the same target (file, command, pattern). Parallel calls
+    count as a set: a match when the two sets share a call (the options research: one point's truth was several reads
+    at once, and only the first was compared)."""
     g, t = tool_calls(got), tool_calls(truth)
     if not t:
         return {"tool": not g, "target": not g, "got": "text" if not g else g[0]["name"], "want": "text"}
     if not g:
         return {"tool": False, "target": False, "got": "text", "want": t[0]["name"]}
-    return {"tool": g[0]["name"] == t[0]["name"], "target": call_target(g[0]) == call_target(t[0]),
-            "got": f"{g[0]['name']} {call_target(g[0])}", "want": f"{t[0]['name']} {call_target(t[0])}"}
+    gt = {(c["name"], call_target(c)) for c in g}
+    tt = {(c["name"], call_target(c)) for c in t}
+    return {"tool": bool({n for n, _ in gt} & {n for n, _ in tt}), "target": bool(gt & tt),
+            "got": "; ".join(sorted(f"{n} {x}" for n, x in gt))[:200],
+            "want": "; ".join(sorted(f"{n} {x}" for n, x in tt))[:200]}
 
 
 def parse_probe(text: str) -> Optional[JsonDict]:
@@ -368,9 +394,11 @@ def ask(base: str, key: str, req: Mapping[str, Any], messages: Sequence[Mapping[
                 id_slot=0)
     t0 = time.time()
     r = post(base, key, "/v1/chat/completions", body)
-    msg = ((r.get("choices") or [{}])[0].get("message")) or {}
+    choice = (r.get("choices") or [{}])[0]
+    msg = choice.get("message") or {}
     t = r.get("timings") or {}
-    return {"message": msg, "seconds": round(time.time() - t0, 2), "prompt_n": t.get("prompt_n"),
+    return {"message": msg, "finish": choice.get("finish_reason"), "seconds": round(time.time() - t0, 2),
+            "prompt_n": t.get("prompt_n"),
             "prompt_ms": t.get("prompt_ms"), "cache_n": t.get("cache_n")}
 
 
@@ -406,10 +434,29 @@ def cmd_prepare(a: argparse.Namespace) -> int:
     return 0
 
 
-def _drivers(client: str, home: str, cwd: str, env: Mapping[str, str], model: str):  # type: ignore[no-untyped-def]
+def _drivers(client: str, home: str, cwd: str, env: Mapping[str, str], model: str,  # type: ignore[no-untyped-def]
+             thinking: str = "default"):
+    """The client's driver (cache-matrix's). thinking: default (the model's own, as CARL sets it up: on) or off. Pi
+    takes it from its settings (CARL's default level); OpenCode from the request's variant."""
     import cachematrix as cm
+    from agentbench import clients as cl
     cm.TURN_LIMIT = TASK_LIMIT
-    return cm.OpenCodeDriver(home, cwd, env, model, False, "") if client == "opencode" else cm.PiDriver(home, cwd, env, model, False)
+    if client != "opencode":
+        return cm.PiDriver(home, cwd, env, model, False)
+
+    class OpenCode(cm.OpenCodeDriver):            # the matrix's driver sends thinking off; here it is a choice
+        def say(self, sid: str, text: str) -> str:
+            body: JsonDict = {"parts": [{"type": "text", "text": text}],
+                              "model": {"providerID": cl.PROVIDER, "modelID": self.model}, "agent": "build"}
+            variant = cl.opencode_variant(thinking)
+            if variant:
+                body["variant"] = variant
+            msg = self._call("POST", f"/session/{sid}/message", body) or {}
+            err = (msg.get("info") or {}).get("error")
+            if err:
+                return "error: " + json.dumps(err)[:300]
+            return "".join(str(p.get("text", "")) for p in msg.get("parts") or [] if p.get("type") == "text")[:200]
+    return OpenCode(home, cwd, env, model, False, "")
 
 
 def cmd_collect(a: argparse.Namespace) -> int:
@@ -442,7 +489,7 @@ def cmd_collect(a: argparse.Namespace) -> int:
                                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 fixture, ids = SCRIPTS[script]
                 cwd = fx.make_fresh(fixture, os.path.join(work, "projects", name))
-                drv = _drivers(client, home, cwd, env, a.model)
+                drv = _drivers(client, home, cwd, env, a.model, a.thinking)
                 tasks = []
                 try:
                     time.sleep(1)
@@ -462,7 +509,7 @@ def cmd_collect(a: argparse.Namespace) -> int:
                     proxy.wait(10)
                 with open(os.path.join(folder, "done.json"), "w", encoding="utf-8") as f:
                     json.dump({"client": client, "script": script, "fixture": fixture, "tasks": tasks,
-                               "model": a.model, "cwd": cwd}, f, indent=1)
+                               "model": a.model, "cwd": cwd, "thinking": a.thinking}, f, indent=1)
     finally:
         srv.stop()
     return 0
@@ -480,7 +527,12 @@ def sessions(out: str) -> Dict[str, List[JsonDict]]:
 def cmd_checkpoints(a: argparse.Namespace) -> int:
     rows = []
     for name, reqs in sessions(a.out).items():
-        for c in checkpoints(name, reqs, a.window, [float(x) for x in a.at.split(",")]):
+        if a.range:
+            lo, hi = (float(x) for x in a.range.split(":"))
+            found = points_in_range(name, reqs, a.window, lo, hi, a.every)
+        else:
+            found = checkpoints(name, reqs, a.window, [float(x) for x in a.at.split(",")])
+        for c in found:
             rows.append({"session": c.session, "index": c.index, "fraction": c.fraction, "tokens": c.tokens,
                          "truth": c.truth})
             say(f"{name}: request {c.index} at {c.fraction:.0%} (~{c.tokens} tokens)")
@@ -508,19 +560,35 @@ def cmd_score(a: argparse.Namespace) -> int:
     srv.wait_ready()
     base, key = f"http://127.0.0.1:{a.port}", ensure_key(setup.key_file)
     try:
+        refs: Dict[Tuple[str, int], JsonDict] = {}
+        if os.path.exists(results):
+            with open(results, encoding="utf-8") as f:
+                for r in map(json.loads, f):
+                    if r["method"] == "none" and isinstance(r.get("reply"), dict):
+                        refs[(r["session"], r["index"])] = r["reply"]
+        methods = cm.csv(a.methods)
+        if "none" in methods:                        # none first: its reply is the reference of the others
+            methods = ["none"] + [m for m in methods if m != "none"]
         for p in points:
             req = reqs[p["session"]][p["index"]]
             full = req["messages"]
-            for spec in cm.csv(a.methods):
+            for spec in methods:
                 if (p["session"], p["index"], spec) in done:
                     continue
                 short = method_fn(spec)(full)
-                nxt = ask(base, key, req, short, 512)
-                probe = ask(base, key, req, short + [{"role": "user", "content": PROBE}], 800)
+                nxt = ask(base, key, req, short, a.answer_tokens)
+                probe = ask(base, key, req, short + [{"role": "user", "content": PROBE}], a.answer_tokens)
+                reply = {"role": "assistant", "content": msg_text(nxt["message"])[:300],
+                         "tool_calls": nxt["message"].get("tool_calls") or []}
+                if spec == "none":
+                    refs[(p["session"], p["index"])] = reply
+                ref = refs.get((p["session"], p["index"]))
                 row = {"session": p["session"], "index": p["index"], "fraction": p["fraction"], "method": spec,
                        "tokens_full": p["tokens"], "prompt_n": nxt["prompt_n"], "cache_n": nxt["cache_n"],
                        "read_ms": nxt["prompt_ms"],
                        "next": score_next(nxt["message"], p["truth"]),
+                       "same_as_none": score_next(nxt["message"], ref) if ref is not None else None,
+                       "reply": reply, "finish": nxt.get("finish"),
                        "probe": score_probe(parse_probe(msg_text(probe["message"])), full),
                        "probe_answer": msg_text(probe["message"])[:2000],
                        "next_got": tool_calls(nxt["message"])[:1] or msg_text(nxt["message"])[:300],
@@ -534,17 +602,59 @@ def cmd_score(a: argparse.Namespace) -> int:
     return 0
 
 
+def mcnemar_p(b: int, c: int) -> float:
+    """The exact two-sided McNemar p: b and c are the points where only one of the two methods was right."""
+    n = b + c
+    if n == 0:
+        return 1.0
+    k = min(b, c)
+    from math import comb
+    return min(1.0, 2 * sum(comb(n, i) for i in range(k + 1)) / 2 ** n)
+
+
+def paired(rows: Sequence[Mapping[str, Any]], method: str, seed: int = 7, draws: int = 2000) -> JsonDict:
+    """A method against none on the same points: the McNemar p of the next target, and the difference in its rate
+    with a 95% interval from resampling whole sessions (points of one session are not independent)."""
+    import random
+    key = (lambda r: (r["session"], r["index"]))
+    base = {key(r): bool(r["next"]["target"]) for r in rows if r["method"] == "none"}
+    mine = {key(r): bool(r["next"]["target"]) for r in rows if r["method"] == method}
+    both = [k for k in mine if k in base]
+    if not both:
+        return {"n": 0, "diff": 0.0, "lo": 0.0, "hi": 0.0, "p": 1.0}
+    b = sum(1 for k in both if base[k] and not mine[k])
+    c = sum(1 for k in both if mine[k] and not base[k])
+    by_session: Dict[str, List[Tuple[bool, bool]]] = {}
+    for k in both:
+        by_session.setdefault(k[0], []).append((mine[k], base[k]))
+    names = sorted(by_session)
+    rng = random.Random(seed)
+    diffs = []
+    for _ in range(draws):
+        pts = [x for s in (rng.choice(names) for _ in names) for x in by_session[s]]
+        diffs.append(sum(m - n for m, n in pts) / len(pts))
+    diffs.sort()
+    return {"n": len(both), "diff": (c - b) / len(both), "lo": diffs[int(0.025 * draws)],
+            "hi": diffs[int(0.975 * draws) - 1], "p": mcnemar_p(b, c)}
+
+
 def report(rows: Iterable[Mapping[str, Any]]) -> List[List[str]]:
+    rows = list(rows)
     by: Dict[str, List[Mapping[str, Any]]] = {}
     for r in rows:
         by.setdefault(str(r["method"]), []).append(r)
-    head = ["method", "points", "next tool", "next target", "files recall", "files precision", "invented",
-            "last error", "prompt tokens", "tokens read", "read s"]
+    head = ["method", "points", "next tool", "next target", "against none (95%)", "p", "same as none",
+            "files recall", "files precision", "invented", "last error", "prompt tokens", "tokens read", "read s"]
     out = [head]
     mean = (lambda xs: sum(xs) / len(xs) if xs else 0.0)
     for name, rs in by.items():
+        pr = paired(rows, name) if name != "none" else None
+        same = [r["same_as_none"]["target"] for r in rs if isinstance(r.get("same_as_none"), dict)]
         out.append([name, str(len(rs)),
                     f"{mean([r['next']['tool'] for r in rs]):.0%}", f"{mean([r['next']['target'] for r in rs]):.0%}",
+                    "" if pr is None else f"{pr['diff']:+.0%} ({pr['lo']:+.0%} to {pr['hi']:+.0%})",
+                    "" if pr is None else f"{pr['p']:.2f}",
+                    f"{mean(same):.0%}" if same and name != "none" else "",
                     f"{mean([r['probe']['file_recall'] for r in rs]):.2f}",
                     f"{mean([r['probe']['file_precision'] for r in rs]):.2f}",
                     f"{mean([r['probe']['invented'] for r in rs]):.1f}",
@@ -581,15 +691,21 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     c.add_argument("--out", required=True)
     c.add_argument("--clients", default="opencode,pi")
     c.add_argument("--scripts", default=",".join(SCRIPTS))
+    c.add_argument("--thinking", default="default", choices=("default", "off"),
+                   help="default: the model's own, as CARL sets it up (on); off (the first runs, 2026-10-12)")
     c.set_defaults(fn=cmd_collect)
     k = sub.add_parser("checkpoints")
     k.add_argument("out")
     k.add_argument("--window", type=int, default=WINDOW)
     k.add_argument("--at", default=",".join(str(x) for x in AT))
+    k.add_argument("--range", default="", help="LO:HI: every request whose context fills this much of the window")
+    k.add_argument("--every", type=int, default=1, help="with --range: every Nth of those requests")
     k.set_defaults(fn=cmd_checkpoints)
     s = sub.add_parser("score", parents=[common])
     s.add_argument("out")
-    s.add_argument("--methods", default="none,mask:4:0.3,mask:8:0.3,mask:4:0.5")
+    s.add_argument("--methods", default="none,mask:8:0.2")
+    s.add_argument("--answer-tokens", type=int, default=4096,
+                   help="the next step's and the probe's limit (thinking needs room; 512 cut a write's path)")
     s.set_defaults(fn=cmd_score)
     r = sub.add_parser("report")
     r.add_argument("out")

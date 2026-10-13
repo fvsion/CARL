@@ -120,9 +120,35 @@ class ScoreTest(unittest.TestCase):
         row = {"method": "none", "next": {"tool": True, "target": False},
                "probe": {"file_recall": 1.0, "file_precision": 0.5, "invented": 1, "error": True},
                "prompt_n": 30000, "read_ms": 60000}
+        row = dict(row, session="s", index=1)
         table = cb.report([row, dict(row, method="mask:4:0.3")])
-        self.assertEqual(table[1], ["none", "1", "100%", "0%", "1.00", "0.50", "1.0", "100%", "30,000", "30,000", "60.0"])
+        self.assertEqual(table[1], ["none", "1", "100%", "0%", "", "", "", "1.00", "0.50", "1.0", "100%", "30,000",
+                                    "30,000", "60.0"])
+        self.assertEqual(table[2][4:6], ["+0% (+0% to +0%)", "1.00"])
         self.assertEqual(len(table), 3)
+
+    def test_the_statistics(self) -> None:
+        self.assertEqual(cb.mcnemar_p(0, 0), 1.0)
+        self.assertAlmostEqual(cb.mcnemar_p(0, 6), 0.03125)          # 6 points only one way: 2 / 64
+        rows = []
+        for s in ("a", "b", "c"):
+            for i in range(4):
+                rows.append({"session": s, "index": i, "method": "none", "next": {"target": True}})
+                rows.append({"session": s, "index": i, "method": "m", "next": {"target": i != 0}})
+        pr = cb.paired(rows, "m")
+        self.assertEqual((pr["n"], round(pr["diff"], 2)), (12, -0.25))
+        self.assertLessEqual(pr["lo"], pr["diff"])
+
+    def test_points_in_a_fill_range_and_parallel_calls(self) -> None:
+        t = transcript()
+        reqs = [{"tools": [{}], "messages": t[:n]} for n in (2, 4, 6, 8, 10)]
+        total = sum(cb.est_tokens(m) for m in t[:8])
+        pts = cb.points_in_range("s", reqs, window=total, lo=0.0, hi=1.0)
+        self.assertEqual([p.index for p in pts], [0, 1, 2, 3])
+        self.assertEqual([p.index for p in cb.points_in_range("s", reqs, window=total, lo=0.0, hi=1.0, every=2)], [0, 2])
+        two = {"tool_calls": [call("a", "read", filePath="/w/pylib/x.py"), call("b", "read", filePath="/w/pylib/y.py")]}
+        one = {"tool_calls": [call("c", "read", filePath="/w/pylib/y.py")]}
+        self.assertTrue(cb.score_next(one, two)["target"])
 
 
 if __name__ == "__main__":
