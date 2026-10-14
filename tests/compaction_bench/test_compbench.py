@@ -489,6 +489,8 @@ class ParentTest(unittest.TestCase):
                              "probe": {"file_recall": 1, "file_precision": 1, "invented": 0, "error": True}})
         table = cb.report(rows)
         self.assertEqual(table[3][6], "-25% (-25% to -25%)")         # +turn against mask:8:0.2
+        lines = cb.compare(rows, "mask:8:0.2", "mask:8:0.2+turn")
+        self.assertTrue(lines[0].startswith("mask:8:0.2+turn against mask:8:0.2: 4 points; next target -25%"))
 
 
 class RepeatTest(unittest.TestCase):

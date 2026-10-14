@@ -1667,6 +1667,37 @@ def cmd_sample(a: argparse.Namespace) -> int:
     return 0
 
 
+def compare(rows: Sequence[Mapping[str, Any]], a: str, b: str) -> List[str]:
+    """Method b against method a on the points both scored (2026-10-14: +args with and without, side by side): the
+    next-target difference with its 95% interval and p, and the means of the other measures for each."""
+    pr = paired(rows, b, against=a)
+    mean = (lambda xs: sum(xs) / len(xs) if xs else 0.0)
+    pts = {(r["session"], r["index"]) for r in rows if r["method"] == a} & \
+        {(r["session"], r["index"]) for r in rows if r["method"] == b}
+    out = [f"{b} against {a}: {pr['n']} points; next target {pr['diff']:+.0%} ({pr['lo']:+.0%} to {pr['hi']:+.0%}), "
+           f"p {pr['p']:.2f}"]
+    for m in (a, b):
+        rs = [r for r in rows if r["method"] == m and (r["session"], r["index"]) in pts]
+        out.append(f"  {m}: next target {mean([r['next']['target'] for r in rs]):.0%}, errors recalled "
+                   f"{mean([r['probe']['error'] for r in rs]):.0%}, files recall {mean([r['probe']['file_recall'] for r in rs]):.2f}, "
+                   f"repeats {mean([needless_repeat(r) for r in rs]):.0%}, imitated {mean([bool(r.get('imitated')) for r in rs]):.0%}, "
+                   f"prompt tokens {mean([(r.get('prompt_n') or 0) + (r.get('cache_n') or 0) for r in rs]):,.0f}")
+    return out
+
+
+def cmd_compare(a: argparse.Namespace) -> int:
+    with open(os.path.join(a.out, "scores.jsonl"), encoding="utf-8") as f:
+        rows = [json.loads(x) for x in f]
+    groups = [("all sessions", rows)]
+    if a.split:
+        kinds = sorted({session_kind(r["session"]) for r in rows})
+        groups += [(k, [r for r in rows if session_kind(r["session"]) == k]) for k in kinds]
+    for title, rs in groups:
+        print(f"{title}:")
+        print("\n".join(compare(rs, a.a, a.b)))
+    return 0
+
+
 def cmd_report(a: argparse.Namespace) -> int:
     with open(os.path.join(a.out, "scores.jsonl"), encoding="utf-8") as f:
         rows = [json.loads(x) for x in f]
@@ -1728,6 +1759,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     sm.add_argument("--window", type=int, default=WINDOW)
     sm.add_argument("--md-out", default="")
     sm.set_defaults(fn=cmd_sample)
+    cp = sub.add_parser("compare", help="one method against another on the points both scored")
+    cp.add_argument("out")
+    cp.add_argument("--a", required=True, help="the method compared against")
+    cp.add_argument("--b", required=True)
+    cp.add_argument("--split", action="store_true", help="also per kind of session")
+    cp.set_defaults(fn=cmd_compare)
     r = sub.add_parser("report")
     r.add_argument("out")
     r.add_argument("--md", action="store_true")

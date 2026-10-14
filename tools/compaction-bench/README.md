@@ -40,7 +40,8 @@ $B report ~/compact-runs --md
 - **report** gives one row per method: against `none` on the same points, the difference in the next-target rate with
   a 95% interval from resampling whole sessions, and the exact McNemar p; the same against the method it is built on
   (its spec without the last `+part`: the methods are cumulative, the thinking variants side by side); `--split` adds
-  one table per kind of session (OpenCode or Pi, main or coder-style); the prompt tokens, and the event's re-read:
+  one table per kind of session (OpenCode or Pi, main or coder-style); **compare** `--a A --b B` sets any two methods
+  side by side on the points both scored (the difference, its interval and p; `--split` per kind); the prompt tokens, and the event's re-read:
   a compaction is read again once, whole, at idle (not per turn), at the server's measured read speed.
 
 Methods: `none`; `mask:K:S` clears each tool result to one line ("[cleared: the output of read notes/store.py; call
