@@ -518,6 +518,40 @@ class ContinuationTest(unittest.TestCase):
         self.assertEqual(ct.partial_args('{"path'), [])
 
 
+class RankedChangesTest(unittest.TestCase):
+    def test_the_ranked_changes_methods(self) -> None:
+        """2026-10-14 (the wide literature pass's ranked changes): +args=diff, cliff:K, +think=plan, +huge=N, +exits,
+        +recite, +order=regen, the working set's forms."""
+        d = cb.diff_args({"filePath": "a.py", "oldString": "x = 1\ny = 2", "newString": "x = 1\ny = 3"})
+        self.assertEqual(d["oldString"], "[pruned: 2 lines; the change is in the new text]")
+        self.assertEqual(d["newString"], "[pruned: 2 lines; the change:]\n-y = 2\n+y = 3")
+        self.assertEqual(cb.diff_args({"path": "a.py", "content": "a\nb"})["content"], "[pruned: 2 lines]")
+        t = long_session()
+        t[2] = dict(t[2], reasoning_content="x" * 400)
+        out = cb.cliff(t, 1)
+        self.assertTrue(out[2]["reasoning_content"].endswith(" [cut]") and len(out[2]["reasoning_content"]) == 306)
+        self.assertEqual(json.loads(out[2]["tool_calls"][0]["function"]["arguments"]), {"filePath": "textstats/tokenize.py"})
+        self.assertTrue(out[3]["content"].startswith("[output dropped: "))
+        self.assertEqual(out[19], t[19])                              # the newest K results stay
+        plan = cb.think_plan("I'll fix stats.py first. " + "Checking more things here. " * 20 + "That looks right.")
+        self.assertIn("I'll fix stats.py first.", plan)
+        cut = cb.cut_huge([{"role": "tool", "content": "\n".join(f"line {n}" for n in range(500))}], 100)[0]["content"]
+        self.assertIn("[cut: 420 lines of this output were left out]", cut)
+        self.assertTrue(cb.placeholder({"name": "bash", "args": {"command": "make build"}}, "building...\nCommand timed out",
+                                       False, False, True).endswith("This output is not complete. Do the command again."))
+        r = cb.recite([{"role": "user", "content": "Fix mean."}, {"role": "tool", "content": "ok"}])
+        self.assertTrue(r[-1]["content"].endswith("[CARL] The current task: Fix mean."))
+        self.assertEqual([cb.regen_rank({"name": n, "args": {"command": c}}) for n, c in
+                          (("read", ""), ("bash", "python -m pytest"), ("bash", "ls -la"), ("edit", ""), ("bash", "git commit"))],
+                         [0, 1, 2, 3, 4])
+        for spec in ("cliff:8", "mask:8:0.2+turn+ph=facts+args=diff+think=plan+exits+huge=4000+recite+order=regen",
+                     "mask:8:0.2+turn+notes+files=regions", "mask:8:0.2+turn+notes+files=mixed"):
+            cb.method_fn(spec)
+        for bad in ("mask:8:0.2+turn+args+args=diff", "mask:8:0.2+turn+files+files=regions", "mask:8:0.2+turn+huge=x"):
+            with self.assertRaises(SystemExit):
+                cb.method_fn(bad)
+
+
 class DriverTest(unittest.TestCase):
     def test_pi_starts_at_the_thinking_level(self) -> None:
         """2026-10-13: the matrix's Pi driver starts Pi with thinking off; the bench's starts it at the level asked

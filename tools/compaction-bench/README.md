@@ -71,6 +71,17 @@ method's, the thinking the second one changed), for a person to read. Sizes: a m
 3.35 characters a token, the tools at 4.0 (measured against the A3B's tokenizer). CARL's own summary is added as a
 method when it is built.
 
+More methods (2026-10-14, the wide literature pass's ranked changes): `cliff:K` (a code-only baseline after
+CliffCompaction: before the newest K results, thinking cut to 300 characters, each call's arguments to its target, a
+result over 500 characters to one line; no drain line, no note); `+args=diff` (an edit's change as a short diff of
+at most 12 lines in place of the two strings); `+think=plan` (`think=last` plus the block's plan sentence); `+exits`
+(a command that stopped before it finished is said to be incomplete); `+huge=N` (a result over N tokens cut once to its
+first and last 40 lines, the tail too); `+recite` (the current task repeated at the end, for thinking off: score
+`--thinking off`); `+order=regen` (reads and listings pruned first, commands with side effects last);
+`+files=regions` (every working file as ~100-line regions around its changes) and `+files=mixed` (5 whole, 5 more as
+regions). score `--steps N` scores N steps ahead: after the compacted context, the steps that really came next with
+their results, then the step after them (the report adds a column per step and "all steps right").
+
 Tests: `python3 -m unittest discover -s tests/compaction_bench -t tests/compaction_bench`.
 
 ## The continuation checks (`continuation/`)

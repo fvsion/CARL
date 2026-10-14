@@ -373,7 +373,10 @@ def test_outcome(text: str) -> str:
     return " ".join(out)
 
 
-def placeholder(call: Mapping[str, Any], text: str, changed_after: bool, in_task: bool) -> str:
+STOPPED_RE = re.compile(r"timed out|timeout|was killed|\bkilled\b|aborted|interrupted|SIGTERM|SIGKILL|terminated", re.I)
+
+
+def placeholder(call: Mapping[str, Any], text: str, changed_after: bool, in_task: bool, exits: bool = False) -> str:
     """A pruned result's placeholder, in STE100 (user, 2026-10-13: "say pruned instead of cleared"; "Write these in
     STE100 simplified technical english for fidelity"): built by code from the call and its result, by kind."""
     name = str(call.get("name") or "tool").lower()
@@ -389,6 +392,8 @@ def placeholder(call: Mapping[str, Any], text: str, changed_after: bool, in_task
         cmd = _cmd(call)
         ex = EXIT_RE.findall(text)
         head = f'[pruned] {name} "{cmd}":' + (f" exit {ex[-1]}." if ex else "")
+        if exits and STOPPED_RE.search(text[-400:]):         # +exits (ranked change 6): partial output is no result
+            return f"{head} The command stopped before it finished. This output is not complete. Do the command again."
         if TEST_CMD_RE.search(cmd):
             outcome = test_outcome(text)
             if outcome:
@@ -431,15 +436,46 @@ def stub_args(args: Any) -> Any:
     return args
 
 
-def _prune_args(m: JsonDict, j: int) -> None:
-    """The message's j-th tool call with its strings pruned (stub_args); the message's tool calls copied first."""
+DIFF_LINES = 12      # +args=diff: an edit's change shown in at most this many diff lines
+
+
+def diff_args(args: Any) -> Any:
+    """+args=diff (ranked change 2; user, 2026-10-14: "+args=diff is worth testing"): an edit's old text becomes a stub
+    and its new text a short diff of the change (-/+ lines, at most DIFF_LINES); a write's content a stub; every
+    other argument, and every name, as it was. The diff keeps what changed (the error recall +args lost) in fewer
+    tokens than the two strings."""
+    import difflib
+
+    def one(old: str, new: str) -> Tuple[str, str]:
+        d = [ln for ln in difflib.unified_diff(old.splitlines(), new.splitlines(), lineterm="", n=0)
+             if not ln.startswith(("---", "+++", "@@"))]
+        cut = d[:DIFF_LINES] + ([f"(... {len(d) - DIFF_LINES} more diff lines)"] if len(d) > DIFF_LINES else [])
+        return (f"[pruned: {_n(len(old.splitlines()) or 1, 'line')}; the change is in the new text]",
+                f"[pruned: {_n(len(new.splitlines()) or 1, 'line')}; the change:]\n" + "\n".join(cut))
+    if isinstance(args, dict):
+        out = dict(args)
+        for o, n in (("oldString", "newString"), ("old_string", "new_string"), ("oldText", "newText")):
+            if isinstance(out.get(o), str) and isinstance(out.get(n), str):
+                out[o], out[n] = one(out[o], out[n])
+        if isinstance(out.get("edits"), list):
+            out["edits"] = [diff_args(e) for e in out["edits"]]
+        for k in ("content", "patch"):
+            if isinstance(out.get(k), str):
+                out[k] = f"[pruned: {_n(len(out[k].splitlines()) or 1, 'line')}]"
+        return out
+    return args
+
+
+def _prune_args(m: JsonDict, j: int, diff: bool = False) -> None:
+    """The message's j-th tool call with its strings pruned (stub_args, or diff_args); the message's tool calls copied
+    first."""
     tcs = [dict(tc, function=dict(tc.get("function") or {})) for tc in m.get("tool_calls") or []]
     fn = tcs[j]["function"]
     try:
         args = json.loads(fn.get("arguments") or "{}")
     except ValueError:
         return
-    fn["arguments"] = json.dumps(stub_args(args))
+    fn["arguments"] = json.dumps(diff_args(args) if diff else stub_args(args))
     m["tool_calls"] = tcs
 
 
@@ -469,6 +505,21 @@ def think_last(text: str) -> str:
         if len(t) > room:
             end = end.split("\n", 1)[1] if "\n" in end[:-1] else end.split(" ", 1)[-1]   # from a line, else a word
     return f"[pruned: {n} tokens] {end.strip()}"
+
+
+PLAN_RE = re.compile(r"\b(I'll|I will|Let me|Next,? I|My plan|Plan:|I need to|I should|The fix is|So I)\b")
+
+
+def think_plan(text: str) -> str:
+    """+think=plan (ranked change 12): think_last's remnant plus the block's plan sentence (its last sentence that
+    says what it will do), when the remnant does not hold it already."""
+    last = think_last(text)
+    sents = [x for x in re.split(r"(?<=[.!?])\s+", text.strip()) if PLAN_RE.search(x)]
+    if not sents or sents[-1].strip() in last:
+        return last
+    plan = sents[-1].strip()[:int(THINK_SENTENCES * CHARS_PER_TOKEN)]
+    head, rest = last.split("] ", 1)
+    return f"{head}] {plan} ... {rest}"
 
 
 def thinking(m: Mapping[str, Any]) -> str:
@@ -735,13 +786,19 @@ def _numbered(text: str, a: int = 1, b: Optional[int] = None) -> str:
     return "\n".join(f"{n}: {lines[n - 1]}" for n in range(a, b + 1))
 
 
-def working_set(rep: "Replay", order: Sequence[str], budget: float, messages: Sequence[Mapping[str, Any]]) -> Tuple[List[str], List[str]]:
+WS_REGION = 50       # +files=regions, +files=mixed: a file as the ~100-line regions around its changes
+
+
+def working_set(rep: "Replay", order: Sequence[str], budget: float, messages: Sequence[Mapping[str, Any]],
+                mode: str = "whole") -> Tuple[List[str], List[str]]:
     """#7: the current contents of the files in work, in order, while they fit the budget (tokens); a file over 40% of
-    it as the regions around this session's changes. Returns the note's lines and the files it holds."""
+    it as the regions around this session's changes. mode (ranked change 11; user, 2026-10-14: "try the 5 with 100 line
+    and the 5 + 5 with 100-line"): whole (the files whole), regions (every file as ~100-line regions around its
+    changes), mixed (the first 5 whole, 5 more as regions). Returns the note's lines and the files it holds."""
     out: List[str] = []
     held: List[str] = []
     room = budget
-    for p in order:
+    for k_order, p in enumerate(order):
         text = rep.state.get(p)
         if text is None or p in held or _skip(p):
             continue
@@ -749,13 +806,15 @@ def working_set(rep: "Replay", order: Sequence[str], budget: float, messages: Se
         flag = " CARL could not apply all the changes to this file. Read the file before you change it." \
             if p in rep.unsure else ""
         body = _numbered(text)
-        if len(body) / CHARS_PER_TOKEN > 0.4 * budget:       # a large file: the regions around its changes
+        as_regions = mode == "regions" or (mode == "mixed" and k_order >= WS_FILES)
+        reach = WS_REGION if as_regions else REGION
+        if as_regions or len(body) / CHARS_PER_TOKEN > 0.4 * budget:       # the regions around its changes
             marks = sorted({n_ for m in messages if m.get("role") == "assistant" for c in tool_calls(m)
                             if call_target(c) == p for _o, new, _a in _edit_pairs(c["args"]) if new.strip()
                             for n_ in [text[:text.find(new)].count("\n") + 1] if text.find(new) >= 0})
             spans: List[List[int]] = []
             for k in marks or [1]:
-                a, b = max(1, k - REGION), min(n, k + REGION)
+                a, b = max(1, k - reach), min(n, k + reach)
                 if spans and a <= spans[-1][1] + 1:
                     spans[-1][1] = max(spans[-1][1], b)
                 else:
@@ -784,7 +843,7 @@ def tail_views(messages: Sequence[Mapping[str, Any]], start: int) -> set:
 
 def carl_note(messages: Sequence[Mapping[str, Any]], project: Mapping[str, str], cur: int, window: int,
               notes: bool, files: bool, cmap: bool, start: Optional[int] = None,
-              scope: str = "all") -> Tuple[str, List[str]]:
+              scope: str = "all", ws_mode: str = "whole") -> Tuple[str, List[str]]:
     """The CARL note's text (STE100) for the messages before the event, and the files whose current contents it holds.
     start: where the working tail begins (its files' views are not copied again); scope: the working set's files, all
     (the current turn's changed files, then the most recently edited: code and tests before documents; at most
@@ -838,19 +897,67 @@ def carl_note(messages: Sequence[Mapping[str, Any]], project: Mapping[str, str],
     held: List[str] = []
     if files:
         seen = tail_views(messages, start) if start is not None else set()
-        ws, held = working_set(rep, [p for p in order if p not in seen][:WS_FILES], FILES_SHARE * window, messages)
+        n_files = WS_FILES * 2 if ws_mode == "mixed" else WS_FILES
+        ws, held = working_set(rep, [p for p in order if p not in seen][:n_files], FILES_SHARE * window, messages, ws_mode)
         if ws:
             parts.append("The current contents of the files in work:\n" + "\n".join(ws))
     return "\n\n".join(parts), held
 
 
+HUGE_HEAD = 40       # +huge=N: a result over N tokens keeps its first and last this many lines
+
+
+def cut_huge(messages: Sequence[Mapping[str, Any]], limit: int) -> List[JsonDict]:
+    """+huge=N (ranked change 7): a tool result over N tokens cut once, as it arrives (anywhere, the tail too), to its
+    first and last HUGE_HEAD lines and a line that says how much was left out."""
+    out = [dict(m) for m in messages]
+    for m in out:
+        if m.get("role") == "tool" and est_tokens(m) > limit:
+            lines = msg_text(m).splitlines()
+            if len(lines) > 2 * HUGE_HEAD:
+                m["content"] = "\n".join(lines[:HUGE_HEAD] + [f"[cut: {len(lines) - 2 * HUGE_HEAD} lines of this output "
+                                                               "were left out]"] + lines[-HUGE_HEAD:])
+    return out
+
+
+def recite(messages: Sequence[Mapping[str, Any]]) -> List[JsonDict]:
+    """+recite (ranked change 10; user, 2026-10-14: "We should repeat key state when thinking is off"): the current
+    turn's request repeated at the end of the newest message, for a model with thinking off."""
+    out = [dict(m) for m in messages]
+    users = [i for i, m in enumerate(out) if m.get("role") == "user" and not msg_text(m).startswith("[CARL note]")]
+    if not users or not out:
+        return out
+    ask = msg_text(out[users[-1]]).strip()[:600]
+    last = out[-1]
+    last["content"] = f"{msg_text(last)}\n\n[CARL] The current task: {ask}"
+    return out
+
+
+def regen_rank(call: Mapping[str, Any]) -> int:
+    """+order=regen (ranked change 13): how cheap a pruned result is to get again: a read or a listing (0), a test or
+    check (1), another command (2), an edit's or a write's result (3), a command with side effects (4: it cannot be
+    done again)."""
+    name = str(call.get("name") or "").lower()
+    if name in READ_TOOLS or name in LIST_TOOLS:
+        return 0
+    if name in COMMAND_TOOLS:
+        cmd = _cmd(call)
+        return 4 if SIDE_RE.search(" " + cmd) else 1 if TEST_CMD_RE.search(cmd) else 2
+    return 3
+
+
 def event(messages: Sequence[Mapping[str, Any]], extra: int, window: int, keep_calls: int, tail_share: float,
           facts: bool, args: bool = False, think: str = "", think_mid: bool = False, notes: bool = False,
-          files: bool = False, cmap: bool = False, project: Optional[Mapping[str, str]] = None) -> List[JsonDict]:
+          files: bool = False, cmap: bool = False, project: Optional[Mapping[str, str]] = None,
+          opts: Optional[Mapping[str, Any]] = None) -> List[JsonDict]:
     """The event (_event). When it cannot reach the drain line, by where the excess is (agreed 2026-10-13): in the
     old part, stage 2 summarizes it (not built yet: the bench keeps the whole note and the overrun); in the current
     turn, the note's parts yield in turn (the working set down to the current turn's files, then the working set,
-    then the map), then the overrun is accepted (up to 55%)."""
+    then the map), then the overrun is accepted (up to 55%). opts: the ranked changes' options (2026-10-14): args
+    ("stub" or "diff"), exits, huge (tokens), recite, ws ("whole", "regions", "mixed"), order ("regen")."""
+    o = dict(opts or {})
+    if o.get("huge"):
+        messages = cut_huge(messages, int(o["huge"]))
     users = [i for i, m in enumerate(messages) if m.get("role") == "user"]
     cur = users[-1] if users else 0
     steps = [("all", cmap)]
@@ -861,20 +968,22 @@ def event(messages: Sequence[Mapping[str, Any]], extra: int, window: int, keep_c
     out: List[JsonDict] = []
     for scope, mp in steps:
         out = _event(messages, extra, window, keep_calls, tail_share, facts, args, think, think_mid, notes,
-                     files and scope != "none", mp, project, scope)
+                     files and scope != "none", mp, project, scope, o)
         size = sum(est_tokens(m) for m in out) + extra
         if size <= DRAIN * window:
             break
         old = sum(est_tokens(m) for m in out[:cur] if m.get("role") != "system")      # the note sits at cur
         if old >= size - DRAIN * window and (scope, mp) == steps[0]:
             break                                    # the excess is in the old part: stage 2's (not the note's) job
+    if o.get("recite") and sum(est_tokens(m) for m in messages) + extra > DRAIN * window:
+        out = recite(out)
     return out
 
 
 def _event(messages: Sequence[Mapping[str, Any]], extra: int, window: int, keep_calls: int, tail_share: float,
            facts: bool, args: bool = False, think: str = "", think_mid: bool = False, notes: bool = False,
            files: bool = False, cmap: bool = False, project: Optional[Mapping[str, str]] = None,
-           scope: str = "all") -> List[JsonDict]:
+           scope: str = "all", opts: Optional[Mapping[str, Any]] = None) -> List[JsonDict]:
     """The compaction event's prune (stage 1) on a request: its shape and the drain line (above). extra: the tokens
     outside the messages (the tools). facts: the STE100 placeholders and their thresholds (#2), else the mask's line.
     args: old edit and write arguments pruned too (#4), with the results of their place in the order. think: earlier
@@ -882,7 +991,8 @@ def _event(messages: Sequence[Mapping[str, Any]], extra: int, window: int, keep_
     drops it by default), the current turn's middle only with think_mid (else kept, the baseline), never the tail; no
     size floor (user, 2026-10-13: "the 80 limit shouldn't apply here"). notes, files, cmap: the CARL note's parts
     (#3, #7, the map; project: the files before the session, for the bench's replay); with files, the working set's
-    current contents replace rule 4's raw view, and the older reads of those files go first."""
+    current contents replace rule 4's raw view, and the older reads of those files go first. opts: see event()."""
+    o = dict(opts or {})
     out = [dict(m) for m in messages]
     sizes = [est_tokens(m) for m in out]
     total = sum(sizes) + extra
@@ -913,7 +1023,7 @@ def _event(messages: Sequence[Mapping[str, Any]], extra: int, window: int, keep_
                     changing.append(t)
     note, held = ("", [])
     if notes or files or cmap:
-        note, held = carl_note(out, project or {}, cur, window, notes, files, cmap, start, scope)
+        note, held = carl_note(out, project or {}, cur, window, notes, files, cmap, start, scope, str(o.get("ws", "whole")))
         total += est_tokens({"content": note})
     kept_files, beyond, room = set(), [], FILES_SHARE * window
     for path in ([] if files else changing):
@@ -943,6 +1053,10 @@ def _event(messages: Sequence[Mapping[str, Any]], extra: int, window: int, keep_
                     (old if i < cur else mid).append((i, j))
         old.sort()
         mid.sort()
+    if o.get("order") == "regen":                     # the cheapest to get again first, then by place
+        rank = (lambda u: (regen_rank(calls[u[0]]) if u[1] == -1 else 2, u[0], u[1]))
+        old.sort(key=rank)
+        mid.sort(key=rank)
     first: List[Tuple[int, int]] = []
     superseded = set()
     if held:                                          # the reads of the files the note holds: superseded, first
@@ -964,7 +1078,8 @@ def _event(messages: Sequence[Mapping[str, Any]], extra: int, window: int, keep_
         if total <= DRAIN * window:
             break
         if j == -2:                                  # a thinking block
-            new_think = "" if think == "empty" else think_last(thinking(out[i]))
+            new_think = "" if think == "empty" else think_plan(thinking(out[i])) if think == "plan" \
+                else think_last(thinking(out[i]))
             if len(new_think) >= len(thinking(out[i])):
                 continue
             _set_thinking(out[i], new_think)
@@ -973,7 +1088,7 @@ def _event(messages: Sequence[Mapping[str, Any]], extra: int, window: int, keep_
             sizes[i] = new_size
             continue
         if j >= 0:                                   # an edit's or a write's arguments (#4)
-            _prune_args(out[i], j)
+            _prune_args(out[i], j, diff=o.get("args") == "diff")
             new_size = est_tokens(out[i])
             total -= sizes[i] - new_size
             sizes[i] = new_size
@@ -990,7 +1105,7 @@ def _event(messages: Sequence[Mapping[str, Any]], extra: int, window: int, keep_
             path = call_target(call)
             later = any(j > i and calls[j]["name"].lower() in WRITE_TOOLS and call_target(calls[j]) == path
                         for j in results)
-            new = placeholder(call, text, later, i in beyond)
+            new = placeholder(call, text, later, i in beyond, bool(o.get("exits")))
         else:
             new = f"[cleared: the output of {names.get(i, 'a tool')}; call it again to see it]"
         out[i]["content"] = new
@@ -1003,29 +1118,82 @@ def _event(messages: Sequence[Mapping[str, Any]], extra: int, window: int, keep_
 Method = Callable[..., List[JsonDict]]
 
 
+CLIFF_THINK = 300      # cliff:K: old thinking cut to this many characters ...
+CLIFF_RESULT = 500     # ... and an old result kept only when it is at most this many characters
+
+
+def cliff(messages: Sequence[Mapping[str, Any]], keep: int) -> List[JsonDict]:
+    """cliff:K (ranked change 4: a code-only baseline after CliffCompaction, 2026-09: it beat summarization on
+    Terminal-Bench): everything before the newest K tool results is cut by fixed rules, with no drain line and no
+    note: thinking to its first CLIFF_THINK characters, each call's arguments to its target (a path, a command's first
+    word), a result over CLIFF_RESULT characters to one line."""
+    out = [dict(m) for m in messages]
+    results = [i for i, m in enumerate(out) if m.get("role") == "tool"]
+    edge = results[-keep] if keep > 0 and len(results) >= keep else len(out)
+    while edge > 0 and edge < len(out) and out[edge].get("role") == "tool":
+        edge -= 1
+    for i in range(edge):
+        m = out[i]
+        if m.get("role") == "assistant":
+            t = thinking(m)
+            if len(t) > CLIFF_THINK:
+                _set_thinking(m, t[:CLIFF_THINK] + " [cut]")
+            tcs = []
+            for tc, c in zip(m.get("tool_calls") or [], tool_calls(m)):
+                target = call_target(c)
+                key = next((k for k in ("filePath", "file_path", "path", "command", "cmd", "pattern", "query", "url")
+                            if k in c["args"]), "target")
+                tcs.append(dict(tc, function=dict(tc.get("function") or {}, arguments=json.dumps({key: target}))))
+            if tcs:
+                m["tool_calls"] = tcs
+        elif m.get("role") == "tool" and len(msg_text(m)) > CLIFF_RESULT:
+            m["content"] = f"[output dropped: {len(msg_text(m))} characters]"
+    return out
+
+
+EVENT_MODS = {"turn", "ph=facts", "args", "args=diff", "think=empty", "think=last", "think=plan", "thinkmid", "notes",
+              "files", "files=regions", "files=mixed", "map", "exits", "recite", "order=regen"}
+
+
 def method_fn(spec: str, window: int = WINDOW) -> Method:
-    """A method by name: none; mask:K:S (the first guard); mask:K:S+turn (the event's shape, S = the working tail's
-    share of the window, K its floor; the drain line); +ph=facts (the STE100 placeholders); +args (old edit and write
-    arguments); +think=empty or +think=last (earlier thinking), +thinkmid (the current turn's middle's too); +notes,
-    +files, +map (the CARL note's parts). The function takes the messages, the tokens outside them (the tools) and,
-    for the note, the project's files before the session."""
+    """A method by name: none; cliff:K (a code-only baseline); mask:K:S (the first guard); mask:K:S+turn (the event's
+    shape, S = the working tail's share of the window, K its floor; the drain line); +ph=facts (the STE100
+    placeholders); +args or +args=diff (old edit and write arguments: stubs, or a short diff of the change);
+    +think=empty, +think=last or +think=plan (earlier thinking), +thinkmid (the current turn's middle's too); +notes,
+    +files (or +files=regions, +files=mixed: the working set's form), +map (the CARL note's parts); +exits (a stopped
+    command said so), +huge=N (results over N tokens cut on arrival), +recite (the task repeated at the end, for
+    thinking off), +order=regen (the cheapest to get again pruned first). The function takes the messages, the tokens
+    outside them (the tools) and, for the note, the project's files before the session."""
     base, *mods = spec.split("+")
     parts = base.split(":")
     if parts[0] == "none" and not mods:
         return lambda ms, extra=0, project=None: [dict(m) for m in ms]
-    known = {"turn", "ph=facts", "args", "think=empty", "think=last", "thinkmid", "notes", "files", "map"}
-    if parts[0] == "mask" and len(parts) == 3 and set(mods) <= known and (not set(mods) - {"turn"} or "turn" in mods) \
-            and not {"think=empty", "think=last"} <= set(mods) and ("thinkmid" not in mods or any(
-                x.startswith("think=") for x in mods)):
+    if parts[0] == "cliff" and len(parts) == 2 and not mods:
+        keep = int(parts[1])
+        return lambda ms, extra=0, project=None: cliff(ms, keep)
+    plain = [m for m in mods if not m.startswith("huge=")]
+    thinks = [m for m in plain if m.startswith("think=")]
+    ok = (parts[0] == "mask" and len(parts) == 3 and set(plain) <= EVENT_MODS
+          and (not set(mods) - {"turn"} or "turn" in mods) and len(thinks) <= 1
+          and not {"args", "args=diff"} <= set(plain) and ("thinkmid" not in plain or thinks)
+          and len([m for m in plain if m.startswith("files")]) <= 1
+          and all(m[len("huge="):].isdigit() for m in mods if m.startswith("huge=")))
+    if ok:
         k, s = int(parts[1]), float(parts[2])
         if "turn" in mods:
-            facts, pargs, mid = "ph=facts" in mods, "args" in mods, "thinkmid" in mods
-            think = next((x.split("=", 1)[1] for x in mods if x.startswith("think=")), "")
-            nt, fl, mp = "notes" in mods, "files" in mods, "map" in mods
+            facts, mid = "ph=facts" in plain, "thinkmid" in plain
+            pargs = "args" in plain or "args=diff" in plain
+            think = thinks[0].split("=", 1)[1] if thinks else ""
+            files_mod = next((m for m in plain if m.startswith("files")), "")
+            nt, fl, mp = "notes" in plain, bool(files_mod), "map" in plain
+            opts = {"args": "diff" if "args=diff" in plain else "stub", "exits": "exits" in plain,
+                    "recite": "recite" in plain, "order": "regen" if "order=regen" in plain else "",
+                    "ws": files_mod.split("=", 1)[1] if "=" in files_mod else "whole",
+                    "huge": next((int(m[len("huge="):]) for m in mods if m.startswith("huge=")), 0)}
             return lambda ms, extra=0, project=None: event(ms, extra, window, k, s, facts, pargs, think, mid, nt, fl,
-                                                            mp, project)
+                                                            mp, project, opts)
         return lambda ms, extra=0, project=None: mask(ms, k, s)
-    raise SystemExit(f"error: no such method {spec!r} (none, mask:K:S, mask:K:S+turn, mask:K:S+turn+ph=facts)")
+    raise SystemExit(f"error: no such method {spec!r} (none, cliff:K, mask:K:S, mask:K:S+turn+..., see method_fn)")
 
 
 def imitated(reply: Mapping[str, Any]) -> bool:
@@ -1202,9 +1370,15 @@ def post(base: str, key: str, path: str, body: Mapping[str, Any], timeout: float
         return json.load(r)
 
 
-def ask(base: str, key: str, req: Mapping[str, Any], messages: Sequence[Mapping[str, Any]], max_tokens: int) -> JsonDict:
-    """The same request (model, tools, template fields) with these messages, temperature 0, not streamed."""
+def ask(base: str, key: str, req: Mapping[str, Any], messages: Sequence[Mapping[str, Any]], max_tokens: int,
+        think_off: bool = False) -> JsonDict:
+    """The same request (model, tools, template fields) with these messages, temperature 0, not streamed; think_off:
+    with thinking off (score --thinking off: the +recite variant's setting)."""
     body = {k: v for k, v in req.items() if k not in ("messages", "stream", "stream_options", "id_slot")}
+    if think_off:
+        body["chat_template_kwargs"] = {**(body.get("chat_template_kwargs") or {}), "enable_thinking": False}
+        if "reasoning_effort" in body:
+            body["reasoning_effort"] = "none"
     body.update(messages=list(messages), stream=False, temperature=0, max_tokens=max_tokens, cache_prompt=True,
                 id_slot=0)
     t0 = time.time()
@@ -1484,12 +1658,32 @@ def cmd_score(a: argparse.Namespace) -> int:
                 # the same request as another method's at this point (under the drain line, or nothing of that kind to
                 # prune): the same answers at temperature 0, so asked once
                 same = hashlib.sha256(json.dumps(short, sort_keys=True).encode()).hexdigest()
+                off = a.thinking == "off"
                 if (p["session"], p["index"], same) in asked:
                     nxt, probe = asked[(p["session"], p["index"], same)]
                 else:
-                    nxt = ask(base, key, req, short, a.answer_tokens)
-                    probe = ask(base, key, req, short + [{"role": "user", "content": PROBE}], a.answer_tokens)
+                    nxt = ask(base, key, req, short, a.answer_tokens, off)
+                    probe = ask(base, key, req, short + [{"role": "user", "content": PROBE}], a.answer_tokens, off)
                     asked[(p["session"], p["index"], same)] = (nxt, probe)
+                # ranked change 5 (slated for after the 2026-10-14 run): steps 2..N. After the compacted context, the
+                # steps that really came next (the model's moves and their results, from the session), then the step
+                # after them, against what really came then.
+                steps_out = []
+                chain_ = reqs[p["session"]]
+                for k in range(2, a.steps + 1):
+                    j = p["index"] + k - 1
+                    if j >= len(chain_) - 1:
+                        break
+                    truth_k = truth_after(chain_, j)
+                    if truth_k is None:
+                        break
+                    cont = [dict(m) for m in chain_[j]["messages"][len(full):]]
+                    key_k = (p["session"], p["index"], same + f"#{k}")
+                    if key_k not in asked:
+                        asked[key_k] = (ask(base, key, req, short + cont, a.answer_tokens, off), {})
+                    got = asked[key_k][0]
+                    steps_out.append({"k": k, "next": score_next(got["message"], truth_k),
+                                      "seconds": got["seconds"]})
                 reply = {"role": "assistant", "content": msg_text(nxt["message"])[:300],
                          "tool_calls": nxt["message"].get("tool_calls") or []}
                 if spec == "none":
@@ -1507,7 +1701,11 @@ def cmd_score(a: argparse.Namespace) -> int:
                        "probe": score_probe(parse_probe(msg_text(probe["message"])), full),
                        "probe_answer": msg_text(probe["message"])[:2000],
                        "next_got": tool_calls(nxt["message"])[:1] or msg_text(nxt["message"])[:300],
-                       "seconds": nxt["seconds"] + probe["seconds"]}
+                       "seconds": nxt["seconds"] + probe["seconds"] + sum(x["seconds"] for x in steps_out)}
+                if steps_out:
+                    row["steps"] = steps_out
+                if off:
+                    row["thinking"] = "off"
                 with open(results, "a", encoding="utf-8") as f:
                     f.write(json.dumps(row) + "\n")
                 say(f"{p['session']} @{p['fraction']:.0%} {spec}: next {row['next']['tool']}/{row['next']['target']}, "
@@ -1572,6 +1770,7 @@ def paired(rows: Sequence[Mapping[str, Any]], method: str, seed: int = 7, draws:
 
 def report(rows: Iterable[Mapping[str, Any]]) -> List[List[str]]:
     rows = list(rows)
+    most = max((len(r.get("steps") or []) for r in rows), default=0)
     by: Dict[str, List[Mapping[str, Any]]] = {}
     for r in rows:
         by.setdefault(str(r["method"]), []).append(r)
@@ -1603,6 +1802,15 @@ def report(rows: Iterable[Mapping[str, Any]]) -> List[List[str]]:
                     f"{mean([(r.get('prompt_n') or 0) + (r.get('cache_n') or 0) for r in rs]):,.0f}",
                     "" if name == "none" or not speed else
                     f"{mean([(r.get('prompt_n') or 0) + (r.get('cache_n') or 0) for r in rs]) / speed:.0f}"])
+    if most:                                         # --steps: the later steps' next targets, and all steps right
+        out[0] = out[0] + [f"step {k} target" for k in range(2, most + 2)] + ["all steps right"]
+        for row, (name, rs) in zip(out[1:], by.items()):
+            for k in range(2, most + 2):
+                vals = [st["next"]["target"] for r in rs for st in (r.get("steps") or []) if st["k"] == k]
+                row.append(f"{mean(vals):.0%}" if vals else "")
+            every = [bool(r["next"]["target"]) and all(st["next"]["target"] for st in r["steps"]) for r in rs
+                     if r.get("steps")]
+            row.append(f"{mean(every):.0%}" if every else "")
     return out
 
 
@@ -1748,6 +1956,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     s.add_argument("out")
     s.add_argument("--methods", default="none,mask:8:0.2")
     s.add_argument("--window", type=int, default=WINDOW, help="the window the event's sizes are shares of")
+    s.add_argument("--steps", type=int, default=1, help="score this many steps ahead (the later ones after the steps "
+                                                         "that really came next)")
+    s.add_argument("--thinking", default="as-captured", choices=("as-captured", "off"),
+                   help="off: every request with thinking off (the +recite variant)")
     s.add_argument("--answer-tokens", type=int, default=4096,
                    help="the next step's and the probe's limit (thinking needs room; 512 cut a write's path)")
     s.set_defaults(fn=cmd_score)
