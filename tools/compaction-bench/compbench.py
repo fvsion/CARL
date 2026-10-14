@@ -1527,12 +1527,29 @@ def mcnemar_p(b: int, c: int) -> float:
     return min(1.0, 2 * sum(comb(n, i) for i in range(k + 1)) / 2 ** n)
 
 
-def paired(rows: Sequence[Mapping[str, Any]], method: str, seed: int = 7, draws: int = 2000) -> JsonDict:
-    """A method against none on the same points: the McNemar p of the next target, and the difference in its rate
-    with a 95% interval from resampling whole sessions (points of one session are not independent)."""
+def parent(method: str, methods: Iterable[str]) -> Optional[str]:
+    """The method a cumulative one is built on: its spec without its last "+part", when that was scored too
+    (mask:8:0.2+turn -> mask:8:0.2; the thinking variants -> +args, side by side; +thinkmid -> +think=last)."""
+    if "+" not in method:
+        return None
+    up = method.rsplit("+", 1)[0]
+    return up if up in set(methods) else None
+
+
+def session_kind(session: str) -> str:
+    """A session's kind for the split report: its client, and main or coder-style."""
+    client = session.split("-", 1)[0]
+    return f"{client} {'coder-style' if '-coder-' in session else 'main'}"
+
+
+def paired(rows: Sequence[Mapping[str, Any]], method: str, seed: int = 7, draws: int = 2000,
+           against: str = "none") -> JsonDict:
+    """A method against another (none by default) on the same points: the McNemar p of the next target, and the
+    difference in its rate with a 95% interval from resampling whole sessions (points of one session are not
+    independent)."""
     import random
     key = (lambda r: (r["session"], r["index"]))
-    base = {key(r): bool(r["next"]["target"]) for r in rows if r["method"] == "none"}
+    base = {key(r): bool(r["next"]["target"]) for r in rows if r["method"] == against}
     mine = {key(r): bool(r["next"]["target"]) for r in rows if r["method"] == method}
     both = [k for k in mine if k in base]
     if not both:
@@ -1558,7 +1575,8 @@ def report(rows: Iterable[Mapping[str, Any]]) -> List[List[str]]:
     by: Dict[str, List[Mapping[str, Any]]] = {}
     for r in rows:
         by.setdefault(str(r["method"]), []).append(r)
-    head = ["method", "points", "next tool", "next target", "against none (95%)", "p", "same as none",
+    head = ["method", "points", "next tool", "next target", "against none (95%)", "p",
+            "against the one before (95%)", "p", "same as none",
             "files recall", "files precision", "invented", "errors recalled", "repeats", "imitated", "prompt tokens",
             "event re-read s"]
     out = [head]
@@ -1566,22 +1584,34 @@ def report(rows: Iterable[Mapping[str, Any]]) -> List[List[str]]:
     speed = read_speed(rows)
     for name, rs in by.items():
         pr = paired(rows, name) if name != "none" else None
+        up = parent(name, by)
+        pu = paired(rows, name, against=up) if up and up != "none" else None
         same = [r["same_as_none"]["target"] for r in rs if isinstance(r.get("same_as_none"), dict)]
         out.append([name, str(len(rs)),
                     f"{mean([r['next']['tool'] for r in rs]):.0%}", f"{mean([r['next']['target'] for r in rs]):.0%}",
                     "" if pr is None else f"{pr['diff']:+.0%} ({pr['lo']:+.0%} to {pr['hi']:+.0%})",
                     "" if pr is None else f"{pr['p']:.2f}",
+                    "" if pu is None else f"{pu['diff']:+.0%} ({pu['lo']:+.0%} to {pu['hi']:+.0%})",
+                    "" if pu is None else f"{pu['p']:.2f}",
                     f"{mean(same):.0%}" if same and name != "none" else "",
                     f"{mean([r['probe']['file_recall'] for r in rs]):.2f}",
                     f"{mean([r['probe']['file_precision'] for r in rs]):.2f}",
                     f"{mean([r['probe']['invented'] for r in rs]):.1f}",
                     f"{mean([r['probe']['error'] for r in rs]):.0%}",
-                    f"{mean([bool(r.get('repeat')) for r in rs]):.0%}",
+                    f"{mean([needless_repeat(r) for r in rs]):.0%}",
                     f"{mean([bool(r.get('imitated')) for r in rs]):.0%}",
                     f"{mean([(r.get('prompt_n') or 0) + (r.get('cache_n') or 0) for r in rs]):,.0f}",
                     "" if name == "none" or not speed else
                     f"{mean([(r.get('prompt_n') or 0) + (r.get('cache_n') or 0) for r in rs]) / speed:.0f}"])
     return out
+
+
+def needless_repeat(row: Mapping[str, Any]) -> bool:
+    """A repeat that the compaction caused: the next step calls again what was pruned, and the model with the whole
+    request did something else there (2026-10-14: most calls of a pruned command are the same call none makes, such as
+    running the tests again; counted as repeats they read 46-72%, against 1-4 of 40 points that differ from none)."""
+    same = row.get("same_as_none")
+    return bool(row.get("repeat")) and isinstance(same, dict) and not same.get("target")
 
 
 def read_speed(rows: Sequence[Mapping[str, Any]]) -> float:
@@ -1639,11 +1669,18 @@ def cmd_sample(a: argparse.Namespace) -> int:
 
 def cmd_report(a: argparse.Namespace) -> int:
     with open(os.path.join(a.out, "scores.jsonl"), encoding="utf-8") as f:
-        table = report(map(json.loads, f))
-    for i, row in enumerate(table):
-        print(("| " + " | ".join(row) + " |") if a.md else "  ".join(row))
-        if a.md and i == 0:
-            print("|" + "---|" * len(row))
+        rows = [json.loads(x) for x in f]
+    groups = [("all sessions", rows)]
+    if a.split:                                      # also by the session's kind (client; main or coder-style)
+        kinds = sorted({session_kind(r["session"]) for r in rows})
+        groups += [(k, [r for r in rows if session_kind(r["session"]) == k]) for k in kinds]
+    for title, rs in groups:
+        if a.split:
+            print(f"\n### {title}\n" if a.md else f"\n{title}")
+        for i, row in enumerate(report(rs)):
+            print(("| " + " | ".join(row) + " |") if a.md else "  ".join(row))
+            if a.md and i == 0:
+                print("|" + "---|" * len(row))
     return 0
 
 
@@ -1694,6 +1731,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     r = sub.add_parser("report")
     r.add_argument("out")
     r.add_argument("--md", action="store_true")
+    r.add_argument("--split", action="store_true", help="also one table per kind of session (client; main or coder)")
     r.set_defaults(fn=cmd_report)
     a = ap.parse_args(argv)
     return int(a.fn(a))

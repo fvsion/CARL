@@ -122,8 +122,8 @@ class ScoreTest(unittest.TestCase):
                "prompt_n": 30000, "read_ms": 60000}
         row = dict(row, session="s", index=1)
         table = cb.report([row, dict(row, method="mask:4:0.3")])
-        self.assertEqual(table[1], ["none", "1", "100%", "0%", "", "", "", "1.00", "0.50", "1.0", "100%", "0%", "0%",
-                                    "30,000", ""])
+        self.assertEqual(table[1], ["none", "1", "100%", "0%", "", "", "", "", "", "1.00", "0.50", "1.0", "100%", "0%",
+                                    "0%", "30,000", ""])
         self.assertEqual(table[2][-1], "60")         # the event's re-read: 30,000 tokens at the measured 500 tokens/s
         self.assertEqual(table[2][4:6], ["+0% (+0% to +0%)", "1.00"])
         self.assertEqual(len(table), 3)
@@ -469,6 +469,36 @@ class NoteTest(unittest.TestCase):
         out = cb.method_fn("mask:1:0.01+turn+notes+files", window)(t, 0, project=self.PROJECT)
         self.assertEqual(out[3]["content"], "[pruned] read textstats/stats.py: 2 lines. The current contents of this "
                                             "file are in the CARL note.")
+
+
+class ParentTest(unittest.TestCase):
+    def test_the_one_before_and_the_kinds(self) -> None:
+        """2026-10-14: cumulative except the thinking variants (side by side on +args); +thinkmid on +think=last."""
+        ms = ["none", "mask:8:0.2", "mask:8:0.2+turn", "mask:8:0.2+turn+args", "mask:8:0.2+turn+args+think=empty",
+              "mask:8:0.2+turn+args+think=last", "mask:8:0.2+turn+args+think=last+thinkmid"]
+        self.assertEqual([cb.parent(m, ms) for m in ms],
+                         [None, None, "mask:8:0.2", "mask:8:0.2+turn", "mask:8:0.2+turn+args", "mask:8:0.2+turn+args",
+                          "mask:8:0.2+turn+args+think=last"])
+        self.assertEqual(cb.parent("mask:8:0.2+turn+notes", ["none"]), None)               # its parent not scored
+        self.assertEqual((cb.session_kind("pi-coder-pylib"), cb.session_kind("opencode-webapp")),
+                         ("pi coder-style", "opencode main"))
+        rows = []
+        for i in range(4):
+            for m, ok in (("none", True), ("mask:8:0.2", True), ("mask:8:0.2+turn", i > 0)):
+                rows.append({"session": "s", "index": i, "method": m, "next": {"tool": True, "target": ok},
+                             "probe": {"file_recall": 1, "file_precision": 1, "invented": 0, "error": True}})
+        table = cb.report(rows)
+        self.assertEqual(table[3][6], "-25% (-25% to -25%)")         # +turn against mask:8:0.2
+
+
+class RepeatTest(unittest.TestCase):
+    def test_a_repeat_counts_only_where_none_did_otherwise(self) -> None:
+        """2026-10-14: running the tests again after a prune is what none does too; only a repeat that departs from
+        none's next step is the compaction's."""
+        self.assertTrue(cb.needless_repeat({"repeat": True, "same_as_none": {"target": False}}))
+        self.assertFalse(cb.needless_repeat({"repeat": True, "same_as_none": {"target": True}}))
+        self.assertFalse(cb.needless_repeat({"repeat": False, "same_as_none": {"target": False}}))
+        self.assertFalse(cb.needless_repeat({"repeat": True, "same_as_none": None}))
 
 
 class ContinuationTest(unittest.TestCase):

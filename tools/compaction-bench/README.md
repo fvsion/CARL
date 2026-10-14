@@ -38,7 +38,9 @@ $B report ~/compact-runs --md
   appear nowhere in the transcript count as invented. `--answer-tokens` (4,096) leaves room for thinking. The prompt tokens and the read time are kept. Results: `scores.jsonl`
   (a second run continues).
 - **report** gives one row per method: against `none` on the same points, the difference in the next-target rate with
-  a 95% interval from resampling whole sessions, and the exact McNemar p; the prompt tokens, and the event's re-read:
+  a 95% interval from resampling whole sessions, and the exact McNemar p; the same against the method it is built on
+  (its spec without the last `+part`: the methods are cumulative, the thinking variants side by side); `--split` adds
+  one table per kind of session (OpenCode or Pi, main or coder-style); the prompt tokens, and the event's re-read:
   a compaction is read again once, whole, at idle (not per turn), at the server's measured read speed.
 
 Methods: `none`; `mask:K:S` clears each tool result to one line ("[cleared: the output of read notes/store.py; call
@@ -62,7 +64,7 @@ list, a map of the code, and the current contents of up to 5 files in work (rebu
 reads, writes and edits; a file whose current view is in the working tail is not copied); the reads it replaces go
 first. When the event still cannot reach the line and the excess is in the current turn, the working set yields, then
 the map. The score's `--window` sets the window. Each row also says whether the next step calls again what was pruned
-(repeats) and whether a call copies a stub (imitated). Two methods that make the same request at a point are asked
+(repeats: counted only where the model with the whole request did something else) and whether a call copies a stub (imitated). Two methods that make the same request at a point are asked
 once. **sample** writes the points where two methods chose differently side by side (the real next step, each
 method's, the thinking the second one changed), for a person to read. Sizes: a message's text, thinking and calls at
 3.35 characters a token, the tools at 4.0 (measured against the A3B's tokenizer). CARL's own summary is added as a
