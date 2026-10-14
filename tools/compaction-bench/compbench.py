@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The compaction bench (Phase 23.5.2.1): long coding sessions of the real OpenCode and Pi on CARL's server, every
+"""The compaction bench (Phase 23.5.2, CARL compaction): long coding sessions of the real OpenCode and Pi on CARL's server, every
 request the model got saved; then, at points where the context is 40-70% full, each compaction method makes the
 request shorter and the same model, given the shorter request, is scored against what it really did with all of it.
 

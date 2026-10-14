@@ -1,6 +1,6 @@
 # The compaction bench
 
-Phase 23.5.2.1. How well a compaction keeps what a coding session needs: long sessions of the real OpenCode and Pi on
+Phase 23.5.2 (CARL compaction). How well a compaction keeps what a coding session needs: long sessions of the real OpenCode and Pi on
 CARL's server are recorded as the model saw them; then, at points where the context is 40-70% full, each compaction
 method makes the request shorter, and the same model is scored against what it did with the whole request.
 
