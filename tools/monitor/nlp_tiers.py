@@ -34,6 +34,14 @@ HYPOTHESES = ("This is a rule.", "This is a coding convention or a restriction."
 HEADS = os.path.join(HERE, "rules-heads.json")
 TEXTCAT = os.path.join(rl.NLP_DIR, "models", "rules-textcat")
 SEP = "<#carl-sep#>"
+# CPU or GPU (user, 2026-10-14: "If these are gonna be in RAM anyway.... doing it on GPU isn't awful"): the models are
+# in the shared memory either way; "gpu" runs llama.cpp's on Metal and ONNX Runtime's on Core ML
+DEVICE = os.environ.get("CARL_RULES_DEVICE", "cpu")
+STACK_MAX_TOKENS = 256
+NLI_FILE = os.environ.get("CARL_RULES_NLI_FILE", "")    # another ONNX file of the NLI model (the fp32 check)
+TASK_HYPOTHESIS = "This is a one-off task."                  # the stacker's "not a rule" signal (research Q2)
+STACK_FLAGS = ("question", "narration", "command", "request", "modal", "negated", "absolute", "limit", "no_x", "we",
+               "you")
 TEXT_MAX = 600
 FEATURES = ("command", "request", "modal", "negated", "absolute", "limit", "no_x", "question", "narration",
             "conditional", "literal", "you", "we")
@@ -65,6 +73,8 @@ def available() -> List[str]:
     for k, d in NLI.items():
         if os.path.isdir(os.path.join(MODELS, d)) and f"C:{k}" in heads:
             out.append(f"spacy+C:{k}")
+    out += [f"spacy+{k}" for k, h in heads.items() if k.startswith("S:") and f"spacy+B:{h['b']}" in out
+            and f"spacy+C:{h['c']}" in out]
     return out
 
 
@@ -157,7 +167,8 @@ def embed(texts: Sequence[str], which: str, batch: int = 64) -> List[List[float]
     out: List[List[float]] = []
     for i in range(0, len(texts), batch):
         part = [t.replace(SEP, " ") or "." for t in texts[i:i + batch]]
-        p = subprocess.run(["llama-embedding", "-m", os.path.join(MODELS, f), "--device", "none", "-ngl", "0",
+        dev = ["-ngl", "99"] if DEVICE == "gpu" else ["--device", "none", "-ngl", "0"]
+        p = subprocess.run(["llama-embedding", "-m", os.path.join(MODELS, f), *dev,
                             "--pooling", pooling, "--embd-normalize", "2", "--embd-output-format", "array",
                             "--embd-separator", SEP, "-c", "512", "-b", "4096", "-ub", "4096", "-p", SEP.join(part)],
                            capture_output=True, text=True, timeout=300)
@@ -187,27 +198,34 @@ def logistic(x: Sequence[float], w: Sequence[float], b: float) -> float:
 
 def nli_scores(texts: Sequence[str], which: str, batch: int = 16) -> List[float]:
     """The entailment probability of the rule hypotheses (their mean), per sentence."""
+    m = nli_matrix(texts, which, HYPOTHESES, batch)
+    return [sum(r) / len(r) for r in m]
+
+
+def nli_matrix(texts: Sequence[str], which: str, hyps: Sequence[str], batch: int = 16) -> List[List[float]]:
+    """The entailment probability of each hypothesis, per sentence."""
     import numpy as np
     import onnxruntime as ort
     from tokenizers import Tokenizer
     d = os.path.join(MODELS, NLI[which])
-    model = next(x for x in sorted(os.listdir(d)) if x.endswith(".onnx"))
+    model = NLI_FILE or next(x for x in sorted(os.listdir(d)) if x.endswith(".onnx"))
     opts = ort.SessionOptions()
     opts.intra_op_num_threads = 4
-    sess = ort.InferenceSession(os.path.join(d, model), opts, providers=["CPUExecutionProvider"])
+    prov = (["CoreMLExecutionProvider", "CPUExecutionProvider"] if DEVICE == "gpu" else ["CPUExecutionProvider"])
+    sess = ort.InferenceSession(os.path.join(d, model), opts, providers=prov)
     tok = Tokenizer.from_file(os.path.join(d, "tokenizer.json"))
-    tok.enable_truncation(256)
+    tok.enable_truncation(STACK_MAX_TOKENS)
     tok.enable_padding()
-    out = np.zeros(len(texts))
-    for h in HYPOTHESES:
+    out = np.zeros((len(texts), len(hyps)))
+    for j, h in enumerate(hyps):
         for i in range(0, len(texts), batch):
             enc = tok.encode_batch([(t, h) for t in texts[i:i + batch]])
             ids = np.array([e.ids for e in enc], dtype=np.int64)
             mask = np.array([e.attention_mask for e in enc], dtype=np.int64)
             logits = sess.run(None, {"input_ids": ids, "attention_mask": mask})[0]
             e = np.exp(logits - logits.max(axis=1, keepdims=True))
-            out[i:i + batch] += (e / e.sum(axis=1, keepdims=True))[:, 0] / len(HYPOTHESES)
-    return [float(x) for x in out]
+            out[i:i + batch, j] = (e / e.sum(axis=1, keepdims=True))[:, 0]
+    return [[round(float(x), 6) for x in r] for r in out]
 
 
 def textcat_scores(texts: Sequence[str]) -> List[float]:
@@ -216,9 +234,98 @@ def textcat_scores(texts: Sequence[str]) -> List[float]:
     return [float(d.cats.get("RULE", 0.0)) for d in m.pipe(texts)]
 
 
+def stack_inputs(b: Sequence[float], c: Sequence[Sequence[float]], texts: Sequence[str],
+                 feats: Sequence[Dict[str, bool]]) -> List[List[float]]:
+    """The combiner's inputs per sentence (user, 2026-10-14: "let's try a B+C combo"): B's score, C's rule hypotheses
+    (mean and max), C's "one-off task" score, the pattern list's strength, the parse's flags, the length in words."""
+    out = []
+    for bi, ci, t, f in zip(b, c, texts, feats):
+        rule = ci[:len(HYPOTHESES)]
+        st = rl.pattern_strength(t)
+        out.append([bi, sum(rule) / len(rule), max(rule), ci[-1], 1.0 if st == "strong" else 0.0,
+                    1.0 if st == "weak" else 0.0] + [1.0 if f[k] else 0.0 for k in STACK_FLAGS]
+                   + [min(len(t.split()), 60) / 60])
+    return out
+
+
+def stack_scores(texts: Sequence[str], feats: Sequence[Dict[str, bool]], key: str) -> List[float]:
+    head = _heads()[key]
+    enc, nli = head["b"], head["c"]
+    bh = _heads()[f"B:{enc}"]
+    b = [logistic(x, bh["w"], bh["b"]) for x in b_inputs(texts, feats, enc, False)]
+    c = nli_matrix(texts, nli, tuple(HYPOTHESES) + (TASK_HYPOTHESIS,))
+    return [logistic(x, head["w"], head["bias"]) for x in stack_inputs(b, c, texts, feats)]
+
+
+# D: a tiny LLM asked "rule or not" (user, 2026-10-14: "it could be possible to use the qwen LLM the tiny one as well and
+# see how well it does in a test case"): llama-server on the CPU, the probability of "yes" as the score. A test only.
+LLMS = {"qwen35": "Qwen3.5-0.8B-Q8_0.gguf", "qwen3": "Qwen3-0.6B-Q8_0.gguf"}
+LLM_PORT = int(os.environ.get("CARL_RULES_LLM_PORT", "8231"))
+LLM_PROMPT = """You sort sentences from a user's messages to a coding assistant.
+A RULE sets how the work is done from then on, or limits the task it is in: a constraint, must or never, a convention, a preference, a scope limit, a tool or library to keep using, a compatibility limit, a standing process ("after every change, run the linter"). "Add a cache without new dependencies." is a rule (a limit inside a task).
+NOT A RULE: a one-off task, the spec of that task (inputs, outputs, formats, exit codes, file names, how the new code behaves), a question, information, narration, a bug report, pasted errors, thanks.
+Examples:
+"Never commit secrets." -> yes
+"Use httpx, not requests." -> yes
+"Keep the public header unchanged." -> yes
+"We're on Python 3.8, so no match statements." -> yes
+"Add a --json flag to the export command." -> no
+"It should return 404 when the user does not exist." -> no
+"Why is the test client getting a 500?" -> no
+"I tried it twice and it still fails." -> no
+Answer with one word: yes or no."""
+
+
+def llm_scores(texts: Sequence[str], which: str) -> List[float]:
+    import math
+    import time
+    import urllib.request
+    url = f"http://127.0.0.1:{LLM_PORT}"
+    proc = None
+    try:
+        urllib.request.urlopen(url + "/health", timeout=2)
+    except OSError:
+        dev = ["-ngl", "99"] if DEVICE == "gpu" else ["--device", "none", "-ngl", "0"]
+        proc = subprocess.Popen(["llama-server", "-m", os.path.join(MODELS, LLMS[which]), *dev,
+                                 "--port", str(LLM_PORT), "--host", "127.0.0.1", "-c", "4096", "-np", "1",
+                                 "--temp", "0"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        for _ in range(120):
+            try:
+                if json.load(urllib.request.urlopen(url + "/health", timeout=2)).get("status") == "ok":
+                    break
+            except (OSError, ValueError):
+                time.sleep(0.5)
+    out = []
+    try:
+        for t in texts:
+            body = {"messages": [{"role": "system", "content": LLM_PROMPT},
+                                 {"role": "user", "content": f'"{t}" ->'}],
+                    "max_tokens": 1, "temperature": 0, "logprobs": True, "top_logprobs": 20,
+                    "chat_template_kwargs": {"enable_thinking": False}}
+            r = urllib.request.Request(url + "/v1/chat/completions", data=json.dumps(body).encode(),
+                                       headers={"Content-Type": "application/json"})
+            doc = json.load(urllib.request.urlopen(r, timeout=120))
+            top = doc["choices"][0]["logprobs"]["content"][0]["top_logprobs"]
+            p = {"yes": 0.0, "no": 0.0}
+            for x in top:
+                w = x["token"].strip().lower()
+                if w in p:
+                    p[w] += math.exp(x["logprob"])
+            out.append(p["yes"] / (p["yes"] + p["no"]) if p["yes"] + p["no"] else 0.5)
+    finally:
+        if proc:
+            proc.terminate()
+            proc.wait(timeout=30)
+    return out
+
+
 def scores(tier: str, texts: Sequence[str], feats: Sequence[Dict[str, bool]]) -> List[float]:
     """The rule score (0 to 1) of each sentence by a tier's classifier."""
     kind = tier.split("+", 1)[1]
+    if kind.startswith("D:"):
+        return llm_scores(texts, kind[2:])
+    if kind.startswith("S:"):
+        return stack_scores(texts, feats, kind)
     if kind == "A":
         return textcat_scores(texts)
     if kind.startswith("B:"):
@@ -232,7 +339,7 @@ def scores(tier: str, texts: Sequence[str], feats: Sequence[Dict[str, bool]]) ->
 
 def head_key(tier: str) -> str:
     k = tier.split("+", 1)[1]
-    return k if k == "A" or k.startswith("C:") else "B:" + k[2:]
+    return k if k == "A" or k.startswith(("C:", "S:", "D:")) else "B:" + k[2:]
 
 
 def classify(ss: Sequence[rl.Sentence], tier: str) -> Tuple[str, List[Optional[str]]]:
@@ -240,7 +347,7 @@ def classify(ss: Sequence[rl.Sentence], tier: str) -> Tuple[str, List[Optional[s
     strengths, feats = parse(ss)
     if tier == "auto":
         av = available()
-        tier = next((t for pre in ("spacy+B", "spacy+C", "spacy+A", "spacy") for t in av if t.startswith(pre)),
+        tier = next((t for pre in ("spacy+S", "spacy+B", "spacy+C", "spacy+A", "spacy") for t in av if t.startswith(pre)),
                     "patterns")
         if tier == "patterns":
             return "patterns", rl.classify_patterns(ss)
