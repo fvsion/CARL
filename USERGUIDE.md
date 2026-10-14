@@ -278,11 +278,11 @@ Use this procedure for clients that are not on the server Mac and not in the VMw
 
 1. Make the zip:
    ```bash
-   tools/make-share-zip.sh [--with-docs] [OUT]
+   tools/make-share-zip.sh [OUT]
    ```
    The command writes `../CARL-YYYYMMDD.zip`, or the file `OUT`. The zip holds one folder, `CARL/`.
    - The zip holds only the files that git tracks. It does not include files that git does not track (test folders, notes), caches, `.DS_Store` files or `*.bak.*` files. It never includes `api-key`, `remote.json` or `installed-models.json`.
-   - The development notes (`docs/`) are not in git. `--with-docs` (the first argument) adds them from the disk.
+   - The development notes (`docs/`) are not in git, so they are never in the zip.
    - The models, the logs and the API key are outside the folder (`~/models`, `~/.config/carl`).
 2. On the Mac of your friend, unzip the file.
 3. Do the steps in [Set up the Mac](#set-up-the-mac) and [Clients on the same Mac](#clients-on-the-same-mac-no-vm). In short:
@@ -2085,7 +2085,7 @@ CARL_DOCKER_TESTS=1 python3 -m unittest tests/integration/test_sync_docker.py
 | `./carl.sh -h` | The help: all commands. An unknown command gives one `error:` line and exits with 2. |
 | `./carl.sh --help-adv` | All `llama-server` flags |
 | `./host/models.sh list\|download\|verify\|delete NAME\|path NAME\|get NAME FIELD\|default\|downloaded` | The models tool (a wrapper around `tools/carl.py`; `./carl.sh models\|download\|verify\|delete` use it): list, download, verify, delete, the local path, one field, the default model for this Mac, the downloaded models |
-| `tools/make-share-zip.sh [--with-docs] [OUT]` | Makes a clean zip of the folder to share |
+| `tools/make-share-zip.sh [OUT]` | Makes a clean zip of the folder to share |
 | `tools/llama-log.sh [-f] [FILE]` | The server log as plain text (no ANSI codes). `-f` follows the log. |
 
 **Environment variables of the launcher:**

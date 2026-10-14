@@ -167,7 +167,7 @@ The top-level keys `default` and `default_small` are the offline fallback of Aut
 | `tools/metal-limit.swift` | Reads the GPU memory limit of the Mac |
 | `tools/prompt-size.py` | Counts the tokens of the system prompt and of each tool in a captured request |
 | `tools/req-capture-proxy.py` | A request-capture proxy. It refuses wildcard listen addresses. It writes its log with mode 600. |
-| `tools/make-share-zip.sh` | Makes a clean zip of this project that you can share: the files that git tracks (`git ls-files`), never a key or the server's files. `--with-docs` adds `docs/` (not in git) from the disk. |
+| `tools/make-share-zip.sh` | Makes a clean zip of this project that you can share: the files that git tracks (`git ls-files`), never a key or the server's files, never `docs/` (not in git). |
 | `tools/tuishot.py` | Makes terminal screenshots and GIFs (the dashboard, OpenCode) for the README |
 | `tools/llama-log.sh` | Shows the server log as plain text |
 | `tools/llama-wait-idle.sh` | Waits until the server is idle |

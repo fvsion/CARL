@@ -239,7 +239,7 @@ class ShareZipTest(unittest.TestCase):
                                timeout=120)
             self.assertEqual(p.returncode, 0, p.stderr)
             self.assertTrue(p.stdout.startswith(out + "  ("), p.stdout)
-            self.assertIn("files, without development notes)", p.stdout)
+            self.assertTrue(p.stdout.rstrip().endswith(" files)"), p.stdout)
             with zipfile.ZipFile(out) as z:
                 names = {n[len("CARL/"):] for n in z.namelist() if not n.endswith("/")}
         tracked = subprocess.run(["git", "-C", REPO, "ls-files"], capture_output=True, text=True,
@@ -248,6 +248,11 @@ class ShareZipTest(unittest.TestCase):
         self.assertEqual(names, want)
         self.assertFalse([n for n in names if re.search(r"(^|/)(api-key|remote\.json|installed-models\.json)$|"
                                                         r"__pycache__|^docs/|^dist/", n)])
+        # docs/ is never zipped (user, 2026-10-12): the option that added it is gone, and an option is refused
+        p = subprocess.run([os.path.join(REPO, "tools", "make-share-zip.sh"), "--with-docs"], capture_output=True,
+                           text=True, timeout=60)
+        self.assertEqual(p.returncode, 2)
+        self.assertIn("docs/ is never zipped", p.stderr)
 
 
 # ====================================================================== ./carl.sh package
