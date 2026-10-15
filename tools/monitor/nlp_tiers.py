@@ -33,7 +33,10 @@ ENCODERS = {"bge": ("bge-small-en-v1.5-f16.gguf", "cls"), "minilm": ("all-MiniLM
             "setfit": ("rules-setfit-bge-small-f16.gguf", "cls"),
             # the same, retrained with the discovery labels and inline code without its backticks (head "input":
             # "nocode"; discovery 2026-10-14: a sentence ending in "`code`." no longer reads as a task spec)
-            "setfit2": ("rules-setfit2-bge-small-f16.gguf", "cls")}
+            "setfit2": ("rules-setfit2-bge-small-f16.gguf", "cls"),
+            # setfit2's recipe at three seeds, the bodies' weights averaged into one (a model soup; discovery round 2:
+            # the same mean as one seed without the seed lottery: bench recall 0.88 in three soups of nine seeds)
+            "setfit3": ("rules-setfit3-bge-small-f16.gguf", "cls")}
 NLI = {"deberta": "nlp/deberta-v3-xsmall-zeroshot", "modernbert": "nlp/modernbert-base-zeroshot"}
 HYPOTHESES = ("This is a rule.", "This is a coding convention or a restriction.",   # the best of 9 on the training
               "This is a standing instruction, not a single task.")                   # labels (F1 0.82, DeBERTa)
@@ -361,7 +364,7 @@ def classify(ss: Sequence[rl.Sentence], tier: str) -> Tuple[str, List[Optional[s
     if tier == "auto":
         av = available()
         # the best measured first (2026-10-14, held-out F1: SetFit 0.89, the B+C combiner 0.81, B 0.76, C 0.74)
-        tier = next((t for pre in ("spacy+B:setfit2", "spacy+B:setfit", "spacy+S", "spacy+B", "spacy+C", "spacy+A", "spacy") for t in av
+        tier = next((t for pre in ("spacy+B:setfit2", "spacy+B:setfit3", "spacy+B:setfit", "spacy+S", "spacy+B", "spacy+C", "spacy+A", "spacy") for t in av
                      if t.startswith(pre)),
                     "patterns")
         if tier == "patterns":

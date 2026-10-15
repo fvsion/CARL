@@ -88,6 +88,28 @@ class ListTest(unittest.TestCase):
         self.assertEqual(kept[0].quote, "Every function you add gets a docstring.")
 
 
+class ChangedRuleTest(unittest.TestCase):
+    """A rule changed or lifted later, and questions (discovery round 2, 2026-10-14)."""
+
+    def quotes(self, *turns: str) -> list:
+        msgs = []
+        for t in turns:
+            msgs += [{"role": "user", "content": t}, {"role": "assistant", "content": "OK."}]
+        return [r["quote"] for r in rl.run(msgs, "patterns")["rules"]]
+
+    def test_lifted_rule_is_quoted(self) -> None:
+        got = self.quotes("Profile it first; don't change any code until I've seen the numbers.",
+                          "OK, those numbers help. You can change code now.")
+        self.assertIn("You can change code now.", got)
+
+    def test_change_cue_without_a_matching_rule_is_not(self) -> None:
+        got = self.quotes("Never commit secrets.", "Scratch the staging test, staging is down today.")
+        self.assertEqual(got, ["Never commit secrets."])
+
+    def test_question_is_never_a_rule(self) -> None:
+        self.assertEqual(self.quotes("Should we never use print here?"), [])
+
+
 class DiscoveryTest(unittest.TestCase):
     """The list logic of the recall discovery (2026-10-14)."""
 

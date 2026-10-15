@@ -469,6 +469,11 @@ def run(messages: Sequence[Mapping[str, Any]], tier: str = "auto", cap: int = CA
     major = list_majority(ss, strengths)
     strengths = ["strong" if listed[i] else (None if s.intro or s.lead else st or ("weak" if major[i] else None))
                  for i, (s, st) in enumerate(zip(ss, strengths))]
+    if os.environ.get("CARL_RULES_CHANGE", "1") == "1":
+        strengths = changed_rules(ss, strengths)
+    if os.environ.get("CARL_RULES_QVETO", "1") == "1":
+        strengths = [None if st and s.text.rstrip().endswith("?") and not _REQUEST.match(_body(s.text)) else st
+                     for s, st in zip(ss, strengths)]
     # a sentence that only says more about the rule before it ("Its first line...", "For example, ...") is quoted
     # with it, so a rule said in two sentences comes back whole
     merged: List[Tuple[Sentence, Optional[str]]] = []
@@ -485,6 +490,33 @@ def run(messages: Sequence[Mapping[str, Any]], tier: str = "auto", cap: int = CA
     text, kept, left = build(rules, cap)
     return {"text": text, "rules": [{"turn": r.turn, "quote": r.quote, "strength": r.strength} for r in kept],
             "tier": used, "dropped": left}
+
+
+# A rule changed or lifted later: a change cue, and a content word shared with an earlier rule ("Don't change any code
+# until I've seen the numbers." ... "You can change code now."; discovery, 2026-10-14)
+_CHANGE = re.compile(r"\b(?:change of plan|forget (?:what|the|about)|scratch (?:that|the|what)|ignore what i said|"
+                     r"never ?mind|on second thought|you can (?:\w+ ){0,4}now\b|(?:is|are) (?:fine|ok|okay|allowed) "
+                     r"(?:now|after all|again)|no longer|not anymore|any ?more\b|from here on|actually,? |"
+                     r"instead of what i said|same rule)", re.I)
+_REQUEST = re.compile(r"^(?:can|could|would|will) you\b", re.I)
+_STOP = frozenset("""the a an and or but to of in on for with from by at as is are be it its this that these those you
+your we our i me my any all every each some no not do does don't did can could would will should must have has had
+use make keep add new now then than so if when also just only more less one two""".split())
+
+
+def _content(text: str) -> set:
+    return {w.rstrip("s") for w in re.findall(r"[a-z][a-z_]+", text.lower()) if len(w) > 3 and w not in _STOP}
+
+
+def changed_rules(ss: Sequence[Sentence], strengths: Sequence[Optional[str]]) -> List[Optional[str]]:
+    out = list(strengths)
+    for i, s in enumerate(ss):
+        if out[i] or s.text.rstrip().endswith("?") or not _CHANGE.search(s.text):
+            continue
+        words = _content(s.text)
+        if any(out[j] and words & _content(ss[j].text) for j in range(i)):
+            out[i] = "weak"
+    return out
 
 
 def _nlp_python() -> Optional[str]:
