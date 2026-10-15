@@ -79,6 +79,70 @@ class ListTest(unittest.TestCase):
     def test_nothing(self) -> None:
         self.assertEqual(rl.run([{"role": "user", "content": "Thanks!"}], "patterns")["text"], "")
 
+    def test_cap_keeps_the_first_message_last(self) -> None:
+        rules = [rl.Rule(1, "Every function you add gets a docstring.", "weak")] + [
+            rl.Rule(t, f"Use the helper number {t} for every thing of that kind in this project.", "strong")
+            for t in range(2, 40)]
+        text, kept, left = rl.build(rules, cap=200)
+        self.assertGreater(left, 0)
+        self.assertEqual(kept[0].quote, "Every function you add gets a docstring.")
+
+
+class DiscoveryTest(unittest.TestCase):
+    """The list logic of the recall discovery (2026-10-14)."""
+
+    def quotes(self, *turns: str) -> list:
+        msgs = []
+        for t in turns:
+            msgs += [{"role": "user", "content": t}, {"role": "assistant", "content": "OK."}]
+        return [r["quote"] for r in rl.run(msgs, "patterns")["rules"]]
+
+    def test_lead_line_is_not_a_rule(self) -> None:
+        got = self.quotes("Please keep to these while you work on the importer:\n- Log through `audit`, never print.\n"
+                          "- No wildcard imports.")
+        self.assertEqual(got, ["Log through `audit`, never print.", "No wildcard imports."])
+
+    def test_standing_intro_without_the_word_rules(self) -> None:
+        got = self.quotes("Some things to keep in mind the whole time:\n- Small commits.\n- Branches start with the "
+                          "ticket id.\n\nNow add a /health route.")
+        self.assertEqual(got, ["Small commits.", "Branches start with the ticket id."])
+
+    def test_task_list_is_not_a_rules_list(self) -> None:
+        self.assertEqual(self.quotes("Steps for today:\n- bump requests;\n- run the integration tests."), [])
+
+    def test_line_after_an_item_is_its_own_sentence(self) -> None:
+        got = [s.text for s in rl.split("Changes:\n- a date filter;\n- a CSV button.\nKeep the layout as it is.")]
+        self.assertEqual(got, ["Changes:", "a date filter;", "a CSV button.", "Keep the layout as it is."])
+
+    def test_lower_case_lines_split(self) -> None:
+        got = [s.text for s in rl.split("add a dark mode toggle\ndont touch the colors file, the designer owns it\n"
+                                        "this sentence was wrapped in the middle of\nthe line by hand.")]
+        self.assertEqual(got, ["add a dark mode toggle", "dont touch the colors file, the designer owns it",
+                               "this sentence was wrapped in the middle of the line by hand."])
+
+    def test_two_sentence_rule_quoted_whole(self) -> None:
+        got = self.quotes("Every function that you add or change gets a docstring. Its first line starts with "
+                          "`Does:`. Now fix the parser.")
+        self.assertEqual(got, ["Every function that you add or change gets a docstring. Its first line starts with "
+                               "`Does:`."])
+
+    def test_list_of_mostly_rules(self) -> None:
+        got = self.quotes("- Never commit secrets.\n- Name every new test method `test_rule_` and then what it checks."
+                          "\n- Don't touch `vendor/`.")
+        self.assertEqual(len(got), 3)
+
+    def test_conventions_said_as_facts(self) -> None:
+        cases = {"Every foreign key column gets an index.": "weak",
+                 "New tests go in tests/unit, one file per module.": "weak",
+                 "Config keys are snake_case.": "weak",
+                 "Fix the code, not the tests.": "weak",
+                 "Standard library only, please.": "weak",
+                 "In this codebase we write Optional[X].": "strong",
+                 "We're on Python 3.9 here.": "strong",
+                 "Read every test file in this project and list what is untested.": None}
+        for text, want in cases.items():
+            self.assertEqual(rl.pattern_strength(text), want, text)
+
 
 if __name__ == "__main__":
     unittest.main()

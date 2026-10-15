@@ -9,13 +9,17 @@ Each model: out-of-fold scores on the training sentences (the folds of train_rul
 the thresholds), then a model fitted on all of them, its scores on the held-out sets, and the model saved (DeBERTa also
 as ONNX, int8). Input: train_set.json (train_rules.py --export); output: OUT/scores.json and the models.
 
-    python finetune.py train_set.json OUT [--only setfit,nli]
+    python finetune.py train_set.json OUT [--only setfit,nli] [--setfit-input nocode]
+
+--setfit-input nocode: SetFit reads inline code without its backticks (the discovery, 2026-10-14: a sentence ending in
+"`code`." read as a task spec; the head then says "input": "nocode" so nlp_tiers.model_input does the same at run time).
 """
 from __future__ import annotations
 
 import argparse
 import json
 import os
+import re
 import sys
 from typing import Dict, List, Sequence
 
@@ -46,7 +50,8 @@ def nli_run(train_x: Sequence[str], train_y: Sequence[int], score_sets: Dict[str
     set_seed(SEED)
     base = "MoritzLaurer/deberta-v3-xsmall-zeroshot-v1.1-all-33"
     tok = AutoTokenizer.from_pretrained(base)
-    model = AutoModelForSequenceClassification.from_pretrained(base)       # 0 entailment, 1 not_entailment
+    # 0 entailment, 1 not_entailment; full precision (the hub's weights are fp16: mixed precision cannot train them)
+    model = AutoModelForSequenceClassification.from_pretrained(base, dtype=torch.float32)
     prem, hyp, lab = [], [], []
     for t, y in zip(train_x, train_y):
         for h, true in ((H_RULE, y == 1), (H_TASK, y == 0)):
@@ -56,7 +61,7 @@ def nli_run(train_x: Sequence[str], train_y: Sequence[int], score_sets: Dict[str
     ds = Dataset.from_dict({"p": prem, "h": hyp, "label": lab}).map(
         lambda b: tok(b["p"], b["h"], truncation=True, max_length=256), batched=True)
     args = TrainingArguments(output_dir=os.path.join(save or "tmp-nli", "run"), per_device_train_batch_size=32,
-                             num_train_epochs=3, learning_rate=2e-5, warmup_ratio=0.06, weight_decay=0.01,
+                             num_train_epochs=3, learning_rate=2e-5, warmup_steps=0.06, weight_decay=0.01,
                              fp16=torch.cuda.is_available(), seed=SEED, save_strategy="no", report_to=[],
                              logging_strategy="no")
     Trainer(model=model, args=args, train_dataset=ds, processing_class=tok).train()
@@ -94,16 +99,25 @@ def main() -> int:
     ap.add_argument("train_set")
     ap.add_argument("out")
     ap.add_argument("--only", default="setfit,nli")
+    ap.add_argument("--setfit-input", default="raw", choices=("raw", "nocode"))
     a = ap.parse_args()
     with open(a.train_set, encoding="utf-8") as f:
         d = json.load(f)
-    texts, ys, folds = d["texts"], d["ys"], d["folds"]
+    ys, folds = d["ys"], d["folds"]
     os.makedirs(a.out, exist_ok=True)
     path = os.path.join(a.out, "scores.json")
     res = json.load(open(path)) if os.path.exists(path) else {}
+
+    def nocode(t: str) -> str:
+        return re.sub(r"`([^`\n]*)`", r"\1", t)
     for name, run in (("setfit", setfit_run), ("nli", nli_run)):
         if name not in a.only.split(","):
             continue
+        if name == "setfit" and a.setfit_input == "nocode":            # SetFit only; the NLI model reads the text as it is
+            texts = [nocode(t) for t in d["texts"]]
+            evals = {k: [nocode(t) for t in v] for k, v in d["eval"].items()}
+        else:
+            texts, evals = d["texts"], d["eval"]
         oof = [0.0] * len(texts)
         for k, fold in enumerate(folds):
             held = set(fold)
@@ -112,7 +126,7 @@ def main() -> int:
             for i, p in zip(fold, got["fold"]):
                 oof[i] = p
             print(f"{name}: fold {k + 1} of {len(folds)} done", flush=True)
-        final = run(texts, ys, d["eval"], os.path.join(a.out, name))
+        final = run(texts, ys, evals, os.path.join(a.out, name))
         res[name] = {"oof": oof, **final}
         with open(path, "w", encoding="utf-8") as f:
             json.dump(res, f)

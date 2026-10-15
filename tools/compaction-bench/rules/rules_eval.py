@@ -11,6 +11,12 @@ Each tier labels each gold sentence alone (the classifier's quality, apart from 
 own: how many gold sentences the splitter gives back whole from the joined message.
 
     python3 rules_eval.py [--tiers patterns,spacy,spacy+A,spacy+B,spacy+C] [--sets bench,test] [--errors]
+    python3 rules_eval.py --e2e e2e-lists.jsonl,e2e-lists-2.jsonl --tiers ...
+
+--e2e: whole messages through rules.run (the split, the list logic, the classifier, the list), against each session's
+expected quotes ({"id", "turns": [message, ...], "rules": [quote, ...], "optional": [...]}; the discovery's sets,
+2026-10-14: lists with and without a rules intro, task and spec lists, rules said in two sentences); a rule counts when
+a quote equals it.
 """
 from __future__ import annotations
 
@@ -77,13 +83,49 @@ def scores(g: Gold, pred: Sequence[int]) -> Dict[str, float]:
             "fn": fn, "n": len(g), "rules": tp + fn}
 
 
+def e2e(path: str, tier: str, errors: bool = False) -> Dict[str, float]:
+    def norm(x: str) -> str:
+        return " ".join(x.split())
+    tp = fp = fn = 0
+    with open(path if os.path.isabs(path) else os.path.join(HERE, path), encoding="utf-8") as f:
+        for line in (x for x in f if x.strip()):
+            d = json.loads(line)
+            ms: List[dict] = []
+            for t in d["turns"]:
+                ms += [{"role": "user", "content": t}, {"role": "assistant", "content": "OK."}]
+            qs = [norm(r["quote"]) for r in rl.run(ms, tier)["rules"]]
+            gold, opt = [norm(x) for x in d["rules"]], [norm(x) for x in d.get("optional", [])]
+            for g in gold:
+                tp, fn = (tp + 1, fn) if g in qs else (tp, fn + 1)
+                if errors and g not in qs:
+                    print(f"      missed  {d['id']}: {g[:130]}")
+            for q in qs:
+                if q not in gold and q not in opt:
+                    fp += 1
+                    if errors:
+                        print(f"      wrong   {d['id']}: {q[:130]}")
+    pr = tp / (tp + fp) if tp + fp else 0.0
+    rc = tp / (tp + fn) if tp + fn else 0.0
+    return {"precision": pr, "recall": rc, "f1": 2 * pr * rc / (pr + rc) if pr + rc else 0.0, "tp": tp, "fp": fp, "fn": fn}
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--tiers", default="patterns")
     ap.add_argument("--sets", default="bench,test")
     ap.add_argument("--errors", action="store_true", help="list each wrong sentence")
     ap.add_argument("--json", help="write the scores here (JSON lines)")
+    ap.add_argument("--e2e", default="", help="end-to-end sets (whole messages, expected quotes), comma separated")
     a = ap.parse_args()
+    if a.e2e:
+        for path in a.e2e.split(","):
+            print(f"\n{path} (end to end)")
+            print(f"  {'tier':16} {'precision':>9} {'recall':>7} {'F1':>5}   tp  fp  fn")
+            for tier in a.tiers.split(","):
+                sc = e2e(path, tier, a.errors)
+                print(f"  {tier:16} {sc['precision']:9.2f} {sc['recall']:7.2f} {sc['f1']:5.2f}  {sc['tp']:3} {sc['fp']:3} "
+                      f"{sc['fn']:3}")
+        return 0
     rows = []
     for name in a.sets.split(","):
         sessions = load(name)

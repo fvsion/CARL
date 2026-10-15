@@ -27,7 +27,13 @@ import rules as rl
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 MODELS = os.environ.get("CARL_NLP_MODELS") or os.path.expanduser("~/models/gguf")
-ENCODERS = {"bge": ("bge-small-en-v1.5-f16.gguf", "cls"), "minilm": ("all-MiniLM-L6-v2-f16.gguf", "mean")}
+ENCODERS = {"bge": ("bge-small-en-v1.5-f16.gguf", "cls"), "minilm": ("all-MiniLM-L6-v2-f16.gguf", "mean"),
+            # bge-small fine-tuned by SetFit on the training labels (finetune.py on a CUDA computer, then llama.cpp's
+            # converter): the same size, its own head (B:setfit in rules-heads.json)
+            "setfit": ("rules-setfit-bge-small-f16.gguf", "cls"),
+            # the same, retrained with the discovery labels and inline code without its backticks (head "input":
+            # "nocode"; discovery 2026-10-14: a sentence ending in "`code`." no longer reads as a task spec)
+            "setfit2": ("rules-setfit2-bge-small-f16.gguf", "cls")}
 NLI = {"deberta": "nlp/deberta-v3-xsmall-zeroshot", "modernbert": "nlp/modernbert-base-zeroshot"}
 HYPOTHESES = ("This is a rule.", "This is a coding convention or a restriction.",   # the best of 9 on the training
               "This is a standing instruction, not a single task.")                   # labels (F1 0.82, DeBERTa)
@@ -337,6 +343,13 @@ def scores(tier: str, texts: Sequence[str], feats: Sequence[Dict[str, bool]]) ->
     raise ValueError(f"unknown tier {tier}")
 
 
+def model_input(t: str, head: Dict[str, Any]) -> str:
+    """The text as the classifier was trained on it: "nocode" drops inline code's backticks (head "input")."""
+    if head.get("input") == "nocode" or os.environ.get("CARL_RULES_INPUT") == "nocode":
+        return re.sub(r"`([^`\n]*)`", r"\1", t)
+    return t
+
+
 def head_key(tier: str) -> str:
     k = tier.split("+", 1)[1]
     return k if k == "A" or k.startswith(("C:", "S:", "D:")) else "B:" + k[2:]
@@ -347,7 +360,9 @@ def classify(ss: Sequence[rl.Sentence], tier: str) -> Tuple[str, List[Optional[s
     strengths, feats = parse(ss)
     if tier == "auto":
         av = available()
-        tier = next((t for pre in ("spacy+S", "spacy+B", "spacy+C", "spacy+A", "spacy") for t in av if t.startswith(pre)),
+        # the best measured first (2026-10-14, held-out F1: SetFit 0.89, the B+C combiner 0.81, B 0.76, C 0.74)
+        tier = next((t for pre in ("spacy+B:setfit2", "spacy+B:setfit", "spacy+S", "spacy+B", "spacy+C", "spacy+A", "spacy") for t in av
+                     if t.startswith(pre)),
                     "patterns")
         if tier == "patterns":
             return "patterns", rl.classify_patterns(ss)
@@ -362,8 +377,24 @@ def classify(ss: Sequence[rl.Sentence], tier: str) -> Tuple[str, List[Optional[s
                         and not (feats[i]["narration"] and not (feats[i]["absolute"] or feats[i]["modal"])))
         or (flow == ">>" and strengths[i]))]
     tier = tier.replace(">>", "+").replace(">", "+")
-    sc = scores(tier, [clean(ss[i].text) for i in idx], [feats[i] for i in idx])
-    thr = float(_heads().get(head_key(tier), {}).get("threshold", 0.5))
+    texts = [clean(ss[i].text) for i in idx]
+    fs = [feats[i] for i in idx]
+    owner = list(range(len(idx)))
+    # a unit of several sentences (a list item) scores as its best sentence too (discovery, 2026-10-14: the second
+    # sentence of "Every function ... gets a docstring. Its first line starts with `Does:` ..." took it to 0.27)
+    extra = [(k, p) for k, i in enumerate(idx) for p in rl.parts(ss[i].text) if not hard_drop(p)]
+    if extra:
+        _, efs = parse([rl.Sentence(0, p, j) for j, (_, p) in enumerate(extra)])
+        texts += [clean(p) for _, p in extra]
+        fs += efs
+        owner += [k for k, _ in extra]
+    head = _heads().get(head_key(tier), {})
+    texts = [model_input(t, head) for t in texts]
+    raw = scores(tier, texts, fs)
+    sc = [0.0] * len(idx)
+    for k, p in zip(owner, raw):
+        sc[k] = max(sc[k], p)
+    thr = float(head.get("threshold", 0.5))
     out: List[Optional[str]] = [None] * len(ss)
     for i, p in zip(idx, sc):
         if p >= thr:

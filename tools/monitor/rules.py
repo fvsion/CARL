@@ -40,8 +40,9 @@ NLP_DIR = os.environ.get("CARL_NLP_DIR") or os.path.join(ROOT, ".nlp")       # C
 CAP_TOKENS = 1000
 CHARS_PER_TOKEN = 3.35               # as carl-compaction.js (messages)
 QUOTE_MAX = 400                      # a longer sentence is quoted to here and marked cut
-TIERS = ("patterns", "spacy", "spacy+A", "spacy+B:bge", "spacy+B:minilm", "spacy+B:bge+f", "spacy+B:minilm+f",
-         "spacy+C:deberta", "spacy+C:modernbert")
+# A tier: "patterns", "spacy", or spaCy then a classifier: "+" (it decides alone), ">" (spaCy drops questions and
+# narration first), ">>" (it confirms spaCy's rules); A | B:ENCODER[+f] | C:NLI | S:ENCODER+NLI | D:LLM (nlp_tiers.py)
+TIER_RE = re.compile(r"^(?:auto|patterns|spacy|spacy(?:\+|>|>>)(?:A|B:\w+(?:\+f)?|C:[\w-]+|S:\w+\+[\w-]+|D:\w+))$")
 HEADER = "Rules from the user (their exact words, oldest first). The newest rule wins."
 
 # ------------------------------------------------------------------ the user's own words
@@ -102,6 +103,10 @@ _HELD = re.compile("|".join([
 ]), re.S | re.I)
 _BREAK = re.compile(r"(?<=[.!?])[\"')\]]*\s+(?=\S)|\n\s*\n|\n(?=\s*(?:[-*•]|\d+[.)])\s)|\n(?=[A-Z`])")
 _ITEM = re.compile(r"^\s*(?:[-*•]|\d+[.)])\s+")
+# a line break before a lower-case line also ends a sentence (chat lines without full stops: "dont touch the colors
+# file\nalso add a toggle"), unless the line before ends mid-phrase (a comma, "and", "the" ...) (discovery, 2026-10-14)
+_BREAK_NL = re.compile(_BREAK.pattern + r"|(?<![,;:(&/-])(?<!\band)(?<!\bor)(?<!\bthe)(?<!\bto)(?<!\bof)(?<!\ba)"
+                       r"(?<!\bwith)(?<!\bin)(?<!\bfor)[ \t]*\n(?=[ \t]*[a-z])")
 
 
 @dataclass
@@ -109,10 +114,30 @@ class Sentence:
     turn: int
     text: str            # the user's words, as written (spaces squashed)
     pos: int             # its place in the turn
+    item: bool = False   # a list item (kept whole: its sentences are one rule)
+    intro: bool = False  # a line that ends with ":" and names rules ("A few rules for this project:")
+    lead: bool = False   # a line that ends with ":" right before a list (any list): not a rule itself
+
+
+_LINE_ITEM = re.compile(r"\n(?=[ \t]*(?:[-*\u2022]|\d+[.)])[ \t])")
+_INTRO = re.compile(r"\b(?:rules?|guidelines?|conventions?|instructions?|requirements?|constraints?|policy|"
+                    r"policies|standards?)\b[^:\n]*:\s*$", re.I)
+# a standing intro without those words: "Some things to keep in mind the whole time:", "House style for this repo:"
+# (but not a task's list: "Steps for today:", "The new command should:", "Acceptance criteria:")
+_INTRO2 = re.compile(r"(?:\b(?:rules?|guidelines?|conventions?|instructions?|constraints?|policy|policies|standards?|"
+                     r"house style|style guide|ground rules|keep in mind|bear in mind|remember|the whole (?:time|session)|"
+                     r"(?:for|during) (?:the )?(?:whole|entire|rest of)|from now on|going forward|at all times|throughout|"
+                     r"while you work|always|every time|in this (?:repo|project|codebase)|for this (?:repo|project|"
+                     r"codebase)|keep to (?:these|this)|stick to (?:these|this)|follow (?:these|this) (?:the|for|while|"
+                     r"always|throughout|at))\b)[^:\n]*:\s*$", re.I)
+_NOT_INTRO = re.compile(r"\b(?:steps?|to ?do|todos?|the following|tasks?|changes|found|criteria|should|needs?|"
+                        r"must do|plan)\b[^:\n]*:\s*$", re.I)
 
 
 def split(text: str, turn: int = 0) -> List[Sentence]:
-    """The sentences of a text; held parts (code, paths, URLs, versions, abbreviations) never split."""
+    """The sentences of a text; held parts (code, paths, URLs, versions, abbreviations) never split; a list item is
+    one unit (user, 2026-10-14, the directive test: "Every function ... gets a docstring. Its first line starts with
+    `Does:`" is one rule)."""
     held: List[str] = []
 
     def hold(m: re.Match) -> str:
@@ -120,13 +145,61 @@ def split(text: str, turn: int = 0) -> List[Sentence]:
         return f"\x00{len(held) - 1}\x00"
     t = _HELD.sub(hold, text)
     out: List[Sentence] = []
-    for k, part in enumerate(_BREAK.split(t)):
+
+    def emit(part: str, item: bool) -> None:
         s = _ITEM.sub("", part)
         s = re.sub(r"\x00(\d+)\x00", lambda m: held[int(m.group(1))], s)
         s = re.sub(r"[ \t]*\n[ \t]*", " ", s) if "```" not in s else s
         s = re.sub(r"[ \t]{2,}", " ", s).strip()
         if s:
-            out.append(Sentence(turn, s, k))
+            intro = bool(_INTRO.search(s)) or (bool(_INTRO2.search(s)) and not _NOT_INTRO.search(s))
+            out.append(Sentence(turn, s, len(out), item=item, intro=not item and intro))
+    for block in re.split(r"\n\s*\n", t):
+        lines = _LINE_ITEM.split(block)
+        for j, chunk in enumerate(lines):
+            if _ITEM.match(chunk):
+                rest = ""
+                # a line after the item that starts a new sentence (the item's last line ends one) is not part of
+                # the item: "- a CSV button.\nKeep the layout as it is."
+                m = re.search(r"(?<=[.!?;])[\"')\]]*[ \t]*\n(?=[A-Z`])", chunk)
+                if m:
+                    chunk, rest = chunk[:m.start()], chunk[m.end():]
+                emit(chunk, True)
+                if rest:
+                    for part in _BREAK.split(rest):
+                        emit(part, False)
+            else:
+                for part in _BREAK_NL.split(chunk):
+                    emit(part, False)
+    for i, s in enumerate(out[:-1]):              # "Steps for today:", "How I like things done:" before a list
+        if not s.item and s.text.rstrip().endswith(":") and out[i + 1].item:
+            s.lead = True
+    return out
+
+
+def parts(text: str) -> List[str]:
+    """A unit's sentences by the plain sentence split (a list item kept whole can hold several); [] for one."""
+    held: List[str] = []
+
+    def hold(m: re.Match) -> str:
+        held.append(m.group(0))
+        return f"\x00{len(held) - 1}\x00"
+    t = _HELD.sub(hold, text)
+    ps = [re.sub(r"\x00(\d+)\x00", lambda m: held[int(m.group(1))], p).strip() for p in _BREAK.split(t)]
+    ps = [p for p in ps if p]
+    return ps if len(ps) > 1 else []
+
+
+def under_intro(ss: Sequence[Sentence]) -> List[bool]:
+    """The list items right after a rules intro, in the same turn: each one is a rule."""
+    out, on = [False] * len(ss), False
+    for i, s in enumerate(ss):
+        if s.intro:
+            on = True
+        elif s.item and on and ss[i - 1].turn == s.turn:
+            out[i] = True
+        else:
+            on = False
     return out
 
 # ------------------------------------------------------------------ the pattern list (the standard library)
@@ -232,6 +305,26 @@ def is_command(s: str) -> bool:
     return w in VERBS or w in ("don't", "dont", "do", "never", "let's", "lets")
 
 
+# Conventions said as facts, and the project's own way (discovery, 2026-10-14: the training sets' pattern misses;
+# training recall 0.73 -> 0.84 at the same precision, held-out test recall 0.65 -> 0.75, bench 0.88 -> 0.92).
+# Weak: "Every resource gets the tags", "New tests go in tests/unit", "Config keys are snake_case", "Fix the code, not
+# the tests", "Standard library only, please".
+_CONVENTION = re.compile("|".join([
+    r"^(?:every|each|all|any)\s+(?:\w+[\s-]+){0,7}?(?:gets?|has|have|needs?|is|are|uses?|goes|go|lives?|stays?|starts?|"
+    r"ends?|follows?|belongs?|comes?|takes?)\b",
+    r"\b(?:go|goes|live|lives|belong|belongs|stay|stays|come|comes)\s+(?:in|into|under|at|through|out of|from|on top)\b",
+    r"\b(?:snake|camel|pascal|kebab|screaming[_ ]snake)[_ -]?case\b|\b(?:lower|upper)[ _-]?case\b|\bALL_CAPS\b|"
+    r"\bUPPER_CASE\b",
+    r"\w,\s+not\s+(?!a\b|an\b|sure\b|yet\b|now\b|just\b|only\b|really\b)\w",
+    r"^[\w\s'-]{1,40}?\bonly\b\s*(?:[,.;!]|please|$)"]), re.I)
+# Strong: "In this codebase we write ...", "like the rest of the package", "from here on", "We're on Python 3.8".
+_STANDING = re.compile(r"\b(?:in|for|across) this (?:codebase|repo|repository|project|package|crate|app|module)\b|"
+                       r"\b(?:like|as in|same as|as with) the rest of\b|\bfrom here on\b|\bfor the rest of\b|"
+                       r"\bthe whole (?:time|session)\b|"
+                       r"^(?:we|our \w+)'(?:re|ll)\s+(?:on|using|targeting|sticking)\b|"
+                       r"^we(?:'re| are) (?:on|using|targeting)\b", re.I)
+
+
 def pattern_strength(s: str) -> Optional[str]:
     """The pattern list: "strong", "weak", or None (not a rule)."""
     if dropped(s):
@@ -239,6 +332,10 @@ def pattern_strength(s: str) -> Optional[str]:
     b = _body(_CODE_BLOCK.sub(" ", s))
     if _ABSOLUTE.search(b):
         return "strong"
+    if _STANDING.search(b) and not (is_command(b) and first_word(b) not in RULE_VERBS | RULE_VERBS_WITH):
+        return "strong"                      # but "Read every file in this project ..." is a task
+    if _CONVENTION.search(b):
+        return "weak"
     command = is_command(b)
     talks = bool(re.search(r"\byou(?:'ll|'d)?\b", b, re.I))
     if _LIMIT.search(b) and (command or talks or re.match(r"^(?:always|only|never)\b", b, re.I)):
@@ -286,9 +383,13 @@ def build(rules: Iterable[Rule], cap: int = CAP_TOKENS) -> Tuple[str, List[Rule]
     def size(rs: Sequence[Rule]) -> float:
         return (len(HEADER) + sum(len(line(r)) + 1 for r in rs) + 40) / CHARS_PER_TOKEN
     left = 0
-    for strength in ("weak", "strong"):
-        while kept and size(kept) > cap and any(r.strength == strength for r in kept):
-            kept.remove(next(r for r in kept if r.strength == strength))
+    # the first message's rules (where a session's project rules are said) go last (discovery, 2026-10-14: in a long
+    # session the old order dropped all of them)
+    tiers = ((lambda r: r.strength == "weak" and r.turn > 1), (lambda r: r.turn > 1), (lambda r: r.strength == "weak"),
+             (lambda r: True))
+    for ok in tiers:
+        while kept and size(kept) > cap and any(ok(r) for r in kept):
+            kept.remove(next(r for r in kept if ok(r)))
             left += 1
     if not kept:
         return "", [], left
@@ -304,8 +405,39 @@ def sentences(messages: Sequence[Mapping[str, Any]], moved: str = "") -> List[Se
     return [s for turn, text in user_turns(messages, moved) for s in split(text, turn)]
 
 
+def pattern_strengths(ss: Sequence[Sentence]) -> List[Optional[str]]:
+    """Each unit's strength; a unit of several sentences (a list item) is as strong as its strongest sentence."""
+    order = {"strong": 2, "weak": 1, None: 0}
+    return [max([pattern_strength(s.text)] + [pattern_strength(p) for p in parts(s.text)], key=lambda x: order[x])
+            for s in ss]
+
+
 def classify_patterns(ss: Sequence[Sentence]) -> List[Optional[str]]:
-    return [pattern_strength(s.text) for s in ss]
+    return pattern_strengths(ss)
+
+
+_ATTACH = re.compile(r"^(?:its?|this|that|these|those|they|their|them|the same|for example|for instance|e\.g\.|"
+                     r"i\.e\.|like|such as|so|otherwise|except)\b", re.I)
+
+
+def list_majority(ss: Sequence[Sentence], strengths: Sequence[Optional[str]]) -> List[bool]:
+    """The items of a list (consecutive items in one turn, after a lead line) where most items are rules: each one."""
+    out = [False] * len(ss)
+    i = 0
+    while i < len(ss):
+        if ss[i].item:
+            j = i
+            while j < len(ss) and ss[j].item and ss[j].turn == ss[i].turn:
+                j += 1
+            n = j - i
+            k = sum(1 for x in strengths[i:j] if x)
+            if n >= 2 and k * 3 >= n * 2:
+                for m in range(i, j):
+                    out[m] = True
+            i = j
+        else:
+            i += 1
+    return out
 
 
 def available() -> List[str]:
@@ -333,6 +465,22 @@ def run(messages: Sequence[Mapping[str, Any]], tier: str = "auto", cap: int = CA
             pass
         except Exception as e:  # noqa: BLE001  (fail to the pattern list, and say why)
             used = f"patterns ({type(e).__name__}: {str(e)[:120]})"
+    listed = under_intro(ss)
+    major = list_majority(ss, strengths)
+    strengths = ["strong" if listed[i] else (None if s.intro or s.lead else st or ("weak" if major[i] else None))
+                 for i, (s, st) in enumerate(zip(ss, strengths))]
+    # a sentence that only says more about the rule before it ("Its first line...", "For example, ...") is quoted
+    # with it, so a rule said in two sentences comes back whole
+    merged: List[Tuple[Sentence, Optional[str]]] = []
+    for s, st in zip(ss, strengths):
+        if (merged and merged[-1][1] and not s.item and not merged[-1][0].item and not s.lead
+                and s.turn == merged[-1][0].turn and s.pos == merged[-1][0].pos + 1 and _ATTACH.match(s.text)
+                and not s.text.rstrip().endswith("?")):
+            prev, pst = merged[-1]
+            merged[-1] = (Sentence(prev.turn, prev.text + " " + s.text, s.pos), pst if pst == "strong" else st or pst)
+        else:
+            merged.append((s, st))
+    ss, strengths = [m[0] for m in merged], [m[1] for m in merged]
     rules = [Rule(s.turn, quote_of(s.text), st, s.pos) for s, st in zip(ss, strengths) if st]
     text, kept, left = build(rules, cap)
     return {"text": text, "rules": [{"turn": r.turn, "quote": r.quote, "strength": r.strength} for r in kept],
@@ -347,9 +495,11 @@ def _nlp_python() -> Optional[str]:
 def main(argv: Sequence[str]) -> int:
     import argparse
     ap = argparse.ArgumentParser(description="The rules list of carl-compaction's CARL note.")
-    ap.add_argument("--tier", default="auto", choices=("auto",) + TIERS)
+    ap.add_argument("--tier", default="auto", help="auto (the best installed), patterns, spacy, spacy+B:setfit, ...")
     ap.add_argument("--cap", type=int, default=CAP_TOKENS)
     a = ap.parse_args(argv)
+    if not TIER_RE.match(a.tier):
+        ap.error(f"unknown tier {a.tier!r}")
     py = _nlp_python()
     if a.tier != "patterns" and py and os.path.realpath(sys.prefix) != os.path.realpath(NLP_DIR):
         os.execv(py, [py, os.path.abspath(__file__), *argv])          # spaCy and the classifiers are there

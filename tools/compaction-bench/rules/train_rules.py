@@ -20,10 +20,12 @@ sys.path.insert(0, os.path.join(HERE, "..", "..", "monitor"))
 import nlp_tiers as nt  # noqa: E402
 import rules as rl  # noqa: E402
 
-# The training labels: hand-written, in-domain (long task specs), and CC0 rules files in chat voice (CARL_RULES_TRAIN:
+# The training labels: hand-written, in-domain (long task specs), CC0 rules files in chat voice, and the discovery's
+# (2026-10-14: statement-form conventions, lists, rules ending in inline code) (CARL_RULES_TRAIN:
 # a comma list of these files, to measure each one's part)
 TRAIN_FILES = (os.environ.get("CARL_RULES_TRAIN") or
-               "labels-train.jsonl,labels-train-indomain.jsonl,labels-train-cursorrules.jsonl").split(",")
+               "labels-train.jsonl,labels-train-indomain.jsonl,labels-train-cursorrules.jsonl,"
+               "labels-train-discovery.jsonl").split(",")
 FOLDS = 5
 SEED = 7
 L2 = 1.0
