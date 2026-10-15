@@ -13,6 +13,8 @@ from dataclasses import dataclass
 from typing import Literal, Optional, Tuple
 
 UPDATE = "brew upgrade llama.cpp"
+# Without Homebrew (Windows): llama.cpp's own release zip (carl.cmd gpu names the one for this computer)
+UPDATE_RELEASE = "a newer llama.cpp release zip (carl gpu names the one for this computer)"
 State = Literal["older", "same", "newer", "unknown"]
 
 
@@ -48,6 +50,8 @@ def parse_version(text: str) -> Optional[LlamaVersion]:
         word, inside = m.group(1), m.group(2) or ""
         b = _BUILD_IN.search(inside)
         build = int(b.group(1)) if b else None
+        # llama.cpp's own release builds (Windows, Linux) say "0.6.0-dev (build 11429, ...)" for the same build
+        word = re.sub(r"-[A-Za-z][\w.]*$", "", word)
         if _DOTTED.fullmatch(word):
             return LlamaVersion(tuple(int(x) for x in word.split(".")), build)
         only = _BUILD_ONLY.fullmatch(word)
@@ -85,12 +89,12 @@ def check_version(output: str, tested: LlamaVersion = TESTED) -> VersionCheck:
     return VersionCheck(state, found, tested)
 
 
-def start_line(c: VersionCheck) -> str:
+def start_line(c: VersionCheck, update: str = UPDATE) -> str:
     """The launcher's start line: one sentence when the installed llama.cpp is older than the tested one, else ""."""
     if c.state != "older" or c.installed is None:
         return ""
     return (f"llama.cpp {c.installed.text()} is older than the version that CARL is tested with "
-            f"({c.tested.text(inner=True)}): update it with {UPDATE}.")
+            f"({c.tested.text(inner=True)}): update it with {update}.")
 
 
 def health_rows(c: VersionCheck, full: bool) -> Tuple[Tuple[str, str, bool], ...]:

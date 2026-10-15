@@ -146,12 +146,14 @@ def candidate(m: ModelInfo, shape: Optional[ModelShape]) -> Candidate:
 @dataclass(frozen=True)
 class Budget:
     """What a model may use on this Mac: the GPU limit, and RAM less the reserve for macOS
-    and apps (ram 0 = unknown: the GPU limit alone)."""
+    and apps (ram 0 = unknown: the GPU limit alone). unified False: a discrete GPU (Windows, Linux), whose
+    VRAM is apart from the RAM: gpu_limit is its free VRAM (domain/gpu.py) and the RAM does not cap it."""
     gpu_limit: float
     ram: float
     reserve: float
     vm_up: bool = False             # VMware's network is up (the reserve is larger)
     swa: str = "auto"               # cache.swa: sliding-window layers at full length only with "full"
+    unified: bool = True            # the GPU and the CPU share the RAM (a Mac)
 
     @property
     def swa_full(self) -> bool:
@@ -161,18 +163,23 @@ class Budget:
 
     @property
     def allowed(self) -> float:
-        if self.ram <= 0:
+        if self.ram <= 0 or not self.unified:
             return self.gpu_limit
         return max(0.0, min(self.gpu_limit, self.ram - self.reserve))
 
     def describe(self) -> str:
         """What a model may use, and the reason, as a short phrase: 25.0 GiB (the GPU memory limit)."""
+        if not self.unified:
+            return f"{gib(self.allowed)} (the free GPU memory)"
         if self.ram > 0 and self.ram - self.reserve < self.gpu_limit:
             return f"{gib(self.allowed)} (the RAM, {gib(self.ram)}, minus {gib(self.reserve)} kept free for macOS and apps)"
         return f"{gib(self.allowed)} (the GPU memory limit)"
 
     def explain(self) -> str:
         """What a model may use on this Mac, in full sentences (the CLI's ./carl.sh fit)."""
+        if not self.unified:
+            return (f"A model can use {gib(self.allowed)}: the free memory of the GPU, less a part that CARL keeps "
+                    f"free. The GPU has its own memory, apart from the RAM.")
         if self.ram <= 0:
             return f"A model can use {gib(self.allowed)}: the GPU memory limit."
         free = self.ram - self.reserve

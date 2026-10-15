@@ -253,7 +253,8 @@ class Carl:
         if ram_gb:
             return Budget(estimated_limit(ram_gb * GIB)[0], ram_gb * GIB, reserve_bytes(reserve_gb, False), swa=swa)
         vm = self.host.vm_network_up()
-        return Budget(self.gpu.limit()[0], self.host.ram_bytes(), reserve_bytes(reserve_gb, vm), vm, swa)
+        return Budget(self.gpu.limit()[0], self.host.ram_bytes(), reserve_bytes(reserve_gb, vm), vm, swa,
+                      getattr(self.gpu, "unified", True))
 
     def swa_mode(self) -> str:
         """cache.swa (auto / full / window): how sliding-window models are planned; auto when the

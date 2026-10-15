@@ -82,9 +82,10 @@ def main(argv: Optional[list] = None) -> int:
     ap.add_argument("--port", type=int, required=True, help="the server's port (for ~/models/logs/.log-PORT.json)")
     ap.add_argument("--home", default=os.path.expanduser("~"))
     a = ap.parse_args(argv)
-    for sig in (signal.SIGINT, signal.SIGHUP, signal.SIGTERM):
-        signal.signal(sig, signal.SIG_IGN)
-    signal.signal(signal.SIGPIPE, signal.SIG_IGN)
+    # SIGHUP and SIGPIPE do not exist on Windows (CARL's launcher there: tools/carl-serve.py)
+    for name in ("SIGINT", "SIGHUP", "SIGTERM", "SIGPIPE"):
+        if hasattr(signal, name):
+            signal.signal(getattr(signal, name), signal.SIG_IGN)
     write_pointer(pointer_path(a.home, a.port), os.path.abspath(a.log))
     try:
         os.makedirs(os.path.dirname(os.path.abspath(a.log)), exist_ok=True)

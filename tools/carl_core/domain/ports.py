@@ -45,6 +45,9 @@ class ShapeReader(Protocol):
 
 
 class GpuLimit(Protocol):
+    """What a model can use on the GPU. An adapter may set `unified = False` (a discrete GPU: its VRAM is apart
+    from the RAM, so the RAM does not cap it); without the attribute the memory is unified (a Mac)."""
+
     def limit(self) -> Tuple[int, str]:
         """(bytes the GPU may use, how it was found)."""
         ...

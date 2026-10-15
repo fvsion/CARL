@@ -2,13 +2,15 @@
 from __future__ import annotations
 
 import os
+import sys
 from dataclasses import dataclass
-from typing import Callable, Mapping, Optional
+from typing import Callable, Mapping, Optional, Union
 
 from .adapters.console import StdConsole
 from .adapters.downloader import Aria2OrCurl
 from .adapters.filesystem import LocalModelFolder
 from .adapters.gguf_reader import GgufShapes
+from .adapters.gpu_probe import DeviceGpuLimit, PcHost
 from .adapters.huggingface import HfHttpClient
 from .adapters.json_files import JsonFile, LegacyEnvFiles
 from .adapters.system import MacGpuLimit, MacHost, SystemClock
@@ -23,7 +25,11 @@ METAL_PROBE = os.path.join(TOOLS_DIR, "metal-limit.swift")
 
 # Process-wide: header reads (64 MB each) and the GPU limit (a Swift probe) are cached.
 SHAPES = GgufShapes(SHAPE_CACHE)
-GPU = MacGpuLimit(METAL_PROBE, METAL_LIMIT_CACHE)
+# A Mac: unified memory (what macOS lets the GPU use). Another computer (Windows, Linux): a discrete GPU's
+# free VRAM (adapters/gpu_probe.py, domain/gpu.py).
+MAC = sys.platform == "darwin"
+GPU: Union[MacGpuLimit, DeviceGpuLimit] = MacGpuLimit(METAL_PROBE, METAL_LIMIT_CACHE) if MAC else DeviceGpuLimit()
+HOST: Union[MacHost, PcHost] = MacHost() if MAC else PcHost()
 
 
 @dataclass(frozen=True)
@@ -56,5 +62,5 @@ def build_carl(paths: CarlPaths, env: Mapping[str, str]) -> Carl:
     stores = Stores(catalog=JsonFile(paths.catalog), catalog_path=paths.catalog, config=JsonFile(paths.config),
                     local=JsonFile(paths.local), local_path=paths.local,
                     legacy=LegacyEnvFiles(paths.legacy_llama))
-    return Carl(stores, LocalModelFolder(), SHAPES, GPU, MacHost(), HfHttpClient(), Aria2OrCurl(), SystemClock(),
+    return Carl(stores, LocalModelFolder(), SHAPES, GPU, HOST, HfHttpClient(), Aria2OrCurl(), SystemClock(),
                 StdConsole(), home=os.path.expanduser("~"), env_models_dir=env.get("MODELS_DIR") or None)

@@ -18,6 +18,14 @@ class ParseTest(unittest.TestCase):
                          lc.LlamaVersion((0, 4, 1), 9001))
         self.assertEqual(lc.parse_version("version: 1.2 (commit abc)"), lc.LlamaVersion((1, 2), None))
 
+    def test_the_release_builds_say_dev(self) -> None:
+        """llama.cpp's own release zips (Windows, Linux) say "-dev" for the same build as Homebrew's."""
+        text = "version: 0.6.0-dev (build 11429, commit d81235049)\nbuilt with Clang 20.1.8 for Windows x86_64\n"
+        self.assertEqual(lc.parse_version(text), TESTED)
+        self.assertEqual(lc.check_version(text).state, "same")
+        self.assertIn("release zip", lc.start_line(lc.check_version("version: 0.5.0-dev (build 9000, commit x)"),
+                                                   lc.UPDATE_RELEASE))
+
     def test_the_old_format_is_a_build_number(self) -> None:
         self.assertEqual(lc.parse_version("version: 6789 (bc091a4d)"), lc.LlamaVersion((), 6789))
         self.assertEqual(lc.parse_version("version: b5124"), lc.LlamaVersion((), 5124))

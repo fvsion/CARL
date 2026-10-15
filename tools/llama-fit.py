@@ -48,7 +48,7 @@ from carl_core.domain.fit import (DEFAULT_CTX, UBATCH, Spec, check_start, estima
 from carl_core.domain.gguf import GIB, ModelShape, kv_bytes_per_token, model_shape  # noqa: E402
 from carl_core.domain.models import draft_bytes  # noqa: E402
 from carl_core.domain.types import ModelInfo  # noqa: E402
-from carl_core.wiring import GPU  # noqa: E402
+from carl_core.wiring import GPU, HOST, MAC  # noqa: E402
 from carl_help import columns, render, width, wrap  # noqa: E402
 
 TTY = sys.stdout.isatty()
@@ -139,11 +139,13 @@ def cmd_plan(args: argparse.Namespace, limit: int) -> None:
     shape, w = local_shape(args.plan)
     ctx = args.ctx or DEFAULT_CTX
     reserve = reserve_bytes(args.reserve_gb, vm_network_up())
-    ram = sysctl_int("hw.memsize")
-    allowed = min(limit, ram - reserve) if ram else limit
+    ram = sysctl_int("hw.memsize") if MAC else HOST.ram_bytes()
+    # a discrete GPU (Windows, Linux): the model is in the VRAM, so the RAM neither caps it nor holds it
+    unified = getattr(GPU, "unified", True)
+    allowed = min(limit, ram - reserve) if ram and unified else limit
     sp = start_plan(args.swa, shape, w, ctx, args.want_slots, args.kv, allowed, start_spec(args, shape), args.ub)
     need = need_bytes(shape, w, ctx, sp.slots, args.kv, sp.swa_full is not False, sp.spec, args.ub)
-    print(sp.slots, prompt_cache_mib(ram, need, reserve), "-" if sp.swa_full is None else "full" if sp.swa_full
+    print(sp.slots, prompt_cache_mib(ram, need if unified else 0, reserve), "-" if sp.swa_full is None else "full" if sp.swa_full
           else "window", sp.spec.kind)
 
 

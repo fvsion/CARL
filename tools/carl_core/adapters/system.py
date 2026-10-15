@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 import subprocess
 import time
-from typing import List, Optional, Set, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
 from ..domain.fit import estimated_limit
 from ..domain.tuning import ProcessInfo
@@ -38,7 +38,9 @@ def sysctl_text(name: str) -> str:
 class MacGpuLimit:
     """What the GPU may use (implements GpuLimit). An iogpu.wired_limit_mb override wins;
     otherwise Metal's recommendedMaxWorkingSetSize (a Swift probe, cached per RAM size since
-    it takes seconds), else an estimate. Measured once per process."""
+    it takes seconds), else an estimate. Measured once per process. unified: the GPU and the CPU share the RAM."""
+
+    unified = True
 
     def __init__(self, probe: str, cache_file: str) -> None:
         self.probe = probe
@@ -92,6 +94,30 @@ def parse_listening_ports(netstat_output: str) -> Set[int]:
     return ports
 
 
+def parse_windows_listeners(netstat_output: str) -> Dict[int, int]:
+    """{port: pid} of the TCP listeners in Windows' `netstat -ano -p TCP` ("  TCP    127.0.0.1:9275    0.0.0.0:0
+    LISTENING       14240"; the state word is in the system's language, so a listener is a line whose remote port
+    is 0)."""
+    out: Dict[int, int] = {}
+    for line in netstat_output.splitlines():
+        f = line.split()
+        if len(f) >= 5 and f[0].upper() == "TCP" and f[2].endswith(":0") and f[-1].isdigit():
+            port = f[1].rsplit(":", 1)[-1]
+            if port.isdigit():
+                out.setdefault(int(port), int(f[-1]))
+    return out
+
+
+def parse_tasklist(csv_output: str) -> List[Tuple[str, int]]:
+    """[(image name, pid)] from Windows' `tasklist /fo csv /nh` ("llama-server.exe","14240","Console","1","1,074 K")."""
+    out: List[Tuple[str, int]] = []
+    for line in csv_output.splitlines():
+        f = [x.strip().strip('"') for x in line.split('","')]
+        if len(f) >= 2 and f[1].isdigit():
+            out.append((f[0].lstrip('"'), int(f[1])))
+    return out
+
+
 def listening_ports() -> Set[int]:
     return parse_listening_ports(run_text([NETSTAT, "-anv", "-p", "tcp"]))
 
@@ -115,9 +141,11 @@ def vm_network_up(addr: str = VM_ADDR) -> bool:
     return f"inet {addr} " in run_text(["ifconfig"])
 
 
-def llama_server_version() -> str:
+def llama_server_version(binary: str = "llama-server") -> str:
+    """The "version:" line of `llama-server --version` ("?" when it cannot run). binary: its path when it is not on
+    PATH (Windows: CARL_LLAMA_DIR, adapters/gpu_probe.py llama_program)."""
     try:
-        r = subprocess.run(["llama-server", "--version"], capture_output=True, text=True, timeout=30)
+        r = subprocess.run([binary, "--version"], capture_output=True, text=True, timeout=30)
     except (OSError, subprocess.SubprocessError):
         return "?"
     lines = [x.strip() for x in (r.stdout + r.stderr).splitlines() if x.startswith("version:")]
