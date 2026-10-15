@@ -1,0 +1,10 @@
+{
+  "name": "carl-rules-hook",
+  "version": "0.0.1",
+  "description": "A test plugin of the compaction bench (Phase 23.5.2.2.4): the rules list given to OpenCode's own compaction.",
+  "type": "module",
+  "license": "MIT",
+  "private": true,
+  "exports": { ".": { "import": "./index.js" }, "./server": { "import": "./index.js" } },
+  "peerDependencies": { "@opencode-ai/plugin": ">=1.14.0" }
+}

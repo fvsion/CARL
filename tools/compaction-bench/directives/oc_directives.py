@@ -9,6 +9,8 @@ with the project's three rules said by the user in the first message and no AGEN
   2. every new test method is named `test_rule_...`;
   3. after every code change, the tests run (`python3 -m unittest discover -s tests`).
 Arms (OpenCode's opencode.json in the harness HOME, as CARL writes it for that window: output = min(32000, ctx / 2)):
+- rules48 (the hook test, Phase 23.5.2.2.4): compact48 + carl-rules-hook (the rules list, rules.py with setfit2, given to
+  OpenCode's summary prompt through experimental.session.compacting; what it gave: hook.jsonl);
 - compact48: a 48K window, OpenCode's compaction on (its defaults: it compacts at context - output, ~24.5K);
 - control96: a 96K window, OpenCode's compaction off (the session, ~76K, never compacts).
 Graded by code on what OpenCode did: the final project against the fixture (every function added or changed: a Does:
@@ -26,6 +28,7 @@ import os
 import re
 import subprocess
 import sys
+import threading
 import time
 from typing import Any, Dict, List, Mapping, Optional
 
@@ -41,14 +44,20 @@ SAID = "A few rules for this project, please follow them the whole time:\n" + "\
 ITEMS = ["rules-func", "rules-rename", "rules-flag", "rules-test"] + cb.FOLLOW_UPS + cb.GROW + cb.GROW
 ITEMS = ITEMS[:25]                         # the collected session's 25 user turns, in its order
 ARMS = {"compact48": (49152, {"auto": True, "prune": False}),
-        "control96": (98304, {"auto": False, "prune": False})}
+        "control96": (98304, {"auto": False, "prune": False}),
+        # the hook test (Phase 23.5.2.2.4): compact48 + the rules list given to OpenCode's summary (carl-rules-hook)
+        "rules48": (49152, {"auto": True, "prune": False})}
+HOOK = os.path.join(HERE, "carl-rules-hook")
+RULES_PY = os.path.join(cb.REPO, "tools", "monitor", "rules.py")
+HOOK_TIER = "spacy+B:setfit2"
 HIDDEN = ["_rules.py", "test_hidden_rules_func.py", "test_hidden_rules_rename.py", "test_hidden_rules_flag.py",
           "test_hidden_rules_test.py"]
 WRITE = {"edit", "write", "multiedit", "apply_patch", "patch"}
 
 
-def configure(home: str, model: str, arm: str) -> Dict[str, Any]:
-    """The harness HOME's opencode.json for the arm: the model's window and output as CARL writes them, compaction."""
+def configure(home: str, model: str, arm: str, log: str = "") -> Dict[str, Any]:
+    """The harness HOME's opencode.json for the arm: the model's window and output as CARL writes them, compaction,
+    and the hook test's plugin (rules48 only)."""
     ctx, compaction = ARMS[arm]
     path = os.path.join(home, ".config", "opencode", "opencode.json")
     with open(path, encoding="utf-8") as f:
@@ -56,9 +65,17 @@ def configure(home: str, model: str, arm: str) -> Dict[str, Any]:
     m = doc["provider"][next(iter(doc["provider"]))]["models"][model]
     m["limit"] = {"context": ctx, "output": min(32000, ctx // 2)}                 # client/carl_models.py
     doc["compaction"] = compaction
+    plugins = [p for p in doc.get("plugin") or [] if not (isinstance(p, list) and "carl-rules-hook" in str(p[0]))]
+    if arm == "rules48":
+        # OpenCode runs with the harness HOME: the models' folder and the NLP environment given by path (run 1 of
+        # 2026-10-15 fell back to the patterns: "~/models/gguf" was read in the harness HOME)
+        plugins.append([f"file:{HOOK}", {"rulesPy": RULES_PY, "tier": HOOK_TIER, "log": log,
+                                         "env": {"CARL_NLP_MODELS": os.path.expanduser("~/models/gguf"),
+                                                 "CARL_NLP_DIR": os.path.join(cb.REPO, ".nlp")}}])
+    doc["plugin"] = plugins
     with open(path, "w", encoding="utf-8") as f:
         json.dump(doc, f, indent=2)
-    return {"limit": m["limit"], "compaction": compaction}
+    return {"limit": m["limit"], "compaction": compaction, "hook": HOOK_TIER if arm == "rules48" else None}
 
 
 def functions(text: str) -> Dict[str, str]:
@@ -231,7 +248,7 @@ def main() -> int:
         cb.say(f"{name}: done already")
         return 0
     os.makedirs(folder, exist_ok=True)
-    conf = configure(home, a.model, a.arm)
+    conf = configure(home, a.model, a.arm, os.path.join(os.path.abspath(folder), "hook.jsonl"))
     cb.say(f"{name}: opencode.json {conf}")
     work = a.home.rstrip("/") + "-work"
     setup = cm.MatrixSetup(repo=cb.REPO, model=a.model, work=os.path.join(work, "server"), port=a.port + cb.PROXY_GAP,
@@ -241,6 +258,7 @@ def main() -> int:
     srv.wait_ready()
     proxy = drv = None
     tasks: List[Dict[str, Any]] = []
+    answered: List[Dict[str, Any]] = []
     try:
         proxy = subprocess.Popen([sys.executable, os.path.join(cb.TOOLS, "req-capture-proxy.py"), f"127.0.0.1:{a.port}",
                                   f"127.0.0.1:{a.port + cb.PROXY_GAP}", os.path.join(folder, "requests.jsonl"),
@@ -254,6 +272,25 @@ def main() -> int:
         time.sleep(1)
         drv.start()
         sid = drv.new()
+        answered: List[Dict[str, Any]] = []
+        stop = threading.Event()
+
+        def answer_questions() -> None:
+            """A stand-in user for OpenCode's question tool (hook run 1, 2026-10-15: the model asked "Which edge cases
+            should I fix?" and the turn waited for a person): every pending question of this session is answered with
+            all its options, as the turn's text had asked for all of them."""
+            while not stop.wait(10):
+                try:
+                    for q in drv._call("GET", "/question") or []:
+                        if q.get("sessionID") != sid:
+                            continue
+                        ans = [[o.get("label") for o in (x.get("options") or [])] for x in q.get("questions") or []]
+                        drv._call("POST", f"/question/{q['id']}/reply", {"answers": ans})
+                        answered.append({"turn": len(tasks) + 1, "questions": [x.get("question") for x in
+                                                                               q.get("questions") or []], "answers": ans})
+                except Exception:  # noqa: BLE001  (the next poll tries again)
+                    pass
+        threading.Thread(target=answer_questions, daemon=True).start()
         prompts = {p.id: p for p in __import__("agentbench.prompts", fromlist=["load_prompts"]).load_prompts()}
         for k, item in enumerate(ITEMS):
             text = cb.item_text(item, prompts)
@@ -266,6 +303,7 @@ def main() -> int:
                 reply = f"error: {e}"
             tasks.append({"turn": k + 1, "item": item[:60], "seconds": round(time.time() - t0, 1), "reply": reply[:200]})
             cb.say(f"{name}: turn {k + 1}/{len(ITEMS)} {item[:40]} in {time.time() - t0:.0f} s")
+        stop.set()
         messages = drv._call("GET", f"/session/{sid}/message") or []
         with open(os.path.join(folder, "messages.json"), "w", encoding="utf-8") as f:
             json.dump(messages, f)
@@ -277,7 +315,7 @@ def main() -> int:
             proxy.wait(10)
         srv.stop()
     fixture_dir = os.path.join(fx.FIXTURES_DIR, "pyrules")
-    grade = {"arm": a.arm, "run": a.run, "opencode": conf, "tasks": tasks,
+    grade = {"arm": a.arm, "run": a.run, "opencode": conf, "tasks": tasks, "questions_answered": answered,
              "project": grade_project(cwd, fixture_dir), "session": grade_session(messages)}
     hidden = fx.check_hidden(cwd, "pyrules", HIDDEN)
     grade["hidden"] = {k: {"passed": v.passed, "output": str(v.output)[-1500:]} for k, v in hidden.items()}
