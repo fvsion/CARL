@@ -1,0 +1,14 @@
+{
+  "name": "carl-cache",
+  "version": "1.0.0",
+  "description": "CARL's disk cache for OpenCode. CARL saves each session and each agent's prompt on the server's disk and restores them before the next request. After a restart, a model switch or a reopened session, the server does not read everything again.",
+  "type": "module",
+  "license": "MIT",
+  "exports": {
+    ".": { "import": "./index.js" },
+    "./server": { "import": "./index.js" }
+  },
+  "peerDependencies": {
+    "@opencode-ai/plugin": ">=1.14.0"
+  }
+}

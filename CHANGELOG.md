@@ -1,0 +1,987 @@
+# Changelog
+
+All notable changes to CARL. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
+Dates are local dates on the development Mac (M3 Pro, 36 GB).
+
+## 1.20.10 - 2026-10-13
+
+### Changed
+- **The Live tab's Cache column says when a session will be saved.** Saved shows `not yet` for a session that will be
+  saved when it leaves its slot (coders from 32K tokens too, since 1.20.9), `no (under 32K)` for a shorter coder, and
+  `no (a subagent)` only for Pi's subagents, which are never saved. Before, every unsaved coder showed
+  `no (a subagent)`.
+
+## 1.20.9 - 2026-10-13
+
+Phase 23.5.3.2: the disk cache keeps each session in its own slot, and a coder follow-up stays in its window.
+
+### Fixed
+- **A compaction took another session's slot.** A coder's compaction could run in the main session's slot, and a
+  compacted session could go on in a different slot while its old one kept the stale conversation. A compaction now
+  runs in its session's own slot, and the session stays there after it. A subagent's compaction (the coder's) is
+  known too: before, the coder's next turn read its whole new conversation again.
+- **A session pushed out by a request back from the RAM cache was not saved.** That path took the least full slot
+  without saving the session there (or marking it as in the RAM cache), so that session was read again in full
+  later. Every way into a slot now saves or marks the session there first.
+- **A compacted session's new start was not saved.** It is now saved at the end of its first turn (save rules `auto`,
+  `turn` and `switch`).
+
+### Changed
+- **Coder sessions of 32K tokens or more are saved,** at the end of a turn by the save rule and when their slot is
+  needed, and restored when OpenCode's main agent sends the coder a follow-up (`task_id`). Shorter subagent sessions
+  are still read again; Pi's subagents (no session file) are never saved.
+- **A coder follow-up starts a new coder session when the earlier one is at 60% of the coder's window or more**
+  (OpenCode). The task gets a note with the earlier session's title, size and last result, and you see a toast. Before,
+  a follow-up could go on in a session an external coder model had grown to 225K tokens.
+
+### Measured
+- On this M2 Max (Qwen3.6-35B-A3B IQ3, 3 slots, OpenCode 1.19.0), save rules `auto` and `stop`: a compaction stays in
+  its session's slot (main 0 -> 0, the coder 1 -> 1); the coder's first turn after its compaction read 1,008 of 10,100
+  tokens; a request back from the RAM cache saved (`auto`) or marked (`stop`) the main session in the slot it took,
+  which then read 64-66 of 11,814; a 35.6K coder pushed out and sent back read 28 of 35,583 (from its file; `stop`:
+  26, from the RAM cache), against ~26K read again before.
+
+## 1.20.8 - 2026-10-13
+
+Phase 23.5.3.1: the Live tab's speed card, cleaned up.
+
+### Changed
+- **Speculation reads as it works.** The Position row (positions 1, 16, 32, 64, mostly 0% with MTP + n-gram) is gone.
+  In its place a **Per step** table: one column per MTP guess (the share of the steps that kept it), then **n-gram |
+  tkn/run** (the share of the steps that kept more than MTP's guesses, which only an n-gram run can, and the tokens
+  such a step kept), then **tokens acpt** (the tokens accepted a step). With n-gram alone it is **Per draft**.
+- **Guesses ACPT** (was Guesses OK; the Requests tab's column too) sits at the right of the Speculation line; the totals are two rows; Largest
+  context is no longer on this card.
+
+## 1.20.7 - 2026-10-13
+
+The Phase 23.4.2 addendum: the Gemma 4 12B is the hard code choice on 16 GB Macs.
+
+### Changed
+- **On a 16 GB Mac, Auto fit's hard code choice is `gemma-4-12b`** (2 × 96K, n-gram, the window cache), no longer
+  `saluki-27b`. On the same three medium agent tasks with hidden tests (OpenCode and Pi, CARL's default thinking, a
+  coder subagent, the tested client versions) both passed 6 of 6; the 12B handed 5 of 6 to the coder as CARL's rule
+  says, Saluki wrote all of them itself; the 12B also leads CARL's code test. `saluki-27b` stays in the catalogue
+  (quality rank 9) as a choice by hand.
+
+## 1.20.6 - 2026-10-12
+
+Phase 23.5.1.10: the RAM cache across client processes.
+
+### Fixed
+- **A session in llama.cpp's RAM cache was read again by a new OpenCode or Pi process.** When a session's slot is
+  taken without a save (the save rule "before a stop", or a session under 4,096 tokens), its state goes to llama.cpp's
+  RAM cache. Only the process that ran it knew that; after a restart, the client put the agent's saved prompt in the slot
+  and llama.cpp skipped its RAM cache. carl-cache now leaves a note for every client process (on this Mac in the slots
+  folder; from another computer through the dashboard's API). Measured on the Qwen3.6-35B-A3B IQ3: OpenCode 26,436
+  tokens read again (79.9 s) to 64 (4.9 s); Pi 26,376 (71.8 s) to 63 (3.6 s).
+
+## 1.20.5 - 2026-10-12
+
+Phase 23.5.1.8: n-gram speculation set right, and Auto fit from measured speculation; the 23.5.1.7 note; Saluki's agent results.
+
+### Changed
+- **n-gram speculation drafts more, and faster.** CARL now sets llama.cpp's n-gram (`ngram-mod`) settings for every
+  model: a 32-token match, drafts of 16 to 96 tokens (llama.cpp's own: 24, 48 and 64). Measured on the
+  Qwen3.6-35B-A3B IQ3 and the Qwen3.8-27B IQ3: re-emitting a file 5.1-5.4x faster than no speculation (was 3.9-4.1x),
+  an agent-style edit 2.6-2.9x (was 2.3-2.7x); new text unchanged (`reference/server.md`).
+- **Auto fit starts from this Mac's Auto-tune result** for a model, and before MTP goes it tries the other MTP modes
+  measured for it (this Mac's Auto-tune, else the catalogue's new `tune.speeds` table).
+
+- **`saluki-27b`'s card, from its agent runs** (the Phase 23.4.2 addendum): on medium coding tasks with hidden tests
+  (OpenCode and Pi, CARL's default thinking, the coder's thinking off and on) it got 12 of 12 right, the main session
+  writing 10 of them itself in 6-19 minutes on an M3 Pro (a hand-off took 54-90 minutes at its speed). The card no
+  longer says "every hidden test" with thinking-off numbers: at the default thinking the large tasks passed 4 of 6, and
+  most hit the time limit. A comparison with the Gemma 4 12B on the same tasks follows in an addendum.
+
+### Fixed
+- **n-gram had no guesses to set.** llama.cpp's n-gram never read CARL's guess count (`--spec-draft-n-max` is MTP's),
+  so "n-gram, 2 guesses" and Auto-tune's n-gram rows at 1 and 2 guesses were the same setup. CARL passes the guesses only
+  with MTP; the start lines, the Settings tab's Speculation row, the Live tab, Auto-tune and the help name guesses only
+  for MTP; Auto-tune measures n-gram once.
+- **The Live tab's speed card: "Guess" is now "Position"**, the drafts accepted at each draft position, chosen by the
+  speculation: MTP's guesses; n-gram's long run at 1, 8, 16, 32, 64 and 96; both for MTP + n-gram.
+
+### Measured
+- **Why each agent's prompt is one saved file** (`reference/caching.md`): the agents' prompts share too little
+  (OpenCode's main agent and coder 2,982 tokens on the A3B, Pi's 1,333, Gemma's 8) for a shared layer to save disk or
+  time.
+
+## 1.20.4 - 2026-10-12
+
+Phase 23.5.1.4: the drive writes, measured.
+
+### Measured
+- **What the cache writes to the drive** (`reference/caching.md`, Drive writes): on the Qwen3.6-35B-A3B IQ3 with the
+  default cache settings, 24 agent coding tasks (83 min) wrote 0.78 GB of saved prompts and sessions, ~0.6 GB an
+  hour: ~4.5 GB for an 8-hour day of agent work, ~1.1 TB in a year of such days. The save rule stays as it is.
+
+## 1.20.3 - 2026-10-12
+
+Phase 23.5.1.3: a session its client compacted, cached right.
+
+### Fixed
+- **The first turn after OpenCode or Pi compacted a session was read again in full.** A summary now stands for the
+  session's earlier turns, but carl-cache still placed the session where its earlier turns were cached (its slot or
+  llama.cpp's RAM cache), which a hybrid model cannot use. carl-cache now knows the compaction (OpenCode's
+  compaction-agent request, Pi's `session_compact` event) and starts the session's cached state again from its
+  agent's saved prompt. Measured on the Qwen3.6-35B-A3B IQ3: OpenCode 13,245 tokens read (26.7 s) to 1,559 (4.1 s);
+  Pi 7,483 (14.2 s) to 835 (2.4 s).
+- **A compacted session's old file is removed** (it held the turns before the summary), also for a client on another
+  computer (the dashboard API's new `POST /carl/cache/retire`), and its count of tokens not saved yet no longer goes
+  below zero.
+- **A compaction's own request no longer restores the session's file** (its prompt is the client's compaction prompt:
+  nothing of it fits).
+
+## 1.20.2 - 2026-10-11
+
+Phase 23.5.1.11: OpenCode 1.19, and OpenCode 2 said plainly.
+
+### Changed
+- **OpenCode 1.19.0 is supported** (released 2026-10-11): CARL's plugins, the cache and the coder's chain checked on
+  it end to end; the chain's background hold is on for it too.
+- **The setup installs the OpenCode and Pi versions CARL is tested with**, not npm's newest
+  (`client/client-versions.env`: OpenCode 1.19.0, Pi 1.1.0). An older one is updated to them; a newer one of the same
+  major version stays, and the setup says that CARL did not test it.
+- **OpenCode 2 is not supported yet, and CARL says so.** OpenCode 1.19 offers the move to OpenCode 2, which changes how
+  plugins work: with it, OpenCode showed "Plugin must export a default definition with an id and an effect or setup
+  function" for CARL's plugins. Now they load without an error (and do nothing there), the setup leaves OpenCode 2 as
+  it is and gives the command to go back (`npm install -g --prefix ~/.local opencode-ai@1.19.0`), and the Connect
+  tab warns in one line. Moving CARL to OpenCode 2 is the next phase.
+- **CARL's OpenCode plugins are in `~/.config/opencode/carl-plugins/`** (was `plugins/`, which OpenCode 2 loads by
+  itself). The next setup or `u` moves them; folders there that are not CARL's stay.
+- **The Connect tab's `u` is "Update Config and Install CARL Plugins"**: the configs with CARL's plugins and agents,
+  also for an OpenCode or Pi you installed yourself; it installs nothing. The setup section shows the OpenCode and Pi
+  versions on this Mac against the tested ones.
+
+## 1.20.1 - 2026-10-11
+
+Phase 23.5.1.2: llama.cpp's RAM cache with CARL's slot pinning, measured.
+
+### Fixed
+- **A session coming back from llama.cpp's RAM cache was read again in full when its conversation was short.**
+  llama.cpp looks in its RAM cache only when the slot a request lands in would keep less than half of its tokens
+  (llama.cpp #28276). That slot holds another session of the same agent, which shares the agent's prompt, so a session
+  shorter than about twice that prompt was read again: on the Qwen3.6-35B-A3B IQ3 (a hybrid model) the whole session,
+  19,687 of 19,689 tokens in OpenCode; on the Gemma 4 E4B its own part, 7,967 of 18,948. carl-cache now moves the
+  slot's conversation to the RAM cache first (a one-token request), so llama.cpp always looks there: 64 and 62 tokens.
+  This path is taken when a session was not saved before its slot was needed (the save rule "before a stop", or a
+  session under 4K tokens).
+
+### Measured
+- With long sessions the RAM cache already served this path: the A3B IQ3, 2 slots, llama.cpp 0.6.0: 64 tokens of
+  38,041 (OpenCode), 63 of 33,233 (Pi). The llama.cpp bug that skips the RAM cache for a request pinned to an empty
+  slot (#28139) does not happen in CARL's use: CARL never clears an idle slot.
+
+### Changed
+- As a guard against that bug, carl-cache puts a session that comes back from the RAM cache in a slot that holds a
+  conversation when there is one, not in an empty slot.
+
+## 1.20.0 - 2026-10-11
+
+Phase 23.5.1.1: what the disk cache did, counted.
+
+### Added
+- **Settings > Caching, WHAT THE CACHE DID**: a table of what the disk cache did for OpenCode and Pi in the last
+  hour (`t`: today, since the server started): sessions and prompts restored, with their tokens and the time saved;
+  the tokens still in their slot; the sessions read again because nothing was saved, with the time it took; sessions
+  and prompts saved and what was written; retired files; and the tokens reused of all the tokens sent.
+- **The Live tab's SLOTS card, a Cache column** (on a terminal 160 columns or wider): for the session in each busy
+  slot, where its state came from (a session file, the agent's prompt, its slot, the RAM cache, or read in full), its
+  last save, and its name.
+- OpenCode's and Pi's carl-cache write what they do as events (`~/.config/carl/cache-events/`, kept two days); a
+  client on another computer sends them to the dashboard API (`POST /carl/cache/events`). No key or prompt text is in
+  them.
+
+### Fixed
+- **Two OpenCode or Pi processes on one Mac could read a session again and save it over a better file**: when one
+  process took a session's slot (saving it first), the other, on that session's next turn, still took the slot as
+  its own, read the session's prompt into it again and saved that over the file. It now sees that the file was saved
+  since it last used the slot, and restores it instead (found by the counters).
+
+## 1.19.0 - 2026-10-11
+
+Phase 23.5.0: the coder's tests come after the code by default.
+
+### Changed
+- **`/carl` > Coder Subagent > Tests is `after code` by default** (was `before code`): for a new feature the coder
+  writes the code first, then CARL's separate test session writes tests from the requirements against it; CARL runs
+  the checks after both, and a failing new test comes back to the main agent as a finding. Test-first needs a very
+  well-defined spec to work, especially with smaller models.
+- **`before code` (test-first) says it needs a full spec**: a grey note under the value ("needs a full spec"), the
+  explanation when the values open, and a warning when you choose it: "Use it only with a full spec (spec-kit or a
+  similar tool)."
+- A computer with no Tests choice of its own gets `after code` at its next setup or sync; a choice of `after code` or
+  `off` stays. To keep test-first, choose `before code` again in `/carl` (`CODER_TESTS=before`).
+- The main agent's rules (`delegation.md`) describe the code session first.
+
+## 1.18.0 - 2026-10-11
+
+### Added
+- **`saluki-27b`, a 27B for 16 GB Macs**: Underdog Saluki 27B 1.0, a 2-bit (IQ2-mix) Qwen3.8-27B, 7.9 GB, the plain
+  file without an MTP head. Two 48K slots fit a 16 GB Mac (9.89 GiB measured), so the main session keeps a coder
+  subagent. ~11.6 tok/s new text and 52-55 re-emitting code with n-gram (M3 Pro). CARL's code test: 13 of 18 tasks
+  with thinking off, 8 of 18 with it on (half of its answers thought past 16,000 tokens); the hidden tests passed in
+  every agent run with thinking off. Its catalogue window is 48K.
+
+### Changed
+- **Auto fit's hard code choice on 16 GB Macs is Saluki** (was the Gemma 4 12B): a model whose catalogue window
+  is below 96K tries each of Auto fit's setups at its own window, so Saluki's 2 x 48K competes with the 12B's
+  2 x 96K on quality rank.
+
+## 1.17.1 - 2026-10-11
+
+The 1.17.0 addendum: the 48 setups measured again on 1.17.0. No code change.
+
+### Measured
+The same 48 setups as before 1.17.0 (the real OpenCode and Pi, scripted turns, the M3 Pro, llama.cpp 0.6.0), 1.17.0
+against 1.16.0: no step or server error. The whole run: the Qwen3.6-35B-A3B IQ3 6,231 s -> 4,629 s, the Gemma 4 E4B
+5,520 s -> 4,465 s. Tokens read again (main sessions, the full cache):
+
+| Step | A3B IQ3, OpenCode | A3B IQ3, Pi | E4B, OpenCode | E4B, Pi |
+|---|---|---|---|---|
+| a session back after another took its slot | 66 -> 66 | 26,376 -> 65 | 63 -> 63 | 7,984 -> 61 |
+| a fork | 26,634 -> 264 | 26,571 -> 260 | 8,179 -> 252 | 8,167 -> 244 |
+| its slot taken after a client restart | 26,567 -> 64 | 26,508 -> 63 | 8,077 -> 62 | 8,073 -> 60 |
+| after a server restart | - | 26,571 -> 63-260 | - | 8,167 -> 60-244 |
+| the whole script | 426-504 s -> 276-355 s | 447-537 s -> 245-266 s | 142-229 s -> 104-185 s | 141-189 s -> 90-114 s |
+
+With the window cache (the E4B) nothing is saved or restored now, and a switch reads the session's own part only
+(~8K of ~18.8K; Pi going back: 14,334 -> 66). The subagent setups are unchanged: their long turns are new text.
+
+### Known issues
+- On a hybrid model (the Qwen3.6 35B-A3B), a session restored from its file is read again in full when the next
+  prompt does not start with all of its tokens (an edited or reverted message): llama.cpp 0.6.0 saves no checkpoints in
+  the file. Upstream llama.cpp #26004 adds them.
+
+## 1.17.0 - 2026-10-10
+
+Phase 23.5: the cache, tested against what really runs (a matrix of 48 setups with the real OpenCode and Pi);
+CARL's own port; the speeds in OpenCode and Pi.
+
+### Changed
+- **CARL's default port is 9275** (was 8080, which other software often uses). OpenCode and Pi on this Mac that were
+  set up for 8080 show as out of date in the dashboard's Connect tab: `u` updates them. The sync on other computers
+  finds the new port by itself.
+- **When another program holds the server's port**, the start offers the next free port (a question in a terminal and
+  in the dashboard); it never changes the port without asking, and never stops that program. `./carl.sh` with no
+  arguments attaches the dashboard only to a llama.cpp server.
+- **The dashboard API's port** (Settings > Server > API port): auto (the server's port + 1, else the next free one) or
+  a number. It listens on 127.0.0.1 and ::1, tries again while it does not run, and writes its real port where the
+  clients look (`client/remote.json`, `~/.config/carl/server-PORT.json`).
+- **The key goes only to CARL's API**: the API answers `GET /carl/ping` without a key with CARL's ID
+  (`~/.config/carl/carl-id`, in the client package's `remote.json`); OpenCode, Pi and the sync send their key only to
+  an API that answers that ID. The sync finds an API that moved and sets the clients up again when the server's port
+  changed.
+- **Gemma 4 keeps cache.swa = auto** (the full cache when it fits). Measured: with the full cache a session that
+  comes back reads 62 tokens again, with the window cache its whole conversation.
+- Pi's model check is its own extension (`carl-model-check`, as OpenCode's plugin), with a Model Check row in Pi's
+  `/carl`.
+
+### Added
+- **The speeds in OpenCode and Pi**: "write 18.4 tok/s · read 652 tok/s" while a turn runs, "reading 38% · 652
+  tok/s", "last turn: …" after it; OpenCode in the sidebar's footer, Pi in its status line (the dashboard API's new
+  `GET /carl/status`).
+- **Pi's model check**: a notice when the server runs another model than Pi asks for (as OpenCode's).
+- The saved sessions' names (the OpenCode title, the Pi name) next to their IDs in `./carl.sh cache show` and the
+  Caching panel; a Window cache row there when the running model has it.
+- Known llama.cpp warnings in the Log tab: grey, with their reason under them ("↳ known: …").
+- Each minute the dashboard removes what clients that went away leave in the disk cache (stale claims and turn marks,
+  half-written files, the lone half of a stored session).
+
+### Fixed
+- **Pi lost the disk cache's state at each session switch**: a session that another took the slot of was not saved
+  first, and came back by reading its whole conversation again (the A3B IQ3: 26,376 of 32,987 tokens; OpenCode: 66).
+  One cache per Pi process now.
+- **A client restart, or a second OpenCode or Pi, forgot which session was in a slot**: the session in a slot is now
+  saved from its record before another session takes the slot, from any process.
+- **A fork started from the agent's prompt only** (~26K tokens read again on the A3B): a session with history and no
+  saved file of its own starts from the longest saved session whose tokens start it.
+- **With the window cache, saved prompts and sessions were restored and saved for nothing**: the clients now restore
+  and save nothing then (they still keep each session in its own slot).
+- **Single-model mode filed the saved states under the model the client named**, not the one the server runs: the
+  dashboard's save before a stop missed them.
+- A file the server could not restore was asked for at every request; now it is retired (or, when not on this Mac,
+  not asked again for a minute).
+- **Router mode saved to `~/.config/carl/slots` even with `CARL_CONF_DIR` set**: the model server did not start, or the
+  saves went where no client looked.
+- **The dashboard's speeds went missing**: CARL's own cache requests were shown as the last request; a long prompt's
+  batch made `/slots` time out (now the last answer stays, up to 30 s); "Now" depended on two polls (now the log's
+  progress lines, every slot); after a restart from the dashboard it could follow the old log.
+
+## 1.16.0 - 2026-10-10
+
+The Phase 23.4.3 addendum (the brief's checks and the run gate), the RAM cache count, a held chain's project.
+
+### Added
+- **The run gate** (/carl, Coder Subagent, Coder Loop > Run Gate; on by default): before a coder task with code,
+  CARL runs the project's tests (pytest, npm test or node --test, go test, cargo test); after it, it checks the
+  changed files (py_compile, ruff's error rules, `python -m PKG --help`, node --check, go vet, cargo check) and runs
+  the tests again. A failing check, tests that do not run, or a test that passed before and fails now starts a fix
+  round (Fix Rounds 0-3, default 1); when none is left, the main agent gets NOT DONE with the output and a ready
+  brief. OpenCode: in the foreground; a held background chain is checked too (delivered after a restart).
+- **The Request Check** (/carl, Request Check: reminder, the default; on; off): after the brief check, CARL compares
+  the brief with the literals of the user's messages (backticked text, exit codes, signatures, paths, flags, quoted
+  text). Reminder refuses once with the list and where each goes; on refuses until each is in the brief or in the
+  new `not_in_task`.
+- **The free-form brief** (/carl, Free-Form Brief: per model, the default; on; off): `detailed_brief`, the main
+  agent's own words next to the structured keys, taught only to a main session whose model qualifies (a model that is
+  not CARL's, or a catalogue entry marked for it: the 35B-A3B and the 27B Q4 builds).
+- **The RAM cache count** in the dashboard's SLOTS card: the prompts and sessions llama.cpp holds in RAM (--cache-ram)
+  and their memory. A single-model start runs at `-lv 4` and writes its log through `tools/llama-log-filter.py`,
+  which drops the per-request detail, so the log stays about its size. HEALTH warns when the filter stopped.
+- Each Coder setting with values explains itself in two sentences when its values open (OpenCode: a note; Pi: under
+  the title).
+
+### Changed
+- **A refused brief says how to fix it**: a checklist of the brief's parts and their state, a ready
+  `[[acceptance_check]]` for requirements no check covers, where a key under the wrong block goes, and for broken TOML
+  the line and the key's right form. A task text with no brief gets the brief's form.
+- /carl's row labels are title case ("Coder Subagent").
+
+### Fixed
+- A held background chain was delivered to a new project at the same path: it now goes only to the same folder
+  (device and inode), the same OpenCode project and a main session that is still there.
+- After a refused code brief, the main agent could send the task as tests only (the coder then wrote tests and no
+  code): refused until a code brief is taken or the user writes again.
+- `carl-sync.py set` dropped a value `on` for settings that are not on/off switches.
+
+## 1.15.0 - 2026-10-09
+
+Phase 23.4.6: the test session configurable.
+
+### Added
+- **When the coder's tests are written** (/carl, Coder subagent, Tests): `before code` (the default: the test
+  session, then the code session, as before), `after code` (the code session first; then a test session writes tests
+  from the requirements against that code, CARL runs the checks once after both, and failing tests come back to the
+  main agent as findings) or `off` (one code session, no tests; the result says so). Kept per computer
+  (`CODER_TESTS`). OpenCode and Pi read it at each coder task: no restart. Follow-ups and fixes are the same in each
+  value.
+
+### Changed
+- OpenCode's record of a held background chain names its sessions `first` and `second` (either order); records
+  from before are still delivered.
+
+## 1.14.0 - 2026-10-09
+
+Phase 23.4.5: the coder on another endpoint; a brief-reader fix.
+
+### Added
+- **The coder can run on an external model** (/carl, Coder subagent, Coder model): "same as main" (CARL's model) or a
+  model this computer's OpenCode or Pi can use, free or paid, listed from the client itself with where the work goes
+  ("openrouter.ai, paid"). Kept per computer (`CODER_MODEL`; its thinking `CODER_MODEL_THINKING`, "model default" by
+  default). With an external coder: the coder is on also with 1 slot and there is no 1-slot warning; CARL's coder
+  temperature and thinking table are not sent; a provider failure fails the task with its error (no fallback).
+  CARL's brief, its check, the gates and the tests-first chain work the same (both sessions on that model). carl-cache
+  and the model check leave the external requests alone. Auto fit still assumes a local coder.
+- **The dashboard's Clients sub-tab** shows each computer's coder model (the sync reports it).
+
+### Fixed
+- **A brief whose lists of tables are written as `key = [ { ... }, ... ]`** with JSON-style `"key": value` was refused
+  as broken TOML, and the refusal ("a key needs = and a value") did not say how to fix it: the Gemma 4 E4B sent such a
+  brief 6 times. Inside `{ }` the reader now takes `"key": value` as well as `key = value` (the meaning is the same as
+  `[[key]]` blocks), and a refusal for broken TOML shows the `[[table]]` form of a list.
+
+## 1.13.1 - 2026-10-09
+
+### Fixed
+- **A client package could name a model the server does not run.** In single-model mode (1.13.0), `./carl.sh package`
+  and `push` listed the model a start would load, not the model the server ran: after a start with `--model`, the
+  other computer's OpenCode said "Model not found" and could do nothing. Now a package lists every downloaded model
+  when the running one is not known, and the setup keeps only the model the server runs (its `/props`).
+- A test read a file under `docs/`, which is not in the repository.
+
+## 1.13.0 - 2026-10-09
+
+Phases 23.4.3 and 23.4.4: the coder's brief as structured TOML, tests first in a separate session, thinking per
+role, the memory estimate and Auto fit's order, llama.cpp 0.6.
+
+### Added (23.4.4)
+- **The Agents settings panel**: per model, Main thinking and Coder thinking (off, on, or low / medium / xhigh where
+  the model has levels). The coder's default is "same as main". A note says to use a full spec (spec-kit or a similar
+  tool) when the coder does not think. The rows left Settings > Server.
+- **/carl's Coder subagent row** opens a sub-list: Coder, Background coder, Delegation reminder, Coder thinking (this
+  computer's override per model, or "dashboard default"), Coder model ("same as main"). Rows that open something show
+  "›". Esc goes back one list in OpenCode and in Pi.
+- **The coder's thinking follows the model it runs on**: OpenCode sets it per request (chat.params), Pi passes it to
+  the coder; "same as main" is the model of the session /carl is opened in.
+- **A llama.cpp version check**: the start lines and the HEALTH card say when the installed llama.cpp is older than
+  the tested one (0.6.0, build 11429).
+- **`carl-brief-check.mjs`**: a command that checks a coder brief by hand.
+
+### Changed (23.4.4)
+- **The memory estimate** counts the MTP draft context (its KV, the recurrent state per guess, two more compute
+  buffers), the compute buffer from the ubatch, and the whole model file; a 0.75% margin. Checked against the measured
+  runs (within 9 MiB); the 12B with the full sliding-window cache on 36 GB and the 35B Q4 with MTP on 32 GB now come out
+  as not fitting, as they failed.
+- **Auto fit's order, on every Mac, 48K floor**: 2 x 96K, 2 x 64K, 2 x 48K, 1 x 96K, 1 x 64K, 1 x 48K; MTP is dropped
+  (n-gram kept) before a slot or the window; the start line says so.
+- **Single-model mode**: OpenCode and Pi list only the model the server runs; after a model change the Connect tab
+  says the configs are out of date.
+- `--fit off` also for Auto-tune's llama-batched-bench.
+
+### Changed
+- **The project part of the prompt goes back to the first user message for Qwen** (as in 1.8.0). A measurement
+  (2026-10-08) showed that the second system message of 1.9.0 is followed less: the AGENTS.md rules held in 11 of 32
+  runs on the Qwen3.6 35B-A3B, against 20 of 32 in the first message. CARL still finds a Qwen template by its chat
+  template, so fine-tunes with other file names are covered. Gemma 4 is unchanged.
+- **The SLOTS card says `between turns`** for a slot that holds a conversation and does nothing now (was "keeps a
+  session").
+
+### Fixed
+- **The MEMORY card's server bar** showed the process's RSS, which on Apple Silicon leaves out the Metal buffers and
+  the mapped model file (for example 0.7 GiB for a Gemma 4 E4B server that uses about 8.2 GiB). It now shows the
+  process footprint plus the mapped model and drafter files, and the rows below add up to it.
+- **The This Mac card's used memory** now follows Activity Monitor (app memory + wired + compressed); cached files
+  have their own row at full detail.
+
+### Added
+- **`/carl` warns when you turn the coder on with 1 slot**: the coder then takes the main session's slot. The setup
+  passes the server's slot count to `carl-sync.py set`.
+- **The coder's brief is structured TOML** (`client/shared/carl-brief.js`, revision 4): `work_mode` (code |
+  tests-only), `work_type` (new_feature | follow_up | bug_fix), `existing_tests`, a distilled `task_summary`,
+  `expected_outcome`, `current_state`, `design_notes`, `exact_interfaces` (names, signatures and formats copied
+  exactly), `scope_limits`, `[[reference_doc]]`, `[[known_file]]` (not a complete list), `[[task_requirement]]` and
+  `[[acceptance_check]]` by id, `[[project_rule]]`, `[[input_example]]`, and for a fix that failed `[failed_attempt]` and
+  `[[tried_fix]]`. Keys have two or three words. CARL checks the brief before the coder starts and sends an incomplete
+  one back with what is missing, in the new key names (old keys get a hint). `carl-brief-check.mjs` checks one by hand.
+- **The coder's report is TOML too**: `outcome_summary`, `brief_deviations`, `task_status`, the requirements and checks
+  by id, the changed files, the test findings, the open issues.
+- **The coder's gates**: in tests-only work it writes test files only, in code work no test file; files marked read are
+  never written. The coder may add files that are not in the brief (a new module).
+- **Tests first, in a separate session**: for new features (`work_mode = "code"`, `work_type = "new_feature"`), CARL runs
+  a coder session in tests-only work mode (without the design notes and the file list: tests from the behaviour),
+  checks that a new test fails before any code (a warning when none does; CARL runs a check itself only when it is a
+  plain test runner or ruff), freezes the tests, then runs a fresh coder session in code work mode, and gives the main
+  agent one result. Follow-ups and fixes: no test session; their `existing_tests` are frozen. Pi: CARL's subagent
+  extension. OpenCode: carl-delegation, in the foreground on any version; in the background only on verified OpenCode
+  versions, with a state file so an interrupted chain still delivers a result.
+- **The main agent may read what the brief needs** (files, the test command, the project's rules) before it delegates
+  a large task; it still writes nothing itself.
+
+## 1.12.1 - 2026-10-08
+
+Phase 23.4, reopened: `/carl` rebuilt from mock-ups as a real control panel.
+
+### Changed
+- **`/carl` is one list, changed in place** (OpenCode and Pi). Each row is a label and its state; Enter (Pi: also
+  Space) changes it at once: the state reads `turning off…` while the setup runs, then the new state, and a message
+  says what CARL did (red on an error). The title says when OpenCode or Pi must restart. No second dialog per row, no
+  explanations, no setup switch names on screen.
+- OpenCode: the state is at the right of the row, in OpenCode's 60-column dialog; the list updates in place, so the
+  cursor stays. Pi: Pi's own settings list (as `/settings`).
+- **Web search** opens its values (exa, parallel, off), each provider with where the queries go. **Sync service**
+  opens a view of the sync's state, the versions and the addresses. **Check for a new config** and **Apply the
+  waiting config** are rows of their own.
+- Without the coder, the **Background coder** and **Delegation reminder** rows are not in the list.
+
+### Fixed
+- 1.12.0's panel cut words at the edge of OpenCode's dialog (its text was 88 columns wide in a 60-column dialog) and
+  listed its sentences as rows that you could select.
+
+## 1.12.0 - 2026-10-08
+
+Phase 23.4: `/carl` is a control panel, and the new-file gate is a setting of the dashboard.
+
+### Added
+- **`/carl` turns things on and off** (OpenCode and Pi): one row per piece with its state, and a toggle: the coder
+  subagent, the background coder, the delegation reminder, the browser, web search (exa, parallel or off; the row
+  says that the queries leave the computer), the disk cache, and in OpenCode LSP, the subagents side panel, the
+  session switcher and the model check; the config sync's "Apply new configs at once". An opened row shows its
+  actions, then what the piece does, in sentences. A toggle runs `carl-sync.py set KEY=VALUE`: it writes the same
+  switch file as the setup (`~/.config/carl/client-install.env`) and runs the setup's config step again, so `/carl`,
+  `./setup` and the dashboard's sync never disagree. The panel then says what changed and which client must restart.
+  Turning the coder on in `/carl` keeps it on also with 1 slot (`CODER=1`).
+- **`carl-sync.py set`**: the switches `NO_CODER`, `NO_BACKGROUND_SUBAGENTS`, `NO_REMINDER`, `NO_BROWSER`, `NO_LSP`,
+  `NO_SIDEBAR`, `NO_SWITCHER`, `NO_CACHE`, `NO_MODEL_CHECK` (`1` or `on`), `WEB_SEARCH` and `CODER`; under the sync's
+  lock; the result as JSON.
+- **The new-file gate in the dashboard** (Connect > Setup, the full level of SET UP, `g`: off, 1, 2, 3, 5). It is
+  saved in `config.json` as `delegation.gate` (`./carl.sh config set delegation.gate N`). OpenCode and Pi read it
+  from the dashboard within 10 s, with no setup run: on the server Mac from `config.json`, on another computer from
+  the dashboard API (`GET /carl/cache/settings` now carries `gate`). Advanced, not recommended, off by default.
+
+### Changed
+- The setup no longer sets the gate: `DELEGATION_GATE` and `configure.py --gate` are gone (the user: "the gate is
+  TUI console settings only"). `carl-delegation` gets the dashboard API's address (`cacheApi`) instead of a number.
+- `/carl` follows the 1.10.0 writing rules: one reading per row, labels with a capital, statements as sentences.
+- Tests: `tests/js/carl-panel.test.mjs` (the rows, the states and the toggles of both clients), the gate in
+  `tests/js/carl-delegation.test.mjs`, `tests/scripts/test_carl_sync_set.py`, the `g` key in the dashboard tests.
+
+## 1.11.0 - 2026-10-08
+
+Phase 23.3: fewer config backups, and plugin paths that survive a symbolic link.
+
+### Changed
+- **One backup per file.** The setup, an update and a config from the dashboard keep `FILE.before-carl` (your
+  original, written once) and one `FILE.bak` (the version before CARL's last change). Before, each change left a
+  `FILE.bak.<time>`: on the development Mac, 12 of `opencode.json` and 8 of `models.json`. The API key and the PATH
+  line in the shell profile keep one `.bak` too. A run that changes nothing writes no backup, as before.
+- **The old copies go once.** The next setup removes the `FILE.bak.<YYYYMMDD-HHMMSS>` copies of CARL's files
+  (`opencode.json`, `tui.json`, `models.json`, `settings.json`, `mcp.json`, `APPEND_SYSTEM.md`, CARL's state files,
+  `~/.zshrc`, `~/.bashrc`) and keeps the newest as `FILE.bak`. The summary says how many it removed. A file with
+  another name or pattern, for example a backup of your own, stays.
+
+### Fixed
+- **OpenCode plugins behind a symbolic link.** When `~/.config/opencode` goes through a link, OpenCode resolves its
+  folder but not the `file:` paths of its plugins, so no CARL plugin loaded and nothing said so. The setup now
+  writes the plugin, TUI plugin, agent prompt and instruction paths with the link resolved, and an entry written
+  before through the link is replaced, not doubled.
+- Tests: two changes leave one `FILE.bak`; the clean-up keeps the newest and your own files; a home folder behind a
+  link (`tests/scripts/test_configure.py`).
+
+## 1.10.0 - 2026-10-08
+
+Phase 23.2: the dashboard, reworked again for what it lost in 1.5.0 and for every terminal size. Made from mock-ups
+that the user signed off screen by screen.
+
+### Added
+- **A level for each section.** Every card and section has its own level: collapsed (one row with a summary), simple
+  or full. The title shows it: `▸ NAME ○○`, `▾ NAME ●○`, `▾ NAME ●●`. **Tab** and **Shift-Tab** select a section
+  (its title shows reversed) and bring it on the screen; **L** or a click on its title changes its level; **D** sets
+  every section to simple or full. The levels are kept for the next start (`dashboard.json`). The tab bar says
+  `detail: simple`, `full` or `mixed`. Tab no longer changes the tab: 1-5 and clicks do.
+- **THIS MAC** on the Live tab (it was the SYSTEM card before 1.5.0): this Mac's memory with a bar, the memory
+  pressure, swap ("none" without a swap file), the GPU with a bar, power and heat; full adds wired, compressed,
+  free, the load and the free disk. It shows also when no server runs.
+- **The speeds by source.** The MODEL card (Settings > Server) and the selected model (Settings > Models) show a
+  table: this Mac's Auto-tune result and the catalogue's measurement, each with prose, code and edit tok/s, the Mac,
+  the date and the speculation. From 150 columns the Models list shows both sources' prose / code / edit; **t**
+  shows them at any width.
+- **Sliding window in Settings > Server** for Gemma models: the same setting as Caching's "Gemma models"
+  (`cache.swa`), with the memory of the full cache and of the window cache in About.
+- Requests: a mean row under the speeds; the full level adds the slot and where the reused tokens came from ("–"
+  when it is not known). Log: the full level shows milliseconds.
+- Tests: every screen at 100 x 40, 130 x 40, 160 x 50 and 200 x 60, with every section simple and full, checks that
+  nothing is wider than the screen, no values are joined by " · ", no line holds one lone word, the titles show the
+  right level and the footer keeps its keys (`tests/monitor/test_screens.py`); Tab, L, D and the saved levels.
+
+### Changed
+- **No values joined by " · ".** Every reading has its own row with a label, or a column in a table; the footer
+  joins keys with spaces. Labels start with a capital letter, and every statement is a whole sentence.
+- **Layouts for 100 x 40, 130 x 40, 160 x 50 and 200 x 60.** Live: two columns from 100 columns, three from 190;
+  the requests and the log fill the rows that are left. Every tab and Settings panel scrolls as one page ("↓ more"
+  in the footer), so no part is out of reach at 130 x 40 or 100 x 40. From 160 columns the ? card covers the right
+  half and does not push the page down.
+- Live: SPEED is a table (now, average, last request); MEMORY shows the server's parts as rows; MODEL, RECENT
+  REQUESTS and LOG show on every Live screen; each busy slot shows its own request. Nothing academic on the screens:
+  the line "GiB is memory: 1 GiB = 1.07 GB" and the name of the Metal limit are gone.
+- Settings > Server: sections (SERVER, MEMORY, AUTO FIT, MODEL, ABOUT, MODELS); the flag and config key of the
+  selected setting are in About. Settings > Models: the lists show prose tok/s (● this Mac, ○ the catalogue) and sort
+  by it (before: a weighted score that did not match the figures beside it). Auto fit, Auto-tune, Router and
+  Caching: pages of sections. Connect: sections; Clients is a table, or one block per computer when the table does
+  not fit. Dialogs are centred, with one button per row and what each choice does.
+- The Log filter is "Errors and warnings" (f).
+- The header shows the CARL icon on terminals that show images (iTerm2, Ghostty, WezTerm, kitty), as before; the
+  status pill keeps black text on every terminal.
+
+### Fixed
+- After a normal stop, the dashboard said "The last start failed" above ordinary shut-down lines.
+- While a model loaded, MEMORY said "model 0 KiB"; with two busy slots, only one request showed.
+- The router text claimed that OpenCode and Pi restore a session after every switch. A saved session belongs to the
+  model it ran on: it is restored when you switch back to that model (dashboard, `./carl.sh` banner, `--router`
+  help, `reference/server.md`).
+- The delete question said "stop the server first (q, then s)", which also closes the dashboard.
+- The Auto-tune run showed the tool's own words ("re-emit", "score"); the sliding-window help said 2.1 GiB where
+  the measurement is 2.3 GiB.
+- The installer's output is wrapped to the width of its card (it wrapped at 78 columns).
+- Error messages on the message line are red (they were green), and what is happening now says so ("Slot 0 is
+  writing an answer.", "CARL is checking the file…").
+
+## 1.9.0 - 2026-10-07
+
+Phase 23.1: the project's instructions are system text again, with Qwen models.
+
+### Changed
+- **Where the project part of the prompt goes** (`carl-cache`, OpenCode and Pi): the parts of the system prompt that change per project or day (OpenCode: the `<env>` block and the AGENTS.md files of the working folder; Pi: `<project_context>` and `<cwd>`) still come after the part that is the same everywhere, so one saved prompt serves every project. Where they go now depends on the model's chat template, checked once per model with `/apply-template`:
+  - **Qwen 3.6 and 3.8:** a second system message. The template puts the tools first, then the system text, and merges the second system message into it, so the project's instructions stay system text (before, they were the start of your first message). The saved prompt ends exactly where they start.
+  - **Gemma 4:** left where the client put them. CARL saves no prompt for Gemma 4 (its sliding-window cache cannot restore one).
+  - **Any other template:** left in place by default, so the instructions are system text (before 1.9.0 they went to the start of the first user message). **Settings > Caching > Other templates** changes it: "leave in place" (the default) or "move to your message" (one saved prompt serves every project; not for a template that also uses a sliding-window cache). It is the new setting `cache.move` (`off` / `auto`; `CARL_CACHE_MOVE` on another computer), and the dashboard's cache API sends it to clients on other computers.
+- The docs (`reference/caching.md`, the user guide's Fast starts, `reference/plugins.md`) and `/carl` (Disk cache) say where the project part goes.
+
+### Added
+- Tests: the placements in `tests/js/carl-cache.test.mjs` (a Qwen-like template: two system messages and the saved prompt's end; Gemma 4; other templates).
+
+## 1.8.0 - 2026-10-07
+
+Phase 23: the hand-off to the coder, measured and made consistent. The main agent now gives large and stuck coding tasks to the coder much more often, with any model, and the coder never acts as a main agent. The details and the measurements: `reference/delegation.md`.
+
+### Added
+- **The reminder** (`carl-delegation`, OpenCode plugin and Pi extension): one line at the end of each of your messages in the main session says that large coding work and fixes that already failed go to the coder. The line is the same each time, so the RAM cache and the disk cache stay valid. Measured with the real OpenCode 1.18.34 and Pi 1.0.2: with the coder's modes, large tasks to the coder went from 2/5 and 3/5 to 5/5 and 5/5 on the Qwen3.6 35B A3B Q4 (OpenCode / Pi), and from 1/5 and 2/5 to 5/5 and 5/5 on the Gemma 4 12B; stuck fixes from 0-1 of 4 to 2-3 of 4; small tasks and questions stayed with the main agent. On by default; `NO_REMINDER=1` turns it off.
+- **The coder's two modes:** each coder task starts with `Mode: code` (it writes the program code and runs the tests, but never changes them) or `Mode: test` (it writes tests from the requirements and never changes the program code). For code with tests, the main agent can send the test task first.
+- **The hand-off form:** the main agent writes each coder task as `Mode`, `Goal`, `Files`, `Requirements`, `Acceptance`, `Constraints`, and `Error` and `Tried` for a fix that failed. The coder changes only the files in `Files`, reports each acceptance item, and follows the project's constraints before its own defaults.
+- **`/code TASK`** in OpenCode (`~/.config/opencode/command/code.md`, run on the coder) and Pi (`~/.pi/agent/prompts/code.md`): the task goes straight to the coder. A `code.md` of your own stays.
+- **The new-file gate** (advanced, not recommended, off by default): `DELEGATION_GATE=N` stops the main agent's write that makes the Nth new file of a turn and tells it to use the coder. With N = 1 it also sent small tasks that need one new file to the coder.
+- Tests: `tests/js/carl-delegation.test.mjs` (the rules), the plugin's tests in `tests/js/opencode-plugins.test.mjs`, and the settings, the marked rule and `/code` in `tests/scripts/test_configure.py`.
+
+### Fixed
+- **A coder that acted as the main agent.** OpenCode gives its global instructions to every agent, so the coder got the delegation rule. A small model then said that it gave the task to the coder, and did nothing (the Gemma 4 E4B: no file changed, 0 of 4 hidden tests; after the fix, 3 of 4). Now the setup marks the rule, and `carl-delegation` takes it out of the prompt of every subagent. In Pi, the `subagent` tool now starts every agent with `--append-system-prompt`, so no subagent reads `APPEND_SYSTEM.md`.
+
+### Changed
+- `client/agents/coder.md` and `client/agents/delegation.md`: the two modes and the hand-off form. The coder's prompt now says first that it does the work itself.
+- The glossary moved from the development notes to `reference/glossary.md`; the code and the tests point there.
+
+## 1.7.0 - 2026-10-04
+
+Phase 22: the client package. One zip and one `./setup` for every client computer.
+
+Phase 22: the client package. One way to set up OpenCode and Pi on every computer: `./carl.sh install` on the server Mac, and `./carl.sh package`, copy, unzip, `./setup` on another computer.
+
+### Added
+- **`./carl.sh package`** writes `dist/carl-client-VERSION-HOST.zip` (git ignores `dist/`): the client files that git tracks, the entry points `setup` and `setup.command`, the server's `remote.json` and `api-key`, the installed models (`installed-models.json`) and `VERSION`. The zip has mode 0600; in it, the key file and `remote.json` have mode 0600 and the scripts 0755 (`unzip` and the Finder keep the modes). CARL prints where the zip is, that it holds the key (delete it after the copy, with the `rm` command), and how to use it. Code: `tools/carl_core/domain/package.py`, `tools/carl_core/adapters/client_package.py`; help: `./carl.sh help package`.
+  - When the server serves only this Mac (an address such as 127.0.0.1 in `remote.json`), `package` makes no zip, changes nothing and exits with 1. It tells you how to change the network (Settings > Server > Network, or `./carl.sh config set llama.net vm`, then a new server start). `--anyway` makes the zip all the same. Before the first server start, it tells you to start the server one time.
+- **`client/setup`** (and `setup.command` for a double click on a Mac): the one entry point on macOS and Linux, without sudo. It asks one time which clients (OpenCode, Pi or both) and which options (the coder subagent, the browser tools, web search, with a note that its queries leave the computer, and LSP). The defaults are the choices of the last setup (`~/.config/carl/client-install.env`: the switches that the sync service applies too). `--yes` takes the defaults; without a terminal, it asks nothing. It installs or updates OpenCode and Pi only when they are missing or older (`npm view`), writes the configs, and ends with what it did, the smoke test and the next step. `--help` is a full help page. An update is a new package unzipped over the old folder, then `./setup` again.
+- **Dashboard, Connect > Setup:** **[ Make the client package (z) ]** runs the code of `./carl.sh package` in the background. The card **CLIENT PACKAGE** shows the path, the key warning and the next steps, or why CARL made no package. **[ Show it in the Finder (f) ]** (`open -R`). The `?` card and the footer list `z` and `f`.
+- **`/carl`:** the **Details** part of **Config sync** shows the version of the client package and the CARL version of the server. When they differ, the section says so and tells you to make a new package and run `./setup`.
+- `remote.json` (written at each server start) now holds the CARL version (`host/common.sh`, `carl_version`: the newest `## X.Y.Z` heading of this file, else `git describe --tags`).
+- `CLIENTS=both|opencode|pi` for `install.sh`, and `configure.py --clients`: the configs of the chosen clients only; the files of the other client stay as they are.
+- Tests: `tests/scripts/test_client_package.py` (the files and modes of the zip, no untracked or cache files, the version and the host name, the refusals, `setup --yes` in a temporary home with a fake server and fake node and npm, an update over an install that keeps your config and makes backups, one client with options, the questions in a terminal, the help pages, the share zip), dashboard tests for the package card, a JavaScript test for the version lines of `/carl`, and a Docker test that installs from the zip in a Linux container with the sync service (`CARL_DOCKER_TESTS=1`).
+
+### Changed
+- **`./carl.sh install` runs `client/setup`**, the same setup as on other computers. Its options are the same as before (`opencode`/`pi`, `--config-only`, `--clients-only`, `--vm`, `--host`, `--port`, `--key-file`), with the new `--yes`, `--coder`, `--browser`, `--web-search` and `--lsp`. The dashboard's **Install** and **Update the model lists** buttons use the choices of the last setup.
+- **The docs name one way only:** README, the user guide (the client sections, the new sections "The client package" and "Updating a client computer", "What the setup changes"), and `reference/client-sync.md`, `plugins.md`, `architecture.md`, `server.md`. `install.sh` and `install-clients.sh` are internal parts of the setup (a short "Internals" note); they still work alone, and their `--help` pages start with "Run ./setup instead."
+- **The clients' default model** (OpenCode `model` / `small_model`, Pi `defaultModel`) is now the model that the server runs now, when the server runs a single model that is in the installed list. Else, it is the model that a server start loads (`llama.model`, or Auto fit's choice), as before; in router mode too. The dashboard saves the model that it applies (`llama.model`), so a restart runs it again; only a one-off `./carl.sh --model NAME` is not saved. As before, the setup changes the default only when it is unset or still has the value that CARL set (`client/configure.py`, `default_model()`).
+- **The setup keeps your choices:** `install.sh` now also records `CLIENTS`, `CODER` and `NO_CODER`, so a sync keeps a coder that you turned on or off (`--coder auto` lets the number of slots decide again). A switch that the setup does not ask for (`NO_CACHE`, `NO_SIDEBAR` and the others) stays as in the last setup; `=0` turns it back on. The `/carl` hints say `=0`.
+- The messages of the sync service and of `install.sh` tell you to make a new client package, not to copy the client folder.
+- **`tools/make-share-zip.sh`** builds the zip from `git ls-files` (nothing that git does not track), and never puts in `api-key`, `remote.json`, `installed-models.json`, backups or caches. `--with-docs` still adds `docs/` (not in git) from the disk. The options and the output line are the same.
+- **A review of all the docs** against the code (README, the user guide, every page of `reference/`): the glossary's names everywhere, also in the passages that Phase 21 did not touch (user guide §3, §5, §6, §7, §11; `models.md`, `performance.md`, `memory.md`, `caching.md`, `server.md`): context (not window), context memory, guesses, read speed and write speed, session (not conversation), edit (not re-emit), shared storage, the GPU memory limit, the memory kept free, GiB for memory. User guide §5 is now "Context: how much a slot holds". Each measurement names its Mac, its llama.cpp version and its date, and the cache results are waiting times.
+
+- **Custom Gemma 4 models** get Google's sampling (top_k 64), not Qwen's top_k 20.
+- **OpenCode's `none` variant** sends Qwen's sampling for thinking off only to Qwen models. For Gemma 4 and custom models it only turns thinking off (`off_sampling` in `installed-models.json`).
+- **`/carl` sees a CARL update on the server.** The dashboard API sends the server's CARL version (`X-Carl-Version`) with each reply, the sync service saves it, and `/carl` compares the client package with it. Before, both values came from the package, so `/carl` never saw an update.
+- Catalogue card texts: the last old names (decode, window for the context, n=1).
+- Help: the Auto-tune page gives the real guesses (MTP head: 1 and 2; MTP drafter: 1 to 4), the environment page gives Gemma's sampling, and BIG_GB is in GiB.
+
+### Fixed
+- `tools/make-share-zip.sh` put every file of the folder in the zip, also folders that git does not track (a test folder was in the zip in Z1), and the server's `remote.json`.
+- `install.sh`'s smoke test stopped the install with an error when the server's JSON had spaces (`grep` found no model id under `set -e`). It now reads the JSON with Python.
+- **Wrong statements in the docs:** `reference/models.md` gave the 9B quality rank 6, said that the Gemma models have no rank and that Auto fit does not choose them, that the 12B is not measured and that the 31B speculation is not measured. `reference/memory.md` said that the 9B is Auto fit's choice on 16 GB Macs. `reference/server.md` gave the E4B MTP only, the other Gemma models "a default, not measured", a catalogue without Gemma 4, and top_k 20 for every model (Gemma 4 uses 64). `reference/sampling.md` gave top_k 20 for every model. `reference/thinking.md` and `reference/client-configs.md` did not list Gemma 4. The user guide's 24 GB table did not list the Gemma 12B and 26B-A4B, and its Connect tab sections had old names.
+
+## 1.6.0 - 2026-10-04
+
+Phase 21.1: custom Gemma 4 models get the MTP drafter of their size.
+
+### Added
+- **An MTP drafter for custom Gemma 4 models.** A Gemma 4 file from another Hugging Face repository (for example a fine-tune, or an unsloth or bartowski build) now gets the MTP drafter of the catalogue model with the same size. CARL finds the size in the file's header: Gemma 4, the layer count and the expert count (E4B 42 layers, 12B 48, 26B-A4B 30 with 128 experts, 31B 60), the same in every repackaging (`tools/carl_core/domain/drafters.py`).
+  - `./carl.sh download hf:…` of a Gemma 4 file downloads its drafter too, as for a catalogue model. For a custom Gemma 4 model that you have already, `./carl.sh download NAME` downloads only the drafter. `./carl.sh models` tells you when a drafter fits.
+  - Dashboard: Settings > Models shows "MTP drafter: none yet … Press d to download it." for such a model.
+  - The drafter is recorded in the custom model's `models.json` entry (`draft`). Start (`-md`), fit, verify, delete and Auto-tune then use it as for a catalogue model. A custom model with a drafter starts with MTP + n-gram, 2 guesses.
+  - Checked live: a custom Gemma 4 E4B file got the E4B drafter (60 MB, SHA-256 checked) and wrote at 67.7 tok/s with 73% of the guesses correct.
+
+### Changed
+- **Gemma 4 31B: 2 guesses**, not 1. Three more runs of each gave the same numbers every time (the model is deterministic at temperature 0 on the M3 Pro), so the lead of 2 guesses (12.8 against 12.7) is real. 1.5.0 used 1 guess. The 12B: 2 guesses won all three repeat runs too.
+
+## 1.5.0 - 2026-10-04
+
+Phase 21, the console rewrite: one name for each thing (`reference/glossary.md`) in the dashboard, the CLI, the launcher, `/carl` and the docs, one unit for each kind of number, and screens that say the state first in plain sentences.
+
+### Added
+- **Dashboard: two detail levels.** `D` changes between simple and full detail on every screen (a click on `detail: simple (D)` does the same). The dashboard saves the level in `~/.config/carl/dashboard.json`, next to `config.json` (it never writes `config.json` for this). `--expand` gives full detail for one run.
+- **Dashboard: a message line** above the footer (at most 2 lines): the progress of a stop or a restart with its time, short messages, and the downloads, Auto-tune runs and installs that run in the background. The `?` card shows the last 5 messages.
+- **Dashboard: a "CARL STARTS" card** shows the progress of the first start (the server state, the model list, what fits this Mac).
+- **A refused start shows its reason** in the dashboard: the launcher's `error:` line, in the Memory section of Settings > Server and in the SERVER card of the Live tab.
+- **Live tab:** a SERVER card when no server runs (how to start it, what a start uses and if it fits, the last error, the log). `a` starts a stopped server.
+- **Settings > Server:** the columns **Your choice**, **Running now** and **Recommended** (with its source: Auto-tune, the catalogue, CARL's default); a **Memory** section (a sentence that tells if the setup fits, and a bar); **Auto fit suggests**; **More settings** in full detail, with the llama.cpp flag and the `config.json` key under each setting.
+- **Router panel keys:** `s` single model, `r` router mode, ↑ ↓ and Enter to load or unload a model, `u` to update the configs (before: the mouse only).
+- **Help for every command** (`tools/carl_help.py`): `./carl.sh help COMMAND`, `./carl.sh COMMAND --help` and `./carl.sh COMMAND -h`. The help wraps to the width of the terminal.
+- **`install.sh --help` and `install-clients.sh --help`** are real help pages (the options, the key sources, the switches).
+- **Legends** under `./carl.sh models`, `./carl.sh fit`, `./carl.sh cache show` and the Models panel. `./carl.sh config show` gives every key with what it does, its values and its default.
+- **Pi:** the result of a background subagent shows as `✓ Coder finished (42 s)` with its first 3 lines. Ctrl+O shows all of it. The model still reads the `<subagent …>` text.
+- **`/carl` panel:** a **Details** part in each section (the addresses, the config version, the installer's switches) and **‹ back**.
+- Code: `tools/carl_core/domain/units.py` (the units of every screen; it replaces `fit.human_gb` and the dashboard's `fmt.size`, `knum` and `dur`), `cards.card_rows()` (the rows of `./carl.sh card`), `tools/monitor/words.py` (the glossary's names for the values of the server and `config.json`), `tools/monitor/uiprefs.py` (the detail level).
+- Tests: `tests/monitor/test_screens.py` (every screen as text at 100, 140 and 200 columns, simple and full), `tests/scripts/test_cli_text.py` (each help page, the width, the names, the units, the start lines), `tests/test_units.py`, `tests/js/pi-subagent.test.mjs`.
+
+### Changed
+- **Names (the glossary):** tab 1 is **Live** (was Overview); the panel is **Caching** (no "(exp.)"); **disk cache** (was "prompt cache" in `/carl`, the plugins and the docs); **RAM cache**; **context memory** and **context memory type** (was KV cache, KV type); **window cache** / **full cache** (was window only / full-length); **guesses** (was draft tokens, `n=2`); **read speed** / **write speed** (was prompt processing, decode, generate); **reused** tokens (was cached); **Auto fit** and its **choice** (was auto fit's pick); **quality rank**; **send the config** (was push). The settings keys, the flags and the file names do not change.
+- **Units everywhere:** GB for files, downloads and the disk; GiB for memory; K = 1024 tokens; tok/s (was t/s); one style for times (`4.9 s`, `6 min`, `1 h 12 min`).
+- **Dashboard header:** the state words are STOPPED, LOADING, IDLE, READING, WRITING and BUSY ×N, with ● (a server runs) or ○ (was OFFLINE, EXITED, UP, GENERATING). The tab, the panel and each selected choice are in brackets (`[1 Live]`, `[Server]`, `[10 GB]`).
+- **Dashboard cards:** no detail dots. A click on a card title collapses the card to one ▸ line, or opens it. Text in a card wraps. The Live tab starts with a sentence ("No request runs. The 2 slots are free. Memory is normal."), then the cards SLOTS, SPEED, MEMORY, CONNECT and HEALTH (full detail: MODEL and LOG). The SPEED card gives the read and write speeds and "77% of the guesses are correct". Two columns from 120 columns, three from 180.
+- **Dashboard footer:** it always ends with `D detail · ? all keys · q quit`. A dialog shows only its own keys. `?` lists the keys that work on that screen.
+- **Dashboard keys:** the copy keys on Live and Connect are `o` / `p` / `c` (`t` still works); `e` / `c` (expand / collapse all cards) are gone (`D`, and a click on a title); `+` / `-` change the lines of the LOG card in full detail only (`--lines` sets the start value); the Quit dialog is `s` (stop the server and quit) / `l` (leave it running and quit) / Esc; the dialog **AN AGENT IS WORKING** is `w` (wait for the turn) / `s` (stop now) / Esc; the Caching panel uses ↑ ↓ ← → and `c` (no letter keys for the rows); `x` in the Auto-tune panel uses the recommended settings; the Auto-tune lengths are quick / normal / long; `w` and `f` work on the Log tab only.
+- **Settings > Server:** the buttons are **[ Apply and restart (a) ]**, **[ Undo my changes (r) ]** and **[ Use the recommended settings (x) ]**. One Speculation row holds the mode and its guesses (`MTP + n-gram, 1 guess`). `auto` always shows its choice (`auto (2)`, `auto (2.5 GiB)`). A ⚠ sentence under the table replaces the colour legend.
+- **Settings > Models:** the download size in GB, "Fits this Mac" (`yes, 2 × 96K` or `no (17.5 GiB)`), the speed in tok/s with ● (this Mac) / ○ (another Mac) / `not measured`, and a legend. Full detail shows the quality rank and the largest context. The buttons are **Use it**, **Check the file**, **Auto-tune**, **Delete**, **Edit its card** and **Add from Hugging Face**.
+- **Settings > Caching:** the rows are Disk limit, Saved prompts, Saved sessions, When to save (auto, every turn, when it leaves, before a stop), Save after, Shared storage and Gemma models.
+- **Connect tab:** **[ Install on this Mac (i) ]** (**Install again** when set up), **[ Update the model lists (u) ]**, **[ Send the config (P) ]**. The Clients sub-tab is a table (computer, user, syncs, last seen, config).
+- **`./carl.sh models`:** the glossary's status and source words (downloaded, not downloaded, partial; catalogue, models folder, Hugging Face), GB, and a legend. **`./carl.sh cache show`:** saved prompts and saved sessions, GB and MB, and a legend for `*`. **`./carl.sh card`:** the labels of the dashboard. `verify`, `download`, `card` and `delete` of an unknown model give the same error.
+- **`./carl.sh fit`:** a **Memory.** block in sentences; Auto fit's choice for each goal, with "(your goal)"; the columns rank, weights (GiB), per 1K tokens (MiB) and largest context with q4 and q8 (for Gemma: the cache that Auto fit plans, and a note with the other cache); a legend; the `sysctl` line is for experts only, with the risk first. The `--check` refusal is one `error:` sentence, then the advice.
+- **The launcher's start lines** are sentences with their sources: "CARL starts the server: NAME (FILE).", "Slots: 2 (from Auto-tune). Context: 96K tokens per slot (…).", "Context memory type: q4 (…). RAM cache: 8.0 GiB.", "Speculation: MTP + n-gram, 2 guesses (…).", the sliding-window line and the log line. The sources are your option, the environment, your settings, Auto-tune, the catalogue, the model file and Auto fit. Each refusal starts with `error:`. An unknown command gives one `error:` line and exits with 2.
+- **Router mode:** the start lines name the setup of each model, with the window cache or the full cache (`2 slots × 96K tokens, q4, window cache`).
+- **Auto fit wording:** "NAME (quality rank N) is dense: Auto fit keeps it for the hard code goal". A passed-over model that fits no pass says "does not fit" first. `Plan.label()` is "2 × 96K tokens, q4".
+- **`/carl` panel:** plain sentences, the state first. The actions are **Do not apply new configs at once** (was "Turn auto-apply off"), **Apply new configs at once**, **Apply the new config now** and **Check for a new config now**. The section of the cache is **Disk cache**.
+- **`install.sh`:** the smoke test says `OK: the server answers at http://HOST:PORT/v1. It has MODEL.` (or `Note: no server runs at …`). The output is in sentences.
+- **Catalogue:** the card texts use the glossary's names (context memory, window cache, 2 × 96K).
+
+- **Gemma 4 31B measured** (M3 Pro 36 GB): speculation MTP + n-gram scores 12.8 with 2 guesses and 12.7 with 1 (no speculation: 6.9), so the catalogue uses 1 guess (Auto-tune's rule: the simpler mode unless the other is 3% better). Code test at Google's sampling: 17 of 18 tasks, no answer stopped at the token limit, the shortest thinking of the Gemma models (about 1,800 tokens a task) at about 9.5 tok/s. With the window cache it reads a 14.5K-token prompt at 73 tok/s. It keeps quality rank 6, below the Qwen 27B.
+- **Catalogue card texts** use the glossary (context memory, window cache, 2 × 96K). The 9B's card says what Phase 20 measured; the E4B's and the 12B's "pick instead" no longer point at the 9B.
+- **Download sizes include the MTP drafter** in every dashboard view (the list, the selected model, Auto fit).
+- **Free disk for saves:** CARL and the clients stop saving below 10 GB of free disk (was 10 GiB, 10.7 GB).
+
+### Fixed
+- **A false error on every Gemma 4 start.** llama.cpp's own memory fitting probes the model, and its probe fails for the Gemma 4 MTP drafter ("Gemma4Assistant requires ctx_other"). The dashboard counted this as 1 error. The launcher now gives `--fit off`, and the router presets `fit = off`: CARL sets `-ngl` and `-c` and checks the memory itself.
+- **The launchers honour `CARL_CONF_DIR`**, as `tools/carl.py` does: the disk cache (`slots/`) and `router-presets.ini` go to that folder. Before, a run with a test folder wrote the real one. The API key stays in `~/.config/carl`.
+- **Two keys in one read** (for example `?3`) now work as two keys. A text that you type or paste stays one text.
+- **The source of the slots:** after `--slots 4`, the start line said `slots:auto-tune`. A flag and the environment are sources now ("Slots: 4 (from your option)").
+- **`CMD --help`** failed with "no help topic" for six commands (install, config, cache, push, tune, dashboard). Every command has a help page now.
+- **The help did not wrap** to the width of the terminal.
+- **Pi showed the raw `<subagent …>` text** of a background result. It now shows `✓ Coder finished (42 s)` and the first lines.
+
+## 1.4.0 - 2026-10-04
+
+Gemma 4 done properly: MTP speculation with Google's separate drafters (measured: MTP + n-gram is 55-83% faster), the Gemma 4 12B, ranks from benchmarks and CARL's own code test, and auto fit for 16 GB Macs (the E4B for everyday work, the 12B for hard code).
+
+### Added
+- **Catalogue: `gemma-4-12b`**, Google's dense Gemma 4 12B (ggml-org Q4_0 QAT, 7.2 GB, with its MTP drafter, 0.25 GB). 2 × 96K fits a 16 GB Mac with the window-only cache (~9.1 GiB); the full cache needs ~25.7 GiB. Google's model card: LiveCodeBench v6 72.0%, Codeforces ELO 1659. Rank 8. Auto fit selects it for hard code on 16 GB Macs.
+- **MTP speculation for Gemma 4 with its separate drafter.** Google gives an MTP drafter file for each Gemma 4 model (`mtp-gemma-4-*-Q4_0.gguf` in the ggml-org repos: 60 MB to 0.28 GB). The catalogue names it in a new optional field, `draft` (repo, revision, file, sha256, bytes, checked as `hf` is).
+  - `./carl.sh download NAME` gets the model and then its drafter (resumable, SHA-256 checked). If only the drafter is missing, it gets only the drafter. `verify` checks both files. `delete` removes both. `./carl.sh models` marks a model whose drafter is missing. The drafter is not listed as a model.
+  - A start gives the drafter to llama-server with `-md` when the speculation uses MTP (`tools/carl.py launch-env` writes `DRAFT` and `MTP_SOURCE`). Router presets get `spec-draft-model`. If the drafter is not downloaded, the start uses n-gram and tells you one time. This also applies to a model file without an MTP head.
+  - The drafter's weights count in every fit check: the launcher's check (`llama-fit.py --draft`), the dashboard's fit line and largest window, auto fit, `./carl.sh fit` and Auto-tune.
+  - Auto-tune measures none, n-gram, MTP and MTP + n-gram with 1 to 4 drafts for a model with a downloaded drafter (`--quick`: 1 and 2). Its test server gets the drafter.
+  - Dashboard: the Models panel shows the drafter line, Download (`d`) gets a missing drafter, and the delete question names the drafter. The download progress counts both files. The MODEL card shows the drafter. Red for MTP speculation now means "no MTP head and no downloaded drafter".
+- Catalogue: the Gemma 4 entries have `mtp: true` (meaning: MTP speculation is available, from the model file or from its drafter). All four use `draft-mtp,ngram-mod` with 2 drafts: measured the best on the E4B, the 12B and the 26B-A4B (prose, new code and re-emit together: 77.0, 41.4 and 74.9 against 49.4, 26.7 and 40.9 without speculation). The 31B is not measured. The entries have a `speed` field from these runs.
+
+### Changed
+- **Ranks for the Gemma 4 models** (temporary, from published benchmarks and CARL's code test, 2026-10-04): 31B 6, 26B-A4B 7, 12B 8, E4B 9. The Qwen3.8-9B distill moves from rank 6 to 10. The Qwen 27B and 35B-A3B builds keep ranks 1–5, because Qwen is better at agent coding in the published benchmarks (SWE-bench Verified: Qwen3.6-35B-A3B 73.4, Gemma 4 31B 52.0, 26B-A4B 17.4).
+  - CARL's code test: 6 small Python tasks with hidden tests, 3 runs. Every answer that the 26B-A4B, the 35B-A3B and the 12B finished was correct. Their failures were answers that stopped at the 8,000-token limit during thinking. The E4B passed 13 of 18 tasks at about 66 tok/s. The 9B passed 5 of 18 at about 29 tok/s.
+  - At Google's sampling (temperature 1.0, top_k 64) the 12B thought less and passed 17 of 18 (12 of 18 at temperature 0.6). The Gemma entries keep Google's values.
+- **Auto fit on 16 GB Macs:** the `everyday` goal now takes the fast builds first: the MoE builds and a small dense model with the new catalogue field `fast: true` (the Gemma 4 E4B). A 16 GB Mac gets the E4B for `everyday` and the 12B for `hard-code` (both 2 × 96K). Before, it got the 9B for both.
+- **Sort by quality:** models with no rank (custom models without a card rank) sort last, the larger file first.
+- **`./carl.sh fit`** also shows the largest window with the window-only cache for a model with sliding-window layers (for example the 12B on 16 GB: 28K with the full cache, 256K with the window cache).
+
+## 1.3.0 - 2026-10-04
+
+Auto fit: the best stock model for this Mac, and a start that doesn't fit is refused. Custom models get a card you write. The server serves this Mac only unless asked, and the dashboard installs the clients. OpenCode and Pi list the models really installed, under their own names, and router mode (opt-in) lets them switch models.
+
+### Added
+- **Auto fit** picks the best **stock** model that fits this Mac for a goal: `everyday` (default) = the MoE builds first (35B-A3B: fast, usually sufficient; CARL prioritises speed), `hard-code` = the dense builds first (27B: better at code and hard tasks, slower). Quality is the catalogue rank (parameters and density, then quantization). It wants two 96K windows (main session + a coder subagent), else one, else the largest window of at least 32K, within the smaller of the GPU limit and RAM minus the reserve for macOS and apps (6 GiB, 10 with the VM network up). If no build of the goal's family fits, it takes the best of the other family and says so. Abliterated models are never picked automatically, and a custom model is a candidate only when its card opts in (see the next item). The answer names every better-ranked model it passed over, and why.
+  - Picks (2 × 96K each): 16 GB nothing fits; 24 GB `qwen3.6-35b-a3b-iq3` (everyday) / `qwen3.8-27b-iq3` (hard code); 32 GB (estimate 24.0 GiB; a real M2 Max reports 25.0) and up `qwen3.6-35b-a3b` / `qwen3.8-27b`. With VMware's network up the reserve grows to 10 GiB, so a 32 GB Mac's everyday pick becomes the IQ3. `--ram` previews estimate the GPU limit at 2/3 of RAM below 32 GB and 3/4 from 32 GB up.
+- **Cards for custom models** (Hugging Face downloads and files in the models folder): CARL can't tell what a model is for from its file, so you write its card, with the catalogue's fields and rules: label, role (≤ 60 characters), good-for tags, why use it, trade-offs, hardware, abliterated, uncensored (abliterated only), arch (dense / MoE), quant, quality rank, thinking (on / off or effort levels), auto fit (opt-in) and pick-instead entries. Stored in `~/.config/carl/models.json` (`models.NAME.card`), checked when saved (and when the file loads). Everything that reads cards uses it at once: the MODEL card, the role / tags columns of the model lists, sort by quality, the use-case, stock and dense / MoE filters, and `./carl.sh fit` ("your card's rank").
+  - **Dashboard:** Settings → Models panel → `e` (or **Edit card**) on a custom model opens a form: one row per field (a row per tag, a row per pick-instead entry), ↑↓ select, Enter edits (typed text wraps; Enter keeps it, Esc drops it; paste works), ← → / space change a choice or tick a tag, `x` clears, `+ add a model` opens a model picker, `s` saves (errors show in the form), Esc cancels. arch and quant start from the GGUF header. On a catalogue model, `e` says its card is read-only.
+  - **Command line:** `./carl.sh card NAME` shows any model's card (catalogue: read-only); `./carl.sh card NAME set FIELD VALUE` (tags comma-separated; `pick_instead MODEL=WHEN …` or a JSON list) and `unset FIELD` edit a custom model's card; a bad value prints `error: …` and exits 1. `./carl.sh models` shows a custom model's role.
+  - **Auto fit** takes a custom model only when its card sets `auto_fit` (it needs a rank and an arch, and a stock model): the rank is yours, not measured, so custom models never join by default. `./carl.sh download default` and the download offer only name catalogue models.
+  - Catalogue models stay read-only: no edit mode and no local override (a card written by hand under a catalogue model's name in `models.json` is ignored).
+- **`config.json` keys** `llama.auto_goal` (`everyday` | `hard-code`) and `llama.auto_fit` (`catalogue` | `downloaded`; default `catalogue`, so a new Mac with nothing downloaded is offered the best model). `./carl.sh config set llama.auto_goal hard-code` works through the schema.
+- **`./carl.sh fit`** shows auto fit's pick for each goal, why, and the passed-over models with their reasons; the model table has a `rank` column and marks the picks with ★. New options: `--goal`, `--scope`, `--reserve-gb`; `--ram 24|36|64` previews other Macs.
+- **Settings tab, Auto fit panel** (`[` / `]`, or `A` on the Server panel): the goal (everyday / hard code) and the models it picks from (catalogue / downloaded) as clickable choices (`g` / `f`, saved at once), this Mac's budget (GPU limit, RAM less the reserve, VMware's network up or down), the pick with its plan, the memory it needs and why, what `model auto` starts until it is downloaded, every passed-over model with the reason, the other goal's pick, and a ranking of every model (rank, arch, weights, the largest window that fits, here or not, what auto fit made of it). **Use this** (Enter) sets the model, context, slots and KV cache for this Mac in one step and offers to download a pick that isn't here; **Download it** (`d`) shows the progress in the panel. The Server card keeps a one-line auto fit status (click it for the panel). The `auto` entry and lists show what `auto` starts (`★ auto → NAME`), ★ marks auto fit's pick, red names are too big for this Mac; the MODEL card explains the pick ("Auto fit picked X: …", the goal, the scope, what starts until it is downloaded, the passed-over models).
+
+- **OpenCode and Pi list the models installed on the server, one entry each** (the catalogue's and your own), under the model's own name, with its family's thinking options (35B-A3B builds: none / high; 27B builds: none / low / medium / xhigh; a custom model: its card's *thinking*) and its own context window. `./carl.sh install` (and `install.sh`) writes them from `tools/carl.py client-models`, kept in `client/installed-models.json` so a copy of the client folder carries the list into a VM; without it, from the server's `/v1/models`. The default model becomes the one a server start loads. The dashboard's copy buttons build the same entries.
+- **Connect tab: an out-of-date warning** when the OpenCode / Pi configs on this Mac list other models than are installed ("OpenCode lists 3 models; installed now: 4 — added X") or the running model's window changed (a new context or slots setting), with `u` to update them. While they are out of date, the tab itself reads **2 Connect ⚠**. A finished download or a delete says so too.
+- **Switching router mode on or off updates the OpenCode / Pi configs on this Mac** (when CARL set them up here), after the restart.
+- **OpenCode plugin carl-model-check:** a CARL warning in OpenCode when the model picked isn't the one the server runs (single-model mode: the answers come from the loaded model), isn't installed on the server, or is being loaded (router mode). `NO_MODEL_CHECK=1` leaves it out.
+- **Router mode (opt-in; the default stays one model):** for users who prefer to choose models on the fly, llama.cpp's router offers every downloaded model that fits and loads the one OpenCode / Pi asks for, one at a time (`--models-max 1`: the loaded model stops first). Each model gets the settings a single start of it would use; a model that doesn't fit is left out with the reason. Turn it on in the new **Router** panel of the Settings tab (it asks, saves `llama.mode = router` and restarts the server), with `./carl.sh --router`, or `./carl.sh config set llama.mode router`. WARNING: every switch empties the prompt cache; OpenCode and Pi put their sessions back from the disk cache (below), other clients re-read the whole conversation. The Router panel lists the models with their state and Load / Unload, the recent switches and the client lists' state; the dashboard follows the loaded model (memory, context, requests, log) and the header says `llama.cpp router (N models)`.
+- **Connect tab: install from here.** **[ Install on this Mac ]** (`i`) runs `./carl.sh install` (OpenCode and Pi into `~/.local` when missing, then their configs pointed at this server) and **[ Update configs only ]** (`u`) runs it with `--config-only`; both ask first (`y` / `n`), run in the background and show their output in the tab (`x` closes it). The tab says plainly: on this Mac, `./carl.sh install`; in a VM, start the server with `./carl.sh --vm` (it says whether it does now), then `./install-clients.sh && ./install.sh` there. The CONNECT card's install line says the same. `./carl.sh install` takes `--port N`.
+
+- **More tools, within a lean prompt** (measured: OpenCode's system prompt + tools = 9,870 tokens as installed, target < 10.5K): OpenCode gets **web search** (Exa; the queries leave the computer: `WEB_SEARCH=off` or `parallel`), the **LSP** tool with `"lsp": true` (`NO_LSP=1`), **background subagents** (`NO_BACKGROUND_SUBAGENTS=1`) and **parallel tool calls** (each model entry asks llama.cpp for them); a **browser** (Playwright MCP, pinned, temporary Chrome profile, headless unless `BROWSER_HEADED=1`; `NO_BROWSER=1`) whose 26 tools belong to a new **browser** subagent, so the main prompt stays small and the main agent sends it browser work on its own. The switches (OpenCode reads them only from the environment) live in `~/.config/carl/opencode.env`, loaded by a marked 3-line pointer appended to an existing `~/.zshrc` / `~/.bashrc` (never created; a backup first). Pi gets grep, find and ls (off by default in Pi), web search and the browser as MCP servers (the browser loaded on demand).
+- **A disk cache of prompt states for OpenCode and Pi** (`~/.config/carl/slots`, the server's new `--slot-save-path`): the OpenCode plugin and the Pi extension **carl-cache** (one shared `client/shared/carl-cache.js`; `NO_CACHE=1 ./install.sh` leaves them out) save **each agent's prompt** (read once: a new session's first answer starts in under a second instead of after ~13 s on the 35B, ~2 min on the 27B) and **each session** after every turn, and put a session back before its next request when the server no longer holds it: after a restart, a router switch or many other sessions (the next answer starts in about a second instead of after the whole conversation is read again: minutes for a long one). Per session, so a session reopened after others comes back too; per agent (OpenCode's build, plan, coder; Pi and each Pi subagent). The parts of the system prompt that change between projects and days (OpenCode's environment block and project instructions, Pi's project context and folder) move to the first message, so an agent's saved prompt fits every project. Works with the hybrid Qwen models and normal transformer models (tested: Gemma 4 E4B, tools after the system prompt). Only the server's API: from a VM too.
+- **Router mode:** before a request for another model the plugin loads it and puts the session back (a switch costs the load and about a second); OpenCode's title requests go to the loaded model, so a new session on another model doesn't switch twice.
+- **Title and summary requests run without thinking** (they held a slot for 35 s on the 35B, and `opencode run` waited for them); a session whose slot a subagent needs is saved first and put back from its file (an OpenCode run that delegates to the coder: 59 s → 12 s).
+- **Settings tab, Caching panel:** the disk limit (default **10 GB**; the oldest conversations go first, then the oldest prompts), prompts and sessions on / off (for the clients on this Mac), **when to save** (`auto`: when the unsaved part would take 2 minutes to read again and before a session leaves the server; every turn; on a switch; before a stop), **SWA models** (auto, full cache, window only), what is on disk (model · agent, model · session), and Clear (it asks). Saved at once in the new `cache` section of `config.json` (`cache.disk_gb`, `cache.prefix`, `cache.sessions`, `cache.save`, `cache.swa`). For the stop saves the clients record each slot's session; the dashboard saves them before Stop, Apply, Auto-tune and router loads; a new client process finds a session still in its slot the same way. `./carl.sh cache [show|trim|clear]`; the launcher trims at every start.
+- **Models with sliding-window layers** (Gemma): the memory estimate reads the layer pattern from the GGUF (Gemma 4 E4B's KV was counted about 3× too large), and `cache.swa = auto` starts them with `--swa-full` when it fits (router presets: `swa-full = true`), so their saved states can be restored (without it llama.cpp re-reads a restored prompt in full; it costs Gemma 4 E4B 2.3 GB at 2 × 96K); else window only.
+- **Conversations stored as patches in the disk cache:** a conversation is stored as a zstd patch against the agent's prompt file it starts with, so the prompt is on the disk only once (35B: an 8.6K-token session 115 → 64 MB; 1.5 → 1.2 GB for 7 conversations). Made whole again before a restore (on this Mac by the client, for another computer by the dashboard's API), byte for byte. `cache.share` (Caching panel: Shared, `h`); zstd is a dependency now.
+- **The save rule `auto` saves after 2 minutes of unsaved reading** (was 10 s: the stop and switch saves catch the cases that matter; fewer drive writes), configurable (`cache.auto_s`; Caching panel: Auto after, `t`).
+- **Clients on other computers:** every server start writes `client/remote.json` and `client/api-key` (git-ignored, 0600), so a copy of the client folder installs with no arguments. The dashboard serves an API (the server's address, port + 1, the same key): the Caching settings, slot claims and records, unpack, and the client config. **Push config to clients** (Connect tab, `P`, or `./carl.sh push`) publishes the installed models; the **client sync service** that `install.sh` adds on another computer (launchd / systemd --user; one outgoing connection, no port opened; `NO_SYNC_SERVICE=1` leaves it out) applies it with the installer and its backups. Without the service, OpenCode and Pi check once when they start. Auto-apply is on; a running OpenCode or Pi says to restart after a new config.
+- **Connect tab: Setup and Clients sub-tabs** (`[` / `]`): every client (this Mac's configs, each computer that syncs: connected or last seen, its config against the pushed one), kept in `~/.config/carl/clients.json`.
+- **/carl in OpenCode and Pi:** every CARL piece on this computer with its state (the config sync, the prompt cache, the model check, the switcher, the sidebar, the coder, the browser, web search, LSP); the sync's auto-apply switch, Apply now, Check now.
+- **Auto-tune all models** (Auto-tune panel: all downloaded models; `./carl.sh tune all`): one after the other, a failure doesn't stop the rest.
+- **The Caching panel is marked EXPERIMENTAL.**
+- **The reference is a folder** (`reference/`, one page per topic; `reference/README.md` is the index, no top-level REFERENCE.md), with new pages: Caching (every cache, how a saved state is built, conversations stored as patches), and clients on other computers.
+- **Slot claims across processes:** OpenCode and Pi on this Mac claim a slot with a small file until the server has the request, so two of them never pin the same slot (the second request would wait for the first).
+- **The 9B's chat template gets `preserve_thinking`** (the 35B's and 27B's have it): earlier replies keep their reasoning, so a saved conversation continues where it stopped instead of being read again.
+- **The speed sort uses measured speeds:** this Mac's Auto-tune score for each model (green), else the catalogue's figure from another Mac (new numeric `speed` field per catalogue entry: prose, code, re-emit tok/s, the Mac, the mode; dim), else the old order (MoE first, smaller files; `?`). The Models panel and the Auto fit ranking show a speed column (it replaces the ✓tuned mark: green means measured here).
+- **Auto-tune's long mode** (`./carl.sh tune NAME --long`, or **long** in the dashboard's Auto-tune panel, which now offers quick / default / long): cold reads at 128K and 192K too (as far as the model's window fits), the decode speed after each read, and the time estimate before the deep reads. The context zones are fitted to all the reads (least squares).
+
+- **The coder runs in the background** (OpenCode and Pi; `NO_BACKGROUND_SUBAGENTS=1` turns it off): the main session stays free while the coder works in the other slot, and the coder's result comes back to it as a message. OpenCode: the new plugin **carl-background** sets the task tool's `background: true` for CARL's coder (local models ignored the instruction: measured on the 35B, the main session waited ~3.5 min in the foreground). Pi: the `subagent` tool gets a background mode (single and parallel), the coder runs there by default, `/subagents` lists and stops the running ones, the footer counts them.
+- **Stop waits for the end of a turn:** Stop, Apply, Auto-tune and a router load ask first while an agent's turn runs: **Wait for the turn to end** (all its tool calls and its last reply, then its session is saved) or **Now**. OpenCode and Pi with CARL mark each slot's turn (`.turn+MODEL+SLOT`, through the dashboard's API on another computer); for another client CARL waits for an idle slot. A new session takes a slot where no other turn runs first.
+- **Gemma 4 in the catalogue:** `gemma-4-e4b` (4.6 GB, 16 GB Macs and up), `gemma-4-26b-a4b` (the MoE, 14.6 GB: 2 × 96K with the full cache on a 36 GB Mac) and `gemma-4-31b` (dense, 18 GB: the window-only cache) — Google's QAT weights in Q4_0 (ggml-org), sampling from Google's model card, n-gram speculation. No rank yet: auto fit does not pick them. The E4B already downloaded becomes the catalogue model.
+- **Pi's coder gets every tool but `subagent` and `tool_search`** (an agent file's new `exclude-tools:`): web search too, when it is installed, but no browser. **The coder hands live-page checks back:** its report has a "Needs a browser check" part, and the delegation rule tells the main agent to do that check (OpenCode: the browser subagent; Pi: its browser tools; without a browser: a list for you).
+- **A test of the sync service under systemd** in Docker containers (`CARL_DOCKER_TESTS=1 python3 -m unittest tests/integration/test_sync_docker.py`): install, push (applied in ~2 s), reconnect, removal, three clients at once.
+- **reference/plugins.md** and a user guide section on every plugin and extension CARL installs.
+### Changed
+- **Every model is served under its own name** (`qwen3.6-35b-a3b-iq3`, `orcarouter-27b`, ...). Before, builds of one family shared a name (all 27B builds were `qwen3.8-27b`, orcarouter's `qwen3.8-27b-abliterated-llama`, the Heretic builds `qwen3.6-35b-a3b`), so OpenCode showed e.g. "Qwen3.8 27B (stock)" while orcarouter ran. The catalogue's `alias` field is gone and each entry says how it thinks (`thinking`). Run `./carl.sh install` again (fully restart OpenCode): the old three fixed entries are replaced.
+- **The Settings tab has six panels:** Server, Models, Auto fit, Auto-tune, Router, Caching.
+- **The server listens on this Mac only (127.0.0.1) by default.** The default used to be "auto": the VMware address (192.168.42.1) whenever Fusion's network was up, so the server was exposed to the VM network without being asked. Now the VM needs `--vm`, `NET=vm`, or **network = vm** in Settings (`llama.net`). `NET=auto` means local (the banner says so); a saved `llama.net = auto` is converted once, with a note. The Settings network row offers local, vm and this Mac's addresses. With VMware's network up, the banner mentions `--vm`.
+- The **auto goal** / **auto from** rows and the **Auto fit** button moved from the Server card to the Auto fit panel.
+- **Auto-tune's quick mode** is described correctly: it skips the MTP modes with 2 drafts and the 64K read (it said "n=1 modes only", but n-gram alone is always measured with 2 drafts).
+- **`qwen3.8-9b`** in the catalogue (empero-ai's community distillation of Qwen3.8 into a 9B, Q4_K_M, 5.8 GB; MTP head; thinking on / off): the one catalogue model for **16 GB Macs**, where auto fit now picks it (2 × 96K) instead of finding nothing. Measured on an M2 Max: ~25 tok/s (the hybrid architecture is slow on Metal; llama-bench agrees), 41 tok/s in total with 4 requests at once. A copy you had added yourself is taken over by the catalogue entry (its Auto-tune result and config profile move to `qwen3.8-9b`, said once).
+- **Up to 4 slots** (3-4 offered in the Server panel only when they fit this Mac with the model, window and KV cache; `--slots 1-4`): more subagents at once, each one slower.
+- **Auto-tune's parallel step** (not in quick mode): total decode and read speed with 1-4 requests at once (`llama-batched-bench`), shown in the Auto-tune panel and on the MODEL card.
+- **A custom model's thinking comes from its GGUF header** when its card doesn't say (effort levels or on / off), for the client entries and as the card form's starting value.
+- **HEALTH card:** warning lines llama.cpp writes in normal work (a cancelled request, checkpoint and prompt-cache rotation, the port and reasoning notices, unused tensors at load) count as routine notices, not warnings.
+- **Auto-tune tests n-gram with 1 draft too** for a model without an MTP head (n-gram is its only speculation; 1 draft won on the Heretic IQ3).
+- **A start over the GPU limit is refused** (it used to only warn): `serve-llama.sh` stops with what the setup needs against the limit, the largest window that fits (with these slots and with 1), and auto fit's alternative. Expert override: `FIT_CHECK=0`. The dashboard's Apply uses the same check (`check_start`).
+- **`llama.model = auto`** starts auto fit's pick; when the pick is not downloaded, the best downloaded stock model that fits (with a note naming the pick to download), no longer the first downloaded model in catalogue order. If only abliterated models are downloaded, `auto` says so instead of starting one.
+- **`./carl.sh download default`, `host/models.sh default` and the download offer of `./carl.sh` on a new Mac** use auto fit's pick (whole catalogue, everyday goal). The catalogue's `default` / `default_small` remain only as the offline fallback (no GGUF header readable).
+- **The Server panel of the Settings tab is easier to read:** below the rows, separate sections **About this setting** (how to change the selected row, then what it does), **Status** (the fit line, auto fit's pick, the settings file), the buttons, and **Keys**. Key hints in every Settings panel, picker and confirmation read "Press Enter to …", "Press a to …". Text wraps to the terminal width (a colour-keeping word wrap) instead of being cut with "…"; the value column is wide enough for model names at 80 columns.
+- **A cleaner dashboard:** in every Settings panel and the Connect tab, the controls and the data are on the left and the explanations in a column on the right (on a wide terminal; below them on a narrow one): a one-line **Quick tip** about the selection, then short sections, each under its own header. The keys left the text: the footer shows the keys of the panel you see, `?` opens a card with all of them. The Models panel keeps its explanations under the list (the list needs the width), and the selected model shows its best Auto-tune result in one line.
+- **The dashboard's fit line, slot choices, largest windows and auto fit know sliding-window models:** they plan Gemma's cache as the launcher does (`cache.swa`), and the fit line says which cache a start gets.
+- **The reference pages are in ASD-STE100** and were checked against the code (36 corrections).
+
+- **Code pass (Phase Z):** the dashboard's Settings view and controller split by panel and area; one GGUF parser; `configure.py` as pure merge functions behind a filesystem port (62 install scenarios checked byte for byte); a shared TUI module for the session switcher and the subagents panel; TypeScript strict checks on the plugins (0 errors).
+- **Docs:** the user guide and README in ASD-STE100 (the README is short); `reference/README.md` is the index (no top-level REFERENCE.md); one **Caching** page; cache results as waiting time; `reference/client-configs.md`; new screenshots.
+### Fixed
+- **Auto showed the wrong model** in the dashboard after a dead-code pass removed `carl.resolve_launch` (the dashboard calls it through an untyped handle); a test now checks every `carl.py` name the dashboard uses.
+- **The dashboard's averages** showed 1,000,000 tok/s after a 1-token reply; an average now needs 0.5 s of data.
+- **`?` worked only in the Server panel** of the Settings tab; it works in every panel now. The quit dialog's buttons no longer get cut.
+- **The dashboard API was open when no key was known**, and a negative or bad Content-Length read until the client closed; it fails closed now and checks the length. State files (claims, records, turn marks, clients) are 0600 and written atomically, on both sides.
+- **A broken Pi config** stopped the installer only after other configs were written; all configs are checked before any write.
+- **The client sync service** stopped on a config without a version or a cut stream; it checks its inputs and reconnects.
+- **Paths from the cache's records and patches** are used only when they are plain file names.
+- **Gemma 4 26B and 31B: the KV cache counted as free.** Their headers give the KV heads per layer; CARL read none, so fit, `--check` and auto fit ignored the cache (a 31B at 2 × 96K with the full cache needs 64 GiB). The headers cached from Hugging Face are read again once.
+- **`--local` and `--vm` lost to a saved address:** a `llama.host` in config.json (or `HOST`) won, so `./carl.sh --local` could serve on a LAN address. The flags win now; `--host` wins over everything.
+- **The sync service** (found by the Docker test): a client folder whose path has a space did not start under systemd; an install did not restart a running service (the old code kept running); concurrent writes could break `client-sync.json`; `connected` stayed true after the stream ended. The dashboard's Clients list showed a client that left as connected for up to ~50 s and with the config it had when it connected; now at once, with what it reported last.
+- Stale help: `serve.sh llama -h` said "2 GB RAM prompt cache; --parallel 1".
+
+## 1.2.0 - 2026-10-03
+
+CARL now runs only llama.cpp.
+
+### Added
+- **`heretic-35b-a3b`:** the Heretic 35B-A3B in Q4_K_M with the MTP head kept (llmfan46's MTP-preserved build, 21.8 GB, 32 GB+ Macs): the abliterated counterpart of the default model. Its settings are copied from the stock Q4 35B (not measured yet: run Auto-tune).
+- **Sort and filter the model lists:** by quality, speed, size, name or downloaded first; show all, a use case, stock, dense, MoE, downloaded or fits this Mac. The Models panel shows every option as clickable chips; `s` / `S` and `f` / `F` step forward and back.
+- **A model list beside the Server settings:** click a model (or `m`, ↑↓, Enter) instead of stepping through the model row; its sort and filter open as drop-downs.
+- **Two abliterated IQ3 builds:** `orcarouter-27b-iq3` (bartowski IQ3_XXS, 12.6 GB; two 96K slots on 24 GB Macs) and `heretic-35b-a3b-iq3` (mradermacher i1-IQ3_XXS of the Heretic 35B-A3B, 13.6 GB: 10/100 refusals vs 83/100, KL 0.0015; no MTP head, so n-gram speculation). Measured on an M2 Max: Heretic n-gram n=1 51.5/48.5/96.1 tok/s (prose/code/re-emit); orcarouter IQ3 n-gram n=2 8.8/8.6/19.8 (a tie with MTP + n-gram n=1). Both carry full model cards.
+
+### Removed
+- **MTPLX support.** MTPLX was evaluated (2026-09/10) and removed. On 32–36 GB Macs, MTPLX 2.12 could not hold a usable session: HTTP 507 from ~4–56K tokens (it depends on the free memory), no real quantized KV cache in 2.11, and a 48K cap. llama.cpp holds 2 × 96K slots on the same Macs. The last version with MTPLX support is commit [470c316](https://github.com/fvsion/CARL/commit/470c316). Removed:
+  - the `grant` and `pocket` commands and presets. `./carl.sh grant` and `./carl.sh pocket` now print one line: MTPLX was removed in 1.2.0, use `./carl.sh llama`;
+  - the dashboard's MTPLX backend and cards (the backend row of the Settings tab, the MTPLX data from `/v1/mtplx/*`, the port 8000 following, `MTPLX_PORT`);
+  - the `mtplx` section and the `backend` key of `config.json`, `SETTINGS_FILE_MTPLX`, and `tools/carl.py mtplx-env`;
+  - OpenCode: the `mtplx` provider (or `llm-deploy-mtplx`) and the `mtplx-session-headers` plugin. Pi: the `mtplx` provider and the `mtplx-request-policy.ts` extension. `client/install.sh` removes these from an existing install (only CARL's own items; a provider that you own is never touched; the usual backups `FILE.bak.<time>` and `FILE.before-carl`);
+  - the coder subagent rule "or when the server is MTPLX": the coder is installed when the server has 2+ slots (`CODER=1` / `NO_CODER=1` still force it);
+  - `$MTPLX_API_KEY` (use `$CARL_API_KEY`).
+
+### Renamed
+- **Renamed: llm-deploy → carl.** Every name from the time CARL was called LLM-Deploy is now CARL's:
+  - Server: the settings folder `~/.config/llm-deploy/` → **`~/.config/carl/`** (`config.json`, `models.json`, `api-key`). Every `./carl.sh` command except help (and `host/serve-llama.sh`) moves the folder once: folder 0700, files 0600, and a symlink `~/.config/llm-deploy -> carl` stays, so client configs that read the key at the old path keep working until `client/install.sh` runs again. If both folders exist, CARL uses `~/.config/carl/` and does not touch the old one (a note says so). Until the move, the dashboard and the tools read the old folder. Key chain: `API_KEY_FILE` > `~/.config/carl/api-key` > `~/.config/llm-deploy/api-key` > `~/.mtplx/api-key`; the first server start copies the first one it finds into the new path. `CARL_CONF_DIR` still overrides the folder (and turns the move off).
+  - Clients: the key copy `~/.config/carl/api-key` (`client/install.sh` moves the old folder the same way); the state files `~/.config/opencode/carl.json` and `~/.pi/agent/carl.json` (were `llm-deploy.json`); the prompt folder `~/.config/opencode/carl/` (was `llm-deploy/`); the provider id next to a `llamacpp` of your own is `carl` (was `llm-deploy`); the Pi `APPEND_SYSTEM.md` block is `<!-- carl:delegation … -->` and the Pi subagent extension's marker is `CARL:`; the OpenCode plugin packages are `carl-subagents-sidebar` and `carl-session-switcher`, the switcher's command id `carl.session.switch`; the dashboard's pasted provider block has the id `carl`.
+  - A new `install.sh` run moves CARL's own items to the new names, with the usual backups (`llm-deploy.json.bak.<time>` and so on): the state files, the prompt folder (also out of `instructions`), our provider `llm-deploy` (recorded in the state file or reading our key file), the default model when CARL set it (`llm-deploy/<model>` → `carl/<model>`), the Pi block and extension. A default model of your own on `llm-deploy/…` stays, with a note to pick `carl/…`. Your own items with these names are never touched.
+
+### Changed
+- **API key path: `~/.config/carl/api-key`** for the server and the clients (mode 600, in a folder with mode 700; the folder of `config.json`). Before: `~/.mtplx/api-key` (server) and `~/.config/mtplx/api-key` (clients).
+  - Server: the first server start (`./carl.sh`, `./carl.sh llama`, or the dashboard's Settings tab) copies `~/.mtplx/api-key` to the new path if the new file is missing. It is the same key, so existing clients continue to work. The dashboard and Auto-tune read the new path, and the old path while the new file does not exist. `API_KEY_FILE` still overrides the path. If there is no key, a new one is made at the new path.
+  - Clients: `client/install.sh` stores the key at the new path, and the OpenCode and Pi configs point at it. A new run changes old configs to the new path. Key sources, in order: `--key` / `--key-file`, `$CARL_API_KEY`, `./api-key` next to `install.sh`, on a Mac with `--local` the server key file (new path, else `~/.mtplx/api-key`), the key from an earlier run (new path, else `~/.config/mtplx/api-key`), a prompt. The old `~/.config/mtplx/api-key` stays (a provider of your own can use it): delete it when nothing uses it. On the server Mac the client copy and the server key are now the same file: if `install.sh` gets a different key there (`--key`), it keeps the old one as `api-key.bak.<time>` and says that the server uses the new key from its next start.
+- **`client/install.sh --port N`**: the llama.cpp port (default 8080). The old positional form `./install.sh [HOST] [MTPLX_PORT] [LLAMA_PORT]` still works: HOST is used, the MTPLX port is ignored with a deprecation note, and the third value is the llama.cpp port.
+- **The VM staging folder is now `~/Documents/carl-vm-client`** (before: `mtplx-vm-client`; rename it or continue to use the old one). `client/install-clients.sh` marks its PATH line in `~/.zshrc` / `~/.bashrc` with `# carl-vm-client`. It recognises the old `# mtplx-vm-client` marker, so it does not add a second line.
+- **The Settings tab survives a bad catalogue or `models.json`:** it shows the load error in the panel instead of a crash.
+- **`./carl.sh` with no arguments** attaches the dashboard to a server on :8080 if one runs. Else it starts llama.cpp (and offers to download the default model for this Mac if no model is downloaded). `last-backend` in the settings folder is no longer used.
+- **The coder subagent's fallback name is `carl-coder`** (before: `llm-deploy-coder`). CARL's coder is still `coder`; only when you have an agent of your own called `coder` is ours `carl-coder` (OpenCode `agent.carl-coder`, Pi `agents/carl-coder.md`, and the delegation rule names it). A new `install.sh` run renames CARL's own `llm-deploy-coder` (to `carl-coder`, or to `coder` once your own `coder` is gone; Pi files are kept as `*.bak.<time>`). With the coder off (1 slot, `NO_CODER=1`) ours is removed under any of these names; your own agents are never touched.
+- **Talk to the coder directly** (README, USERGUIDE): in OpenCode type `@coder <task>` (or `@carl-coder`); in Pi ask for the coder subagent in the message. The docs no longer mention OpenCode commands that do not exist (`/model`, `/effort`).
+- **Old `config.json` files still load:** a `backend` key is ignored silently, an `mtplx` section is ignored with a warning (`./carl.sh config show` prints it). Both go away the next time CARL saves the file.
+
+## 1.1.0 - 2026-10-03
+
+### Added
+- **Model cards:** each catalogue model says what it is for and why to pick it: a role headline, good-for tags (agent coding, hard code, chat & writing, uncensored), why use it, trade-offs, the models to pick instead and when, the hardware it is meant for, what *uncensored* means (abliterated models) and a quality rank (parameters and density first, then quantization; the 27B dense ranks above the 35B-A3B except the 27B IQ3). The Settings tab's MODEL card shows them (with this Mac's measured speed after Auto-tune), the model list shows the role and tags. Validated when the catalogue loads.
+- **Model catalogue: `host/catalog.json`** (replaces `host/models.conf`). For each model: the Hugging Face source (pinned revision, SHA-256, size), a summary and a description, the tuned settings (`tune`: KV, context, slots, speculation, draft tokens, sampling), the reason for each tuned value (`why`), context zones (`ctx_zones`) and measurements (`measured`). `default` and `default_small` select the default models.
+- **`tools/carl.py`**: one place for the catalogue, the models on this Mac and the settings. `host/models.sh` is now a thin wrapper around it.
+- **Custom models.**
+  - Each `.gguf` in `~/models/gguf` is listed as a model, also if it is not in the catalogue. It gets its first settings from its GGUF header (MTP + n-gram n=1 with an MTP head, else n-gram n=2).
+  - `./carl.sh download hf:OWNER/REPO/FILE.gguf` downloads any GGUF from Hugging Face. It gets the revision, the size and the SHA-256 from the Hugging Face API, and verifies the file. `./carl.sh download hf:OWNER/REPO` lists the GGUF files of a repo.
+  - Custom models and the Auto-tune results are in `~/.config/llm-deploy/models.json`.
+- **Settings file: `~/.config/llm-deploy/config.json`** (replaces `llama.env` and `mtplx.env`; CARL copies their values into it one time).
+  - Sections: `backend`, `llama` (model, net, host, cache_ram, ub, batch, ckpt, ckpt_step, think_toggle, extra_args), `models.<name>` (a profile for each model: kv, ctx, slots, spec, spec_n, temp, top_p, top_k, min_p, presence, repeat, alias), `mtplx`, `paths` (models_dir).
+  - CARL validates each value. `./carl.sh config show|get|set|unset|path`.
+  - Order of priority: flags > environment > config.json > Auto-tune (this Mac) > catalogue > built-in defaults. `SETTINGS_FILE=none` / `SETTINGS_FILE_MTPLX=none` ignore the file.
+- **Auto-tune: `./carl.sh tune NAME [--quick]`** (`tools/carl-tune.py`). It measures the memory fit, the speculation modes (prose, code, re-emit) and the prompt reading at 8K/32K/64K (gives the context zones of this Mac). It saves the result in `models.json`, and each later start of the model uses it. It needs the GPU for itself: it refuses to run while a server or another large process is in memory (`ALLOW_SECOND_MODEL=1` skips the memory check).
+- **Dashboard: the Settings tab has three panels** (`[` and `]` change the panel).
+  - **Server:** a model list (Enter) with every model. The values have colours: green = tuned / fast, yellow = changed / slower, red = very slow / no MTP head / MTP with n>1 on an IQ quant. The right side explains the model and why each value is tuned.
+  - **Models:** the catalogue and the models folder. Download (with progress), verify, delete, add from Hugging Face.
+  - **Auto-tune:** run it, and see the last results. It stops the running server, and starts it again after the tune.
+- **New catalogue model: `qwen3.8-27b-iq3`** (unsloth UD-IQ3_XXS, 10.9 GB), the smallest 27B. On a 24 GB Mac, 2 × 96K slots fit.
+- **IQ3 speculation measured** (M2 Max 32 GB, llama.cpp 0.5.0, both IQ3 builds): MTP alone helps little on IQ3 (about nothing on the 35B, ~5–10% on the 27B), and n=2 costs ~15% on new text. MTP + n-gram with n=1 is the best on both models (about +5% over n-gram alone on the 35B, +9% on the 27B). Both IQ3 builds now use `draft-mtp,ngram-mod`, n=1; before, the 35B IQ3 used n=2 (copied from the Q4). The Q4 35B keeps n=2 (REFERENCE.md, "IQ3 speculation").
+- **`./carl.sh delete NAME`** deletes a model file. `./carl.sh verify` with no names verifies every downloaded model.
+- **Unit tests:** `python3 -m unittest discover -s tests` (domain, app, adapters) and `python3 -m unittest discover -s tests/scripts` (shell helpers, `client/configure.py`).
+- **Dependency check.** `./carl.sh` looks for `llama-server`, `aria2` and `ansifilter`, and offers to `brew install` the missing tools. `SKIP_DEPS=1` skips the check.
+- **No model downloaded:** `./carl.sh` offers to download the default for this Mac, or opens the dashboard without a server.
+
+### Changed
+- **OpenCode subagents panel:** the finished subagents are below the running ones (✓/✗ and the duration). It shows the 5 newest for 5 minutes, then a `+N more` line. It resets when you go to a different parent session. Run `client/install.sh` again to install it.
+- **A default model that is not downloaded** falls back to the first downloaded model.
+- The REFERENCE.md IQ section: the IQ3 builds are now in the catalogue (for Macs where nothing larger fits). IQ quants are still not used on 36 GB.
+
+- **96K context for each slot is the floor of the default window** (users need that much context to work). The catalogue now gives 96K to `qwen3.8-27b-q3` and `qwen3.8-27b-iq3` (before: 64K), and the dense context zones start at 96K (96K / 128K / 160K). Custom models start at 96K (less only if the model was trained for less). The Settings tab never shows 96K or less in yellow or red; it warns only about larger windows. Auto-tune never selects less than 96K if 96K fits one slot. Above 96K, it keeps the catalogue window while a cold read of it is no worse than "slow" on this Mac and it fits. One exception: `orcarouter-27b-q3` keeps 64K. It exists only for 24 GB Macs, where 96K does not fit (~68K, estimate); larger Macs use the Q4 build. A start of a model whose catalogue window is below 96K, with no Auto-tune result and no window you set, prints a note to run `./carl.sh tune NAME`, and the fit warning (model too big for the window) also suggests a tune.
+- **Code layout:** the logic of `tools/carl.py` and `tools/gguf_shape.py` moved to the package `tools/carl_core/` (a pure `domain/`, `adapters/` for the I/O, `app.py`, `wiring.py`). The two files are now thin facades. `host/common.sh` has `apply_settings` (an allow-listed `KEY=value` reader), `require_int` and `is_port`.
+- **Auto-tune:** the re-emit workload now copies `tools/carl_core/adapters/llama_server.py`. Its re-emit numbers are not directly comparable with older results.
+- **The API key stays out of the process list:** `client/install.sh` gives it to `curl` through a header file (`curl -H @file`, curl 7.55 or later).
+- **OpenCode plugin `mtplx-session-headers` has a second file, `mtplx.js`.** A manual copy of the plugin must include it (`install.sh` does this).
+
+### Removed
+- `host/models.conf` (replaced by `host/catalog.json`).
+
+### Fixed
+- The monitor crashed on its first refresh when `pmset -g assertions` printed a byte that is not UTF-8 (a Bluetooth device name such as a curly apostrophe in "Name’s Magic Keyboard"); command output is now decoded with replacement.
+- **The monitor and `./carl.sh` froze, and Ctrl-C did not stop them.** `lsof` hangs (and cannot be stopped) on a stale network share, for example a disconnected Time Machine SMB volume. CARL no longer uses `lsof`: port and PID lookups use `netstat -anv`.
+- The shell and Python scripts are executable in the repository (a fresh clone could not run `./carl.sh`).
+- Monitor: a mouse report or key sequence split across two reads no longer shows up as key presses. Mouse reporting is always turned off on exit.
+- The first start on a Mac without `~/.mtplx/api-key` no longer ends silently (`pipefail` and SIGPIPE in `ensure_api_key`).
+- OpenCode `mtplx-session-headers`: it read the provider id from the wrong field (`input.provider.id`, now `provider.info.id`), so its fallback never matched. Its `server.js` also had a `setup` function for a session hook that OpenCode 1.18.34 does not have, and it threw an error; it is removed (the V1 hooks already send the headers). Header values are validated (no CR/LF).
+- Pi: the MTPLX models offered thinking level `high`, which MTPLX turns into `xhigh` (Qwen3.8 has no `high`); it is hidden now, as in OpenCode.
+- OpenCode session switcher: it now redraws on question events.
+- Pi subagent extension: it no longer crashes on a JSON `null` line.
+
+## 1.0.0 - 2026-10-02
+
+The first release under the name CARL (Can't Afford Remote LLMs). Before this release, the project was called LLM-Deploy (and Qwen-Llama-Deploy before that).
+
+### Added
+- **`./carl.sh`**, a launcher in the project root. It does the same as `./host/serve.sh`, which continues to work.
+  - `./carl.sh` with no arguments opens the dashboard. If a server runs, the dashboard attaches to it. If not, CARL starts the backend that you used last, with your saved settings. The first time, it starts llama.cpp with the defaults.
+  - `./carl.sh -h` shows the help.
+  - `./carl.sh --no-start` (or `./carl.sh dashboard`) opens only the dashboard. If no server runs, nothing loads; the Settings tab can start a server.
+  - `./carl.sh install [both|opencode|pi]` installs OpenCode and/or Pi and writes their configs in one step. Options: `--local`, `--vm [HOST]`, `--host ADDR`, `--clients-only`, `--config-only`.
+- **Launch guard.** The launchers do not start a server when another large process (more than 8 GB, `BIG_GB`) or a known model server is in memory. Two models do not fit in the GPU memory, and a second model can stop the Mac. `ALLOW_SECOND_MODEL=1` skips the check.
+- **Dashboard: MTPLX support.** All cards show MTPLX data from `/v1/mtplx/snapshot` and `/v1/mtplx/flight`: request progress and ETA, the KV cache, the session bank (RAM and SSD), MLX memory, profile, MTP depth, draft acceptance by depth, and the finished requests.
+- **Dashboard: Settings tab (tab 5).**
+  - Select the backend (llama.cpp or MTPLX), the model, the KV cache, the context, the slots, the RAM prompt cache, the network and the sampling. Push `a` to restart the server with the new settings.
+  - A fit check shows if the setup fits in the GPU memory. If the new server does not start, the old server starts again.
+  - The settings are saved in `~/.config/llm-deploy/llama.env` and `mtplx.env`. The launchers read them (flags > environment > file > defaults).
+  - An **advanced** section: top_k, top_p, min_p, repeat penalty, draft tokens, batch size and context checkpoints (llama.cpp); scheduler, batching, prefill chunk and SSD session cache (MTPLX). You can type exact values. A warning tells you that the defaults are tuned.
+- **Dashboard: logo and layout.**
+  - The CARL logo in the header (iTerm2, Ghostty, WezTerm, kitty); other terminals show 😎. `CARL_LOGO=0` turns it off.
+  - The cards keep a fixed height. A value that is not known shows `0`, `N/A` or `none`.
+  - Dots after each card title show its detail level (`○○`, `●○`, `●●`).
+- **OpenCode session switcher** (TUI plugin). `‹ 2/3 ● title ›` in the prompt box: the arrows go to the previous or next session, and the title or `/switch` opens a list with the state of each session. OpenCode 1.18.34 does not show sessions as tabs.
+- **The coder subagent on MTPLX.** `install.sh` now also installs the coder when the server is MTPLX. MTPLX keeps each session in its session bank, so the main session comes back after a subagent in 3.8 s (RAM) to 14.8 s (SSD), not a full re-read.
+- **Other computers and VM apps.** `--host ADDR` serves on one address of this Mac (its LAN address, or a Parallels network). The dashboard's network row lists the addresses of this Mac. `install.sh --key-file FILE` (or `--key KEY`) gives the API key to a client on another computer.
+- **Coder subagent tuning.** The OpenCode coder uses temperature 0.6 with thinking on: the best of 9 measured runs (all functions typed, more tests, 26% faster than 1.0). The 27B uses the same value without its own test. The coder now checks that the packaging files it writes actually build.
+- **Installer backups.** Before the installer changes an existing config file, it keeps your original as `FILE.before-carl` (never overwritten) and a copy of each version as `FILE.bak.<time>`. `APPEND_SYSTEM.md` of Pi is now included.
+- `tools/tuishot.py`: makes the README screenshots and GIFs from the real terminal programs.
+- README screenshots: the dashboard (GIF), the Settings tab, OpenCode with the plugins.
+
+### Changed
+- The README is short: what CARL is, install, use, pictures. All its other content moved to USERGUIDE.md and REFERENCE.md (new sections: Architecture, Repository layout, Server flags, OpenCode config, Performance).
+- The share zip is `CARL-YYYYMMDD.zip` with one folder, `CARL/`.
+- The help, the dashboard and the installer messages use `./carl.sh`.
+- The context cache tests found no gain from a larger RAM prompt cache or more checkpoints. The defaults stay (REFERENCE.md, "RAM prompt cache and checkpoints").
+
+### Fixed
+- The dashboard hid the llama.cpp log and request list, because the llama-server command line contains `~/.mtplx/api-key`.
+- With MTPLX, the dashboard showed an old llama.cpp log. It now shows the MTPLX console output, or "no log file".
+- Test servers on other ports wrote the "last used backend" file.
+
+### Known issues
+- MTPLX: 56K for two sessions does not fit on a 36 GB Mac (the allocator went to 106%, and the main session was read again). Use 48K.
+- OpenCode 1.18.34 has `/variants` (and `ctrl+t`) instead of `/effort` for the thinking level.
+- When the server runs the 27B, a client that sends `reasoning_effort: "high"` (the 35B setting, for example the OpenCode title agent) gets HTTP 500 from the 27B chat template.
+
+## Earlier work (as LLM-Deploy)
+
+### 2026-10-01
+- **Subagents.** 2 server slots by default (when they fit), so the main OpenCode session and a subagent each keep their cache. A specialist **coder** subagent for OpenCode and Pi, and a rule that tells the main agent when to use it. The coder is installed only when the server has 2 slots.
+- **Subagents panel** for OpenCode (TUI plugin).
+- **Installer that does not overwrite your configs** (`client/configure.py`). Your providers, default model, agents and plugins stay. CARL items are tracked in `llm-deploy.json`.
+- **Qwen3.6-35B-A3B is the default model** on every Mac. The IQ3 build is the default on 24 GB Macs.
+- **96K context for each slot** by default. 128K–160K are possible with `--ctx` (measured costs in REFERENCE.md).
+- The user documents are in ASD-STE100 Simplified Technical English.
+
+### 2026-09-25
+- Qwen3.6-35B-A3B (MoE) added and measured: about 4× faster decode and 6× faster prompt read than the 27B.
+- "Thinking off" works from OpenCode (a patched chat template that maps `reasoning_effort: none` to no thinking).
+- The installer replaces the providers that it manages, so old model options do not stay in the configs.
+- Flash attention checked and kept on (necessary for a quantized V cache).
+
+### 2026-09-24
+- llama.cpp backend (`serve-llama.sh`): q4_0 KV cache by default (+16% prompt read, −2 GB, the same decode speed as q8_0), MTP speculative decoding.
+
+### 2026-09-23
+- MTPLX presets `grant` and `pocket` (abliterated Qwen3.8-27B) at 48K, served to OpenCode and Pi in a VMware Fusion VM.
+- Research: the MTPLX quantized KV cache does not hold long sessions. Research on llama.cpp and oMLX.
+

@@ -1,0 +1,18 @@
+{
+  "name": "carl-delegation",
+  "version": "1.0.0",
+  "description": "Keeps CARL's delegation rule to a session's main agent in OpenCode: subagents (the coder too) never get it.",
+  "type": "module",
+  "license": "MIT",
+  "exports": {
+    ".": {
+      "import": "./index.js"
+    },
+    "./server": {
+      "import": "./index.js"
+    }
+  },
+  "peerDependencies": {
+    "@opencode-ai/plugin": ">=1.14.0"
+  }
+}

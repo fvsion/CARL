@@ -1,0 +1,10 @@
+docs/
+__pycache__/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.DS_Store
+client/installed-models.json
+client/remote.json
+client/api-key
+dist/

@@ -1,0 +1,18 @@
+{
+  "name": "carl-background",
+  "version": "1.0.0",
+  "description": "Runs CARL's coder subagent in the background in OpenCode (the task tool's background: true) unless the model asks otherwise.",
+  "type": "module",
+  "license": "MIT",
+  "exports": {
+    ".": {
+      "import": "./index.js"
+    },
+    "./server": {
+      "import": "./index.js"
+    }
+  },
+  "peerDependencies": {
+    "@opencode-ai/plugin": ">=1.14.0"
+  }
+}

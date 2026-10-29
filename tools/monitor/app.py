@@ -1,0 +1,720 @@
+"""The dashboard application: builds the parts (composition root), draws frames, turns
+keys and clicks into actions, and runs the main loop."""
+from __future__ import annotations
+
+import os
+import select
+import shutil
+import signal
+import threading
+import time
+from dataclasses import dataclass
+from typing import Callable, Dict, List, Optional, Sequence, Tuple
+
+from carl_core.adapters.client_package import carl_version, publish_api_port
+from carl_core.adapters.system import llama_server_version
+from carl_core.domain import runtime
+from carl_core.domain.llamacpp import VersionCheck, check_version
+from carl_core.domain.units import duration, tokens
+
+from . import cachestats, cli, clientsync, diskcache, fsio, sessionnames, system, uiprefs
+from .cacheapi import CacheApi, Registry
+from .api import Endpoint
+from .card_view import FORM_KEYS, TYPING_KEYS, draw_form
+from .cards import STOPPED, THREE_LEVELS, View, status_of
+from .clients import Drift, drift, serving
+from .collector import Collector
+from .controller import Controller, Region
+from .fmt import (B, CYN, DIM, GRN, R, RED, YEL, CardLine, Key, Row, cwrap, draw_card, fit, footer_keys, indent, pill, row, vlen,
+                  wwrap)
+from .jobs import Paths, ServerJobs, launcher_errors
+from .keys import InputBuffer
+from .model import JSONDict, ServerData, flag, jdict
+from .settings import Pending, Schema, SettingsService, fit_sentence, gib_pair, net_choices
+from .settings_panels.common import subpanel_bar
+from .settings_panels.models import ModelsDir
+from .settings_view import SettingsView
+from .state import SP_AGENTS, SP_CACHE, SP_FIT, SP_MODELS, SP_ROUTER, SP_SERVER, TABS, UIState
+from .store import CarlStore, ModelList
+from .terminal import LOGO_COLS, Terminal, logo_escape, logo_mode, place_lines
+from .views import body_connect, body_live, body_log, body_requests, drain_dialog, keys_card, quit_dialog
+from .words import plural, uptime
+
+REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+LOGO_FILE = os.path.join(REPO, "assets", "carl-icon.png")
+QUIT_LABEL = "[ Quit ]"
+TAIL: List[Key] = [("D", "detail"), ("?", "all keys"), ("q", "quit")]      # the footer's keys on every screen
+API_RETRY_S = 30.0      # the dashboard API tries again this often while it does not run (Phase 23.5)
+
+
+@dataclass
+class Machine:
+    """Facts about this Mac read once at start."""
+    page: int           # VM page size
+    total_mem: int
+    llama_version: str = ""     # `llama-server --version` (its "version:" line; "" or "?" when not known)
+
+
+class App:
+    """The dashboard: draws frames from the collector's snapshots and the UI state, and runs
+    the main loop; input goes to the Controller."""
+
+    def __init__(self, opts: cli.Options, machine: Machine, collector: Collector, ui: UIState, svc: SettingsService,
+                 jobs: ServerJobs, view: SettingsView, logo: Optional[bytes], logo_kind: Optional[str]) -> None:
+        self.opts = opts
+        self.machine = machine
+        self.endpoint = collector.endpoint
+        self.collector = collector
+        self.ui = ui
+        self.svc = svc
+        self.store = svc.store
+        self.jobs = jobs
+        self.view = view
+        self.logo = logo
+        self.logo_kind = logo_kind
+        self.logo_cols = LOGO_COLS if logo else 0
+        self.prefs = uiprefs.path_for(jobs.paths.config_file)
+        self.ctl = Controller(ui, svc, jobs, view, collector.endpoint, collector.tail, REPO, opts.home, self.prefs)
+        self._api: Optional[CacheApi] = None              # the cache API for clients on other computers
+        self._api_where: Optional[Tuple[str, int, object]] = None
+        self._api_tried = 0.0
+        self._api_conf: Tuple[float, object] = (0.0, "auto")
+        self._names: Tuple[float, Tuple[str, ...], Dict[str, str]] = (0.0, (), {})
+        self._slot_names: Tuple[float, Tuple[str, ...], Dict[str, str]] = (0.0, (), {})
+        # what the disk cache did (Phase 23.5.1.1): OpenCode's and Pi's events, read as the day files grow
+        self.events = cachestats.EventLog(os.path.dirname(jobs.paths.config_file))
+        self._versions: Tuple[float, Tuple[Tuple[str, str, str, str], ...]] = (0.0, ())
+        self._versions_after: object = None             # the install the versions were read after
+        self._events_at = 0.0
+        self._status: JSONDict = {"state": "idle"}     # /carl/status: made in the loop, read by the API's thread
+        self._clients_file = os.path.join(os.path.dirname(jobs.paths.config_file), "clients.json")
+        self._errors: Tuple[str, float, List[str]] = ("", 0.0, [])    # the launcher's output: (path, mtime, error lines)
+        # The installed llama.cpp (HEALTH): read at the dashboard's start (Machine) and again when the server process
+        # changes (a restart after brew upgrade llama.cpp); create() sets the reader, tests keep the start value.
+        self.read_llama_version: Callable[[], str] = lambda: machine.llama_version
+        self._llama: Tuple[Optional[int], VersionCheck] = (None, check_version(machine.llama_version))
+
+    @classmethod
+    def create(cls, opts: cli.Options) -> "App":
+        """Wire the parts together (the composition root)."""
+        machine = Machine(page=system.sysctl_int("hw.pagesize", 16384), total_mem=system.sysctl_int("hw.memsize", 1),
+                          llama_version=llama_server_version())
+        host = opts.host or system.listen_host(system.netstat_tcp(), opts.port) or opts.env_host or "127.0.0.1"
+        endpoint = Endpoint(host, opts.port, fsio.read_key(opts.key_file))
+        collector = Collector(endpoint, fixed_host=bool(opts.host), key_file=opts.key_file, server_pid=opts.server_pid,
+                              console=opts.console, log_arg=opts.log, home=opts.home, page=machine.page)
+        ui = UIState(lines=opts.lines)
+        store = CarlStore()
+        ui.detail = "full" if opts.expand else uiprefs.load_detail(uiprefs.path_for(store.config_file))
+        ui.levels.update({k: x for k, x in uiprefs.load_levels(uiprefs.path_for(store.config_file)).items()
+                          if k in ui.levels})
+        if opts.expand:                          # --expand: every section at full for this run (not saved)
+            ui.levels.update({k: 2 if k in THREE_LEVELS else 1 for k in ui.levels})
+        models = ModelList(store, on_error=lambda msg: ui.toast(f"{RED}{msg}{R}", 10))
+        schema = Schema(net_choices(system.local_addrs(opts.vm_addr)))
+        svc = SettingsService(models, schema, opts.vm_addr, gpu_limit=lambda: (collector.gpu_limit or store.gpu_limit())[0],
+                              ram=machine.total_mem)
+        paths = Paths(REPO, logs=os.path.join(opts.home, "models", "logs"), config_file=store.config_file)
+        jobs = ServerJobs(ui, collector, svc, paths, opts.vm_addr)
+        view = SettingsView(svc, store.config_file, opts.home)
+        kind = logo_mode(os.environ) if not opts.once else None
+        png = None
+        if kind:
+            try:
+                with open(LOGO_FILE, "rb") as f:
+                    png = f.read()
+            except OSError:
+                kind = None
+        app = cls(opts, machine, collector, ui, svc, jobs, view, png, kind)
+        app.read_llama_version = llama_server_version
+        return app
+
+    # ------------------------------------------------------------ drawing
+    def view_ctx(self) -> View:
+        """What the cards need besides the snapshot (the latest one: ctl.data)."""
+        c, ep, ui = self.collector, self.endpoint, self.ui
+        d = self.ctl.data
+        md = flag(d.cmd, "-md")
+        m = self.svc.models.by_name(d.alias) if d.alias else None
+        return View(levels=ui.levels, host=ep.host, port=ep.port, base=ep.base, key=ep.key, key_file=self.opts.key_file,
+                    key_shown=ui.key_shown, server_pid=c.server_pid, log=c.tail.book, log_path=c.tail.path,
+                    model_path=c.model_path, model_size=c.model_size, gpu_limit=c.gpu_limit, slow=c.slow,
+                    total_mem=self.machine.total_mem, home=self.opts.home, wrap=ui.wrap, errors_only=ui.errors_only,
+                    log_scroll=ui.log_scroll, cache=self.cache_line(),
+                    api=f"{self._api.host}:{self._api.port}" if self._api else "",
+                    listeners=self._api.listeners if self._api else 0, pushed=self.jobs.pushed(),
+                    unsent=self.config_unsent(d), single=self.single_model(d),
+                    clients=tuple((self._api.registry if self._api else Registry(self._clients_file)).list()),
+                    detail=ui.detail, drafter_size=fsio.file_size(md) if md else 0,
+                    model_quant=str(m.get("quant") or "") if m else "", here=self.here_text(),
+                    coder_here=self.coder_here(), cache_slots=self.cache_slots(d),
+                    client_versions=self.client_versions() if ui.tab == 1 else (),
+                    gate=self.jobs.cache_conf().gate, llama=self.llama_check(d.pid))
+
+    def client_versions(self) -> Tuple[Tuple[str, str, str, str], ...]:
+        """OpenCode and Pi on this Mac against the versions CARL is tested with (the Connect tab; read again every
+        5 min and after an install: runs `opencode --version`)."""
+        done = self.ui.install is not None and self.ui.install.done
+        fresh_install = done and self._versions_after is not self.ui.install       # an install just ended: read again
+        if fresh_install:
+            self._versions_after = self.ui.install
+        if fresh_install or time.time() - self._versions[0] > 300:
+            try:
+                self._versions = (time.time(), tuple(fsio.client_versions(self.jobs.paths.repo, self.opts.home)))
+            except Exception:          # a client that hangs or cannot run: no row
+                self._versions = (time.time(), ())
+        return self._versions[1]
+
+    def cache_events(self) -> List[cachestats.Event]:
+        """The disk cache's events of the last two days (read again at most every 2 s)."""
+        carl_dir = os.path.dirname(self.jobs.paths.config_file)
+        if self.events.dir != cachestats.events_dir(carl_dir):     # another settings folder (set after the start)
+            self.events, self._events_at = cachestats.EventLog(carl_dir), 0.0
+        if time.time() - self._events_at > 2:
+            self._events_at = time.time()
+            try:
+                self.events.poll()
+            except Exception:           # a file that can't be read: what was read stays
+                pass
+        return self.events.events
+
+    def cache_slots(self, d: ServerData) -> Dict[int, Tuple[str, str, str]]:
+        """The SLOTS card's Cache column: for each busy slot, what the cache did for the session in it."""
+        busy = [x.id for x in d.slot_list if x.busy]
+        size = {x.id: x.prompt for x in d.slot_list}
+        if not busy:
+            return {}
+        events = self.cache_events()
+        ids = tuple(sorted({str(e.get("session", "")) for e in events if e.get("e") == "place" and e.get("slot") in busy}))
+        if ids != self._slot_names[1] or time.time() - self._slot_names[0] > 10:
+            self._slot_names = (time.time(), ids, sessionnames.names(self.opts.home, ids))
+        out = {}
+        for s in busy:
+            col = cachestats.slot_column(events, s, d.alias or "", self._slot_names[2], tokens=size.get(s) or 0)
+            if col:
+                out[s] = col
+        return out
+
+    def cache_did(self) -> Tuple[List[cachestats.StatRow], str]:
+        """WHAT THE CACHE DID (the Caching panel): its rows for the chosen time, and that time in words."""
+        when = cachestats.WINDOWS[self.ui.cache_window % len(cachestats.WINDOWS)]
+        book = self.collector.tail.book
+        since = cachestats.window_start(when, time.time(), book.start)
+        return cachestats.table(self.cache_events(), book.tally(), since), when
+
+    def llama_check(self, pid: Optional[int]) -> VersionCheck:
+        """The installed llama.cpp against the tested version; read again when a new server process runs."""
+        if pid and pid != self._llama[0]:
+            self._llama = (pid, check_version(self.read_llama_version()))
+        return self._llama[1]
+
+    def here_text(self) -> str:
+        """OpenCode and Pi on this Mac, for the CONNECT card."""
+        try:
+            here = fsio.installed_here(self.endpoint.base, self.opts.home)
+            stale = self.client_drift(here)[0] if here else []
+        except Exception:           # a model list that can't be read: say nothing
+            return ""
+        return ("need an update (tab 2, u)" if stale else "set up (tab 2)") if here else "not set up here (tab 2)"
+
+    def coder_here(self) -> str:
+        """The coder's model of OpenCode and Pi on this Mac, for the Clients list (Phase 23.4.5)."""
+        try:
+            return fsio.coder_model_here(self.endpoint.base, self.opts.home)
+        except Exception:           # a state file that can't be read: say nothing
+            return ""
+
+    def next_start(self, d: ServerData) -> List[CardLine]:
+        """The SERVER card when no server runs, one reading per row: what a start uses, whether it fits, how to
+        start it, the last log; the launcher's error lines after a start that failed."""
+        L: List[CardLine] = []
+        try:
+            p = self.ensure_pending(d)
+            f = self.svc.fit_cached(p)
+            name = self.svc.resolved_model(p)
+            L.append(row("next start", f"{name}   {DIM}{'auto' if p.get('model') == 'auto' else 'your choice'}{R}"))
+            if f.fits:
+                need, limit = gib_pair(f.need, f.limit)
+                L.append(row("with", f"{plural(f.slots, 'slot')} × {tokens(f.ctx)} tokens"))
+                L.append(row("fits", f"{GRN}✓{R} {need.replace(' GiB', '')} of {limit}"))
+            else:
+                L.append(fit_sentence(f))
+        except Exception as e:      # a broken catalogue or config: the Settings tab says why
+            L.append(f"{YEL}CARL cannot read the settings: {e}{R}")
+        L.append(row("to start", "Press a, or run ./carl.sh in a terminal."))
+        if d.log_path and os.path.exists(d.log_path):
+            L.append(row("last log", f"{os.path.basename(d.log_path)}   {DIM}tab 4{R}"))
+        errs = self.ui.start_error or (self.exited_errors() if d.exited else [])
+        if errs:
+            L += ["", f"{RED}{B}The last start failed. The launcher said:{R}", *[f"{RED}{e}{R}" for e in errs]]
+        return L
+
+    def exited_errors(self) -> List[str]:
+        """The launcher's error lines in the console output of a server that exited (cached by mtime)."""
+        path = self.collector.console or os.path.join(self.opts.home, "models", "logs",
+                                                      f".console-{self.endpoint.port}.out")
+        try:
+            mt = os.path.getmtime(path)
+        except OSError:
+            return []
+        if self._errors[:2] != (path, mt):
+            self._errors = (path, mt, launcher_errors(path, tail=False))   # a normal stop has no error line
+        return self._errors[2]
+
+    def cache_api(self) -> None:
+        """The dashboard API (cacheapi.py) next to the server (Phase 23.5 item 7): llama.api_port, or auto = the
+        server's port + 1, else the next free port; never a port another CARL holds. Moved when the server moves or
+        the setting changes; tried again every API_RETRY_S while it does not run. The port it took goes into the
+        server's file (~/.config/carl/server-PORT.json) and client/remote.json, where the clients look."""
+        ep, ui = self.endpoint, self.ui
+        want = self.api_setting()
+        where = (ep.host, ep.port, want)
+        if self._api_where == where and (self._api or time.time() - self._api_tried < API_RETRY_S):
+            return
+        new_place = self._api_where != where
+        if self._api:
+            self._api.stop()
+        self._api, self._api_where, self._api_tried = None, where, time.time()
+        first = ep.port + 1
+        tries = [want] if isinstance(want, int) else [first]
+        if not isinstance(want, int):
+            rows = system.netstat_tcp()
+            free = first
+            while len(tries) < 10 and free is not None:
+                free = system.next_free_port(rows, free)
+                if free is not None and free != ep.port:
+                    tries.append(free)
+        err = ""
+        conf_dir = os.path.dirname(self.jobs.paths.config_file)
+        for port in tries:
+            api = CacheApi(ep.host, port, lambda: self.endpoint.key, self.jobs.paths.slots, self.jobs.cache_conf,
+                           lambda model: self.jobs.save_recorded(model, self.ctl.data.router is not None),
+                           conf_dir, carl_version(self.jobs.paths.repo), runtime.carl_id(conf_dir),
+                           lambda: self.endpoint.port, lambda: self._status)
+            err = api.start() or ""
+            if not err:
+                self._api = api
+                self.jobs.registry = api.registry
+                ui.api_port, ui.api_note = port, ("" if port == first or isinstance(want, int)
+                                                  else f"{first} is in use{self.port_user(first)}")
+                runtime.set_api_port(conf_dir, ep.port, port)
+                publish_api_port(self.jobs.paths.repo, ep.port, f"http://{ep.host}:{port}")
+                return
+        ui.api_port, ui.api_note = None, err.removeprefix("dashboard API: ")
+        if new_place:
+            ui.toast(f"The dashboard API cannot start: {ui.api_note}. Other computers cannot sync now (the Caching "
+                     f"panel says so too).", 12, error=True)
+
+    def session_names(self, files: Sequence[diskcache.CacheFile]) -> Dict[str, str]:
+        """The saved sessions' current names (OpenCode's and Pi's stores on this Mac; read again every 10 s)."""
+        ids = tuple(sorted(sessionnames.session_id(f.name) for f in files if f.name.startswith("carl-session+")))
+        if ids != self._names[1] or time.time() - self._names[0] > 10:
+            self._names = (time.time(), ids, sessionnames.names(self.opts.home, ids))
+        return self._names[2]
+
+    def window_model(self, d: ServerData) -> str:
+        """The running model when it has the window cache (the launcher's server file), else ""."""
+        doc = runtime.read(os.path.dirname(self.jobs.paths.config_file), self.endpoint.port)
+        models = jdict(doc.get("models"))
+        name = d.alias or (next(iter(models)) if len(models) == 1 else "")
+        return name if jdict(models.get(name)).get("swa") == "window" else ""
+
+    def api_setting(self) -> object:
+        """llama.api_port: "auto" or a port (read again every few seconds)."""
+        if time.time() - self._api_conf[0] > 5:
+            v = jdict(self.store.load_config().get("llama")).get("api_port", "auto")
+            self._api_conf = (time.time(), v if isinstance(v, int) and 1024 <= v <= 65535 else "auto")
+        return self._api_conf[1]
+
+    @staticmethod
+    def port_user(port: int) -> str:
+        """" (ssh)": what listens on port, for the API Port row."""
+        pid = system.listen_pid(system.netstat_tcp(), port)
+        info = system.process_info(pid) if pid else None
+        name = os.path.basename(info.cmd.split()[0]) if info and info.cmd.split() else ""
+        return f" ({name})" if name else ""
+
+    def cache_line(self) -> str:
+        """The CONNECT card's disk cache line: what OpenCode and Pi have saved, of the limit."""
+        files = diskcache.listing(self.jobs.paths.slots)
+        if not files:
+            return ""
+        n = sum(1 for f in files if f.kind == diskcache.PROMPT)
+        return (f"{diskcache.gb(diskcache.used(files)).replace(' GB', '')} of {self.jobs.cache_conf().disk_gb} GB   "
+                f"{DIM}{plural(n, 'prompt')}, {plural(len(files) - n, 'session')}{R}")
+
+    def header(self, d: ServerData, cols: int) -> Tuple[str, str]:
+        """The two header lines: CARL, the state word, the model and its uptime, the clock, Quit; the tabs and
+        the detail level. Their clickable parts go to the controller."""
+        ui, once, regions = self.ui, self.opts.once, self.ctl.regions
+        label, bg = status_of(d, self.collector.server_pid)
+        dot = "○" if label == STOPPED else "●"
+        up = uptime(d.etime) if d.up else ""
+        kind = f"   router mode ({plural(len(d.router.models), 'model')})" if d.up and d.router is not None else ""
+        name = d.alias or ("no model loaded" if d.router is not None else "no server" if label == STOPPED else "")
+        left = (f"{'' if self.logo else '😎 '}{B}CARL{R}  {pill(f'{dot} {label}', bg)}  {B}{name}{R}{DIM}{kind}"
+                f"{f'   up {up}' if up else ''}{R}")
+        right = f"{DIM}{time.strftime('%H:%M')}{R}  " + ("" if once else f"{B}{RED}{QUIT_LABEL}{R}")
+        head = fit(left, cols - self.logo_cols - vlen(right) - 1) + " " + right
+        regions.append(Region(1, cols - len(QUIT_LABEL) + 1, cols + 1, "quit"))
+        tabs, x = " ", 2 + self.logo_cols
+        stale = self.configs_stale()
+        for i, t in enumerate(TABS):
+            lab = f"[{i + 1} {t}]" if i == ui.tab else f" {i + 1} {t}{' ⚠' if i == 1 and stale else ''} "
+            tabs += (f"\x1b[1;7m{lab}{R}" if i == ui.tab else f"{YEL}{lab}{R}" if i == 1 and stale else f"{DIM}{lab}{R}") + " "
+            regions.append(Region(2, x, x + len(lab), f"tab:{i}"))
+            x += len(lab) + 1
+        shown = {ui.levels.get(nm, 1) for nm in ui.sections if nm in THREE_LEVELS}     # an open two-level one is 1
+        if any(ui.levels.get(nm, 1) == 0 for nm in ui.sections if nm not in THREE_LEVELS):
+            shown.add(0)
+        level = "mixed" if len(shown) > 1 else "full" if shown == {2} else "simple" if shown else ui.detail
+        det = f"detail: {level} (D)"
+        room = cols - self.logo_cols - vlen(tabs) - 1
+        if room > len(det):
+            tabs += " " * (room - len(det)) + f"{DIM}detail:{R} {B}{level}{R} {DIM}(D){R}"
+            regions.append(Region(2, cols - len(det) + 1, cols + 1, "detail"))
+        return head, fit(tabs, cols - self.logo_cols)
+
+    def dialog(self) -> bool:
+        """A dialog, a drop-down or a text being typed has the keys: the footer shows only its keys."""
+        ui = self.ui
+        return bool(ui.drain or ui.quit or ui.confirm or (ui.tab == 4 and (ui.picker or ui.confirm2 or ui.text
+                                                                            or ui.edit is not None))
+                    or (ui.tab == 1 and ui.install_ask))
+
+    def frame(self, d: ServerData) -> List[str]:
+        """The screen's lines; the clickable regions go to the controller."""
+        ui, once = self.ui, self.opts.once
+        cols, rows = shutil.get_terminal_size((120, 36))
+        regions = self.ctl.regions
+        regions.clear()
+        self.svc.full = ui.full
+        height = (rows - 6) if not once else 10**4
+        ui.keys, ui.keys_more, ui.more = [], [], False    # the screen drawn next sets its own
+        if ui.drain:
+            body = drain_dialog(ui.drain, cols, height, ui)
+        elif ui.quit:
+            body = quit_dialog(d, ui, cols, height)
+        else:
+            body = self.body(d, cols, height)
+            if ui.help:                          # ?: every key of this screen, then the keys of every screen
+                if cols >= 160:                  # an overlay on the right half: the page stays where it is
+                    cut = 2 + (cols - 3) // 2                 # the overlay covers the right column, not the left
+                    cw = min(cols - cut - 1, 96)
+                    card = keys_card(ui.keys, ui.keys_more, ui.messages, cw)
+                    body = [(fit(t, cut).replace("…", " ") + " " + card[i][0], [s for s in sp if s[1] <= cut] +
+                             [(a + cut + 1, b + cut + 1, act) for a, b, act in card[i][1]]) if i < len(card) else (t, sp)
+                            for i, (t, sp) in enumerate(body)]
+                    body += [(" " * (cut + 1) + c[0], []) for c in card[len(body):]]
+                else:
+                    w = min(cols - 4, 96)
+                    card = indent(keys_card(ui.keys, ui.keys_more, ui.messages, w), (cols - w) // 2)
+                    body = card + self.body(d, cols, max(height - len(card), 4))
+        head, tabs = self.header(d, cols)          # after the body: its sections set the detail shown
+        out = [head, tabs, fit(DIM + "─" * cols, cols)]
+        for text, spans in body:
+            y = len(out) + 1
+            regions.extend(Region(y, a + 1, b + 1, act) for a, b, act in spans)
+            out.append(fit(text, cols))
+        if not once:
+            msg = cwrap(self.message(), cols - 2)[:2] if self.message() else [""]
+            out = out[:rows - 2 - len(msg)]
+            while len(out) < rows - 2 - len(msg):
+                out.append(" " * cols)
+            out += [fit(" " + m, cols) for m in msg] + [fit(DIM + "─" * cols, cols), fit(" " + self.footer(cols - 2), cols)]
+        if self.opts.demo:                       # screenshots: no key characters, no home path
+            key = self.endpoint.key
+            out = [ln.replace(self.opts.home, "~").replace(key[-4:] if key else "\0", "••••") for ln in out]
+        return out
+
+    def message(self) -> str:
+        """The message line above the keys: a stop or restart in progress, the newest message (for its
+        time), else a download or a run in the background; empty when nothing happens."""
+        ui = self.ui
+        msg, until = ui.toast_msg
+        if ui.stopping:
+            return f"{YEL}The server is stopping…{R}"
+        if ui.restart:
+            return f"{YEL}{ui.restart}{R}" + (f" {DIM}({duration(time.time() - ui.restart_t)}){R}" if ui.restart_t else "")
+        if msg and time.time() < until:
+            return f"{RED if ui.toast_error else GRN}{msg.replace(R, R + (RED if ui.toast_error else GRN))}{R}"
+        dl, tn, ins = ui.dl, ui.tune, ui.install
+        if dl and not dl.done and not (ui.tab == 4 and ui.sp in (SP_MODELS, SP_FIT)):   # those panels show it
+            frac = f": {dl.have / dl.total * 100:.0f}%" if dl.total else ""
+            return f"{CYN}CARL is downloading {dl.name}{frac}.{R} {DIM}It is in Settings > Models.{R}"
+        if tn and not tn.done:
+            return f"{CYN}Auto-tune is running for {tn.model}.{R} {DIM}It is in Settings > Auto-tune.{R}"
+        if ins and not ins.done:
+            return f"{CYN}The installer is running.{R}" + ("" if ui.tab == 1 else f" {DIM}It is in the Connect tab.{R}")
+        if ui.package and not ui.package.done:
+            return f"{CYN}CARL is making the client package.{R}" + ("" if ui.tab == 1 else f" {DIM}It is in the Connect "
+                                                                                    f"tab.{R}")
+        return ""
+
+    def footer(self, w: int) -> str:
+        """The keys of the screen shown (its dialog's alone while one is open); "D detail · ? all keys ·
+        q quit" stay at the end of every screen."""
+        ui = self.ui
+        if ui.help:
+            return footer_keys([("?", "close this list")], [("q", "quit")], w)
+        if self.dialog():
+            return footer_keys(ui.keys, [], w)
+        return footer_keys(([("↓", "more")] if ui.more else []) + ui.keys, TAIL, w)
+
+    def body(self, d: ServerData, cols: int, height: int) -> List[Row]:
+        """The selected tab's rows."""
+        ui = self.ui
+        v = self.view_ctx()
+        if ui.tab == 0:
+            if status_of(d, self.collector.server_pid)[0] == STOPPED:
+                v.next_start = self.next_start(d)
+            return body_live(v, ui, d, cols, height)
+        if ui.tab == 1:
+            here = fsio.installed_here(self.endpoint.base, self.opts.home)
+            stale, installed = self.client_drift(here)
+            return body_connect(v, ui, d, cols, height, here, self.ctl.preview_text(ui.preview, d, mask=not ui.key_shown),
+                                stale, installed)
+        if ui.tab == 2:
+            return body_requests(v, ui, cols, height)
+        if ui.tab == 3:
+            n = max(height - 4, 3) if not self.opts.once else max(shutil.get_terminal_size((120, 36))[1] - 8, 10)
+            return body_log(v, ui, cols, n)
+        return self.body_settings(d, cols, height)
+
+    def client_drift(self, here: List[Tuple[str, str]]) -> Tuple[List[Drift], int]:
+        """The client configs on this Mac (for this server) that list other models than the configs get, and how many
+        they get: single-model mode, only the model the server runs (Phase 23.4.4 item 13: a change of the server's
+        model makes the configs out of date); router mode, every installed model."""
+        if not here:                # no client set up here for this server: nothing to compare
+            return [], 0
+        d = self.ctl.data
+        router = d.router is not None if d.up else self.saved_mode() == "router"    # no server: config.json's mode
+        doc = self.client_doc(d)
+        try:
+            want = [str(jdict(m)["id"]) for m in doc["models"]] if doc else None
+        except (KeyError, TypeError):
+            want = None
+        if want is None:            # no list: the installed models
+            want = [m["name"] for m in self.svc.models.downloaded()]
+        server = want[0] if not router and len(want) == 1 else ""
+        running = (d.alias, d.n_ctx) if d.up and d.alias and d.n_ctx else None
+        port = self.endpoint.port
+        moved = {c: (p, port) for c, p in fsio.moved_here(self.endpoint.base, self.opts.home).items()}
+        return (drift({c: fsio.listed_models(self.opts.home, c, pid) for c, pid in here}, want, running, server, moved),
+                len(want))
+
+    def client_doc(self, d: ServerData) -> Optional[JSONDict]:
+        """The model list the client configs get now (single-model mode: the model the server runs)."""
+        run, router = serving(d)
+        return self.svc.models.client_list(run, self.saved_mode() == "router" if router is None else router)
+
+    def single_model(self, d: ServerData) -> str:
+        """Single-model mode: the model the server runs (or a start loads), which the configs list alone; else ""."""
+        if d.router is not None or (not d.up and self.saved_mode() == "router"):
+            return ""
+        try:
+            doc = self.client_doc(d)
+            ms = doc.get("models") if doc else None
+            return str(jdict(ms[0]).get("id") or "") if isinstance(ms, list) and len(ms) == 1 else ""
+        except Exception:           # a model list that can't be read: say nothing
+            return ""
+
+    def config_unsent(self, d: ServerData) -> bool:
+        """The config sent to the other computers is out of date: the list they would get now differs (Phase 23.4.4:
+        in single-model mode, a change of the server's model)."""
+        sent = self.jobs.pushed().partition(" at ")[0]
+        if not sent:
+            return False
+        try:
+            doc = self.client_doc(d)
+        except Exception:           # a model list that can't be read: no warning
+            return False
+        return doc is not None and clientsync.version_of(doc) != sent
+
+    def configs_stale(self) -> bool:
+        """The client configs on this Mac need ./carl.sh install --config-only (the Connect tab's ⚠)."""
+        try:
+            return bool(self.client_drift(fsio.installed_here(self.endpoint.base, self.opts.home))[0])
+        except Exception:           # a model list that can't be read: no warning (the Settings tab says why)
+            return False
+
+    def saved_mode(self) -> str:
+        """llama.mode in config.json (single when unset or unreadable)."""
+        try:
+            return str(jdict(self.store.load_config().get("llama")).get("mode") or "single")
+        except Exception:           # a broken config.json: the Server panel says why
+            return "single"
+
+    def body_settings(self, d: ServerData, cols: int, height: int) -> List[Row]:
+        """The Settings tab: the panel bar, then the picker, a question, or the selected panel."""
+        ui = self.ui
+        out: List[Row] = [subpanel_bar(ui.sp), ("", [])]
+        if ui.sp != getattr(self, "_last_sp", ui.sp):     # another panel: its page starts at the top
+            ui.page_scroll = 0
+        self._last_sp = ui.sp
+        if ui.picker:
+            return out + self.view.picker(ui.picker, cols, height - 2, ui)
+        if ui.confirm2:
+            return out + self.view.confirm(ui.confirm2, cols, ui)
+        try:
+            if ui.sp == SP_SERVER:
+                body = self.view.server(ui, self.ensure_pending(d), d, cols, height - 2, self.endpoint.port,
+                                        self.collector.gpu_limit[1] if self.collector.gpu_limit else "")
+            elif ui.sp == SP_MODELS and ui.card:
+                ui.keys = list(TYPING_KEYS if ui.card.typing is not None else FORM_KEYS)
+                body = draw_form(ui.card, cols, height - 2)
+            elif ui.sp == SP_AGENTS:
+                body = self.view.agents(ui, self.ctl.settings.agents_info(), cols, height - 2,
+                                        self.svc.models.error or "")
+            elif ui.sp == SP_FIT:
+                body = self.view.autofit(ui, self.ensure_pending(d), cols, height - 2)
+            elif ui.sp == SP_ROUTER:
+                book = self.collector.tail.book
+                stale, n = self.client_drift(fsio.installed_here(self.endpoint.base, self.opts.home))
+                here = bool(fsio.installed_here(self.endpoint.base, self.opts.home))
+                body = self.view.router(ui, d, self.saved_mode(), [(book.wall(t), name) for t, name in book.switches],
+                                        [s.line(n) for s in stale], cols, here, height - 2)
+            elif ui.sp == SP_CACHE:
+                folder = self.jobs.paths.slots
+                api = f"{self._api.host}:{self._api.port}" if self._api else ""
+                files = diskcache.listing(folder)
+                did, when = self.cache_did()
+                body = self.view.caching(ui, self.jobs.cache_conf(), files, folder, cols, api, height - 2,
+                                         self.session_names(files), self.window_model(d), did, when)
+            elif ui.sp == SP_MODELS:
+                mdir = self.store.models_dir()
+                body = self.view.models(ui, cols, height - 2, ModelsDir(mdir, disk_free(mdir)), d.alias)
+            else:
+                body = self.view.tune(ui, cols, d.up, height - 2)
+        except Exception as e:      # the catalogue, models.json or config.json can't be read: say so, keep running
+            body = panel_error(e, cols)
+        if not ui.keys:
+            ui.keys = [("[ ]", "panels")]
+        return (out + body)[:height]
+
+    def ensure_pending(self, d: ServerData) -> Pending:
+        """The Server panel's values, from config.json and the running server the first time."""
+        ui = self.ui
+        if ui.pending is None:
+            ui.pending, ui.set_run = self.ctl.pending_init(d), self.svc.running(d)
+        return ui.pending
+
+    # ------------------------------------------------------------ main loop
+    def warm_up(self, term: Terminal) -> None:
+        """The first start: the server state, the model list and what fits read once, with a progress line
+        for each step (the GGUF headers and a Hugging Face read can take some seconds)."""
+        cols, rows = shutil.get_terminal_size((120, 36))
+
+        def show(done: int) -> None:
+            term.write(place_lines(progress_lines(done, cols, rows), 0))
+
+        def models() -> None:
+            self.svc.models.get()
+
+        def fits() -> None:
+            p = self.ensure_pending(self.ctl.data)
+            self.svc.fit_cached(p)
+
+        for i, step in enumerate((lambda: setattr(self.ctl, "data", self.collector.collect()), models, fits)):
+            show(i)
+            try:
+                step()
+            except Exception:       # a broken catalogue or config: the screens say why
+                pass
+        show(len(PROGRESS_STEPS))
+
+    def run(self) -> None:
+        """Print one snapshot (--once), or run the interactive dashboard until quit."""
+        c, ui = self.collector, self.ui
+        threading.Thread(target=c.slow_loop, daemon=True).start()
+        threading.Thread(target=c.load_gpu_limit, daemon=True).start()
+        if self.opts.once:
+            self.ctl.data = c.collect()
+            time.sleep(0.5)
+            if self.opts.tab:
+                ui.tab = self.opts.tab - 1
+            print("\n".join(self.frame(self.ctl.data)))
+            return
+        term = Terminal()
+        wake_r, wake_w = os.pipe()                 # Ctrl-C wakes the loop and opens the quit dialog
+
+        def interrupted() -> None:
+            ui.quit = True
+            os.write(wake_w, b"x")
+
+        term.enter(interrupted)
+        buf = InputBuffer()
+        try:
+            self.warm_up(term)
+            next_fetch = time.time() + self.opts.interval
+            logo_size: Optional[os.terminal_size] = None
+            logo_t = 0.0
+            while True:
+                if time.time() >= next_fetch:
+                    self.ctl.data = c.collect()
+                    next_fetch = time.time() + (0.5 if ui.stopping else self.opts.interval)
+                self.jobs.poll()
+                self.jobs.drain_tick(self.ctl.data)
+                self._status = {**c.tail.book.status(), "up": self.ctl.data.up}   # a new dict: the API reads it whole
+                self.cache_api()
+                if ui.stopping:
+                    pid, deadline = ui.stopping
+                    if not system.pid_alive(pid):
+                        ui.exit_msg = f"Server (pid {pid}) stopped."
+                        break
+                    if time.time() > deadline:
+                        system.kill(pid, signal.SIGKILL)
+                tsize = shutil.get_terminal_size((120, 36))
+                if self.logo and self.logo_kind and (tsize != logo_size or time.time() - logo_t > 30):
+                    term.write(("\x1b[2J" if tsize != logo_size else "") + logo_escape(self.logo_kind, self.logo))
+                    logo_size, logo_t = tsize, time.time()
+                term.write(place_lines(self.frame(self.ctl.data), self.logo_cols))
+                r, _, _ = select.select([term.fd, wake_r], [], [], max(min(next_fetch - time.time(), 1.0), 0.05))
+                if wake_r in r:
+                    os.read(wake_r, 64)
+                if term.fd in r:
+                    data = buf.feed(term.read(), lambda: bool(select.select([term.fd], [], [], 0.05)[0]))
+                    if data and self.ctl.handle_input(data):
+                        next_fetch = 0
+        except SystemExit:
+            pass
+        finally:
+            term.restore()
+            if ui.exit_msg:
+                print(ui.exit_msg)
+
+
+PROGRESS_STEPS = ("Reading the server state", "Reading the model list", "Checking what fits this Mac")
+
+
+def progress_lines(done: int, cols: int, rows: int) -> List[str]:
+    """The first start's progress: each step with ✓ (done) or … (now), centred."""
+    w = min(60, cols - 4)
+    L: List[CardLine] = ["", *[(f"{GRN}✓{R} " if i < done else f"{YEL}…{R} " if i == done else "  ") + step
+                               for i, step in enumerate(PROGRESS_STEPS)], ""]
+    card = draw_card("start", "CARL STARTS", f"{DIM}the dashboard reads what it shows{R}", L, w, 1)
+    top = max((rows - len(card)) // 2, 0)
+    pad = " " * max((cols - w) // 2, 0)
+    return [""] * top + [pad + t for t, _ in card]
+
+
+def panel_error(e: Exception, cols: int) -> List[Row]:
+    """A Settings panel that could not be drawn: the reason instead of a crash."""
+    lines = [f"{RED}{x}{R}" for x in wwrap(f"{type(e).__name__}: {e}", cols - 6)[:6]]
+    lines += ["", *[f"{DIM}{x}{R}" for x in wwrap("CARL cannot read the catalogue (host/catalog.json), models.json or "
+                                                  "config.json. Correct the file: ./carl.sh models and ./carl.sh config "
+                                                  "show tell the problem. This panel tries again.", cols - 6)]]
+    return indent(draw_card("seterror", "SETTINGS UNAVAILABLE", "", lines, cols - 1, 2))
+
+
+def disk_free(path: str) -> int:
+    """Free bytes on the disk holding path (0 if unknown)."""
+    try:
+        return shutil.disk_usage(path).free
+    except OSError:
+        return 0
+
+
+def main(argv: Optional[Sequence[str]], description: str) -> None:
+    """Run the dashboard with these arguments (None: the command line); description is the --help text."""
+    App.create(cli.parse(argv, description, os.environ)).run()

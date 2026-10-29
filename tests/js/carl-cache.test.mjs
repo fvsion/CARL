@@ -1,0 +1,1042 @@
+// client/shared/carl-cache.js: the pure parts, and before() / after() against a fake llama-server.
+// Run: node --test tests/js (tests/scripts/test_js.py runs it with the other suites).
+import assert from "node:assert/strict";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { test } from "node:test";
+import { forgetPings, isCarl } from "../../client/shared/carl-api.js";
+import { EVENTS_DIR, eventDay, sessionOf,
+  CarlCache, rankSlots, commonPrefix, isStateName, overBudget, prefixFile, relocate, sessionFile, splitOpenCode, splitPi,
+  thinkingOff,
+} from "../../client/shared/carl-cache.js";
+
+const OC_SYSTEM = [
+  "You are opencode.\nYou are powered by the model named m.\n",
+  "Here is some useful information about the environment you are running in:\n<env>\n",
+  "  Working directory: /work/app\n  Workspace root folder: /work/app\n  Today's date: Sat Oct 03 2026\n</env>\n",
+  "Instructions from: /home/u/.config/opencode/carl/delegation.md\nDelegate big jobs.\n",
+  "Instructions from: /work/app/AGENTS.md\nUse tabs.\n",
+  "\n\nSkills provide specialized instructions and workflows.\n<available_skills></available_skills>",
+].join("");
+
+test("OpenCode: the env block and the project's instructions move, the rest stays as it was", () => {
+  const [kept, moved] = splitOpenCode(OC_SYSTEM);
+  assert.equal(kept, "You are opencode.\nYou are powered by the model named m.\n" +
+    "Instructions from: /home/u/.config/opencode/carl/delegation.md\nDelegate big jobs.\n" +
+    "\n\nSkills provide specialized instructions and workflows.\n<available_skills></available_skills>");
+  assert.match(moved, /^Here is some useful information[\s\S]*<\/env>\n\nInstructions from: \/work\/app\/AGENTS.md\nUse tabs\.$/);
+  assert.deepEqual(splitOpenCode("no env here"), ["no env here", ""]);
+});
+
+test("Pi: the project context and the folder move", () => {
+  const sys = "<rules>r</rules>\n\n<project_context>\nP\n</project_context>\n\n<cwd>\n/w\n</cwd>\n\n<mcp_servers>m</mcp_servers>";
+  assert.deepEqual(splitPi(sys), ["<rules>r</rules>\n\n<mcp_servers>m</mcp_servers>",
+                                  "<project_context>\nP\n</project_context>\n\n<cwd>\n/w\n</cwd>"]);
+});
+
+test("relocate puts the moved text in front of the first user message (text or parts)", () => {
+  const p = { model: "m", messages: [{ role: "system", content: OC_SYSTEM }, { role: "user", content: "hi" }] };
+  const out = relocate(p, splitOpenCode);
+  assert.ok(!out.messages[0].content.includes("<env>"));
+  assert.match(out.messages[1].content, /^Here is[\s\S]*Use tabs\.\n\nhi$/);
+  assert.equal(p.messages[1].content, "hi");                                      // the original is untouched
+  const parts = relocate({ messages: [{ role: "system", content: OC_SYSTEM }, { role: "user", content: [{ type: "text", text: "hi" }] }] },
+                         splitOpenCode);
+  assert.equal(parts.messages[1].content.length, 2);
+  assert.equal(relocate({ messages: [{ role: "user", content: "x" }] }, splitOpenCode).messages[0].content, "x");
+});
+
+test("relocate: none leaves the request as it was; no second system message (Phase 23.4.3)", () => {
+  const p = { messages: [{ role: "system", content: OC_SYSTEM }, { role: "user", content: "hi" }] };
+  assert.equal(relocate(p, splitOpenCode, "none"), p);
+  const out = relocate(p, splitOpenCode, "user");
+  assert.deepEqual(out.messages.map((m) => m.role), ["system", "user"]);
+  assert.ok(out.messages[1].content.includes("<env>") && out.messages[1].content.endsWith("hi"));
+});
+
+test("small helpers", () => {
+  assert.equal(commonPrefix([1, 2, 3], [1, 2, 4]), 2);
+  assert.deepEqual(rankSlots([{ id: 0, busy: false, n: 50 }, { id: 1, busy: false, n: 0 }, { id: 2, busy: true, n: 0 }])
+                     .map((x) => x.id), [1, 0]);
+  assert.deepEqual(rankSlots([{ id: 0, busy: true, n: 0 }]), []);
+  assert.ok(thinkingOff({ reasoning_effort: "none" }) && thinkingOff({ chat_template_kwargs: { enable_thinking: false } }));
+  assert.ok(!thinkingOff({ chat_template_kwargs: { enable_thinking: true } }));
+  assert.equal(sessionFile("q/m", "k", "ses 1"), "carl-session+q_m+k+ses_1.bin");
+  assert.equal(prefixFile("m", "pi-coder", "ab"), "carl-prefix+m+pi-coder+ab.bin");
+});
+
+test("the disk limit removes the oldest conversations first, then prompts, and the new file last", () => {
+  const f = (name, mtime, bytes = 3) => ({ name, bytes, mtime });
+  const files = [f("carl-prefix+a.bin", 1), f("carl-session+a.bin", 2), f("carl-session+b.bin", 3), f("carl-prefix+b.bin", 4)];
+  assert.deepEqual(overBudget(files, 12), []);
+  assert.deepEqual(overBudget(files, 6), ["carl-session+a.bin", "carl-session+b.bin"]);
+  assert.deepEqual(overBudget(files, 6, "carl-session+a.bin"), ["carl-session+b.bin", "carl-prefix+a.bin"]);
+  assert.deepEqual(overBudget([f("carl-session+a.bin", 1, 9)], 5, "carl-session+a.bin"), ["carl-session+a.bin"]);
+});
+
+// ------------------------------------------------------------------ a fake llama-server
+
+/** Tokens are character codes; a template is "S:<system>|U:<user>|G:<assistant>…|T:<tools>|G:" */
+function fakeServer({ router = false, loaded = true, slots = 2, toolsFirst = false, modelPath = "/models/m.gguf" } = {}) {
+  const st = {
+    slots: Array.from({ length: slots }, (_, id) => ({ id, busy: false, n: 0, task: -1 })),
+    files: new Map(), calls: [], task: 0, loaded,
+  };
+  // the generation prompt "G:" is how a reply starts, so a reply re-renders as generated (a stable template)
+  // toolsFirst: a Qwen-like template (the tools first, then each system message: a second one comes after them)
+  const tools = (b) => (b.tools ? `T:${JSON.stringify(b.tools)}` : "");
+  const render = (b) => (toolsFirst && b.tools ? tools(b) + "|" : "") + b.messages.map((m) => `${m.role === "assistant" ? "G" : m.role[0].toUpperCase()}:${typeof m.content === "string" ? m.content : JSON.stringify(m.content)}` +
+    (m.reasoning_content ? `~${m.reasoning_content}` : "")).join("|") + (!toolsFirst && b.tools ? `|${tools(b)}` : "") + "|G:";
+  const json = (x, status = 200) => new Response(JSON.stringify(x), { status, headers: { "Content-Type": "application/json" } });
+  const fetch = async (url, init = {}) => {
+    const u = new URL(url);
+    const body = init.body ? JSON.parse(init.body) : undefined;
+    const path = u.pathname + (u.searchParams.get("action") ? `?${u.searchParams.get("action")}` : "");
+    st.calls.push({ path, body });
+    if (path === "/v1/models") return json({ data: [{ id: "m", ...(router ? { status: { value: st.loaded ? "loaded" : "unloaded" } } : {}) }] });
+    if (path === "/models/load") { st.loaded = true; return json({ success: true }); }
+    if (path === "/slots") return json(st.slots.map((s) => ({ id: s.id, is_processing: s.busy, n_prompt_tokens: s.n, id_task: s.task })));
+    if (path === "/props") return json({ model_path: modelPath, build_info: "b1" });
+    if (path === "/apply-template") return json({ prompt: render(body) });
+    if (path === "/tokenize") return json({ tokens: [...body.content].map((c) => c.charCodeAt(0)) });
+    if (path === "/completion") {
+      const s = st.slots[body.id_slot];
+      s.n = body.prompt.length; s.task = st.task++;
+      return json({ content: "" });
+    }
+    const m = u.pathname.match(/^\/slots\/(\d+)$/);
+    if (m) {
+      const s = st.slots[Number(m[1])];
+      if (path.endsWith("?save")) { st.files.set(body.filename, s.n); return json({ n_saved: s.n }); }
+      if (path.endsWith("?restore")) {
+        if (!st.files.has(body.filename)) return json({ error: { message: "no file" } }, 400);
+        s.n = st.files.get(body.filename);
+        return json({ n_restored: s.n });
+      }
+    }
+    return json({ error: "unexpected " + path }, 404);
+  };
+  return { st, fetch };
+}
+
+// a request ran in the slot: its tokens, and the server's next task id (ids only go up, as in llama.cpp)
+const ran = (srv, slot, n) => {
+  srv.st.slots[slot].n = n;
+  srv.st.slots[slot].task = srv.st.task++;
+};
+const LONG = "You are opencode. " + "Follow the rules. ".repeat(400);
+const request = (user, extra = {}) => ({ model: "m", messages: [{ role: "system", content: LONG + OC_SYSTEM }, { role: "user", content: user }],
+                                          tools: [{ type: "function", function: { name: "read" } }], ...extra });
+const home = () => {
+  const h = mkdtempSync(join(tmpdir(), "carl-cache-"));
+  mkdirSync(join(h, ".config", "carl", "slots"), { recursive: true });
+  return h;
+};
+process.env.CARL_CACHE_SAVE = "turn";      // most tests: a save after every turn (the policy tests set their own)
+
+// a request: prepared, then sent (the slot is released for this process's next request)
+const send = async (c, p, meta) => {
+  const r = await c.before(p, meta);
+  r.release();
+  return r;
+};
+// the server's files are kept in the fake; "remote" makes the cache try them instead of looking on disk
+const cache = (fetch, h = home()) => new CarlCache({ baseURL: "http://10.0.0.1:8080/v1", fetch, split: splitOpenCode, home: h });
+
+test("a new agent prompt is read once and saved; the request is pinned to that slot", async () => {
+  const srv = fakeServer();
+  const c = cache(srv.fetch);
+  const { payload } = await send(c, request("hello"), { session: "s1", agent: "build" });
+  assert.equal(payload.id_slot, 0);
+  assert.ok(payload.messages[0].content.includes("<env>"));              // a template CARL does not know: in place
+  const saved = [...srv.st.files.keys()];
+  assert.equal(saved.length, 1);
+  assert.match(saved[0], /^carl-prefix\+m\+build\+[0-9a-f]{12}\.bin$/);
+  // the prefix is exactly the system text and tools up to the user's message
+  const fill = String.fromCharCode(...srv.st.calls.find((x) => x.path === "/completion").body.prompt);
+  assert.ok(fill.startsWith("S:You are opencode.") && fill.endsWith("|U:"));
+});
+
+test("Phase 23.4.3: a Qwen-like template gets the project part at the start of the first user message; the saved prompt ends where it starts", async () => {
+  const srv = fakeServer({ toolsFirst: true });
+  const c = cache(srv.fetch);
+  const { payload } = await send(c, request("hello"), { session: "s1", agent: "build" });
+  assert.deepEqual(payload.messages.map((m) => m.role), ["system", "user"]);
+  assert.ok(!payload.messages[0].content.includes("<env>"));
+  assert.ok(payload.messages[1].content.includes("<env>") && payload.messages[1].content.endsWith("hello"));
+  const fill = String.fromCharCode(...srv.st.calls.find((x) => x.path === "/completion").body.prompt);
+  assert.ok(fill.startsWith("T:") && fill.endsWith("|U:"), fill.slice(-40));  // the tools, the shared text, up to the user
+  // the same shared start for another project: the saved prompt is restored, not read again
+  const d = cache(srv.fetch);
+  const other = request("hi", { messages: [{ role: "system", content: (LONG + OC_SYSTEM).replace(/Working directory: \S+/, "Working directory: /other") }, { role: "user", content: "hi" }] });
+  srv.st.calls.length = 0;
+  await send(d, other, { session: "s2", agent: "build" });
+  assert.ok(!srv.st.calls.some((x) => x.path === "/completion"), "the shared prompt was read again");
+});
+
+test("Phase 23.1: Gemma 4 keeps the project part where the client put it", async () => {
+  const srv = fakeServer({ toolsFirst: true, modelPath: "/models/gemma-4-12B-it-Q4_0.gguf" });
+  const { payload } = await send(cache(srv.fetch), request("hello"), { session: "s1", agent: "build" });
+  assert.equal(payload.messages.length, 2);
+  assert.ok(payload.messages[0].content.includes("<env>"));
+  assert.equal(payload.messages[1].content, "hello");
+});
+
+test("Phase 23.1: by default (cache.move off) an unknown template's project part stays in place; Qwen's still moves", async () => {
+  process.env.CARL_CACHE_MOVE = "off";
+  try {
+    const other = await send(cache(fakeServer().fetch), request("hello"), { session: "s1", agent: "build" });
+    assert.equal(other.payload.messages.length, 2);
+    assert.ok(other.payload.messages[0].content.includes("<env>"));
+    assert.equal(other.payload.messages[1].content, "hello");
+    const qwen = await send(cache(fakeServer({ toolsFirst: true }).fetch), request("hello"), { session: "s1", agent: "build" });
+    assert.deepEqual(qwen.payload.messages.map((m) => m.role), ["system", "user"]);
+    assert.ok(qwen.payload.messages[1].content.includes("<env>") && qwen.payload.messages[1].content.endsWith("hello"));
+  } finally {
+    delete process.env.CARL_CACHE_MOVE;
+  }
+});
+
+test("Phase 23.1: cache.move auto (CARL_CACHE_MOVE=auto) moves an unknown template's project part to the first user message", async () => {
+  process.env.CARL_CACHE_MOVE = "auto";
+  try {
+    const srv = fakeServer();                                                // the tools after the messages
+    const { payload } = await send(cache(srv.fetch), request("hello"), { session: "s1", agent: "build" });
+    assert.deepEqual(payload.messages.map((m) => m.role), ["system", "user"]);
+    assert.ok(payload.messages[1].content.includes("<env>") && payload.messages[1].content.endsWith("hello"));
+  } finally {
+    delete process.env.CARL_CACHE_MOVE;
+  }
+});
+
+test("Phase 23.1: the default leaves an unknown template's project part in place", async () => {
+  const { payload } = await send(cache(fakeServer().fetch), request("hello"), { session: "s1", agent: "build" });
+  assert.equal(payload.messages.length, 2);
+  assert.ok(payload.messages[0].content.includes("<env>"));
+});
+
+test("the next request of the session stays in its slot without a restore", async () => {
+  const srv = fakeServer();
+  const c = cache(srv.fetch);
+  await send(c, request("hello"), { session: "s1", agent: "build" });
+  ran(srv, 0, 6000);                        // the request ran there
+  srv.st.calls.length = 0;
+  const { payload } = await send(c, request("again"), { session: "s1", agent: "build" });
+  assert.equal(payload.id_slot, 0);
+  assert.ok(!srv.st.calls.some((x) => x.path.includes("restore")));
+});
+
+test("after a turn the session is saved; a new client process restores it before the next request", async () => {
+  const srv = fakeServer();
+  const c = cache(srv.fetch);
+  await send(c, request("hello"), { session: "s1", agent: "build" });
+  ran(srv, 0, 6000);
+  await c.after({ session: "s1", agent: "*" });
+  const file = [...srv.st.files.keys()].find((n) => n.startsWith("carl-session+"));
+  assert.match(file, /^carl-session\+m\+[0-9a-f]{10}\+s1\.bin$/);
+  await c.after({ session: "s1", agent: "*" });                               // nothing new: no second save
+  assert.equal(srv.st.calls.filter((x) => x.path.endsWith("?save") && x.body.filename === file).length, 1);
+  srv.st.slots[0].n = 0; srv.st.slots[0].task = -1;                          // the server restarted
+  const d = cache(srv.fetch);
+  srv.st.calls.length = 0;
+  const { payload } = await send(d, request("next"), { session: "s1", agent: "build" });
+  const restored = srv.st.calls.filter((x) => x.path.endsWith("?restore")).map((x) => x.body.filename);
+  assert.deepEqual(restored, [file]);                                          // the session's own state, not the prompt's
+  assert.equal(payload.id_slot, 0);
+});
+
+test("a session whose slot another session took comes back from its file", async () => {
+  const srv = fakeServer({ slots: 1 });
+  const c = cache(srv.fetch);
+  await send(c, request("hello"), { session: "s1", agent: "build" });
+  ran(srv, 0, 6000);
+  await c.after({ session: "s1", agent: "build" });
+  await send(c, request("other"), { session: "s2", agent: "build" });       // takes the only slot
+  ran(srv, 0, 7000);
+  srv.st.calls.length = 0;
+  await send(c, request("back"), { session: "s1", agent: "build" });
+  const restored = srv.st.calls.filter((x) => x.path.endsWith("?restore")).map((x) => x.body.filename);
+  assert.equal(restored.length, 1);
+  assert.match(restored[0], /^carl-session\+m\+[0-9a-f]{10}\+s1\.bin$/);
+});
+
+test("a subagent that needs the main session's slot saves the main session first", async () => {
+  const srv = fakeServer({ slots: 1 });
+  const c = cache(srv.fetch);
+  await send(c, request("hello"), { session: "main", agent: "build" });
+  ran(srv, 0, 9000);                                                         // mid-turn: a tool call, no save yet
+  srv.st.calls.length = 0;
+  await send(c, request("sub task"), { session: "child", agent: "coder", sub: true });
+  const paths = srv.st.calls.map((x) => `${x.path}${x.body?.filename ? ` ${x.body.filename.split("+")[0]}` : ""}`);
+  const save = paths.indexOf("/slots/0?save carl-session");
+  assert.ok(save > 0 && paths.indexOf("/completion") < save, paths.join(" "));   // set back to its last prompt, saved
+  ran(srv, 0, 7000);
+  srv.st.calls.length = 0;
+  await send(c, request("tool result"), { session: "main", agent: "build" });
+  assert.ok(srv.st.calls.some((x) => x.path.endsWith("?restore") && x.body.filename.startsWith("carl-session+")));
+});
+
+test("subagents and short conversations are not saved; title requests are not pinned", async () => {
+  const srv = fakeServer();
+  const c = cache(srv.fetch);
+  const t = await send(c, request("title please"), { session: "s1", agent: "title" });
+  assert.equal(t.payload.id_slot, undefined);
+  assert.equal(t.payload.reasoning_effort, "none");                             // a title doesn't think
+  assert.equal(t.payload.chat_template_kwargs.enable_thinking, false);
+  await send(c, request("hello"), { session: "s2", agent: "coder", sub: true });
+  srv.st.slots[0].n = 9000;
+  await c.after({ session: "s2", agent: "coder", sub: true });
+  await send(c, request("hello"), { session: "s3", agent: "build" });
+  srv.st.slots[1].n = 100;
+  await c.after({ session: "s3", agent: "*" });
+  assert.ok(![...srv.st.files.keys()].some((n) => n.startsWith("carl-session+")));
+});
+
+test("a coder session above 32K is saved before its slot is needed and restored when sent back; Pi's are not", async () => {
+  const srv = fakeServer({ slots: 1 });
+  const c = cache(srv.fetch);
+  await send(c, request("coder task"), { session: "k1", agent: "coder", sub: true });
+  ran(srv, 0, 40000);
+  srv.st.calls.length = 0;
+  await send(c, request("main"), { session: "main", agent: "build" });          // takes the coder's slot
+  const saved = srv.st.calls.filter((x) => x.path.endsWith("?save")).map((x) => x.body.filename);
+  assert.equal(saved.length, 1);
+  assert.match(saved[0], /^carl-session\+m\+[0-9a-f]{10}\+k1\.bin$/);
+  ran(srv, 0, 6000);
+  srv.st.calls.length = 0;
+  await send(c, request("follow-up"), { session: "k1", agent: "coder", sub: true });   // sent back (task_id)
+  assert.ok(srv.st.calls.some((x) => x.path.endsWith("?restore") && x.body.filename === saved[0]));
+
+  const pi = fakeServer({ slots: 1 });
+  const p = cache(pi.fetch);
+  await send(p, request("pi sub"), { session: "p1", agent: "coder", sub: true, once: true });
+  ran(pi, 0, 40000);
+  await p.after({ session: "p1", agent: "coder", sub: true, once: true });
+  await send(p, request("main"), { session: "main", agent: "build" });
+  assert.ok(![...pi.st.files.keys()].some((n) => n.includes("+p1.")));
+});
+
+test("a coder session above 32K is saved at the end of its turn like a main session (turn)", () => withSave("turn", async () => {
+  const srv = fakeServer();
+  const c = cache(srv.fetch);
+  await send(c, request("coder task"), { session: "k1", agent: "coder", sub: true });
+  ran(srv, 0, 20000);
+  await c.after({ session: "k1", agent: "coder", sub: true });
+  assert.ok(![...srv.st.files.keys()].some((n) => n.includes("+k1.")));          // 20K: read again instead
+  ran(srv, 0, 33000);
+  await c.after({ session: "k1", agent: "coder", sub: true });
+  assert.ok([...srv.st.files.keys()].some((n) => n.includes("+k1.")));
+}));
+
+test("a server restart (task ids start again) brings the session back from the disk", async () => {
+  const srv = fakeServer();
+  const c = cache(srv.fetch);
+  await send(c, request("hello"), { session: "s1", agent: "build" });
+  ran(srv, 0, 6000);
+  await send(c, request("x"), { session: "s1", agent: "build" });            // sees task 40
+  await c.after({ session: "s1", agent: "*" });
+  srv.st.slots.forEach((s) => { s.n = 0; s.task = -1; });                    // restarted
+  srv.st.calls.length = 0;
+  await send(c, request("again"), { session: "s1", agent: "build" });
+  assert.ok(srv.st.calls.some((x) => x.path.endsWith("?restore") && x.body.filename.startsWith("carl-session+")));
+});
+
+test("router mode: the model is loaded first, and the slot calls name it", async () => {
+  const srv = fakeServer({ router: true, loaded: false });
+  const c = cache(srv.fetch);
+  const { payload } = await send(c, request("hello"), { session: "s1", agent: "build" });
+  assert.ok(srv.st.calls.some((x) => x.path === "/models/load" && x.body.model === "m"));
+  assert.equal(payload.id_slot, 0);
+  const save = srv.st.calls.find((x) => x.path.endsWith("?save"));
+  assert.equal(save.body.model, "m");
+});
+
+test("router mode: a title request for an unloaded model goes to the loaded one", async () => {
+  const srv = fakeServer({ router: true });
+  const inner = srv.fetch;
+  srv.fetch = async (url, init) => String(url).endsWith("/v1/models")
+    ? new Response(JSON.stringify({ data: [{ id: "m", status: { value: "loaded" } }, { id: "big", status: { value: "unloaded" } }] }))
+    : inner(url, init);
+  const c = cache(srv.fetch);
+  const { payload } = await send(c, { ...request("title"), model: "big" }, { session: "s1", agent: "title" });
+  assert.equal(payload.model, "m");
+  const other = await send(c, { ...request("title"), model: "nope" }, { session: "s1", agent: "title" });
+  assert.equal(other.payload.model, "nope");                                   // not installed: as it was
+});
+
+test("models whose template drops the reply's reasoning are set back to the last prompt before the save", async () => {
+  const srv = fakeServer();
+  const inner = srv.fetch;
+  // a template that drops reasoning_content from earlier replies
+  srv.fetch = async (url, init) => {
+    if (String(url).endsWith("/apply-template")) {
+      const b = JSON.parse(init.body);
+      b.messages = b.messages.map((m) => ({ ...m, reasoning_content: undefined }));
+      return inner(url, { ...init, body: JSON.stringify(b) });
+    }
+    return inner(url, init);
+  };
+  const c = cache(srv.fetch);
+  await send(c, request("hello"), { session: "s1", agent: "build" });
+  ran(srv, 0, 9000);
+  srv.st.calls.length = 0;
+  await c.after({ session: "s1", agent: "*" });
+  const paths = srv.st.calls.map((x) => x.path);
+  assert.ok(paths.indexOf("/completion") >= 0 && paths.indexOf("/completion") < paths.findIndex((p) => p.endsWith("?save")));
+});
+
+test("on this Mac the settings switch it off, and saves keep the disk limit", async () => {
+  const h = home();
+  writeFileSync(join(h, ".config", "carl", "config.json"), JSON.stringify({ cache: { prefix: false, sessions: false } }));
+  const srv = fakeServer();
+  const c = new CarlCache({ baseURL: "http://127.0.0.1:8080/v1", fetch: srv.fetch, split: splitOpenCode, home: h });
+  const { payload } = await send(c, request("hello"), { session: "s1", agent: "build" });
+  assert.equal(payload.id_slot, undefined);
+  assert.equal(srv.st.calls.length, 0);
+  const dir = join(h, ".config", "carl", "slots");
+  writeFileSync(join(dir, "carl-session+m+0123456789+old.bin"), Buffer.alloc(10));
+  writeFileSync(join(dir, "carl-session+m+0123456789+new.bin"), Buffer.alloc(10));
+  writeFileSync(join(h, ".config", "carl", "config.json"), JSON.stringify({ cache: { disk_gb: 1 } }));
+  const d = new CarlCache({ baseURL: "http://127.0.0.1:8080/v1", fetch: srv.fetch, split: splitOpenCode, home: h });
+  d.wrote("carl-session+m+0123456789+new.bin", "");
+  assert.equal(readdirSync(dir).length, 2);                                   // 20 bytes: within 1 GB
+});
+
+// ------------------------------------------------------------------ the save policy and the slot claims
+
+const withSave = async (mode, fn) => {
+  const was = process.env.CARL_CACHE_SAVE;
+  process.env.CARL_CACHE_SAVE = mode;
+  try {
+    await fn();
+  } finally {
+    process.env.CARL_CACHE_SAVE = was;
+  }
+};
+const sessionSaves = (srv) => srv.st.calls.filter((x) => x.path.endsWith("?save") && x.body.filename.startsWith("carl-session+"));
+
+test("auto saves a session once its unsaved part would take ~2 min to read again", () => withSave("auto", async () => {
+  const srv = fakeServer();
+  const c = cache(srv.fetch);
+  await send(c, request("hello"), { session: "s1", agent: "build" });     // the build prompt: ~7.2K tokens put in
+  c.models.get("m").speed = 1000 / 120;                                   // 2 min = 1,000 tokens
+  ran(srv, 0, 7700);
+  await c.after({ session: "s1", agent: "build" });
+  assert.equal(sessionSaves(srv).length, 0);                              // ~500 new tokens: not yet
+  ran(srv, 0, 9000);
+  await c.after({ session: "s1", agent: "build" });
+  assert.equal(sessionSaves(srv).length, 1);
+  ran(srv, 0, 9300);
+  await c.after({ session: "s1", agent: "build" });
+  assert.equal(sessionSaves(srv).length, 1);                              // 300 since the save
+}));
+
+test("save = stop: a session isn't saved when its slot is needed (it stays in the RAM cache)", () => withSave("stop", async () => {
+  const srv = fakeServer({ slots: 1 });
+  const c = cache(srv.fetch);
+  await send(c, request("hello"), { session: "main", agent: "build" });
+  ran(srv, 0, 9000);
+  await send(c, request("sub"), { session: "child", agent: "coder", sub: true });
+  assert.equal(sessionSaves(srv).length, 0);
+}));
+
+test("Phase 23.5.1.2: back from the RAM cache, a session goes to a slot that holds a conversation, not an empty one (llama.cpp #28139)", () => withSave("stop", async () => {
+  const srv = fakeServer({ slots: 3 });
+  const c = cache(srv.fetch);
+  await send(c, request("hello"), { session: "a", agent: "build" });
+  ran(srv, 0, 9000);
+  await send(c, request("other"), { session: "b", agent: "build" });
+  ran(srv, 1, 8000);
+  srv.st.slots[0].n = 7000;                     // another process's session took slot 0 (a not saved: save = stop)
+  srv.st.slots[0].task = 99;
+  c.owner.delete("m:0");
+  srv.st.slots[2].n = 0;                        // slot 2 empty (llama.cpp cleared it)
+  srv.st.calls.length = 0;
+  const back = await send(c, request("again"), { session: "a", agent: "build" });
+  assert.notEqual(back.payload.id_slot, 2);    // not the empty slot: its RAM-cache lookup would be skipped
+  assert.equal(sessionSaves(srv).length, 0);
+  // the slot's conversation went to the RAM cache first (one token, nothing written): llama.cpp then looks for the
+  // session there, whatever share of the slot it would keep (llama.cpp #28276: only below half)
+  const pushed = srv.st.calls.filter((x) => x.path === "/completion" && JSON.stringify(x.body.prompt) === "[0]");
+  assert.deepEqual(pushed.map((x) => [x.body.id_slot, x.body.n_predict]), [[back.payload.id_slot, 0]]);
+}));
+
+test("on this Mac a turn leaves a record of the slot's session; a router switch saves it first", () => withSave("switch", async () => {
+  const h = home();
+  const srv = fakeServer({ router: true });
+  const inner = srv.fetch;
+  let loaded = "m";
+  srv.fetch = async (url, init) => {
+    const u = String(url);
+    if (u.endsWith("/v1/models")) {
+      return new Response(JSON.stringify({ data: ["m", "big"].map((id) => ({ id, status: { value: id === loaded ? "loaded" : "unloaded" } })) }));
+    }
+    if (u.endsWith("/models/load")) loaded = JSON.parse(init.body).model;
+    return inner(url, init);
+  };
+  const c = new CarlCache({ baseURL: "http://127.0.0.1:8080/v1", fetch: srv.fetch, split: splitOpenCode, home: h });
+  await send(c, request("hello"), { session: "s1", agent: "build" });
+  ran(srv, 0, 9000);
+  await c.after({ session: "s1", agent: "build" });
+  assert.equal(sessionSaves(srv).length, 0);                              // switch: not after the turn
+  const dir = join(h, ".config", "carl", "slots");
+  const rec = readdirSync(dir).filter((n) => n.startsWith(".resident+"));
+  assert.deepEqual(rec, [".resident+m+0.json"]);
+  await send(c, { ...request("x"), model: "big" }, { session: "s2", agent: "build" });
+  assert.equal(sessionSaves(srv).length, 1);                              // saved before "m" stopped
+  assert.equal(sessionSaves(srv)[0].body.model, "m");
+  assert.deepEqual(readdirSync(dir).filter((n) => n.startsWith(".resident+")), []);
+}));
+
+test("a new process finds a session still in its slot through the record", () => withSave("auto", async () => {
+  const h = home();
+  const srv = fakeServer();
+  const opts = { baseURL: "http://127.0.0.1:8080/v1", fetch: srv.fetch, split: splitOpenCode, home: h };
+  const a = new CarlCache(opts);
+  await send(a, request("hello"), { session: "s1", agent: "build" });
+  ran(srv, 0, 7300);
+  await a.after({ session: "s1", agent: "build" });                        // small: recorded, not saved
+  const b = new CarlCache(opts);                                           // the next `opencode run`
+  srv.st.calls.length = 0;
+  const { payload } = await send(b, request("again"), { session: "s1", agent: "build" });
+  assert.equal(payload.id_slot, 0);
+  assert.ok(!srv.st.calls.some((x) => x.path.endsWith("?restore")));    // used where it is
+  b.models.get("m").speed = 1000 / 120;                                   // 2 min = 1,000 tokens
+  ran(srv, 0, 7600);
+  await b.after({ session: "s1", agent: "build" });
+  assert.equal(sessionSaves(srv).length, 0);                              // the record's base: ~400 unsaved
+}));
+
+test("a turn is marked in its slot from the first request to its save or record (subagents too)", () => withSave("turn", async () => {
+  const h = home();
+  const srv = fakeServer();
+  const c = new CarlCache({ baseURL: "http://127.0.0.1:8080/v1", fetch: srv.fetch, split: splitOpenCode, home: h });
+  const dir = join(h, ".config", "carl", "slots");
+  const marks = () => readdirSync(dir).filter((n) => n.startsWith(".turn+"));
+  await send(c, request("hello"), { session: "s1", agent: "build" });
+  assert.deepEqual(marks(), [".turn+m+0"]);                               // a tool call or the reply: still running
+  await send(c, request("sub"), { session: "k1", agent: "coder", sub: true });
+  assert.deepEqual(marks().sort(), [".turn+m+0", ".turn+m+1"]);
+  ran(srv, 0, 7300);
+  await c.after({ session: "s1", agent: "build" });                        // saved (save = turn), then the mark goes
+  assert.equal(sessionSaves(srv).length, 1);
+  assert.deepEqual(marks(), [".turn+m+1"]);
+  await c.turnsDone("k1");                                                 // stopped with Esc: the idle event
+  assert.deepEqual(marks(), []);
+}));
+
+test("a new session takes a slot where no other turn runs, though that slot holds more", async () => {
+  const h = home();
+  const srv = fakeServer();
+  const c = new CarlCache({ baseURL: "http://127.0.0.1:8080/v1", fetch: srv.fetch, split: splitOpenCode, home: h });
+  const first = await send(c, request("main"), { session: "s1", agent: "build" });   // its turn runs (a tool now)
+  assert.equal(first.payload.id_slot, 0);
+  ran(srv, 0, 900);
+  ran(srv, 1, 5000);                                                     // slot 1: an old, larger conversation
+  const sub = await send(c, request("sub"), { session: "k1", agent: "coder", sub: true });
+  assert.equal(sub.payload.id_slot, 1);                                  // not slot 0: s1's turn still runs there
+});
+
+test("two processes on this Mac don't pin the same slot", async () => {
+  const h = home();
+  const srv = fakeServer();
+  const a = new CarlCache({ baseURL: "http://127.0.0.1:8080/v1", fetch: srv.fetch, split: splitOpenCode, home: h });
+  const b = new CarlCache({ baseURL: "http://127.0.0.1:8080/v1", fetch: srv.fetch, split: splitOpenCode, home: h });
+  const first = await a.before(request("one"), { session: "s1", agent: "build" });   // not released yet: in flight
+  const second = await b.before(request("two"), { session: "s2", agent: "build" });
+  assert.notEqual(first.payload.id_slot, second.payload.id_slot);
+  const third = await b.before(request("three"), { session: "s3", agent: "build" });
+  assert.equal(third.payload.id_slot, undefined);                         // both taken: llama.cpp decides
+  first.release();
+  second.release();
+  assert.deepEqual(readdirSync(join(h, ".config", "carl", "slots")).filter((n) => n.startsWith(".claim+")), []);
+});
+
+test("a client on another computer uses the dashboard's cache API: settings, claims, records", async () => {
+  forgetPings();
+  const srv = fakeServer();
+  const api = { claims: new Set(), records: new Map(), calls: [], turns: [] };
+  const fetch = async (url, init = {}) => {
+    const u = new URL(url);
+    if (u.port !== "8081") return srv.fetch(url, init);
+    const body = init.body ? JSON.parse(init.body) : {};
+    const json = (x, status = 200) => new Response(JSON.stringify(x), { status });
+    if (u.pathname === "/carl/ping") return json({ carl: "c".repeat(32) });     // no key: CARL's API (Phase 23.5)
+    api.calls.push(u.pathname);
+    if (u.pathname === "/carl/cache/settings") return json({ prefix: true, sessions: true, save: "switch", disk_gb: 10 });
+    if (u.pathname === "/carl/cache/claim") {
+      const k = `${body.model}:${body.slot}`;
+      if (api.claims.has(k)) return json({ error: "taken" }, 409);
+      api.claims.add(k);
+      return json({ ok: true });
+    }
+    if (u.pathname === "/carl/cache/release") { api.claims.delete(`${body.model}:${body.slot}`); return json({ ok: true }); }
+    if (u.pathname === "/carl/cache/turn") { api.turns.push([body.slot, body.session, body.running]); return json({ ok: true }); }
+    if (u.pathname === "/carl/cache/record" && init.method === "POST") { api.records.set(body.file, body); return json({ ok: true }); }
+    if (u.pathname === "/carl/cache/record") {
+      const r = api.records.get(u.searchParams.get("file"));
+      return r ? json({ slot: r.slot, task: r.task, base: r.base }) : json({ error: "none" }, 404);
+    }
+    return json({ error: "?" }, 404);
+  };
+  const was = process.env.CARL_CACHE_SAVE;
+  delete process.env.CARL_CACHE_SAVE;
+  try {
+    const opts = { baseURL: "http://10.0.0.1:8080/v1", fetch, split: splitOpenCode, home: "/nonexistent",
+                   cacheApi: "http://10.0.0.1:8081" };
+    const a = new CarlCache(opts);
+    const first = await a.before(request("hello"), { session: "s1", agent: "build" });
+    assert.ok(api.claims.has("m:0"));                                        // claimed through the API
+    first.release();
+    await new Promise((ok) => setTimeout(ok, 10));
+    assert.equal(api.claims.size, 0);
+    ran(srv, 0, 7500);
+    await a.after({ session: "s1", agent: "build" });                       // save = switch (the API's): a record
+    assert.equal(sessionSaves(srv).length, 0);
+    assert.equal(api.records.size, 1);
+    assert.deepEqual(api.turns, [[0, "s1", true], [0, "s1", false]]);      // the turn ran, then ended
+    const b = new CarlCache(opts);                                          // the next process
+    srv.st.calls.length = 0;
+    const { payload } = await send(b, request("again"), { session: "s1", agent: "build" });
+    assert.equal(payload.id_slot, 0);
+    assert.ok(!srv.st.calls.some((x) => x.path.endsWith("?restore")));
+  } finally {
+    process.env.CARL_CACHE_SAVE = was;
+  }
+});
+
+test("a conversation stored as a patch is made whole before a restore (on this Mac, with zstd)", async (t) => {
+  const { spawnSync } = await import("node:child_process");
+  if (spawnSync("zstd", ["--version"]).status !== 0) return t.skip("zstd is not installed");
+  const h = home();
+  const dir = join(h, ".config", "carl", "slots");
+  const shared = Buffer.alloc(400_000, 7);
+  writeFileSync(join(dir, "carl-prefix+m+build+abc.bin"), shared);
+  const whole = Buffer.concat([shared, Buffer.alloc(50_000, 3)]);
+  const name = "carl-session+m+0123456789+s1.bin";
+  writeFileSync(join(dir, name), whole);
+  assert.equal(spawnSync("zstd", ["-q", "--long=31", `--patch-from=${join(dir, "carl-prefix+m+build+abc.bin")}`,
+                                  join(dir, name), "-o", join(dir, `${name}.zst`)]).status, 0);
+  writeFileSync(join(dir, `${name}.json`), JSON.stringify({ base: "carl-prefix+m+build+abc.bin", size: whole.length, packed_at: 1000 }));
+  (await import("node:fs")).unlinkSync(join(dir, name));
+  const srv = fakeServer();
+  srv.st.files.set(name, 9000);
+  const c = new CarlCache({ baseURL: "http://127.0.0.1:8080/v1", fetch: srv.fetch, split: splitOpenCode, home: h });
+  assert.equal(await c.restore("m", false, 0, name), 9000);
+  assert.deepEqual((await import("node:fs")).readFileSync(join(dir, name)), whole);      // byte for byte
+  // the budget sees it in all its forms, and a prompt that goes takes its patch with it
+  assert.deepEqual(overBudget([{ name: "carl-prefix+m+build+abc.bin", bytes: 10, mtime: 1 },
+                               { name, bytes: 5, mtime: 2, base: "carl-prefix+m+build+abc.bin" }], 1, "zzz").sort(),
+                   ["carl-prefix+m+build+abc.bin", name].sort());
+});
+
+// ------------------------------------------------------------------ state files, names and the debug log
+
+const mode = (path) => statSync(path).mode & 0o777;
+
+test("the claim, turn and record files are for this user only (0600)", () => withSave("switch", async () => {
+  const h = home();
+  const dir = join(h, ".config", "carl", "slots");
+  const srv = fakeServer();
+  const c = new CarlCache({ baseURL: "http://127.0.0.1:8080/v1", fetch: srv.fetch, split: splitOpenCode, home: h });
+  const r = await c.before(request("hello"), { session: "s1", agent: "build" });    // in flight: the claim is there
+  assert.equal(mode(join(dir, ".claim+m+0")), 0o600);
+  assert.equal(mode(join(dir, ".turn+m+0")), 0o600);
+  r.release();
+  ran(srv, 0, 9000);
+  await c.after({ session: "s1", agent: "build" });                                   // switch: a record
+  assert.equal(mode(join(dir, ".resident+m+0.json")), 0o600);
+}));
+
+test("a saved state's name is never a path", () => {
+  assert.ok(isStateName(sessionFile("q/m", "k", "../../x")));
+  assert.ok(isStateName("carl-prefix+m+build+abc.bin"));
+  for (const bad of ["../carl-session+m+k+s.bin", "carl-session+m+k+s.bin/../../x", "/tmp/carl-session+a.bin", "x.bin", 7, undefined]) {
+    assert.ok(!isStateName(bad), String(bad));
+  }
+});
+
+test("a turn mark being written (.tmp) or one that goes meanwhile does not hide the others", async () => {
+  const h = home();
+  const dir = join(h, ".config", "carl", "slots");
+  writeFileSync(join(dir, ".turn+m+0.tmp"), "{\"model\": \"m\", \"sl");             // half written (read first)
+  writeFileSync(join(dir, ".turn+m+1"), JSON.stringify({ model: "m", slot: 1, session: "other" }));
+  const srv = fakeServer();
+  const c = new CarlCache({ baseURL: "http://127.0.0.1:8080/v1", fetch: srv.fetch, split: splitOpenCode, home: h });
+  const order = await c.rankFree("m", [{ id: 0, busy: false, n: 10, task: -1 }, { id: 1, busy: false, n: 0, task: -1 }], "mine");
+  assert.deepEqual(order.map((s) => s.id), [0, 1]);                       // slot 1: another session's turn runs there
+});
+
+test("a record whose file is not a saved state's name is not saved from", () => withSave("switch", async () => {
+  const h = home();
+  const dir = join(h, ".config", "carl", "slots");
+  const srv = fakeServer({ router: true });
+  srv.st.slots[0].task = 5;
+  writeFileSync(join(dir, ".resident+m+0.json"),
+                JSON.stringify({ model: "m", slot: 0, file: "carl-session+../../../tmp/x.bin", task: 5, base: 0 }));
+  const c = new CarlCache({ baseURL: "http://127.0.0.1:8080/v1", fetch: srv.fetch, split: splitOpenCode, home: h });
+  await c.saveRecorded("m");
+  assert.ok(!srv.st.calls.some((x) => x.path.endsWith("?save")));
+  assert.ok(readdirSync(dir).includes(".resident+m+0.json"));            // left for the dashboard to look at
+}));
+
+test("a patch whose base is a path (outside the slots folder) is not unpacked", async (t) => {
+  const { spawnSync } = await import("node:child_process");
+  if (spawnSync("zstd", ["--version"]).status !== 0) return t.skip("zstd is not installed");
+  const h = home();
+  const dir = join(h, ".config", "carl", "slots");
+  const outside = join(h, ".config", "carl", "outside.bin");             // slots/../outside.bin
+  writeFileSync(outside, Buffer.alloc(1000, 7));
+  const name = "carl-session+m+0123456789+s1.bin";
+  writeFileSync(join(h, "whole.bin"), Buffer.alloc(1200, 7));
+  assert.equal(spawnSync("zstd", ["-q", "--long=31", `--patch-from=${outside}`, join(h, "whole.bin"),
+                                  "-o", join(dir, `${name}.zst`)]).status, 0);
+  writeFileSync(join(dir, `${name}.json`), JSON.stringify({ base: "../outside.bin", size: 1200, packed_at: 1000 }));
+  const c = new CarlCache({ baseURL: "http://127.0.0.1:8080/v1", fetch: fakeServer().fetch, home: h });
+  assert.equal(await c.whole(name), false);
+  assert.ok(!readdirSync(dir).includes(name));
+});
+
+test("CARL_CACHE_LOG: what the cache let go is written there (this user only), never the key", async () => {
+  const h = home();
+  const log = join(h, "cache.log");
+  const was = process.env.CARL_CACHE_LOG;
+  process.env.CARL_CACHE_LOG = log;
+  try {
+    forgetPings();
+    const down = async () => { throw new TypeError("fetch failed"); };
+    const c = new CarlCache({ baseURL: "http://10.0.0.1:8080/v1", apiKey: "sk-secret-123", fetch: down, home: "/nonexistent",
+                              cacheApi: "http://10.0.0.1:8081" });
+    const r = await c.api("POST", "/carl/cache/claim", { model: "m", slot: 0 });
+    assert.equal(r.status, 0);                                           // the request goes on
+    const { payload } = await c.before(request("hello"), { session: "s1", agent: "build" });
+    assert.equal(payload.id_slot, undefined);
+    const text = readFileSync(log, "utf8");
+    assert.match(text, /cache API POST \/carl\/cache\/claim: http:\/\/10\.0\.0\.1:8081 is not CARL's dashboard API \(no key sent\)/);
+    assert.match(text, /before: fetch failed/);
+    assert.ok(!text.includes("sk-secret-123"));
+    assert.equal(mode(log), 0o600);
+  } finally {
+    if (was === undefined) delete process.env.CARL_CACHE_LOG;
+    else process.env.CARL_CACHE_LOG = was;
+  }
+});
+
+// ------------------------------------------------------------------ Phase 23.5: what the client runs found
+
+/** The fake server's saves also written to the slots folder (as llama-server does on this Mac). */
+const onDisk = (srv, h) => {
+  const inner = srv.fetch;
+  srv.fetch = async (url, init) => {
+    const res = await inner(url, init);
+    if (String(url).includes("action=save") && res.ok) writeFileSync(join(h, ".config", "carl", "slots", JSON.parse(init.body).filename), "x");
+    return res;
+  };
+  return srv;
+};
+const local = (srv, h) => new CarlCache({ baseURL: "http://127.0.0.1:8080/v1", fetch: srv.fetch, split: splitOpenCode, home: h });
+
+test("Phase 23.5: another process's session in the slot is saved from its record before the slot is taken, and comes back from that file", () => withSave("auto", async () => {
+  const h = home();
+  const srv = onDisk(fakeServer({ slots: 1 }), h);
+  const a = local(srv, h);
+  await send(a, request("hello"), { session: "s1", agent: "build" });
+  ran(srv, 0, 9000);
+  await a.after({ session: "s1", agent: "build" });                        // recorded, not saved (auto)
+  assert.equal(sessionSaves(srv).length, 0);
+  await new Promise((ok) => setTimeout(ok, 20));
+  const b = local(srv, h);                                                 // another OpenCode or Pi (or a restart)
+  await send(b, request("other"), { session: "s2", agent: "build" });
+  const saves = sessionSaves(srv);
+  assert.equal(saves.length, 1);
+  assert.match(saves[0].body.filename, /\+s1\.bin$/);
+  assert.ok(!readdirSync(join(h, ".config", "carl", "slots")).some((n) => n.startsWith(".resident+")));
+  ran(srv, 0, 7000);
+  srv.st.calls.length = 0;
+  const back = await send(a, request("back"), { session: "s1", agent: "build" });
+  assert.equal(back.payload.id_slot, 0);
+  assert.ok(srv.st.calls.some((x) => x.path.endsWith("?restore") && /\+s1\.bin$/.test(x.body.filename)),
+            "not restored from the file the other process saved");
+}));
+
+test("Phase 23.5.1.1: the counters' events: each request placed, each save, in this Mac's events file", () => withSave("auto", async () => {
+  const h = home();
+  const srv = onDisk(fakeServer({ slots: 1 }), h);
+  const a = local(srv, h);
+  await send(a, request("hello"), { session: "s1", agent: "build" });
+  ran(srv, 0, 9000);
+  await a.after({ session: "s1", agent: "build" });
+  await new Promise((ok) => setTimeout(ok, 20));
+  const b = local(srv, h);
+  await send(b, request("other"), { session: "s2", agent: "build" });     // s1 saved from its record first
+  ran(srv, 0, 7000);
+  await send(a, request("back"), { session: "s1", agent: "build" });       // s1 back from its file
+  const file = join(h, ".config", "carl", EVENTS_DIR, `${eventDay()}.jsonl`);
+  const events = readFileSync(file, "utf8").trim().split("\n").map((l) => JSON.parse(l));
+  const places = events.filter((x) => x.e === "place");
+  assert.deepEqual(places.map((x) => [x.session, x.slot, x.agent, x.sub]),
+                   [["s1", 0, "build", false], ["s2", 0, "build", false], ["s1", 0, "build", false]]);
+  // back from the file the other process saved (9000 tokens): not read again and saved over by this process, which
+  // still had s1 as the slot's last session (found by these counters; fixed in fill())
+  assert.deepEqual([places[2].from, places[2].tokens], ["session", 9000]);
+  const saved = events.filter((x) => x.e === "save" && x.what === "session");
+  assert.deepEqual(saved.map((x) => [x.session, x.slot]), [["s1", 0]]);
+  assert.ok(events.every((x) => typeof x.t === "number" && x.pid === process.pid));
+  assert.ok(!JSON.stringify(events).includes("hello"));                   // never a prompt's text
+  assert.equal(sessionOf("carl-session+m+k+ses_1.bin"), "ses_1");
+  assert.equal(sessionOf("carl-prefix+m+build+abc.bin"), "");
+}));
+
+test("Phase 23.5.1.3: a session its client compacted starts from its agent's prompt; its old file and record go", () => withSave("turn", async () => {
+  const h = home();
+  const srv = onDisk(fakeServer({ slots: 2 }), h);
+  const a = local(srv, h);
+  await send(a, request("hello"), { session: "s1", agent: "build" });
+  ran(srv, 0, 9000);
+  await a.after({ session: "s1", agent: "build" });                        // saved: s1's file on this Mac
+  const slotsDir = join(h, ".config", "carl", "slots");
+  const s1File = () => readdirSync(slotsDir).filter((n) => /^carl-session\+.*\+s1\.bin$/.test(n));
+  assert.equal(s1File().length, 1);
+  // the client's compaction: its own prompt, the conversation as text; s1's file is not restored for it
+  srv.st.calls.length = 0;
+  await send(a, { model: "m", messages: [{ role: "system", content: "Summarize the conversation." },
+                                         { role: "user", content: "[User]: hello ..." }] }, { session: "s1", agent: "compaction" });
+  assert.ok(!srv.st.calls.some((x) => x.path.endsWith("?restore") && /\+s1\.bin$/.test(x.body.filename)));
+  ran(srv, 0, 5000);
+  await a.after({ session: "s1", agent: "compaction" });                   // nothing saved for a compaction
+  assert.equal(sessionSaves(srv).length, 0);
+  // the next turn: the summary is the conversation now
+  srv.st.calls.length = 0;
+  const logs = [];
+  a.log = (m) => logs.push(m);
+  const next = await send(a, request("SUMMARY: we said hello"), { session: "s1", agent: "build" });
+  const restores = srv.st.calls.filter((x) => x.path.endsWith("?restore")).map((x) => x.body.filename);
+  assert.ok(restores.some((f) => /^carl-prefix\+m\+build\+/.test(f)), restores.join(", "));
+  assert.ok(!restores.some((f) => /\+s1\.bin$/.test(f)), "the file of the conversation before the compaction was restored");
+  assert.equal(s1File().length, 0);
+  assert.ok(logs.some((m) => /s1: compacted by its client/.test(m)), logs.join("\n"));
+  ran(srv, next.payload.id_slot, 7500);
+  await a.after({ session: "s1", agent: "build" });                        // saved anew, nothing below zero
+  assert.equal(s1File().length, 1);
+  assert.ok(!logs.some((m) => /-\d+ tokens not saved/.test(m)));
+  const events = readFileSync(join(h, ".config", "carl", EVENTS_DIR, `${eventDay()}.jsonl`), "utf8").trim().split("\n")
+    .map((l) => JSON.parse(l));
+  assert.deepEqual(events.filter((x) => x.e === "compact").map((x) => [x.session, x.agent]), [["s1", "build"]]);
+  // a turn that continues it is not a compaction
+  const more = request("SUMMARY: we said hello");
+  more.messages.push({ role: "assistant", content: "ok" }, { role: "user", content: "next" });
+  await send(a, more, { session: "s1", agent: "build" });
+  assert.equal(logs.filter((m) => /compacted by its client/.test(m)).length, 1);
+  // no compaction request seen (another client's compaction): a turn whose start is not the last one's
+  const again = request("SUMMARY 2");
+  again.messages.push({ role: "assistant", content: "ok" }, { role: "user", content: "next" });
+  await send(a, again, { session: "s1", agent: "build" });
+  assert.equal(logs.filter((m) => /compacted by its client/.test(m)).length, 2);
+}));
+
+test("Phase 23.5.1.10: a session that went to the RAM cache unsaved is found there by a new process", () => withSave("stop", async () => {
+  const h = home();
+  const srv = onDisk(fakeServer({ slots: 1 }), h);
+  const a = local(srv, h);
+  await send(a, request("hello"), { session: "s1", agent: "build" });
+  ran(srv, 0, 9000);
+  await a.after({ session: "s1", agent: "build" });                        // stop: recorded, not saved
+  await new Promise((ok) => setTimeout(ok, 20));
+  const b = local(srv, h);                                                 // another process takes the slot
+  await send(b, request("other"), { session: "s2", agent: "build" });
+  const slotsDir = join(h, ".config", "carl", "slots");
+  const marks = () => readdirSync(slotsDir).filter((n) => n.startsWith(".ram+") && n.includes("+s1.bin"));
+  assert.equal(marks().length, 1, "no RAM mark for s1");
+  ran(srv, 0, 7000);
+  srv.st.calls.length = 0;
+  const c = local(srv, h);                                                 // a new process (a restart): s1 again
+  const logs = [];
+  c.log = (m) => logs.push(m);
+  const more = request("hello");
+  more.messages.push({ role: "assistant", content: "ok" }, { role: "user", content: "next" });
+  await send(c, more, { session: "s1", agent: "build" });
+  assert.ok(logs.some((m) => /s1 -> slot 0 \(the RAM cache's\)/.test(m)), logs.join("\n"));
+  assert.ok(!srv.st.calls.some((x) => x.path.endsWith("?restore")), "a prompt file was restored instead");
+  assert.equal(marks().length, 0, "the mark stays once s1 is in a slot again");
+  // its own process lets it go unsaved too: marked
+  const d = local(srv, h);
+  await send(d, request("x"), { session: "s3", agent: "build" });
+  ran(srv, 0, 8000);
+  await d.after({ session: "s3", agent: "build" });
+  await send(d, request("y"), { session: "s4", agent: "build" });
+  assert.equal(readdirSync(slotsDir).filter((n) => n.startsWith(".ram+") && n.includes("+s3.bin")).length, 1);
+  // the server's task ids at or past the mark's: it counts; lower (the server restarted): it does not, and goes
+  const name = readdirSync(slotsDir).find((n) => n.startsWith(".ram+") && n.includes("+s3.bin"));
+  const mark = JSON.parse(readFileSync(join(slotsDir, name), "utf8"));
+  const e = local(srv, h);
+  assert.equal(await e.ramMarked("m", mark.file, mark.task + 5), true);
+  assert.equal(await e.ramMarked("m", mark.file, mark.task - 1), false);
+  assert.ok(!existsSync(join(slotsDir, name)));
+}));
+
+test("Phase 23.5.3.2: the RAM path saves or marks the session in the slot it takes", () => withSave("stop", async () => {
+  const h = home();
+  const srv = onDisk(fakeServer({ slots: 1 }), h);
+  const a = local(srv, h);
+  const slotsDir = join(h, ".config", "carl", "slots");
+  const marked = (sid) => readdirSync(slotsDir).some((n) => n.startsWith(".ram+") && n.includes(`+${sid}.bin`));
+  await send(a, request("hello"), { session: "s1", agent: "build" });
+  ran(srv, 0, 9000);
+  await a.after({ session: "s1", agent: "build" });
+  await send(a, request("other"), { session: "s2", agent: "build" });       // s1 out, unsaved ("stop"): marked
+  ran(srv, 0, 7000);
+  await a.after({ session: "s2", agent: "build" });
+  assert.ok(marked("s1"));
+  const logs = [];
+  a.log = (m) => logs.push(m);
+  const more = request("hello");
+  more.messages.push({ role: "assistant", content: "ok" }, { role: "user", content: "next" });
+  await send(a, more, { session: "s1", agent: "build" });                  // s1 back by the RAM path: s2 out
+  assert.ok(logs.some((m) => /s1 -> slot 0 \(the RAM cache's\)/.test(m)), logs.join("\n"));
+  assert.ok(marked("s2"), "s2 was pushed out by the RAM path and neither saved nor marked");
+}));
+
+test("Phase 23.5.3.2: a compaction runs in its session's own slot, and the session stays there after it", () => withSave("turn", async () => {
+  const h = home();
+  const srv = onDisk(fakeServer({ slots: 3 }), h);
+  const a = local(srv, h);
+  const logs = [];
+  a.log = (m) => logs.push(m);
+  await send(a, request("main"), { session: "m1", agent: "build" });       // slot 0
+  ran(srv, 0, 9000);
+  await a.after({ session: "m1", agent: "build" });
+  const c1 = await send(a, request("coder"), { session: "c1", agent: "build", sub: true });
+  ran(srv, c1.payload.id_slot, 5000);
+  const main = (await send(a, request("main again"), { session: "m1", agent: "build" })).payload.id_slot;
+  const comp = await send(a, { model: "m", messages: [{ role: "system", content: "Summarize." }, { role: "user", content: "[User]: ..." }] },
+                          { session: "m1", agent: "compaction" });
+  assert.equal(comp.payload.id_slot, main, "the compaction left its session's slot");
+  ran(srv, main, 4000);
+  const after = await send(a, request("SUMMARY: so far"), { session: "m1", agent: "build" });
+  assert.equal(after.payload.id_slot, main, "after its compaction the session moved to another slot");
+  // a coder (subagent) compacted: its next turn starts from its agent's prompt (not the old conversation's slot)
+  await send(a, { model: "m", messages: [{ role: "system", content: "Summarize." }, { role: "user", content: "[User]: c" }] },
+             { session: "c1", agent: "compaction", sub: true });
+  srv.st.calls.length = 0;
+  await send(a, request("SUMMARY: coder"), { session: "c1", agent: "build", sub: true });
+  assert.ok(logs.some((m) => /c1: compacted by its client/.test(m)), logs.join("\n"));
+  assert.ok(srv.st.calls.some((x) => x.path.endsWith("?restore") && /^carl-prefix\+m\+build\+/.test(x.body.filename)));
+}));
+
+test("Phase 23.5.3.2: a session compacted just now is saved at the end of its first turn (auto)", () => withSave("auto", async () => {
+  const h = home();
+  const srv = onDisk(fakeServer({ slots: 1 }), h);
+  const a = local(srv, h);
+  await send(a, request("hello"), { session: "s1", agent: "build" });
+  a.models.get("m").speed = 1000;                 // the auto rule: 30 s+ of reading, far more than this turn adds
+  ran(srv, 0, 9000);
+  await a.after({ session: "s1", agent: "build" });
+  assert.equal(sessionSaves(srv).length, 0);
+  await send(a, { model: "m", messages: [{ role: "system", content: "Summarize." }, { role: "user", content: "[User]: ..." }] },
+             { session: "s1", agent: "compaction" });
+  ran(srv, 0, 5000);
+  await send(a, request("SUMMARY: so far"), { session: "s1", agent: "build" });
+  ran(srv, 0, 9200);
+  await a.after({ session: "s1", agent: "build" });
+  assert.equal(sessionSaves(srv).length, 1, "the new start after the compaction was not saved");
+  const more = request("SUMMARY: so far");
+  more.messages.push({ role: "assistant", content: "ok" }, { role: "user", content: "next" });
+  await send(a, more, { session: "s1", agent: "build" });
+  ran(srv, 0, 9300);
+  await a.after({ session: "s1", agent: "build" });
+  assert.equal(sessionSaves(srv).length, 1);      // once: then the rule again
+}));
+
+test("Phase 23.5: with the window cache (the launcher's server file) the request is pinned and nothing is read, restored or saved", () => withSave("turn", async () => {
+  const h = home();
+  writeFileSync(join(h, ".config", "carl", "server-8080.json"), JSON.stringify({ version: 1, port: 8080, mode: "single",
+                                                                                   models: { m: { swa: "window" } } }));
+  const srv = fakeServer();
+  const logs = [];
+  const c = new CarlCache({ baseURL: "http://127.0.0.1:8080/v1", fetch: srv.fetch, split: splitOpenCode, home: h, log: (m) => logs.push(m) });
+  const { payload } = await send(c, request("hello"), { session: "s1", agent: "build" });
+  assert.equal(payload.id_slot, 0);
+  ran(srv, 0, 9000);
+  await c.after({ session: "s1", agent: "build" });
+  assert.ok(!srv.st.calls.some((x) => x.path === "/completion" || x.path.endsWith("?save") || x.path.endsWith("?restore")),
+            srv.st.calls.map((x) => x.path).join(" "));
+  assert.equal(logs.filter((m) => m.includes("nothing is restored or saved")).length, 1);   // said once
+}));
+
+test("Phase 23.5: in single mode the files go under the model the server runs, not the one the client names", async () => {
+  const srv = fakeServer();
+  const inner = srv.fetch;
+  srv.fetch = async (url, init) => (String(url).endsWith("/props")
+    ? new Response(JSON.stringify({ model_path: "/models/m.gguf", build_info: "b1", model_alias: "real" })) : inner(url, init));
+  const c = cache(srv.fetch);
+  await send(c, { ...request("hello"), model: "what-the-client-calls-it" }, { session: "s1", agent: "build" });
+  assert.match([...srv.st.files.keys()][0], /^carl-prefix\+real\+build\+/);
+  ran(srv, 0, 9000);
+  await c.after({ session: "s1", agent: "build" });
+  assert.ok([...srv.st.files.keys()].some((n) => /^carl-session\+real\+[0-9a-f]{10}\+s1\.bin$/.test(n)));
+});
+
+test("Phase 23.5: a file on this Mac the server cannot restore is retired; one restored short is too", async () => {
+  const h = home();
+  const srv = fakeServer();
+  const c = local(srv, h);
+  const key = await c.serverKey("m", false, c.model("m", []));
+  const dir = join(h, ".config", "carl", "slots");
+  writeFileSync(join(dir, sessionFile("m", key, "s1")), "damaged");      // here, but the server can't restore it
+  await send(c, request("hello"), { session: "s1", agent: "build" });
+  assert.ok(!readdirSync(dir).includes(sessionFile("m", key, "s1")));
+  // a prompt file that restores fewer tokens than the prompt has: retired, the prompt read again
+  const pf = [...srv.st.files.keys()].find((n) => n.startsWith("carl-prefix+"));
+  writeFileSync(join(dir, pf), "x");
+  srv.st.files.set(pf, 5);
+  const d = local(srv, h);
+  srv.st.calls.length = 0;
+  await send(d, request("hi"), { session: "s2", agent: "build" });
+  assert.ok(srv.st.calls.some((x) => x.path === "/completion"), "the prompt was not read again");
+  assert.equal(srv.st.files.get(pf) > 5, true);                           // saved again, whole
+});
+
+test("Phase 23.5: a fork (history, no file of its own) starts from the saved session whose tokens start it", () => withSave("turn", async () => {
+  const h = home();
+  const srv = fakeServer();
+  const c = local(srv, h);
+  const key = await c.serverKey("m", false, c.model("m", []));
+  const forked = request("first", { messages: [{ role: "system", content: LONG + OC_SYSTEM }, { role: "user", content: "first" },
+                                               { role: "assistant", content: "done" }, { role: "user", content: "and now" }] });
+  // the parent's saved state: the first 5,000 tokens of what the fork's request renders to (the fake: char codes)
+  const out = (await c.before(forked, { agent: "title" })).payload;      // only to get the request as it is sent
+  const rendered = (await (await srv.fetch("http://127.0.0.1:8080/apply-template", { method: "POST",
+    body: JSON.stringify({ messages: out.messages, tools: out.tools }) })).json()).prompt;
+  const toks = [...rendered].slice(0, 5000).map((ch) => ch.charCodeAt(0));
+  const head = Buffer.alloc(24 + 4 * toks.length);
+  [0x67677371, 1, 1, 0xFFFFFFFF, 1, toks.length].forEach((v, i) => head.writeUInt32LE(v, 4 * i));
+  toks.forEach((t, i) => head.writeInt32LE(t, 24 + 4 * i));
+  const parent = sessionFile("m", key, "parent");
+  writeFileSync(join(h, ".config", "carl", "slots", parent), head);
+  srv.st.files.set(parent, toks.length);
+  srv.st.calls.length = 0;
+  await send(c, forked, { session: "fork", agent: "build" });
+  const restored = srv.st.calls.filter((x) => x.path.endsWith("?restore")).map((x) => x.body.filename);
+  assert.ok(restored.includes(parent), restored.join(" "));
+  assert.ok(!srv.st.calls.some((x) => x.path === "/completion"), "the agent's prompt was read as well");
+}));
+
+test("Phase 23.5: the key goes only to CARL's API (the ID it knows); an older CARL dashboard counts when no ID is known", async () => {
+  const id = "a".repeat(32);
+  const reply = (status, body, headers = {}) => async () => new Response(JSON.stringify(body), { status, headers });
+  forgetPings();
+  assert.equal(await isCarl("http://h:1", id, reply(200, { carl: id })), true);
+  assert.equal(await isCarl("http://h:2", id, reply(200, { carl: "b".repeat(32) })), false);       // another CARL
+  assert.equal(await isCarl("http://h:3", "", reply(200, { carl: "b".repeat(32) })), true);        // no ID known: any CARL
+  assert.equal(await isCarl("http://h:4", "", reply(401, {}, { "X-Carl-Version": "1.16.0" })), true);   // before /carl/ping
+  assert.equal(await isCarl("http://h:5", "", reply(401, {})), false);                            // not CARL (a proxy)
+  assert.equal(await isCarl("http://h:6", id, reply(401, {}, { "X-Carl-Version": "1.16.0" })), false);
+  assert.equal(await isCarl("http://h:7", "", async () => { throw new Error("down"); }), false);
+  let asked = 0;
+  const count = async () => (asked++, new Response(JSON.stringify({ carl: id })));
+  await isCarl("http://h:8", id, count);
+  await isCarl("http://h:8", id, count);
+  assert.equal(asked, 1);                                                    // the answer is kept a while
+});
+
