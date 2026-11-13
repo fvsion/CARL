@@ -63,7 +63,7 @@ export function verdict(wanted, s, client = "OpenCode") {
       variant: "error",
       message: `The server does not have ${wanted}. It has ${have}. ` +
         `To update the model list of ${client}, use the Connect tab of the dashboard, ` +
-        `or run ./carl.sh install --config-only.`,
+        `or run carl install --config-only.`,
     };
   }
   if (m.status === "loaded" || m.status === "sleeping") return undefined;

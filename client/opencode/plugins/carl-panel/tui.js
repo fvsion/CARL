@@ -1,5 +1,5 @@
 // @ts-check
-// The /carl panel for OpenCode (TUI plugin, installed by CARL's client/install.sh): a control panel (carl-panel.js).
+// The /carl panel for OpenCode (TUI plugin, installed by CARL's setup): a control panel (carl-panel.js).
 // One list: each row is a CARL part's label and its state at the right ("Coder subagent   on ›": the "›" says that it
 // opens a list). Enter changes it in place: the state reads "turning off…" while the setup runs, then the new state,
 // and a toast says what CARL did (red on an error; a warning when the coder goes on with 1 slot); the title says when
@@ -21,6 +21,7 @@
 import { createElement, insert, setProp } from "@opentui/solid";
 import { createSignal } from "solid-js";
 import { act, openCodeModels, panel, rowsAt, shownState, SpeedPoller, statusSource, viewText } from "./carl-panel.js";
+import { lastPartAt } from "./carl-paths.js";
 import { asElement, nodes } from "./carl-tui.js";
 
 /** @typedef {import("@opencode-ai/plugin/tui").TuiPluginApi} TuiPluginApi */
@@ -206,7 +207,7 @@ function speedsFooter(api) {
       sidebar_footer: () => {
         const theme = api.theme.current;
         const dir = String(api.state?.path?.directory ?? "");
-        const cut = dir.lastIndexOf("/") + 1;
+        const cut = lastPartAt(dir);                       // "/" or "\\" (Windows)
         const speeds = line();
         return asElement(box({ width: "100%", flexDirection: "column" }, [
           box({ flexDirection: "row", flexWrap: "wrap" }, [text(theme.textMuted, dir.slice(0, cut)), text(theme.text, dir.slice(cut))]),

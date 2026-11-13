@@ -1,0 +1,26 @@
+# CARL as the command `carl`: the same bootstrap as carl.py (src/carl/_boot.py). Install it from the clone:
+#
+#   uv tool install --editable <the CARL folder>
+#
+# The install is editable, so `git pull` updates it, and the package finds the clone (the catalogue, client/,
+# CHANGELOG.md) from its own path. CARL has no runtime dependencies.
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "carl"
+# CARL's version is the latest release in CHANGELOG.md, which CARL reads. This one is not read.
+version = "0"
+description = "A local llama.cpp model server with a terminal dashboard, and the setup of coding clients for it."
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.9"
+dependencies = []
+
+[project.scripts]
+carl = "carl._boot:main"
+
+[tool.hatch.build.targets.wheel]
+# Both packages: the bootstrap reaches the shared kernel carl_client.domain through the composition (W2.5).
+packages = ["src/carl", "client/carl_client"]

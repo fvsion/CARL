@@ -1,5 +1,5 @@
 /**
- * CARL: the /carl panel for Pi (installed by CARL's client/install.sh): a control panel (carl-panel.js) in Pi's own
+ * CARL: the /carl panel for Pi (installed by CARL's setup): a control panel (carl-panel.js) in Pi's own
  * settings list (as /settings). Each row is a CARL part's label and its state ("Coder subagent  on ›": the "›" says
  * that it opens a list); Enter or Space changes it in place: the state reads "turning off…" while the setup runs, then
  * the new state, and a notice says what CARL did (a warning when the coder goes on with 1 slot); the title says when Pi

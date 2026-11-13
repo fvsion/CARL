@@ -1,10 +1,10 @@
-docs/
 __pycache__/
 .mypy_cache/
 .ruff_cache/
 .pytest_cache/
 .DS_Store
-client/installed-models.json
-client/remote.json
-client/api-key
+# the server's files (the key, the connection file, the model list), in any folder, test work folders included
+api-key
+remote.json
+installed-models.json
 dist/

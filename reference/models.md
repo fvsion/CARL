@@ -6,7 +6,7 @@
 
 ### Why these models
 
-The catalogue is `host/catalog.json`. Each model is served under its CARL name (the first column).
+The catalogue is `src/carl/data/catalog.json`. Each model is served under its CARL name (the first column).
 
 | Model | Build, size | Why it is here |
 |---|---|---|
@@ -38,7 +38,7 @@ Auto fit uses the catalogue `rank` (the quality rank, 1 = best: published benchm
 | 9 | | `gemma-4-e4b` (`fast`), `saluki-27b` |
 | 10 | | `qwen3.8-9b` |
 
-The abliterated builds are in parentheses. The Gemma ranks are temporary (2026-10-04): published benchmarks and CARL's code test.
+The abliterated builds are in parentheses. The Gemma ranks are temporary (2026-10-04): published benchmarks and CARL's code test. A later CARL version measures quality.
 
 ### Gemma 4
 
@@ -54,12 +54,12 @@ Google's Gemma 4 models joined the catalogue on 2026-10-04. Each one is the QAT 
 - **Quality ranks 6–9** (temporary): the 31B 6, the 26B-A4B 7, the 12B 8, the E4B and `saluki-27b` 9. Qwen is better at agent coding in the published benchmarks, so the Qwen 27B and 35B-A3B builds keep ranks 1–5. On 16 GB Macs, Auto fit chooses the E4B (everyday) or the 12B (hard code).
 - **Sliding-window layers.** Most Gemma layers keep only a window (the E4B: 512 tokens; the 12B, the 26B and the 31B: 1,024 tokens). A saved prompt or session restores only with the full cache: every layer keeps the full context (`--swa-full`). `cache.swa = auto` takes the full cache when it fits ([Caching](caching.md)). The memory figures above come from the GGUF headers. llama.cpp's allocation matched them on the E4B (2 × 64K). On the 26B-A4B (M3 Pro 36 GB, llama.cpp 0.4.1, 2026-10-04, 2 × 96K, q4, with the drafter), the server used 1.6 GiB more than the weights with the window cache, and approximately 11 GiB more with the full cache. CARL planned 2.2 GiB and 12.6 GiB (each included 1 GiB for buffers). Thus, the estimate was safe. Since Phase 23.4.4, CARL plans 4.6 GiB and 17.8 GiB with MTP (the draft context of llama.cpp 0.6 counted; [Memory](memory.md#the-estimate-what-is-counted-and-the-measured-check)). CARL did not measure this model with llama.cpp 0.6 yet. The full cache is also slower. It read a prompt of 14.5K tokens at 300 tok/s (the window cache: 472 tok/s), and it wrote at 31 tok/s (the window cache: 34 tok/s). `cache.swa = auto` still uses the full cache when it fits, because CARL can then restore a saved state and does not read the prompt again.
 - **KV heads per layer.** The 12B, the 26B and the 31B have fewer KV heads on the full-attention layers. Their headers list the heads per layer, and CARL reads that list (it read none before 2026-10-04, so their context memory counted as free).
-- **Speculation: the MTP drafter.** Gemma 4 has no MTP head in the model file. Google ships a separate drafter for each model: `mtp-gemma-4-*-Q4_0.gguf` in the same ggml-org repo (QAT, 60 MB for the E4B, 0.25 GB for the 12B and the 26B-A4B, 0.28 GB for the 31B). The catalogue names it in the `draft` field of each entry.
-  - `./carl.sh download NAME` gets the model and its drafter. `verify` checks both files, and `delete` removes both.
+- **Speculation: the MTP drafter.** Gemma 4 has no MTP head in the model file. Google ships a separate drafter for each model: `mtp-gemma-4-*-Q4_0.gguf` in the same ggml-org repo (QAT, 60 MB for the E4B, 0.25 GB for the 12B and the 26B-A4B, 0.28 GB for the 31B). The catalogue names it in the `drafts` list of each entry, as a drafter of kind `mtp-file`.
+  - `carl download NAME` gets the model and its drafter. `verify` checks both files, and `delete` removes both.
   - A start gives the drafter to llama-server with `-md` when the speculation uses MTP (`--spec-type draft-mtp`). The drafter uses the context memory of the model, so only its weights add memory. The fit checks count these weights.
-  - If the drafter is not downloaded, the start uses n-gram speculation and tells you one time. `./carl.sh download NAME` then gets only the drafter.
+  - If the drafter is not downloaded, the start uses n-gram speculation and tells you one time. `carl download NAME` then gets only the drafter.
   - The drafter file is not a model. The model list does not show it.
-  - **Custom Gemma 4 models** (another repository, a fine-tune) get the drafter of the catalogue model with the same size. CARL finds the size in the header: architecture `gemma4`, the layer count and the expert count (E4B 42, 12B 48, 26B-A4B 30 with 128 experts, 31B 60). `download hf:…` gets the drafter with the model. For a custom model that you have already, `./carl.sh download NAME` gets only the drafter. CARL records it as `draft` in the model's `models.json` entry, and the model then starts with MTP + n-gram, 2 guesses. A fine-tune can accept fewer guesses: Auto-tune measures it (`tools/carl_core/domain/drafters.py`).
+  - **Custom Gemma 4 models** (another repository, a fine-tune) get the drafter of the catalogue model with the same size. CARL finds the size in the header: architecture `gemma4`, the layer count and the expert count (E4B 42, 12B 48, 26B-A4B 30 with 128 experts, 31B 60). `download hf:…` gets the drafter with the model. For a custom model that you have already, `carl download NAME` gets only the drafter. CARL records it as `draft` in the model's `models.json` entry, and the model then starts with MTP + n-gram, 2 guesses. A fine-tune can accept fewer guesses: Auto-tune measures it (`src/carl/domain/catalog/drafters.py`).
 - **Speculation, measured 2026-10-04.** The E4B and the 12B on an M2 Max 32 GB (llama.cpp 0.5.0), the 26B-A4B and the 31B on an M3 Pro 36 GB (llama.cpp 0.4.1). Three tasks for each mode: about 600 tokens of prose, 700 tokens of new code, and a 110-line file that the model writes again with one change (an edit). Temperature 0, thinking off. The score is Auto-tune's weighted mean of the three speeds (tok/s).
 
   | Mode (llama.cpp name) | Guesses | E4B | 12B | 26B-A4B | 31B |
@@ -78,22 +78,30 @@ Google's Gemma 4 models joined the catalogue on 2026-10-04. Each one is the QAT 
   - MTP makes new text faster: 63% to 84% of its guesses are correct. On the 26B-A4B, new code goes from 41.4 to 61.1 tok/s.
   - n-gram makes edits faster: 130 tok/s on the 12B, 233 tok/s on the 26B-A4B. On new text it finds nothing to copy and does nothing.
   - More than 2 MTP guesses make prose slower, because fewer guesses are correct.
-  - The E4B column comes from `./carl.sh tune gemma-4-e4b --quick`, the others from the same three tasks run directly. Auto-tune measures the modes on your Mac.
+  - The E4B column comes from `carl tune gemma-4-e4b --quick`, the others from the same three tasks run directly. Auto-tune measures the modes on your Mac.
 - **Sampling.** Google's model card: temperature 1.0, top_p 0.95, top_k 64. The catalogue `tune` of each Gemma model has these values, and a start uses them.
 - **Thinking.** On or off only (catalogue `thinking: on-off`). llama-server turns it on by default. `reasoning_effort: none` turns it off ([Thinking](thinking.md#thinking-by-model)).
 - **Images.** The models also take images. CARL starts them text-only (`--no-mmproj`).
 
 ### Notes on the catalogue
 
-- **MTP speculation (`mtp`, `draft`).** `mtp: true` in the catalogue means that MTP speculation is available for the model: from an MTP head in the model file, or from a separate drafter file. `draft` names that drafter file (repo, revision, file, sha256, bytes, as `hf` does). CARL checks it as it checks `hf`.
-  - The catalogue marks 10 of the 11 Qwen entries with an MTP head. `heretic-35b-a3b-iq3` has none. The Gemma 4 entries have no head in the model file, but each one has a drafter (`draft`).
+- **MTP speculation (`mtp`, `drafts`).** `mtp: true` in the catalogue means that MTP speculation is available for the model: from an MTP head in the model file, or from a separate drafter file. `drafts` names that drafter file, of kind `mtp-file` (repo, revision, file, sha256, bytes, as `hf` does). CARL checks it as it checks `hf`.
+  - The catalogue marks 10 of the 11 Qwen entries with an MTP head. `heretic-35b-a3b-iq3` has none. The two heretic entries are one model with two quantizations (`model` in the catalogue): the lists show it once, and the quantization selector marks the Q4_K_M with MTP and the i1-IQ3_XXS without it.
+  - Each quantization carries its own mark (decision A73). CARL reads it from the file's GGUF header (`nextn_predict_layers` and the `nextn` tensors) when the file is downloaded or its header is cached, else from the catalogue. Measured on 2026-11-05: Unsloth's Qwen3.6-35B-A3B has 41 blocks and `nextn_predict_layers = 1`; the heretic i1-IQ3_XXS has 40 blocks and none. Speculation follows the quantization you start: MTP and n-gram where the head is, n-gram where it is not. `carl models`, the model picker, the model card and the Models panel show the mark. The Gemma 4 entries have no head in the model file, but each one has a drafter (`drafts`).
   - When a speculation setting uses MTP and the model has no head and no downloaded drafter, a start uses n-gram and tells you one time.
   - For five Q4 and Q3 entries, the GGUF headers were checked: `nextn_predict_layers = 1` and the four `nextn` tensors in block 64.
   - For the two stock IQ3 builds, `nextn_predict_layers = 1` was checked on 2026-10-03, and MTP speculation ran on the 35B IQ3.
   - Auto-tune reads the header, and tests MTP only if the head is there or the drafter is downloaded.
   - unsloth also publishes the head as a separate file (`MTP/mtp-Qwen3.8-27B-Q4_0.gguf`). The main unsloth files include the head, so you do not need that file.
+- **Drafters of other kinds and the vision projector (WCATX, decision A74).** The catalogue names a model's drafters in `drafts`, a list in which each drafter has its kind: `mtp-file` (Gemma 4's drafter, above), `dflash`, `dspark` (DeepSeek's DSpark: DFlash with a Markov head) and `eagle3`. The older single `draft` still reads as an `mtp-file` drafter. `vision` names the vision projector. Each file is pinned by the repository's commit with its SHA-256 (the projectors of the catalogue are the model library's files).
+  - Each kind has its folder in the model's folder (`mtp/` for the MTP drafters only, `dflash/`, `dspark/`, `eagle3/`; `vision/` for the projector), and the scan never reads those folders as quantizations. A drafter is known by its file name (`mtp-`, `dflash`, `dspark-`, `eagle3-`); a drafter with another name goes into the folder of the kind that the catalogue gives.
+  - `carl download NAME` gets the model and all its drafters. The projector comes with `carl download NAME --vision`, or with the plain command when `llama.vision` is on. `verify` checks every file that is there, and `delete` removes them all.
+  - llama.cpp b11738 (the pinned release) and b11429 (the Macs' build) support the four kinds: `--spec-type` takes `draft-mtp`, `draft-dflash`, `draft-dspark` and `draft-eagle3`, and `-md` loads the file of each (read from `common/speculative.cpp` and `common/arg.cpp`, 2026-11-10). A kind that the installed llama.cpp does not support (an older build, or one with an unknown version) is cataloged and downloadable, not used: Auto-tune does not try it and says so.
+  - Auto-tune tries each downloaded drafter of a supported kind alone (DFlash and DSpark with 4 and 8 guesses, EAGLE-3 with 2 and 4; `--quick` the first only) and keeps it only if it is faster than the other modes by the usual 3%. The memory plan counts the drafter's file and a second context.
+  - The vision projector is off by default: it costs about 1 GB of memory. `config set llama.vision true` makes a start pass `--mmproj`; the memory plan counts the file.
+  - No catalogue model has a DFlash, DSpark or EAGLE-3 drafter yet: the files in the model library belong to models that are not in the catalogue (Qwen3.8-Flash-Next, gpt-oss, DeepSeek-V4-Flash, OrcaCyber-Nano). They get entries when those models are added.
 - **The model names.** Each build has its own name, also in the client configs (since 1.3.0). Before 1.3.0, a Q3 build used the name of its Q4 build.
-- **The default model.** With `llama.model = auto`, a start uses Auto fit's choice for this Mac. If the choice is not downloaded, the start uses the best downloaded stock model that fits. `./carl.sh fit` shows which model this Mac gets, and why.
+- **The default model.** With `llama.model = auto`, a start uses Auto fit's choice for this Mac. If the choice is not downloaded, the start uses the best downloaded stock model that fits. `carl fit` shows which model this Mac gets, and why.
 - The catalogue `default` (`qwen3.6-35b-a3b`) and `default_small` (`qwen3.6-35b-a3b-iq3`) are only the offline fallback, when CARL cannot read the GGUF headers.
 
 **Policy:** Use only models with a known and documented uncensoring method. Do not use "uncensored" fine-tunes with an undisclosed method, also when they are popular.
@@ -131,7 +139,7 @@ The HauhauCS model is also different from orcarouter in ways that are not relate
 
 To examine this again:
 1. Test **orcarouter IQ4_XS** first (bartowski, 15.57 GB). It is the same model, so the test isolates the effect of the quant.
-2. Measure the speculation modes, the recall at 66K and a real OpenCode session.
+2. Use Auto-tune (`carl tune`), a 66K recall test and a real OpenCode session.
 
 IQ3_M is a good choice only where no larger file fits, for example on a 24 GB Mac. This is the role of the IQ3 builds in the catalogue now.
 
@@ -166,7 +174,7 @@ IQ3_M is a good choice only where no larger file fits, for example on a 24 GB Ma
 - **2 guesses lose on IQ3.** On the 35B IQ3, MTP with 2 guesses is about 15% slower on new text than no speculation.
 - **MTP + n-gram with 1 guess is the best on both models.** The Auto-tune score is a weighted geometric mean (prose 0.4, code 0.4, edit 0.2). With this score, MTP + n-gram is about 4–5% better than n-gram alone on the 35B IQ3. On the 27B IQ3, it is about 9% better. n-gram alone is better only on a code edit on the 35B (117 vs 93 tok/s).
 - **Thus, the catalogue tune for both stock IQ3 builds is MTP + n-gram (`draft-mtp,ngram-mod`) with 1 guess.** The earlier setting of the 35B IQ3 (MTP + n-gram, 2 guesses, copied from the Q4) was the second slowest mode on new text. The Q4 35B keeps 2 guesses (measured on the M3 Pro).
-- The Server panel warns about MTP with more than 1 guess on an IQ quant: `⚠ Speculation: MTP with more than 1 guess is about 15% slower on IQ quantizations (measured).` To measure a model on your own Mac, run `./carl.sh tune NAME`.
+- The Server panel warns about MTP with more than 1 guess on an IQ quant: `⚠ Speculation: MTP with more than 1 guess is about 15% slower on IQ quantizations (measured).` To measure a model on your own Mac, run `carl tune NAME`.
 
 **The abliterated IQ3 builds** (the same setup, 2026-10-03):
 

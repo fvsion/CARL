@@ -1,6 +1,6 @@
 # CARL Reference: Verifying behaviour
 
-[Index](README.md) · how to check what the server does with a request.
+[Index](README.md) · how to check what the server does: thinking, the template, the sampling.
 
 ## Verifying behaviour
 
@@ -18,7 +18,7 @@ curl -s -H "Authorization: Bearer $K" -H 'Content-Type: application/json' http:/
 # Is the patched template loaded?
 PID=$(netstat -anv -p tcp | awk '$6=="LISTEN" && $4 ~ /[.]9275$/ {n=split($(NF-8),a,":"); print a[n]; exit}')
 ps -o command= -p $PID | grep -o -- '--chat-template-file [^ ]*'
-head -2 ~/models/templates/*.thinking-toggle.jinja
+head -2 ~/models/gguf/*/template/*.thinking-toggle.jinja ~/models/templates/*.thinking-toggle.jinja
 
 # The server's sampling defaults and context
 curl -s -H "Authorization: Bearer $K" http://$ADDR:9275/props | python3 -c 'import json,sys; d=json.load(sys.stdin)["default_generation_settings"]; print(d["n_ctx"], {k: d["params"][k] for k in ("temperature","top_k","top_p","min_p")})'

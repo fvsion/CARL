@@ -1,5 +1,5 @@
 // @ts-check
-// CARL: the coder subagent runs in the background (installed by CARL's client/install.sh with background subagents
+// CARL: the coder subagent runs in the background (installed by CARL's setup with background subagents
 // on, the default; NO_BACKGROUND_SUBAGENTS=1 leaves it out). OpenCode's task tool waits for a subagent unless the
 // model asks for the background, and local models often don't, even when told to: the main session then sits idle
 // in its slot while the coder works in the other. This sets background: true on a task call for CARL's coder that

@@ -15,21 +15,26 @@ One command starts the server and a live dashboard.</p>
 
 **You need:** an Apple Silicon Mac, [Homebrew](https://brew.sh), `python3`, and 4.6–23 GB of free disk space for each model.
 
+Get the CARL folder. Then make the command `carl` from it with [uv](https://docs.astral.sh/uv/), or run `python3 carl.py` in the folder in place of `carl`:
+
 ```bash
+uv tool install --editable .     # in the CARL folder: the command carl, for every folder
 brew install llama.cpp aria2 ansifilter zstd
-./carl.sh download default            # the best model for this Mac (resumable, checksum-verified)
-./carl.sh install                     # OpenCode + Pi into ~/.local (no sudo), connected to the server
+carl download default            # the best model for this Mac (resumable, checksum-verified)
+carl install                     # OpenCode + Pi into ~/.local (no sudo), connected to the server
 ```
 
-- If you skip the `brew install`, `./carl.sh` finds the missing tools and asks to install them.
-- If you skip the download, `./carl.sh` asks to download the best model for this Mac.
-- `./carl.sh install` asks one time which clients (OpenCode, Pi or both) and which options you want (the coder, the browser, web search, LSP). `--yes` takes the defaults.
+- The install is editable: when you update the CARL folder, the command is up to date. CARL has no other dependencies.
+- If you skip the `brew install`, `carl` finds the missing tools and asks to install them.
+- If you skip the download, `carl` asks to download the best model for this Mac.
+- `carl install` asks one time which clients (OpenCode, Pi or both) and which options you want (the coder, the browser, web search, LSP). `--yes` takes the defaults.
 - **Your own OpenCode and Pi settings stay.** The setup adds CARL next to them. It keeps a backup of each file that it changes (`FILE.before-carl`, the original, and one `FILE.bak`, the version before CARL's last change).
+- **A Windows or Linux PC with a GPU** (NVIDIA) runs the server too: [reference/windows-linux.md](reference/windows-linux.md).
 
-**Another computer or a VM** (macOS or Linux): start the server for that network (for example `./carl.sh --vm`), then make the client package and run its setup there:
+**Another computer or a VM** (macOS or Linux): start the server for that network (for example `carl --vm`), then make the client package and run its setup there:
 
 ```bash
-./carl.sh package                     # on the server Mac: dist/carl-client-VERSION-HOST.zip
+carl package                     # on the server Mac: dist/carl-client-VERSION-HOST.zip
 unzip carl-client-*.zip && cd carl-client && ./setup      # on the other computer
 ```
 
@@ -39,7 +44,7 @@ unzip carl-client-*.zip && cd carl-client && ./setup      # on the other compute
 ## Use
 
 ```bash
-./carl.sh                              # start the server and the dashboard
+carl                              # start the server and the dashboard
 ```
 
 Then, in a second terminal, go to your project folder and start `opencode` or `pi` there. They work on the folder that you start them in.
@@ -49,10 +54,10 @@ cd ~/path/to/your/project
 opencode
 ```
 
-- **The first time,** CARL starts the model that **Auto fit** chooses for your Mac: the best stock model that holds two slots of 96K tokens (or the next setup of its order, down to 48K). `./carl.sh fit` shows the choice and why.
+- **The first time,** CARL starts the model that **Auto fit** chooses for your Mac: the best stock model that holds two slots of 96K tokens (or the next setup of its order, down to 48K; two slots of 128K tokens on a PC with an NVIDIA GPU). `carl fit` shows the choice and why.
 - **The next time,** it starts llama.cpp with the settings that you saved.
 - **If a server runs already,** the dashboard attaches to it.
-- `./carl.sh -h` shows all commands. `./carl.sh help COMMAND` (or `./carl.sh COMMAND --help`) shows the help for one command.
+- `carl -h` shows all commands. `carl help COMMAND` (or `carl COMMAND --help`) shows the help for one command.
 
 ## Models
 
@@ -66,9 +71,9 @@ opencode
 | `gemma-4-26b-a4b`, `gemma-4-31b` | Google's larger Gemma 4 models (32 GB+) |
 | `qwen3.8-9b` | A small distilled Qwen, for more subagents at the same time |
 
-- `./carl.sh models` lists the catalogue and each `.gguf` in `~/models/gguf`.
-- `./carl.sh download hf:OWNER/REPO/FILE.gguf` gets any GGUF from Hugging Face.
-- `./carl.sh tune NAME` measures the best settings for a model on your Mac.
+- `carl models` lists the catalogue and each `.gguf` in `~/models/gguf`. Each model has a folder of its own there, with a folder for each quantization (`~/models/gguf/MODEL/QUANT/FILE.gguf`); a file directly in the folder works too. A model with several quantizations is listed once; `carl start --model NAME --quant Q` takes one. CARL reads no other folder of `~/models/gguf` (your own, `r4/`), and lists no GGUF file that is not a language model.
+- `carl download hf:OWNER/REPO/FILE.gguf` gets any GGUF from Hugging Face.
+- `carl tune NAME` measures the best settings for a model on your Mac.
 - More: [Choosing a model](USERGUIDE.md#3-choosing-a-model), [Router mode](USERGUIDE.md#router-mode-switch-models-from-opencode-or-pi) (OpenCode and Pi change the model).
 
 ## The dashboard
@@ -90,13 +95,13 @@ The live state of the server and the Mac: what the server does now, the slots, t
 - **Model:** `/models` in OpenCode, `/model` in Pi.
 - **Thinking:** `/variants` (or ctrl+t) in OpenCode, the thinking level in Pi ([Thinking](USERGUIDE.md#4-thinking-on-off-and-effort)).
 - **The coder:** large tasks go to a coder subagent in the background. Type `@coder TASK` in OpenCode to ask for it.
-- **Tools:** web search, LSP, a browser subagent, background subagents ([Tools](USERGUIDE.md#tools-in-opencode-and-pi)). Web search sends the queries to Exa: answer `off` in the setup (or `./carl.sh install --web-search off`) to turn it off.
+- **Tools:** web search, LSP, a browser subagent, background subagents ([Tools](USERGUIDE.md#tools-in-opencode-and-pi)). Web search sends the queries to Exa: answer `off` in the setup (or `carl install --web-search off`) to turn it off.
 
 ## Plugins
 
 ![OpenCode with the CARL plugins](assets/opencode-plugins.png)
 
-The setup (`./carl.sh install`, or `./setup` on another computer) adds CARL's plugins to OpenCode and Pi:
+The setup (`carl install`, or `./setup` on another computer) adds CARL's plugins to OpenCode and Pi:
 
 - **Disk cache:** fast starts; sessions come back after a restart (OpenCode, Pi).
 - **Coder subagent, in the background:** large tasks go to a specialist coder while the main session stays free (OpenCode, Pi).

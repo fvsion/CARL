@@ -8,7 +8,7 @@
 - One value is on one row: a label column, or a table column with a header. The screens do not join values with ` · `.
 - Labels and column headers start with a capital letter. A statement is a whole sentence, with a full stop. Short state values stay as they are (`normal`, `on`, `downloaded`).
 - `auto` is never shown alone: CARL always shows what it chose, for example `slots: auto (2)`.
-- The code follows this page: `tools/carl_core/domain/units.py` (the units), `tools/monitor/words.py` (the dashboard's words), and the tests that check the screens (`tests/monitor/test_screens.py`, `tests/scripts/test_cli_text.py`).
+- The code follows this page: `src/carl/domain/shared/units.py` (the units), `src/carl/ui/words.py` (the dashboard's words), and the tests that check the screens and the command line's texts.
 
 ## 1. The server and its memory
 
@@ -42,7 +42,7 @@
 | **saved prompt** | An agent's system prompt and tools, read one time and saved. A new session starts from it. | prefix, prompt state, pre-read prompt | `cache.prefix`, the file name |
 | **saved session** | One session at the end of a turn. CARL restores it when the session continues. | conversation, prompt state, saved state, patch | stored as changes to its prompt ("shared"), `cache.sessions` |
 | **reused tokens** | Tokens of a request that the server did not have to read again. | cached (Live tab) | the count and the %. |
-| **reused from** | Where the reused tokens of a request came from: the slot, the RAM cache or the disk cache. `–` when it is not known. | source, restored from | the column in the Requests tab and RECENT REQUESTS |
+| **reused from** | Where the reused tokens of a request came from: the slot, the RAM cache or the disk cache. `–` until a later CARL version fills it. | source, restored from | the column in the Requests tab and RECENT REQUESTS |
 | **Caching** | The Settings panel for the RAM cache, the disk cache and the sliding-window cache. | — | — |
 | **dashboard API** | The port (server port + 1 by default; Settings > Server, **API port**) that clients on other computers use for the disk cache and the config, and that OpenCode and Pi read the speeds from. | cache API, API (alone) | the address |
 
@@ -58,6 +58,8 @@
 | **guesses accepted** | The % of guesses that were correct. | drafts accepted, draft acceptance | per draft |
 | **MTP head** | The MTP predictor inside the model file (Qwen). | nextn | — |
 | **MTP drafter** | The MTP predictor in a separate small file (Gemma 4). | draft model, drafter (alone in simple), mtp-*.gguf | the file, `-md` |
+| **DFlash drafter**, **DSpark drafter**, **EAGLE-3 drafter** | A small predictor in a separate file that guesses a block of tokens (DFlash, DSpark: DeepSeek's, DFlash with a Markov head) or a short chain (EAGLE-3). Each kind has a folder of its own in the model's folder (`dflash/`, `dspark/`, `eagle3/`), and Auto-tune tries it when llama.cpp supports the kind. | draft model, `dflash-*.gguf`, `dspark-*.gguf`, `eagle3-*.gguf` | `--spec-type draft-dflash`, `draft-dspark`, `draft-eagle3`, `-md` |
+| **vision projector** | The file that lets a model read images (`mmproj*.gguf`, in the model's `vision/` folder, about 1 GB). A start passes it only when `llama.vision` is on. | mmproj | `--mmproj` |
 
 ## 5. Choosing and tuning the model
 
@@ -68,7 +70,7 @@
 | **candidates** | `catalogue` or `downloaded only`: the models Auto fit looks at. | scope, From, auto from | `llama.auto_fit` |
 | **fits / does not fit** | Only for memory: the model, its slots and its context are inside the GPU memory limit. | fit (as a noun), fits (column) | the numbers |
 | **quality rank** | CARL's quality order, 1 = best. | rank (alone), quality (alone), best-ranked | where the rank comes from |
-| **Auto-tune** | CARL measures a model on this Mac and finds its best settings. | auto-tune, tune (in the UI) | `./carl.sh tune` |
+| **Auto-tune** | CARL measures a model on this Mac and finds its best settings. | auto-tune, tune (in the UI) | `carl tune` |
 | **recommended settings** | The settings for a model: from Auto-tune on this Mac, else from the catalogue. Shown with their source. | Tuned values, Use these values, Recommended for this model | per setting: its source |
 | **speed** | tok/s. A model's speed in lists = its **prose tok/s**: ● measured on this Mac, ○ from the catalogue. The lists sort by it. Auto-tune's score (the weighted mean of prose, code and edit) only chooses the speculation mode. | score (in lists), t/s | the three speeds of each source |
 | **edit** | Writing a file again with small changes (n-gram is fast here). | re-emit | — |
@@ -95,7 +97,7 @@
 |---|---|---|---|
 | **single model** | One model runs. You change it in the dashboard. | single mode, dashboard only, model switching: single | `llama.mode = single` |
 | **router mode** | OpenCode and Pi can switch the model. Each switch loads the model again. | model switching, multi-model | `llama.mode = router`, `--router` |
-| **dashboard** | CARL's console (`./carl.sh`). | monitor, console, TUI | — |
+| **dashboard** | CARL's console (`carl`). | monitor, console, TUI | — |
 | **CARL provider** | The entry in the OpenCode / Pi config that points at this server. | provider llamacpp / provider block | its ID |
 | **install / update** | Install: the first time. Update: the configs again. | — | the command |
 | **send config / apply** | The dashboard sends the client config to other computers; they apply it. | push, pushed, auto-apply | the version hash |
@@ -144,3 +146,21 @@ The screens do not explain the units (no "1 GiB = 1.07 GB" line). This page does
 | **↓ more** | The page continues below the screen (in the footer). Every tab scrolls as one page. | — |
 
 ● and ○ in a title show its level. In a list, they keep their other meanings: downloaded / not downloaded, measured on this Mac / from the catalogue, connected / not connected.
+
+## 11. PCs, GPUs and engines
+
+On a Windows or Linux PC the GPU has its own memory, and the words of a Mac change ([Windows and Linux](windows-linux.md)).
+
+| Name | Meaning | Not this | The full level adds |
+|---|---|---|---|
+| **engine** | The program that runs the models. llama.cpp (`llama-server`) is the engine of CARL today. The card of a model says which engine serves it. | backend (for this), runtime, server (for this) | the field `engine` of the card, the setting `engine.name` (`CARL_ENGINE`), `carl engine version`, `carl engine help`, `carl engine install` |
+| **backend** | How llama.cpp uses the GPU: Metal (a Mac), CUDA (NVIDIA) or the CPU. Each has its own llama.cpp build. As a row label: **GPU backend**. | engine (for this), driver | `gpu.backend`, `--backend` of `carl engine install` |
+| **VRAM** | The memory of a GPU on a PC, apart from the RAM. In GiB. | GPU RAM, video memory, GPU memory limit (that is a Mac's) | the free and the total VRAM of each GPU in `carl gpu` |
+| **VRAM kept free** | The part of each GPU's VRAM that CARL leaves free for the desktop and other programs (0.5 GiB). As a row label: **GPU memory kept**. | reserve, buffer | `gpu.vram_keep` (`CARL_VRAM_KEEP_GIB`) |
+| **split** | A model spread over several GPUs by layers, each GPU getting the layers it has room for. | tensor split, sharding | `-dev`, `-ts`, `--split-mode layer`, `gpu.devices` |
+| **experts in RAM** | A MoE model with the experts of its first N layers in the RAM, the rest on the GPUs. As a row label: **Experts in RAM**. | offload, CPU MoE, `--n-cpu-moe` (in the UI) | `llama.n_cpu_moe`, `--n-cpu-moe N` |
+| **hot experts** | The experts that a model uses most. The MoE plugin will keep them on the GPUs (next version). | popular experts, top experts | the profile of use |
+| **prefetch** | The copy of an expert to the GPU before the model asks for it, guessed from the next layer's router. A mode of the MoE plugin (next version). | preload, warm-up | |
+| **shared-memory PC** | A PC whose GPU shares the RAM with the CPU (an APU). | APU PC, unified (that is a Mac's) | `gpu.shared_limit_gib` |
+| **this computer** | The words of a PC for **this Mac**: the same screens say "this computer" off the Mac (and "the system and apps" for "macOS and apps"). | this PC, this machine, this host | |
+| **load mode none** | The weights are read into the RAM and not mapped. CARL uses it whenever the free RAM allows it. | preload | `--load-mode none`, `llama.load_reserve_gib` |

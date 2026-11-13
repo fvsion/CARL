@@ -65,7 +65,7 @@ export function cut(s, n) {
 }
 
 /**
- * A time span as CARL writes it everywhere (tools/carl_core/domain/units.py): 42 s, 3 min, 1 h 12 min,
+ * A time span as CARL writes it everywhere (src/carl/domain/shared/units.py): 42 s, 3 min, 1 h 12 min,
  * 2 days.
  * @param {number} ms
  * @returns {string}

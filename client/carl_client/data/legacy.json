@@ -1,0 +1,11 @@
+{
+  "_comment": "What earlier versions of CARL left in the clients' configs, recognised as CARL's own (carl_client.domain.legacy). old_names: CARL's pieces before the rename in 1.2.0 (CARL was called LLM-Deploy). key_files: the other API-key files our providers read before 1.2.0 (the first: the clients' copy). server_key_file: the server's own key before 1.2.0, which the setup's config step still reads on the server's computer. old_defaults: the default models earlier versions set, under our provider ids (models) and as they were (as_is).",
+  "old_names": {"alt": "llm-deploy", "state": "llm-deploy.json", "prompt_dir": "llm-deploy", "block": "llm-deploy",
+                "ext_marker": "LLM-Deploy:", "key_file": ".config/llm-deploy/api-key"},
+  "key_files": [".config/mtplx/api-key"],
+  "server_key_file": ".mtplx/api-key",
+  "old_defaults": {
+    "models": ["qwen3.8-27b-abliterated-llama", "qwen3.8-27b", "qwen3.6-35b-a3b"],
+    "as_is": ["mtplx/qwen3.8-27b-abliterated-grant", "mtplx/qwen3.8-27b-abliterated"]
+  }
+}

@@ -24,8 +24,9 @@ Commands with the label **Mac** run in the CARL folder on the Mac. Commands with
 10. [The dashboard](#10-the-dashboard)
 11. [Updating the client configs](#11-updating-the-client-configs)
 12. [Troubleshooting](#12-troubleshooting)
-13. [Rules of thumb](#13-rules-of-thumb)
-14. [Command reference](#14-command-reference)
+13. [Benchmarking and testing](#13-benchmarking-and-testing)
+14. [Rules of thumb](#14-rules-of-thumb)
+15. [Command reference](#15-command-reference)
 
 ---
 
@@ -44,6 +45,13 @@ Commands with the label **Mac** run in the CARL folder on the Mac. Commands with
 
 ### Set up the Mac
 
+0. Make the command `carl` from the CARL folder:
+   ```bash
+   uv tool install --editable .     # in the CARL folder
+   ```
+   - The install is editable: when you update the CARL folder, the command is up to date. CARL has no other dependencies. `uv` is [astral.sh/uv](https://docs.astral.sh/uv/).
+   - Without `uv`, run `python3 carl.py` in the CARL folder in place of `carl`. Every command in this guide works with it.
+   - A Windows or Linux PC with a GPU runs the server too (NVIDIA): see [reference/windows-linux.md](reference/windows-linux.md).
 1. Install the tools:
    ```bash
    brew install llama.cpp aria2 ansifilter zstd
@@ -55,26 +63,26 @@ Commands with the label **Mac** run in the CARL folder on the Mac. Commands with
    | `ansifilter` | Makes the logs easy to read |
    | `zstd` | Stores a saved session as the changes to its saved prompt, so that it uses less disk space ([the disk cache](#7-fast-starts-the-disk-cache)) |
 
-   - If you forget this step, `./carl.sh` finds the missing tools. It asks to install them with Homebrew.
+   - If you forget this step, `carl` finds the missing tools. It asks to install them with Homebrew.
    - `SKIP_DEPS=1` skips this check.
    - CARL does not install Homebrew itself.
 2. Look at the model that **Auto fit** chooses for this Mac:
    ```bash
-   ./carl.sh fit
+   carl fit
    ```
    The command shows the choice and why. It also shows the largest context of each model that fits the GPU memory limit.
 3. Download the model:
    ```bash
-   ./carl.sh download default
+   carl download default
    ```
    - `default` is Auto fit's choice from the whole catalogue for the everyday goal ([Auto fit](#auto-fit-the-best-model-for-this-mac)).
    - On a Mac with 32 GB or more, the choice is `qwen3.6-35b-a3b`. On a 24 GB Mac, it is `qwen3.6-35b-a3b-iq3`. On a 16 GB Mac, it is `gemma-4-e4b`.
-   - If you forget this step, `./carl.sh` tells you that no model is downloaded. It shows Auto fit's choice and its download size, and asks to download it. If you answer no, the dashboard opens without a server.
+   - If you forget this step, `carl` tells you that no model is downloaded. It shows Auto fit's choice and its download size, and asks to download it. If you answer no, the dashboard opens without a server.
    - If the choice is not downloaded but a different model is, the server starts with the best downloaded stock model that fits. The start-up output tells you this, and how to download the choice.
 4. Start the server:
    ```bash
-   ./carl.sh llama            # this Mac only (127.0.0.1): the default
-   ./carl.sh llama --vm       # for a VMware Fusion VM client too (fails if Fusion's network is down)
+   carl start            # this Mac only (127.0.0.1): the default
+   carl start --vm       # for a VMware Fusion VM client too (fails if Fusion's network is down)
    ```
    - The server starts in the background. Then the **dashboard uses this terminal** ([The dashboard](#10-the-dashboard)).
    - The header of the dashboard shows **LOADING** for 10–60 s, then **IDLE**.
@@ -86,15 +94,15 @@ Commands with the label **Mac** run in the CARL folder on the Mac. Commands with
      Context memory type: q4 (from Auto-tune). RAM cache: 8.0 GiB.
      Speculation: MTP + n-gram, 2 guesses (from Auto-tune). The MTP drafter is mtp-gemma-4-E4B-it-Q4_0.gguf.
      Sliding window: full cache. CARL can restore saved sessions and prompts (cache.swa = auto).
-     Log file: ~/models/logs/llama-server-….log. Batch: -ub 512. Your settings: ./carl.sh config show.
+     Log file: ~/models/logs/llama-server-….log. Batch: -ub 512. Your settings: carl config show.
      ```
    - The sources of a setting are: your option (a flag), the environment, your settings (`config.json`), Auto-tune, the catalogue, the model file, Auto fit, and CARL's default.
-   - The server's port is 9275 (`PORT=N ./carl.sh llama` sets another). CARL's earlier default was 8080. OpenCode and Pi on this Mac that were set up for port 8080 show as out of date in the dashboard's Connect tab: push `u` to update them. On other computers, the sync finds the new port by itself.
+   - The server's port is 9275 (`PORT=N carl start` sets another). CARL's earlier default was 8080. OpenCode and Pi on this Mac that were set up for port 8080 show as out of date in the dashboard's Connect tab: push `u` to update them. On other computers, the sync finds the new port by itself.
    - If another program uses the port, the start offers the next free port ([Daily use](#2-daily-use)).
    - If your llama.cpp is older than the version that CARL is tested with, the second line tells you: `llama.cpp 0.4.1 (build 9001) is older than the version that CARL is tested with (0.6.0, build 11429): update it with brew upgrade llama.cpp.` The server starts. The HEALTH card of the dashboard shows the same warning.
    - A refused start shows one `error:` sentence first, then the lines that tell you what to do.
-   - `./carl.sh` with no arguments also starts the server, and opens the dashboard ([Daily use](#2-daily-use)).
-   - `./carl.sh -h` shows the help. `./carl.sh help llama` (or `./carl.sh llama --help`) shows the options of one command.
+   - `carl` with no arguments also starts the server, and opens the dashboard ([Daily use](#2-daily-use)).
+   - `carl -h` shows the help. `carl help start` (or `carl start --help`) shows the options of one command.
 5. Install the clients ([Clients on the same Mac](#clients-on-the-same-mac-no-vm)).
 
 **The API key.** The first server start makes the API key, if it is missing.
@@ -108,7 +116,7 @@ Commands with the label **Mac** run in the CARL folder on the Mac. Commands with
 **The network.** The server serves this Mac only (127.0.0.1) by default.
 
 - For clients in a VMware Fusion VM, start Fusion first. Then start the server with `--vm`. The server then listens on the Fusion NAT address `192.168.42.1`. This address exists only while the Fusion network is up.
-- To make the VM the default, set **Network** to **this Mac and the VM** in the Settings tab. Or run `./carl.sh config set llama.net vm`.
+- To make the VM the default, set **Network** to **this Mac and the VM** in the Settings tab. Or run `carl config set llama.net vm`.
 - Before 1.3.0, the default was "auto": the VM address when the Fusion network was up. The server was then open to the VM network without a question, so CARL removed this mode. A saved `llama.net = auto` changes to local one time, with a note at the start. `NET=auto` means local.
 
 **The client folder.** At each server start, the launcher writes two files into the `client/` folder: `remote.json` (the server's address, its port, the dashboard API, CARL's ID and the CARL version) and `api-key`. Both have mode 0600, and git ignores them. The client package for other computers takes them from there ([The client package](#the-client-package)).
@@ -120,7 +128,7 @@ Use this procedure when the server and the clients run on the same Mac, for exam
 1. Do the steps in [Set up the Mac](#set-up-the-mac).
 2. Run the setup:
    ```bash
-   ./carl.sh install
+   carl install
    ```
    - It asks one time which clients (OpenCode, Pi or both) and which options you want: the coder subagent, the browser tools, web search and LSP. Press Enter to keep the value in brackets. The defaults are the choices of your last setup.
    - NOTE: web search sends the search queries to Exa (or Parallel), outside this computer.
@@ -137,17 +145,17 @@ Use this procedure when the server and the clients run on the same Mac, for exam
    ```
    Or run `pi`. The client works on the folder that you start it in.
 
-**Setup options** (`./carl.sh install --help` shows all):
+**Setup options** (`carl install --help` shows all):
 
 | Command | Does |
 |---|---|
-| `./carl.sh install --yes` | Takes the defaults. Asks no questions |
-| `./carl.sh install opencode` (or `pi`) | Sets up only one client |
-| `./carl.sh install --coder off --web-search off` | Gives an answer without the question (also `--browser on\|off`, `--lsp on\|off`, `--coder auto\|on\|off`, `--web-search exa\|parallel\|off`) |
-| `./carl.sh install --config-only` | Writes only the configs (the same choices) |
-| `./carl.sh install --clients-only` | Installs or updates only the clients |
-| `./carl.sh install --vm` or `--host ADDR` | Connects the clients to a different address |
-| `./carl.sh install --port N` | Connects the clients to a different llama.cpp port |
+| `carl install --yes` | Takes the defaults. Asks no questions |
+| `carl install opencode` (or `pi`) | Sets up only one client |
+| `carl install --coder off --web-search off` | Gives an answer without the question (also `--browser on\|off`, `--lsp on\|off`, `--coder auto\|on\|off`, `--web-search exa\|parallel\|off`) |
+| `carl install --config-only` | Writes only the configs (the same choices) |
+| `carl install --clients-only` | Installs or updates only the clients |
+| `carl install --vm` or `--host ADDR` | Connects the clients to a different address |
+| `carl install --port N` | Connects the clients to a different llama.cpp port |
 
 - The setup needs `python3`. If macOS asks you to install the command-line developer tools, accept. Or run `xcode-select --install`.
 - On the server Mac, the setup uses the server's own key file (`~/.config/carl/api-key`).
@@ -169,12 +177,12 @@ The VM needs Python 3, curl and unzip.
 
 1. **Mac:** start the server for the VM:
    ```bash
-   ./carl.sh --vm
+   carl --vm
    ```
-   To make the VM network the default, set **Network** to **this Mac and the VM** in Settings > Server, or run `./carl.sh config set llama.net vm`.
+   To make the VM network the default, set **Network** to **this Mac and the VM** in Settings > Server, or run `carl config set llama.net vm`.
 2. **Mac:** make the client package:
    ```bash
-   ./carl.sh package
+   carl package
    ```
    CARL writes `dist/carl-client-VERSION-HOST.zip` and shows its path. Or push `z` in the dashboard's Connect tab ([The client package](#the-client-package)).
 3. **Mac:** put the zip where the VM can read it, for example the Fusion shared folder:
@@ -194,7 +202,7 @@ What `./setup` does on the other computer:
 - It asks one time which clients and options you want, as on the server Mac. `./setup --yes` takes the defaults. `./setup --help` shows all options.
 - It installs OpenCode and Pi from npm (`opencode-ai`, `@earendil-works/pi-coding-agent`) into `~/.local`, without sudo, when they are missing or older than the versions CARL is tested with (`client/client-versions.env`: OpenCode 1.19.0, Pi 1.1.0). It installs those versions, not npm's newest.
   - A newer version of the same major version stays: the setup says that CARL did not test it.
-  - **OpenCode 2 is not supported.** CARL's OpenCode parts need OpenCode 1 (OpenCode 1.19 offers the move to OpenCode 2, which changes how plugins work). With OpenCode 2 they load but do nothing, and the setup leaves it as it is and says how to go back: `npm install -g --prefix ~/.local opencode-ai@1.19.0`.
+  - **OpenCode 2 is not supported yet.** CARL's OpenCode parts need OpenCode 1 (OpenCode 1.19 offers the move to OpenCode 2, which changes how plugins work). With OpenCode 2 they load but do nothing, and the setup leaves it as it is and says how to go back: `npm install -g --prefix ~/.local opencode-ai@1.19.0`.
   - They need Node 22.19 or newer. If Node is missing or older, the setup downloads Node 22 LTS (Linux or macOS build) from nodejs.org, checks its SHA-256, and puts it in `~/.local/lib/nodejs`.
   - It adds a `PATH` line (marked `# carl-vm-client`) to your `~/.zshrc` or `~/.bashrc`, if the file exists.
 - It writes the configs. It keeps your own settings and makes backups ([What the setup changes](#what-the-setup-changes)).
@@ -219,10 +227,10 @@ Use this procedure for clients that are not on the server Mac and not in the VMw
    - Parallels: the address of the Mac on the Parallels network, often `10.211.55.2`. `ifconfig` shows it.
 2. Start the server on that address:
    ```bash
-   ./carl.sh llama --host ADDR
+   carl start --host ADDR
    ```
    Or, in the dashboard, open the Settings tab (tab 5) and select the address in the **Network** row. The row shows each address of this Mac.
-3. Make the client package: `./carl.sh package` (or `z` in the Connect tab).
+3. Make the client package: `carl package` (or `z` in the Connect tab).
 4. Copy the zip to the other computer (for example with `scp`, AirDrop or a USB disk). Then delete it on the Mac.
 5. On the other computer, unzip it and run the setup:
    ```bash
@@ -248,18 +256,18 @@ Use this procedure for clients that are not on the server Mac and not in the VMw
 
 ### The client package
 
-`./carl.sh package` (or **[ Make the client package (z) ]** in the dashboard's Connect tab) writes one zip for another computer: `dist/carl-client-VERSION-HOST.zip` in the CARL folder. VERSION is the CARL version; HOST is the name of this Mac. Git ignores `dist/`.
+`carl package` (or **[ Make the client package (z) ]** in the dashboard's Connect tab) writes one zip for another computer: `dist/carl-client-VERSION-HOST.zip` in the CARL folder. VERSION is the CARL version; HOST is the name of this Mac. Git ignores `dist/`.
 
 | In the zip (folder `carl-client/`) | From |
 |---|---|
 | The client files | The files of `client/` that git tracks. Never a cache, a backup or a file that git does not track |
-| `setup`, `setup.command` | The setup, and its double-click form for macOS |
+| `setup`, `setup.command`, `setup.cmd`, `carl_setup.py` | The setup (`carl_setup.py` is the program), its double-click form for macOS, and its form for Windows |
 | `remote.json`, `api-key` | The server's address and key, from its last start (mode 0600) |
 | `installed-models.json` | The installed models, for the model lists of OpenCode and Pi |
 | `VERSION` | The CARL version. `/carl` shows it under **Sync Service** |
 
 - CAUTION: **The zip holds the API key of the server.** Its mode is 0600. Keep it secret. After the copy, delete it on both computers (`rm` with the path that CARL shows). `unzip` keeps the mode 0600 of the key file, and the setup sets it again.
-- **When the server serves only this Mac** (network local, 127.0.0.1), other computers cannot reach it. CARL then makes no package, changes nothing, and tells you how to change the network: Settings > Server > Network, or `./carl.sh config set llama.net vm`. Then start the server again, so that `remote.json` has the new address. `--anyway` makes the package also in this case (for example for a test).
+- **When the server serves only this Mac** (network local, 127.0.0.1), other computers cannot reach it. CARL then makes no package, changes nothing, and tells you how to change the network: Settings > Server > Network, or `carl config set llama.net vm`. Then start the server again, so that `remote.json` has the new address. `--anyway` makes the package also in this case (for example for a test).
 - **Before the first server start,** `client/` has no `remote.json` and `api-key`. CARL tells you to start the server one time.
 - In the dashboard, **[ Show it in the Finder (f) ]** shows the zip in the Finder.
 
@@ -275,31 +283,24 @@ Use this procedure for clients that are not on the server Mac and not in the VMw
 
 ### Sharing with a friend
 
-1. Make the zip:
-   ```bash
-   tools/make-share-zip.sh [--with-docs] [OUT]
-   ```
-   The command writes `../CARL-YYYYMMDD.zip`, or the file `OUT`. The zip holds one folder, `CARL/`.
-   - The zip holds only the files that git tracks. It does not include files that git does not track (test folders, notes), caches, `.DS_Store` files or `*.bak.*` files. It never includes `api-key`, `remote.json` or `installed-models.json`.
-   - The development notes (`docs/`) are not in git. `--with-docs` (the first argument) adds them from the disk.
-   - The models, the logs and the API key are outside the folder (`~/models`, `~/.config/carl`).
-2. On the Mac of your friend, unzip the file.
-3. Do the steps in [Set up the Mac](#set-up-the-mac) and [Clients on the same Mac](#clients-on-the-same-mac-no-vm). In short:
+1. Your friend gets the CARL folder as you did (a clone of the repository, or its zip). Do not copy your own folder: its `client/` holds your server's `api-key` and `remote.json`.
+   - The models, the logs and the settings are outside the folder (`~/models`, `~/.config/carl`).
+2. Do the steps in [Set up the Mac](#set-up-the-mac) and [Clients on the same Mac](#clients-on-the-same-mac-no-vm). In short:
    ```bash
    brew install llama.cpp aria2 ansifilter zstd
-   ./carl.sh fit
-   ./carl.sh download default       # on 24 GB: qwen3.6-35b-a3b-iq3
-   ./carl.sh llama
-   ./carl.sh install
+   carl fit
+   carl download default       # on 24 GB: qwen3.6-35b-a3b-iq3
+   carl start
+   carl install
    ```
    The first server start on that Mac makes a key on that Mac.
 
-**The memory decides the model.** On the other Mac, `./carl.sh fit` gives the real numbers. To see the numbers of a 24 GB Mac from here, run `./carl.sh fit --ram 24`. These are the estimates for a **24 GB** Mac (GPU memory limit about 16 GiB):
+**The memory decides the model.** On the other Mac, `carl fit` gives the real numbers. To see the numbers of a 24 GB Mac from here, run `carl fit --ram 24`. These are the estimates for a **24 GB** Mac (GPU memory limit about 16 GiB):
 
 | Model | Largest context (q4 context memory) |
 |---|---|
-| **`qwen3.6-35b-a3b-iq3`** (the default on 24 GB: stock fast MoE, 14.1 GB) | 2 × 96K slots (the default) fit in ~15.0 GiB with n-gram speculation (MTP does not fit), so subagents work. |
-| `qwen3.8-27b-iq3` (stock, the smallest 27B, 10.9 GB) | 2 × 96K slots fit in ~15.0 GiB with n-gram speculation, so subagents work. |
+| **`qwen3.6-35b-a3b-iq3`** (the default on 24 GB: stock fast MoE, 14.1 GB) | 2 × 96K slots (the default) fit in ~14.7 GiB with n-gram speculation (MTP does not fit), so subagents work. |
+| `qwen3.8-27b-iq3` (stock, the smallest 27B, 10.9 GB) | 2 × 96K slots fit in ~14.9 GiB with n-gram speculation, so subagents work. |
 | `qwen3.8-27b-q3` (stock, 13.1 GB) | 2 × 64K slots with n-gram speculation (Auto fit's order). ~84K with 1 slot and MTP. |
 | `heretic-35b-a3b-iq3` (abliterated fast MoE, 13.6 GB) | 2 × 96K slots fit, so subagents work. It has no MTP head: n-gram speculation. |
 | `orcarouter-27b-iq3` (abliterated, the smallest abliterated 27B, 12.6 GB) | 2 × 64K slots with n-gram speculation, so subagents work. |
@@ -310,7 +311,7 @@ Use this procedure for clients that are not on the server Mac and not in the VMw
 | `qwen3.8-27b`, `orcarouter-27b` (Q4) | They do not fit under the default limit. |
 | `qwen3.6-35b-a3b`, `heretic-35b-a3b` (Q4), `gemma-4-31b` | They do not fit. |
 
-- `orcarouter-27b-q3` is the one exception to the 96K floor, because this build is for 24 GB Macs. The start tells you this. It suggests `./carl.sh tune orcarouter-27b-q3`, which selects the largest context that fits.
+- `orcarouter-27b-q3` is the one exception to the 96K floor, because this build is for 24 GB Macs. The start tells you this. It suggests `carl tune orcarouter-27b-q3`, which selects the largest context that fits.
 - **Experts only: a larger GPU memory limit.** CAUTION: keep at least 6 GiB for macOS, or the Mac can stop. `sudo sysctl iogpu.wired_limit_mb=18432` gives the GPU more memory until the next restart. Then the stock Q4 `qwen3.8-27b` can run with ~52K and MTP. The abliterated Q4 gets only ~20K: use its Q3.
 - **Watch the memory on the Live tab of the dashboard.** The **Pressure** row of the THIS MAC card shows the macOS memory pressure. If it says `warning` or `critical`, use a smaller `--ctx`.
 - **The launcher refuses a model and a context that do not fit.** It shows what they need and the GPU memory limit. It also shows the largest context that fits, and Auto fit's choice. `FIT_CHECK=0` is the expert override.
@@ -324,9 +325,9 @@ Use this procedure for clients that are not on the server Mac and not in the VMw
 1. **Mac:** for VM clients, start Fusion.
 2. **Mac:** start CARL:
    ```bash
-   ./carl.sh
+   carl
    ```
-   | Situation | What `./carl.sh` does |
+   | Situation | What `carl` does |
    |---|---|
    | A llama.cpp server runs on port 9275 | The dashboard attaches to it. |
    | No server runs | It starts llama.cpp with your saved settings, then shows the dashboard. |
@@ -342,9 +343,9 @@ Use this procedure for clients that are not on the server Mac and not in the VMw
 
 | Command | Does |
 |---|---|
-| `./carl.sh --no-start` (or `./carl.sh dashboard`) | Opens only the dashboard. It attaches to a server that runs. If no server runs, it starts nothing. Push `a` on the Live tab to start the server. Or select a model in the Settings tab, and push `a` there. |
-| `./carl.sh llama --model qwen3.8-27b` | Starts a specific model ([Choosing a model](#3-choosing-a-model)) |
-| `./carl.sh monitor` | Attaches the dashboard to a server that runs |
+| `carl --no-start` (or `carl dashboard`) | Opens only the dashboard. It attaches to a server that runs. If no server runs, it starts nothing. Push `a` on the Live tab to start the server. Or select a model in the Settings tab, and push `a` there. |
+| `carl start --model qwen3.8-27b` | Starts a specific model ([Choosing a model](#3-choosing-a-model)) |
+| `carl monitor` | Attaches the dashboard to a server that runs |
 
 CAUTION: **The server does not start if another model is in memory.** Two models do not fit. The launcher looks for each process larger than 8 GiB, and shows it.
 
@@ -353,7 +354,7 @@ CAUTION: **The server does not start if another model is in memory.** Two models
 | Where | What you see |
 |---|---|
 | A terminal | `Port 9275 is in use by another program (ssh, process 4242). Start the server on port 9276? [Y/n]`. `n` stops the start. |
-| No terminal (a script) | An `error:` line that names the free port, and `PORT=9276 ./carl.sh llama` to start the server there. |
+| No terminal (a script) | An `error:` line that names the free port, and `PORT=9276 carl start` to start the server there. |
 | The dashboard (Start, Apply) | `Port 9275 is in use by another program (ssh, pid 4242). This starts the server on port 9277.` and **[ Start on port 9277 (y) ]**. |
 
 - A llama.cpp server on the port is a server that runs already: the start stops with an error (one model at a time).
@@ -369,9 +370,9 @@ CAUTION: **The server does not start if another model is in memory.** Two models
    | `l` | **Leave it running and quit.** The server continues to run after you close the terminal. |
    | Esc | **Cancel** |
 
-- To attach the dashboard again, run `./carl.sh` (or `./carl.sh monitor`).
+- To attach the dashboard again, run `carl` (or `carl monitor`).
 - If an agent's turn is running, Stop asks first: wait for the end of the turn, or stop now ([A turn is running](#a-turn-is-running)).
-- To stop the server without the dashboard, run `./carl.sh monitor`, then push `q` and `s`. Or run this command. It finds the process that listens on port 9275:
+- To stop the server without the dashboard, run `carl monitor`, then push `q` and `s`. Or run this command. It finds the process that listens on port 9275:
   ```bash
   kill $(netstat -anv -p tcp | awk '$6=="LISTEN" && $4 ~ /[.]9275$/ {n=split($(NF-8),a,":"); print a[n]; exit}')
   ```
@@ -396,26 +397,26 @@ Each model has its own name on the server, and the clients list it under the sam
 
 | You want | Run on the Mac | Select in the client |
 |---|---|---|
-| **The default:** Qwen3.6-35B-A3B (MoE: about 4× the write speed and 6× the read speed of the 27B) | `./carl.sh llama` | `qwen3.6-35b-a3b` |
-| The dense 27B (stock), for hard code | `./carl.sh llama --model qwen3.8-27b` | `qwen3.8-27b` |
-| The uncensored (abliterated) 27B, with the best measured quality in long sessions | `./carl.sh llama --model orcarouter-27b` | `orcarouter-27b` |
-| Uncensored and fast: the abliterated A3B (Heretic, Q4 with the MTP head; 32 GB+) | `./carl.sh llama --model heretic-35b-a3b` | `heretic-35b-a3b` |
-| A 24 GB Mac (the default on that Mac) | `./carl.sh llama` (it selects `qwen3.6-35b-a3b-iq3`) | `qwen3.6-35b-a3b-iq3` |
-| A 24 GB Mac, stock 27B | `./carl.sh llama --model qwen3.8-27b-q3` | `qwen3.8-27b-q3` |
-| A 24 GB Mac, stock, the smallest 27B (10.9 GB) | `./carl.sh llama --model qwen3.8-27b-iq3` | `qwen3.8-27b-iq3` |
-| A 24 GB Mac (or any Mac), uncensored and fast | `./carl.sh llama --model heretic-35b-a3b-iq3` | `heretic-35b-a3b-iq3` |
-| A 24 GB Mac, uncensored 27B with subagents (2 × 96K) | `./carl.sh llama --model orcarouter-27b-iq3` | `orcarouter-27b-iq3` |
-| A 24 GB Mac, uncensored 27B, better quality (1 slot) | `./carl.sh llama --model orcarouter-27b-q3` | `orcarouter-27b-q3` |
-| **A 16 GB Mac**, fast (Auto fit's everyday choice there) | `./carl.sh llama --model gemma-4-e4b` | `gemma-4-e4b` |
-| **A 16 GB Mac**, a 2-bit 27B with a coder subagent (2 × 48K; it writes the code itself more often than it hands it off) | `./carl.sh llama --model saluki-27b` | `saluki-27b` |
-| **A 16 GB Mac**, the dense 12B (2 × 96K) | `./carl.sh llama --model gemma-4-12b` | `gemma-4-12b` |
-| 3–4 subagents at the same time on a small model | `./carl.sh llama --model qwen3.8-9b` | `qwen3.8-9b` |
-| Google's larger Gemma 4 ([Gemma 4](#gemma-4)) | `./carl.sh llama --model gemma-4-26b-a4b` (or `gemma-4-31b`) | the same name |
+| **The default:** Qwen3.6-35B-A3B (MoE: about 4× the write speed and 6× the read speed of the 27B) | `carl start` | `qwen3.6-35b-a3b` |
+| The dense 27B (stock), for hard code | `carl start --model qwen3.8-27b` | `qwen3.8-27b` |
+| The uncensored (abliterated) 27B, with the best measured quality in long sessions | `carl start --model orcarouter-27b` | `orcarouter-27b` |
+| Uncensored and fast: the abliterated A3B (Heretic, Q4 with the MTP head; 32 GB+) | `carl start --model heretic-35b-a3b` | `heretic-35b-a3b` |
+| A 24 GB Mac (the default on that Mac) | `carl start` (it selects `qwen3.6-35b-a3b-iq3`) | `qwen3.6-35b-a3b-iq3` |
+| A 24 GB Mac, stock 27B | `carl start --model qwen3.8-27b-q3` | `qwen3.8-27b-q3` |
+| A 24 GB Mac, stock, the smallest 27B (10.9 GB) | `carl start --model qwen3.8-27b-iq3` | `qwen3.8-27b-iq3` |
+| A 24 GB Mac (or any Mac), uncensored and fast | `carl start --model heretic-35b-a3b-iq3` | `heretic-35b-a3b-iq3` |
+| A 24 GB Mac, uncensored 27B with subagents (2 × 96K) | `carl start --model orcarouter-27b-iq3` | `orcarouter-27b-iq3` |
+| A 24 GB Mac, uncensored 27B, better quality (1 slot) | `carl start --model orcarouter-27b-q3` | `orcarouter-27b-q3` |
+| **A 16 GB Mac**, fast (Auto fit's everyday choice there) | `carl start --model gemma-4-e4b` | `gemma-4-e4b` |
+| **A 16 GB Mac**, a 2-bit 27B with a coder subagent (2 × 48K; it writes the code itself more often than it hands it off) | `carl start --model saluki-27b` | `saluki-27b` |
+| **A 16 GB Mac**, the dense 12B (2 × 96K) | `carl start --model gemma-4-12b` | `gemma-4-12b` |
+| 3–4 subagents at the same time on a small model | `carl start --model qwen3.8-9b` | `qwen3.8-9b` |
+| Google's larger Gemma 4 ([Gemma 4](#gemma-4)) | `carl start --model gemma-4-26b-a4b` (or `gemma-4-31b`) | the same name |
 
 **Key points:**
 - CAUTION: **Only one model can run at a time.** Stop the server before you start a different model. Two models do not fit in 36 GB, and the second model breaks the model that runs.
 - **By default, the client does not change the server's model.** llama-server answers with the loaded model, for each model name that the client sends. If the selection and the server do not agree, you get the loaded model with the wrong label and the wrong thinking options. OpenCode then shows a CARL warning. Router mode (below) is the other way round.
-- **In single-model mode, the clients list only the model that the server runs.** The server answers with its one model, so the other models are of no use in the list. When you start a different model, update the lists: push `u` in the dashboard's Connect tab (this Mac), or run `./carl.sh install --config-only`. For other computers, push `P` (send the config). The Connect tab warns when the lists are out of date.
+- **In single-model mode, the clients list only the model that the server runs.** The server answers with its one model, so the other models are of no use in the list. When you start a different model, update the lists: push `u` in the dashboard's Connect tab (this Mac), or run `carl install --config-only`. For other computers, push `P` (send the config). The Connect tab warns when the lists are out of date.
 - **In router mode, the clients list all the installed models** (downloaded, or in the models folder), one entry each. After a download or a delete, update the lists in the same way.
 - **Stock or abliterated:** the stock models (`qwen3.8-27b`, the 35B, the 9B, Gemma 4) keep their refusals. The orcarouter and Heretic builds have no refusals. Only `orcarouter-27b` has full measurements in CARL. The stock 27B has the same architecture and speed profile.
 - **Q3 or Q4:** Q3 is 2.5–3.5 GB smaller, but its quality is lower (more slips in long agent sessions). Use Q3 if Q4 does not fit.
@@ -447,10 +448,12 @@ The catalogue has four Gemma 4 models from Google. Each one is Google's QAT buil
   - With the **full cache**, those layers keep every token. CARL can restore saved sessions and prompts, but the cache uses much more memory.
   - With the **window cache**, they keep only the last window. It uses less memory, but CARL cannot restore saved sessions and prompts.
   - The setting `cache.swa` decides this: the **Sliding window** row of Settings > Server, or the **Gemma models** row of Settings > Caching ([Models with sliding-window layers](#models-with-sliding-window-layers)).
-- **Speculation: MTP with a drafter.** Gemma 4 has no MTP head in the model file. Google gives a separate drafter file for each model (`mtp-gemma-4-*.gguf`, 60–280 MB). `./carl.sh download NAME` gets the model and its drafter. A start gives the drafter to llama.cpp (`-md`).
+- **Speculation: MTP with a drafter.** Gemma 4 has no MTP head in the model file. Google gives a separate drafter file for each model (`mtp-gemma-4-*.gguf`, 60–280 MB). `carl download NAME` gets the model and its drafter. A start gives the drafter to llama.cpp (`-md`).
   - The catalogue uses MTP + n-gram with 2 guesses. MTP makes new text faster, and n-gram makes edits faster. Measured on all four models (2026-10-04): 55% to 85% faster than no speculation ([the numbers](reference/models.md#gemma-4)).
-  - If the drafter is not downloaded, the start uses n-gram speculation and tells you. Run `./carl.sh download NAME` again to get the drafter.
-  - A Gemma 4 model from another Hugging Face repository (for example a fine-tune) also gets a drafter: the drafter of the catalogue model with the same size. `./carl.sh download hf:…` gets it with the model. For a custom Gemma 4 model that you have already, run `./carl.sh download NAME`, or press d on it in Settings > Models.
+  - If the drafter is not downloaded, the start uses n-gram speculation and tells you. Run `carl download NAME` again to get the drafter.
+  - A Gemma 4 model from another Hugging Face repository (for example a fine-tune) also gets a drafter: the drafter of the catalogue model with the same size. `carl download hf:…` gets it with the model. For a custom Gemma 4 model that you have already, run `carl download NAME`, or press d on it in Settings > Models.
+- **Other drafters (DFlash, DSpark, EAGLE-3).** The catalogue can name more drafter files for a model, each of a kind. `carl download NAME` gets them all, each into its own folder in the model's folder (`dflash/`, `dspark/`, `eagle3/`). Auto-tune tries a downloaded drafter when your llama.cpp supports its kind, and keeps it only if it is faster. If llama.cpp does not support the kind, the drafter stays on the disk and Auto-tune tells you that it is not used.
+- **Vision.** A model that can read images has a vision projector (about 1 GB). CARL starts every model text only. To use images, run `carl download NAME --vision` and `carl config set llama.vision true`: a start then passes the projector to llama.cpp, and the memory plan counts it. Without the file, the start says so and stays text only.
 - **Sampling:** Google's values: temperature 1.0, top_p 0.95, top_k 64.
 - **Thinking:** on or off only.
 - **Images:** the models can read images, but CARL starts them text-only.
@@ -478,12 +481,12 @@ Other ways:
 
 | Command | Does |
 |---|---|
-| `./carl.sh --router` | Router mode for this start only |
-| `./carl.sh config set llama.mode router` | Router mode for each start |
-| `s` in the Router panel (**Single model (s)**), or `./carl.sh --single` | Back to single model |
+| `carl --router` | Router mode for this start only |
+| `carl config set llama.mode router` | Router mode for each start |
+| `s` in the Router panel (**Single model (s)**), or `carl --single` | Back to single model |
 
 **How the router works:**
-- **Each model gets the settings that a single start of it uses:** your `config.json` profile, else its Auto-tune result, else the catalogue. This includes the context, the slots, the context memory type, the speculation, the sampling and the RAM cache.
+- **Each model gets the settings that a single start of it uses:** your `config.json` profile, else its Auto-tune result, else the catalogue. This includes the context, the slots, the context memory type, the speculation, the sampling, the RAM cache, the batch size (`-ub`, lowered as a start lowers it) and the load mode (the weights read into the memory when the free memory holds them and the load reserve).
 - A model whose setup does not fit the GPU memory limit is left out. The start tells you why.
 - `--model`, `--ctx`, `--kv` and `--slots` do not apply to a router start.
 - The launcher writes the presets to `~/.config/carl/router-presets.ini` at each start. Do not edit this file.
@@ -550,8 +553,8 @@ Each model has two thinking settings in the dashboard (Settings > Agents, [Agent
   | The OpenCode `none` variant | Qwen's non-thinking values: temperature 0.7, top_p 0.8, presence penalty 1.5 |
   | The Pi `off` level | The thinking values stay. |
 
-  To change the server defaults, run `TEMP=0.6 ./carl.sh llama`. If the 35B repeats itself, use `PRESENCE=1.5`. More: [Sampling](reference/sampling.md).
-- **How "off" works:** the server loads the chat template of the model with one added rule. With this rule, `reasoning_effort: none` means `enable_thinking: false`. To use the template without the rule, run `THINK_TOGGLE=0 ./carl.sh llama`. More: [Thinking](reference/thinking.md).
+  To change the server defaults, run `TEMP=0.6 carl start`. If the 35B repeats itself, use `PRESENCE=1.5`. More: [Sampling](reference/sampling.md).
+- **How "off" works:** the server loads the chat template of the model with one added rule. With this rule, `reasoning_effort: none` means `enable_thinking: false`. To use the template without the rule, run `THINK_TOGGLE=0 carl start`. More: [Thinking](reference/thinking.md).
 
 ---
 
@@ -575,12 +578,12 @@ A larger context works (the recall test stayed 8/8 up to ~150K), but it needs mo
 Use `--ctx 128k` or `--ctx 160k` when you need it. More: [Context length](reference/memory.md#context-length-what-a-larger-context-costs).
 
 ```bash
-./carl.sh --ctx 192k      # larger: N or Nk, from 4k to 256k
-./carl.sh --ctx 96k       # smaller: less memory
+carl --ctx 192k      # larger: N or Nk, from 4k to 256k
+carl --ctx 96k       # smaller: less memory
 ```
 
 **After you change `--ctx`, update the clients:**
-1. **Mac:** run `./carl.sh install --config-only`.
+1. **Mac:** run `carl install --config-only`.
 2. **Other computers:** send the config (`P` in the Connect tab). Or run the setup again in the client folder. It reads the context of the server that runs:
    ```bash
    cd ~/carl-client && ./setup --yes --no-install
@@ -591,7 +594,7 @@ Use `--ctx 128k` or `--ctx 160k` when you need it. More: [Context length](refere
 - **The client limit decides only when the client compacts** (summarises) the session. The client does not send this limit to the server.
 - **If the client has 128K but the server has 96K,** all requests fail when the session is larger than 96K. The error is `HTTP 400 ... exceeds the available context size`. The client never compacts, because it did not get to its own limit.
 - **A server context that is larger than the client limit causes no problem.** It only uses memory that the client does not use.
-- **The setup sets the client limit** from the server that runs, or from `LLAMA_CTX=128k ./carl.sh install` (`LLAMA_CTX=128k ./setup` on other computers). If the server is down, it uses 96K.
+- **The setup sets the client limit** from the server that runs, or from `LLAMA_CTX=128k carl install` (`LLAMA_CTX=128k ./setup` on other computers). If the server is down, it uses 96K.
 
 **Memory:**
 - The server allocates all of the context memory at the start. The 27B at 128K: about 2.25 GiB with q4, 4.25 GiB with q8. The 35B: 720 MiB and 1.33 GiB.
@@ -608,7 +611,7 @@ OpenCode and Pi run a subagent as a separate session (a child session).
 - **By default, the server keeps two slots** (if they fit). The main session and a subagent each keep their own cache.
   - When the subagent is complete, the main session continues in about a second. It does not read its full context again. With one slot, the main session read everything again: this took minutes on the 27B at 60K tokens.
   - The start lines show `Slots: 2 (auto: two slots fit). Context: 96K tokens per slot (…).`
-  - `--slots 1` sets one slot (less memory). `./carl.sh fit --slots 2` shows what fits.
+  - `--slots 1` sets one slot (less memory). `carl fit --slots 2` shows what fits.
 - **Two at the same time:** a subagent can run while the main session keeps its place. OpenCode can also run two subagents at the same time.
   - On the 35B, two requests at the same time write ~39% more tokens in total (M3 Pro, 2026-10-01).
   - On the 27B, the two requests share the GPU. Each one runs at about half speed.
@@ -632,7 +635,7 @@ Local models often ignore an instruction to use the background. Thus, CARL start
 - OpenCode: the `carl-background` plugin.
 - Pi: the `subagent` tool. In Pi, `/subagents` lists the subagents that run and stops one. The footer shows how many run.
 
-`NO_BACKGROUND_SUBAGENTS=1 ./carl.sh install --config-only` (`./setup` on other computers) turns the background off. `NO_BACKGROUND_SUBAGENTS=0` turns it on again.
+`NO_BACKGROUND_SUBAGENTS=1 carl install --config-only` (`./setup` on other computers) turns the background off. `NO_BACKGROUND_SUBAGENTS=0` turns it on again.
 
 ### The Subagents panel (OpenCode)
 
@@ -648,7 +651,7 @@ In OpenCode, the sidebar shows a Subagents panel.
 - Click a subagent to see its model and its context size. Click it again to open its session.
 - Click the panel header to collapse the panel.
 - To get a new version of the panel, run the setup again. Then restart OpenCode.
-- The plugin is `client/opencode/plugins/subagents-sidebar/`. The setup registers it in `~/.config/opencode/tui.json`. `NO_SIDEBAR=1 ./carl.sh install --config-only` installs without it.
+- The plugin is `client/opencode/plugins/subagents-sidebar/`. The setup registers it in `~/.config/opencode/tui.json`. `NO_SIDEBAR=1 carl install --config-only` installs without it.
 
 ### Switching sessions (OpenCode)
 
@@ -668,11 +671,11 @@ OpenCode 1.18.34 does not show the open sessions as tabs. Thus, the setup adds a
 
 - The list contains the top-level sessions of this project that changed in the last 72 hours (at most 9). It does not contain subagent sessions. For older sessions, use `/sessions`.
 - The switcher does not show when there is only one session.
-- The plugin is `client/opencode/plugins/session-switcher/`. The setup registers it in `~/.config/opencode/tui.json`. `NO_SWITCHER=1 ./carl.sh install --config-only` installs without it.
+- The plugin is `client/opencode/plugins/session-switcher/`. The setup registers it in `~/.config/opencode/tui.json`. `NO_SWITCHER=1 carl install --config-only` installs without it.
 
 ### Tools in OpenCode and Pi
 
-`./carl.sh install` gives OpenCode and Pi as many tools as fit a small prompt. As installed, OpenCode's system prompt and tool definitions are **9,870 tokens** (Qwen3.6 35B-A3B, OpenCode 1.18.34). The target is less than 10.5K, because each new session reads them first.
+`carl install` gives OpenCode and Pi as many tools as fit a small prompt. As installed, OpenCode's system prompt and tool definitions are **9,870 tokens** (Qwen3.6 35B-A3B, OpenCode 1.18.34). The target is less than 10.5K, because each new session reads them first.
 
 | Tool | OpenCode | Pi | Switch |
 |---|---|---|---|
@@ -683,7 +686,7 @@ OpenCode 1.18.34 does not show the open sessions as tabs. Thus, the setup adds a
 | **Background subagents** | The task tool can run a subagent in the background. CARL's coder always does (`carl-background`). | The `background` option of the `subagent` tool. CARL's coder always uses it. `/subagents` lists and stops them. | `NO_BACKGROUND_SUBAGENTS=1` |
 | **Parallel tool calls** | Several tool calls in one turn. llama.cpp needs the request to ask for them: CARL's OpenCode model entries do. | | |
 
-Answer the questions of the setup, or put a switch in front of it, for example `WEB_SEARCH=off ./carl.sh install --config-only` (`WEB_SEARCH=off ./setup` on other computers). The setup keeps your choices for the next time.
+Answer the questions of the setup, or put a switch in front of it, for example `WEB_SEARCH=off carl install --config-only` (`WEB_SEARCH=off ./setup` on other computers). The setup keeps your choices for the next time.
 
 - CAUTION: **Web search sends data out of this computer.** The search queries go to Exa (`mcp.exa.ai`, no account necessary) or to Parallel (`search.parallel.ai`). Everything else stays local. `WEB_SEARCH=off` turns web search off.
 - **The browser runs in a temporary profile** (`--isolated`). It is not logged in to a site, and nothing stays after it closes.
@@ -721,7 +724,7 @@ For a large task, the main agent can first read what the brief needs (the files 
 
 The main agent keeps the questions, the explanations, the code searches and the small edits.
 
-**The reminder.** Local models often forget the rule after they read some code. Thus, CARL adds one line to the end of each of your messages in the main session: `[CARL reminder] Large coding work or a fix that already failed goes to coder …`. The line is the same each time, so the caches stay valid. In the tests, it moved the most large and stuck tasks to the coder. `NO_REMINDER=1 ./setup --yes` turns it off (`./carl.sh install` on the server Mac).
+**The reminder.** Local models often forget the rule after they read some code. Thus, CARL adds one line to the end of each of your messages in the main session: `[CARL reminder] Large coding work or a fix that already failed goes to coder …`. The line is the same each time, so the caches stay valid. In the tests, it moved the most large and stuck tasks to the coder. `NO_REMINDER=1 ./setup --yes` turns it off (`carl install` on the server Mac).
 
 **`/code TASK`** gives a task straight to the coder. The main agent does not decide: it writes the brief and hands it on at once.
 
@@ -828,7 +831,7 @@ Delegation depends on the judgment of the model. Thus, it occurs "usually", not 
 - **OpenCode:** type `@coder` and your task in the prompt, for example `@coder add tests for parse_config`. The subagents are in the `@` list, and Tab completes the name. The task goes directly to the coder: the main agent does not decide. If you already have an agent of your own with the name `coder`, CARL's coder is `@carl-coder`. "Use the coder agent to …" also works.
 - **Pi:** there is no command. The coder is the `subagent` tool. Ask for it in the message: "use the coder subagent to …".
 
-**To turn it off,** run the setup again with `--coder off` (`./carl.sh install --config-only --coder off`).
+**To turn it off,** run the setup again with `--coder off` (`carl install --config-only --coder off`).
 
 **Where it is:**
 
@@ -842,7 +845,7 @@ The setup never replaces your own `coder` agent, Pi `agents/coder.md` or `extens
 
 ### CARL's plugins and extensions
 
-The setup (`./carl.sh install`, `./setup`) adds these to OpenCode and Pi. Each one has a switch for the setup. Type `/carl` in OpenCode or Pi to see which are on, and to turn them on or off. [The plugins and extensions](reference/plugins.md) tells how each one works.
+The setup (`carl install`, `./setup`) adds these to OpenCode and Pi. Each one has a switch for the setup. Type `/carl` in OpenCode or Pi to see which are on, and to turn them on or off. [The plugins and extensions](reference/plugins.md) tells how each one works.
 
 | Plugin | In | What you get | Off |
 |---|---|---|---|
@@ -855,7 +858,7 @@ The setup (`./carl.sh install`, `./setup`) adds these to OpenCode and Pi. Each o
 | **Session Switcher** (`session-switcher`) | OpenCode | `‹ 2/3 ● title ›` in the prompt box, `/switch` ([Switching sessions](#switching-sessions-opencode)) | `NO_SWITCHER=1` |
 | **The /carl panel** (`carl-panel`) | OpenCode, Pi | A control panel: every CARL piece on this computer with its state, changed in place, and the config sync. Also the server's speeds (below). | (always on) |
 
-- Put a switch in front of the setup, for example `NO_SIDEBAR=1 ./carl.sh install --config-only`. The setup then removes the plugin, and keeps it off the next time. `NO_SIDEBAR=0` puts it back.
+- Put a switch in front of the setup, for example `NO_SIDEBAR=1 carl install --config-only`. The setup then removes the plugin, and keeps it off the next time. `NO_SIDEBAR=0` puts it back.
 - Restart OpenCode or Pi after an install. They load their plugins when they start.
 - Your own plugins and extensions stay. If one of yours has the same name, CARL does not install its own.
 
@@ -1032,14 +1035,14 @@ Gemma 4 models have sliding-window layers. llama.cpp can put their saved states 
 ### Settings and switches
 
 - **Settings tab → Caching panel** (experimental): the disk limit, saved prompts on or off, saved sessions on or off, when to save, save after, shared storage, Gemma models, what the cache did (a table), what is on the disk, and **[ Clear the disk cache (c) ]** ([Caching panel](#caching-panel)).
-- `./carl.sh cache show` lists the saved prompts and the saved sessions, with their sizes (GB, MB). Each saved session shows its name next to its ID (the OpenCode title, or the Pi `/name` or first message). A `*` marks a saved session that is stored as the changes to its saved prompt. `./carl.sh cache trim` applies the limit (and stores new saved sessions as changes). `./carl.sh cache clear` removes all files.
+- `carl cache show` lists the saved prompts and the saved sessions, with their sizes (GB, MB). Each saved session shows its name next to its ID (the OpenCode title, or the Pi `/name` or first message). A `*` marks a saved session that is stored as the changes to its saved prompt. `carl cache trim` applies the limit (and stores new saved sessions as changes). `carl cache clear` removes all files.
 
 | Switch | Effect |
 |---|---|
 | `CARL_CACHE_SAVE=turn\|auto\|switch\|stop` | Sets the save rule for one client |
 | `CARL_CACHE=0` | Turns the cache off for one run |
 | `CARL_CACHE_LOG=FILE` | Writes what the cache does to a file |
-| `NO_CACHE=1 ./carl.sh install --config-only` | Installs without the disk cache (`NO_CACHE=1 ./setup` on other computers) |
+| `NO_CACHE=1 carl install --config-only` | Installs without the disk cache (`NO_CACHE=1 ./setup` on other computers) |
 
 **Clients on another computer** (a VM) use the dashboard API for the Caching settings, the slot claims and the records. This works while the dashboard runs ([Clients on other computers](reference/client-sync.md)).
 
@@ -1052,8 +1055,8 @@ More: [Caching](reference/caching.md).
 The context memory holds the context of all slots (llama.cpp: the KV cache). Its type is q4 (smaller, the default) or q8 (larger). The Server panel shows it in the **Context memory** row: `q4 (small)` or `q8 (large)`.
 
 ```bash
-./carl.sh llama        # q4 (q4_0, the default)
-./carl.sh --kv q8      # q8 (q8_0)
+carl start        # q4 (q4_0, the default)
+carl --kv q8      # q8 (q8_0)
 ```
 
 The 27B, measured on an M3 Pro 36 GB (llama.cpp 0.4.1, 2026-09-24):
@@ -1067,6 +1070,8 @@ The 27B, measured on an M3 Pro 36 GB (llama.cpp 0.4.1, 2026-09-24):
 
 Use q8 when subtle long-range detail is the most important.
 
+**On the CPU alone, the default is f16.** When a start runs on the CPU alone (a PC with no GPU, a llama.cpp build that sees no GPU, or the setting `gpu.backend` = `cpu`), q4 and q8 are slow: llama.cpp reads prompts 2.6 times faster with an f16 context memory than with q8, and 3.3 times faster than with q4 (llama-bench at 4K tokens on a Ryzen 9 3900X with a Qwen3 0.6B: f16 267 tok/s, q8 103, q4 81). The CPU does not need the memory that q4 saves, because the model runs from the RAM. So a start that nobody told takes f16 when the free RAM covers the start with f16 and the load reserve (`llama.load_reserve_gib`, default 8 GiB), else q8 on the same test, else q4. The window and the slots stay as they are: only the type changes. The start line says which type and why (`Context memory type: f16 (for the CPU: the free RAM, 64.0 GiB, covers its 10.1 GiB and the load reserve of 8.0 GiB, ...)`), and `carl fit` says it for Auto fit's choice. A type that you set (`--kv`, `KV`, `KV_K` and `KV_V`, or a setting in `config.json`), and the type in an Auto-tune result that measured the types, win. A GPU backend and a Mac keep q4. Router mode gives each model's section the same rule as a single start: the window and the slots stay, the type is f16, q8 or q4, and the model's line says why. A type that Auto-tune measured on the CPU holds for starts on the CPU alone only; a start on a GPU backend does not use it.
+
 CAUTION: Do not mix the K and V types (`KV_K=q8_0 KV_V=q4_0`). With mixed types, the server reads prompts about 5× slower.
 
 ---
@@ -1074,38 +1079,44 @@ CAUTION: Do not mix the K and V types (`KV_K=q8_0 KV_V=q4_0`). With mixed types,
 ## 9. Downloading and adding models
 
 ```bash
-./carl.sh models                    # the catalogue + the models folder + your downloads, with status and free space
-./carl.sh fit                       # what fits this Mac (fit --ram 24 / --ctx 64k / --slots 2)
-./carl.sh download qwen3.8-27b      # one catalogue model (aria2c, 16 connections, resumable)
-./carl.sh download default          # Auto fit's choice for this Mac
-./carl.sh download all              # every catalogue model
-./carl.sh download hf:OWNER/REPO/FILE.gguf   # any GGUF from Hugging Face (verified too)
-./carl.sh download hf:OWNER/REPO    # list the GGUF files of that repo
-./carl.sh verify [NAME...]          # check the size and SHA-256 again (no names: every downloaded model)
-./carl.sh delete NAME               # delete a model file (and its partial download, and its MTP drafter)
-./carl.sh card NAME                 # a model's card; custom models: card NAME set FIELD VALUE (see below)
+carl models                    # the catalogue + the models folder + your downloads, with status and free space
+carl fit                       # what fits this Mac (fit --ram 24 / --ctx 64k / --slots 2)
+carl download qwen3.8-27b      # one catalogue model (aria2c, 16 connections, resumable)
+carl download default          # Auto fit's choice for this Mac
+carl download all              # every catalogue model
+carl download hf:OWNER/REPO/FILE.gguf   # any GGUF from Hugging Face (verified too)
+carl download hf:OWNER/REPO    # list the GGUF files of that repo
+carl verify [NAME...]          # check the size and SHA-256 again (no names: every downloaded model)
+carl delete NAME               # delete a model file (and its partial download, and its MTP drafter)
+carl card NAME                 # a model's card; custom models: card NAME set FIELD VALUE (see below)
 ```
 
-- The files go to `~/models/gguf/`. To use a different folder, set `MODELS_DIR`, or `paths.models_dir` in the settings file ([The settings file](#the-settings-file)).
-- `./carl.sh models` shows the size of each file in GB, its status (downloaded, not downloaded, partial) and its source (catalogue, models folder, Hugging Face). A legend under the list explains the status.
+- **The models folders.** On every OS, the models are in `~/models` (on Windows `%USERPROFILE%\models`): `gguf/` for the GGUF models CARL runs, and `mlx/` (named for MLX models; this version of CARL runs none, so CARL makes nothing there). The models folder of the setting `paths.models_dir`, or `MODELS_DIR`, is `~/models/gguf` by default ([The settings file](#the-settings-file)).
+- **Each model has a folder of its own** in the models folder, with a folder for each quantization in it: `~/models/gguf/Model/Q4_K_M/Model-Q4_K_M.gguf`. The model and the quantization come from the file name: `Qwen3.6-35B-A3B-UD-IQ3_XXS.gguf` is in `Qwen3.6-35B-A3B/UD-IQ3_XXS/`. The quantization folder holds the file (or the parts of a split file). Beside the quantization folders the model has `mtp/` (its MTP drafter), `vision/` (its vision projector, `mmproj…`), `template/` (its chat template with the thinking toggle) and, later, `lora/` (its LoRA adapters). A download makes the folders.
+- **A file directly in the models folder, or directly in the folder of its model, still works** (the layouts before this one): `carl models` lists it, `carl start --model` finds it, and the router and the clients use it. CARL moves no file by itself. `carl models` names the files that are not in the layout and says how to move them: make the model's folders and move the file into them, a drafter into the model's `mtp/` folder.
+- **`~/models` is yours too.** You can keep other things in it. CARL reads only its own paths: `gguf/` (the models folder) and `mlx/` (named, not read: this version runs no MLX model). In `gguf/` it reads the model folders of the layout (`gguf/MODEL/QUANT/` and `gguf/MODEL/`, where `MODEL` is the name that the file name gives, or the file is in the folder of its quantization; a maker's prefix on the file name is fine: `Qwen_Qwen3.6-35B-A3B-IQ3_M.gguf` in `Qwen3.6-35B-A3B/IQ3_M/`) and the `.gguf` files directly in `gguf/`. Another folder in `gguf/` (an experiment, a bench, your own) is not read. A GGUF file that is not a language model (its architecture is `bert`, `nomic-bert` and the like: a model that embeds or classifies text) is never listed as a model.
+- **A model is listed once.** The same file under two names or in two places is one model. A model with several quantizations (the 35B-A3B in `UD-Q4_K_M` and in `UD-IQ3_XXS`) is one entry with a quantization selector: `carl models` lists each quantization under the name of the model; in the dashboard, the Models panel, the model drop-down and the Server panel's list show the model once with its quantization in a column, and ← → change it (in the Models panel for the selected model, in a drop-down or the Server panel's list for the one under the cursor). The actions of the Models panel (download, check, Auto-tune, delete) act on the quantization shown.
+- **Each quantization has its own MTP mark.** The quantizations of one model can differ: the Heretic 35B-A3B in `Q4_K_M` has the MTP head, and in `i1-IQ3_XXS` it does not. `carl models`, the model drop-down, the Models panel and the model card mark the quantizations that have the head with `MTP` (a quantization with a drafter file is marked `drafter`). CARL reads the mark from the file's header (`nextn_predict_layers` and the `nextn` tensors) when the file is downloaded or its header was read before; otherwise it takes the catalogue's word. A start follows the quantization it starts: MTP and n-gram speculation where the head is, n-gram only where it is not.
+- **A start takes a model and, when it has several, a quantization.** `carl start --model NAME --quant Q` (or `--model NAME:Q`; `carl download NAME:Q`, `carl tune NAME:Q` and the like take it too). Q is a quantization of the model as `carl models` lists it, with or without `UD-` (`UD-IQ3_XXS`, `IQ3_XXS`), or the start of one (`iq3`, `q4`) when that names only one. Without `--quant`, a start takes the default quantization, the first of these that is downloaded: the one you chose last (`llama.model` in `config.json`), the one with the latest Auto-tune result, the largest one that fits your computer on the context ladder (96K, 64K, 48K ...). On the CPU alone, `IQ4_NL` and `Q4_0` come before the K-quants of the same size (`Q4_K_M`), where a model has both downloaded: the CPU reads and writes them faster (on a Ryzen 9 3900X, the 35B-A3B in `IQ4_NL` read 84 to 87 tok/s and wrote 12.9, in `Q4_K_M` 65 to 70 and 9.9 to 10.3). The start line says so. Auto fit does the same for the catalogue. `carl models` marks it. The name of one catalogue entry (`qwen3.6-35b-a3b-iq3`) names that file, as before.
+- `carl models` shows the size of each file in GB, its status (downloaded, not downloaded, partial) and its source (catalogue, models folder, Hugging Face). A legend under the list explains the status.
 - If a download stops, run the command again. The download continues from where it stopped.
 - If a file fails its checksum, its name changes to `*.bad`.
-- **MTP drafters (Gemma 4).** A Gemma 4 model has a second file: its MTP drafter (`mtp-…gguf`, in the same folder). `download`, `verify` and `delete` include it. If only the drafter is missing, `download` gets only the drafter. `./carl.sh models` shows `The MTP drafter is not downloaded: ./carl.sh download NAME` for such a model. The drafter is not a model, so the list does not show it.
-- **An unknown model name.** `verify`, `download`, `card` and `delete` give the same error: `error: unknown model 'NAME'. ./carl.sh models lists the models.`
+- **MTP drafters (Gemma 4).** A Gemma 4 model has a second file: its MTP drafter (`mtp-…gguf`, in the `mtp/` folder of the model). `download`, `verify` and `delete` include it. If only the drafter is missing, `download` gets only the drafter. `carl models` shows `The MTP drafter is not downloaded: carl download NAME` for such a model. The drafter is not a model, so the list does not show it.
+- **An unknown model name.** `verify`, `download`, `card` and `delete` give the same error: `error: unknown model 'NAME'. carl models lists the models.`
 - The dashboard can do the same: Settings tab, **Models** panel ([Models panel](#models-panel)).
 
 ### The catalogue
 
-The catalogue is [host/catalog.json](host/catalog.json). It holds the built-in models: 11 Qwen models and 4 Gemma 4 models. For each model, it has these fields:
+The catalogue is [src/carl/data/catalog.json](src/carl/data/catalog.json). It holds the built-in models: 12 Qwen models and 4 Gemma 4 models. For each model, it has these fields:
 
 | Field | Contents |
 |---|---|
 | `hf` | The download source: the Hugging Face repo, a pinned revision, the file, its SHA-256 and its size |
-| `draft` | Optional: a separate MTP drafter file (Gemma 4), with the same fields as `hf`. Downloads, verify, delete, the start (`-md`) and the fit checks include it. |
-| `mtp` | `true` if MTP speculation is available: from an MTP head in the model file, or from the `draft` file |
+| `drafts` | Optional: the model's drafter files, each with its kind and the same fields as `hf`. The Gemma 4 models have a separate MTP drafter (kind `mtp-file`). Downloads, verify, delete, the start (`-md`) and the fit checks include it. The older single `draft` still reads. |
+| `mtp` | `true` if MTP speculation is available: from an MTP head in the model file, or from an MTP drafter file in `drafts` |
 | `summary`, `description` | What the model is (technical) |
 | The model card | `role` (a short headline), `good_for` (tags: `agent coding`, `hard code`, `chat & writing`, `uncensored`), `why_use`, `trade_offs`, `pick_instead` (another catalogue model, and when it is the better pick), `hardware`, `uncensored` (what it means; abliterated models only) and `rank` |
-| `rank` | The quality order, 1 = best: published benchmarks and CARL's code test first, then the quantization. Ranks 1–10: the Qwen 27B and 35B-A3B builds 1–5, Gemma 4 31B 6, 26B-A4B 7, 12B 8, E4B 9, the Qwen 9B 10. |
+| `rank` | The quality order, 1 = best: published benchmarks and CARL's code test first, then the quantization. Ranks 1–10: the Qwen 27B and 35B-A3B builds 1–5, Gemma 4 31B 6, 26B-A4B 7, 12B 8, E4B and Saluki 9, the Qwen 9B 10. |
 | `tune` | The recommended server settings: context memory type, context, slots, speculation, guesses, sampling |
 | `why` | The reason for each tuned value |
 | `ctx_zones` | The contexts that read fast, slow and very slow (the context zones) |
@@ -1117,8 +1128,14 @@ The catalogue is [host/catalog.json](host/catalog.json). It holds the built-in m
 
 ### Custom models (not in the catalogue)
 
-- **Each `.gguf` in the models folder is a model.** `./carl.sh models` lists it with the source `models folder`. Its name is the file name in lower case, without `.gguf`. Vision projectors (`mmproj…`) and the second and later parts of a split GGUF are not listed.
-- **`./carl.sh download hf:OWNER/REPO/FILE.gguf` downloads any GGUF from Hugging Face.** It gets the revision, the size and the SHA-256 from the Hugging Face API. Then it downloads the file and verifies it. A `huggingface.co` URL to the file also works. `hf:OWNER/REPO` (no file) lists the GGUF files of the repo.
+- **Each `.gguf` in the models folder, and in the folder of a model, is a model.** (The model folders of the layout and their quantization folders are read, and no other folder; `mtp/`, `vision/`, `template/` and `lora/` inside a model's folder hold a drafter, a projector, a template and adapters, not models.) `carl models` lists it with the source `models folder`. Its name is the file name in lower case, without `.gguf`. Vision projectors (`mmproj…`) and the second and later parts of a split GGUF are not listed.
+- **`carl download hf:OWNER/REPO/FILE.gguf` downloads any GGUF from Hugging Face.** It gets the revision, the size and the SHA-256 from the Hugging Face API. Then it downloads the file and verifies it. A `huggingface.co` URL to the file also works. `hf:OWNER/REPO` (no file) lists the GGUF files of the repo.
+- **A gated repo needs your Hugging Face access token.** Some repos (for example some fine-tunes) answer 401 until you accept their terms on their page and give a token. Make a token on `https://huggingface.co/settings/tokens` (it needs the right to read repos), accept the terms on the repo's page, then run `carl hf token set`. CARL reads the token from standard input when you pipe it in, else it asks and shows nothing as you type. A token is never an argument, because a process list shows every argument. In the dashboard: Settings > Models, the row **Hugging Face token**, `k` to set it (the field shows dots) and `K` to clear it.
+  - CARL keeps the token where your system keeps secrets: the Keychain on a Mac, the Credential Manager on Windows (in an ssh session, which it does not reach, a file that only you, SYSTEM and the Administrators can open), the Secret Service (`secret-tool`) on Linux when it is installed. Else it keeps it in the file `~/.config/carl/hf-token` (mode 0600); it uses that file too when the Keychain or the Secret Service refuses. The token is never in `config.json`, in a log or in a URL.
+  - `carl hf token` shows whether a token is set, where it comes from and its last 4 characters, never the whole token. `carl hf token clear` removes the token that CARL keeps.
+  - The variable `HF_TOKEN` wins over the token that CARL keeps. When CARL has no token, it reads the file of the Hugging Face tools (`~/.cache/huggingface/token`). CARL never changes the variable or that file.
+  - CARL sends the token to `huggingface.co` and its download hosts only, and only for the Hugging Face calls: the file list, the header read before a download (the memory check) and the download. A gated repo lists other SHA-256s without the token than with it, so CARL always reads its list with the token, and a file whose SHA-256 differs from the one CARL recorded is checked against the list read again with the token before CARL calls the file bad.
+  - A message that says the repo is gated (`Hugging Face refused the request (401)…`) means: accept the terms on the page of the repo, and set the token.
 - CARL records these models in `~/.config/carl/models.json`. This file also holds the Auto-tune results for each model on this Mac.
 - **A custom model gets its first settings from its GGUF header:**
   - q4 context memory.
@@ -1126,22 +1143,22 @@ The catalogue is [host/catalog.json](host/catalog.json). It holds the built-in m
   - MTP + n-gram (1 guess) if the file has an MTP head. A Gemma 4 model with an MTP drafter: MTP + n-gram (2 guesses). Else: n-gram only.
 
   These settings are a guess. Run [Auto-tune](#auto-tune) to measure better values.
-- To start it, run `./carl.sh llama --model NAME`. A path to a `.gguf` also works.
+- To start it, run `carl start --model NAME`. A path to a `.gguf` also works.
 - **Give it a card** (what it is good for): see [Cards for custom models](#cards-for-custom-models).
 - Before you use it from the clients, examine the chat template of the model. The thinking options are different between model families. The server answers with the loaded model for all model names, but the client sends the thinking options of the entry that you select.
 
 **To add a model to the catalogue** (for each user of this folder):
-1. Copy an entry in `models` in `host/catalog.json`.
+1. Copy an entry in `models` in `src/carl/data/catalog.json`.
 2. Change `name`, `label`, `summary` and `description`. The `name` is the name that the server and the clients use.
 3. Write its model card: `role`, `good_for`, `why_use`, `trade_offs`, `pick_instead`, `hardware`, `rank`, and `thinking` (`on-off` or `effort`). For an abliterated model, set `abliterated` and `uncensored`.
-4. Fill in `hf`: `repo`, `revision` (the commit SHA), `file`, `sha256` and `bytes`. The easy way: run `./carl.sh download hf:OWNER/REPO/FILE.gguf` first. Then copy the `hf` block that it writes to `~/.config/carl/models.json`.
+4. Fill in `hf`: `repo`, `revision` (the commit SHA), `file`, `sha256` and `bytes`. The easy way: run `carl download hf:OWNER/REPO/FILE.gguf` first. Then copy the `hf` block that it writes to `~/.config/carl/models.json`.
 5. Set `tune` and `why`:
    - For `spec`, use `draft-mtp,ngram-mod` if the GGUF has an MTP head. For a file without an MTP head, use `ngram-mod`.
    - Use `spec_n` 1. For a MoE K-quant, 2 can be better (the Q4 35B). Do not use 2 on an IQ quant. A model with an MTP drafter (Gemma 4) uses 2.
-   - Run `./carl.sh tune NAME` to measure.
+   - Run `carl tune NAME` to measure.
 6. Set `arch`, `mtp`, `min_ram_gb` and `ctx_zones`.
 7. Examine the chat template of the model before you add it to the clients. The thinking options are different between model families.
-8. Run `./carl.sh install --config-only`. The clients then list the model when it is downloaded.
+8. Run `carl install --config-only`. The clients then list the model when it is downloaded.
 9. On other computers, send the config (`P` in the Connect tab). The sync service applies it.
 
 ### Cards for custom models
@@ -1192,12 +1209,12 @@ When the card has no `arch` or `quant`, the form fills them in from the GGUF hea
 
 **On the command line:**
 ```bash
-./carl.sh card NAME                                   # show a model's card (catalogue or yours)
-./carl.sh card NAME set role "Fast local coder"
-./carl.sh card NAME set good_for "agent coding,hard code"
-./carl.sh card NAME set rank 4
-./carl.sh card NAME set pick_instead qwen3.8-27b="harder code" qwen3.6-35b-a3b="long chats"
-./carl.sh card NAME unset rank
+carl card NAME                                   # show a model's card (catalogue or yours)
+carl card NAME set role "Fast local coder"
+carl card NAME set good_for "agent coding,hard code"
+carl card NAME set rank 4
+carl card NAME set pick_instead qwen3.8-27b="harder code" qwen3.6-35b-a3b="long chats"
+carl card NAME unset rank
 ```
 
 - `set` checks the whole card. A bad value shows `error: …`, and the command exits with 1.
@@ -1206,20 +1223,20 @@ When the card has no `arch` or `quant`, the form fills them in from the GGUF hea
 
 **Notes:**
 - The card is saved in `~/.config/carl/models.json`, under the model (`card`). A delete of the model removes its card. A `pick_instead` entry whose model is gone later is left out.
-- **Catalogue models are read-only.** `e` and `card NAME set` tell you this. Their cards come from `host/catalog.json`.
-- **When the catalogue adds a model that you added yourself** (the same file in the models folder), the catalogue entry takes it over. Its Auto-tune result and your `config.json` profile move to the catalogue name. Your card for it no longer applies. CARL tells you this one time.
+- **Catalogue models are read-only.** `e` and `card NAME set` tell you this. Their cards are built into CARL.
+- **When the catalogue adds a model that you added yourself** (the same file in the models folder, in its quantization folder or not), the catalogue entry takes it over. Its Auto-tune result and your `config.json` profile move to the catalogue name. Your card for it no longer applies. CARL tells you this one time.
 - **thinking:** without a value in the card, CARL reads it from the GGUF header. The chat template has effort levels, or thinking on and off only. The edit form starts with that value.
 - After you save, the MODEL card, the role and the tags in each model list, sort by quality and the filters use the card at once.
 
 ### Auto-tune
 
-Auto-tune measures the best settings for one model on this Mac. It takes about 5–10 min.
+Auto-tune measures the best settings for one model on this Mac. It takes about 10–20 min (`--quick` on the Windows test PC, with the experts in the RAM: 6.5 min).
 
 ```bash
-./carl.sh tune qwen3.8-27b-iq3            # all modes
-./carl.sh tune qwen3.8-27b-iq3 --quick    # fewer guesses, no 64K read, no parallel step (about 4 min)
-./carl.sh tune qwen3.8-27b-iq3 --long     # also reads 128K and 192K, and the write speed at each depth (+10-40 min)
-./carl.sh tune all                        # every downloaded model, one after the other
+carl tune qwen3.8-27b-iq3            # all modes
+carl tune qwen3.8-27b-iq3 --quick    # fewer guesses, no 64K read, no parallel step (about 5-10 min)
+carl tune qwen3.8-27b-iq3 --long     # also reads 128K and 192K, and the write speed at each depth (+10-40 min)
+carl tune all                        # every downloaded model, one after the other
 ```
 
 It does these steps. The model loads one time for each speculation mode.
@@ -1242,34 +1259,46 @@ It does these steps. The model loads one time for each speculation mode.
      | More | Very slow (red) |
 
    - The fast zone always includes 96K: CARL never shows 96K or less as slow.
+   - **Batch size** (before the prompt reading, also with `--quick`): `-ub` 512, 1024, 2048 and 4096, each with a start of its own, at the slots and the context that `-ub` 512 gets (2 × 96K when it fits). Each start reads a cold prompt of 8K tokens, then writes 128 tokens. A size is tried only when it keeps that setup: the context comes first (2 × 96K before 2 × 64K, two slots before one, never below 48K). Then the write speed: a larger `-ub` needs more GPU memory, so on a PC a MoE model can keep more of its experts in the RAM and write slower. A size that writes more than 3% slower than the best one is not chosen. Of the others, the fastest reader wins when it reads 5% faster than the default (2048 on a PC, 512 on a Mac). CARL saves it for the model, and the prompt reading runs at it. A `-ub` you type in the server options still wins. A `llama.ub` or a choice you saved for the model never wins silently over it: a start in a terminal and Settings ask once (Use tuned, or keep your value for this model); a script or router mode uses the tuned size and says so.
+   - **MTP with the experts in the RAM** (a model with an MTP head, when the chosen setup keeps any expert layer in the RAM): a start runs n-gram by default, because MTP did not pay on a card that keeps experts in the RAM. Auto-tune measures the best MTP mode against n-gram at that setup (prose, code and an edit) and keeps MTP only when it writes 3% faster; the start follows the result.
+   - **Threads with the experts in the RAM** (when the chosen setup keeps any expert layer in the RAM): one thread on each physical core, pinned, makes the CPU run those experts about 12% to 14% faster on a quiet computer. Pinning needs quiet cores, so a start pins only after Auto-tune measured it on your computer: Auto-tune writes with the threads pinned and unpinned at that setup (two runs each, alternating) and keeps pinned only when it writes 3% faster. A model without that result, or one where unpinned was as fast, starts with llama.cpp's own threads, and the Server start lines say so. For a pinned start the lines and the MODEL card say `threads: 12, one per core (pinned)`. A thread option in your server options (`-t`, `--threads`, `--cpu-mask`) wins. `THREAD_PIN=on` or `off` in the environment wins over the result.
 4. **Parallel requests** (not with `--quick`): the server stops. `llama-batched-bench` then measures the total write and read speed with 1, 2, 3 and 4 requests at the same time (as subagents that work together). The MODEL card (Settings > Server) shows the result at its full level.
-5. **Result:** q4 context memory, the best speculation, the context and the slots (2 if two slots of that context fit).
+   - **On the CPU alone**, Auto-tune also measures the **context memory types** (right after the memory step) and reads only up to 8K tokens; see [Auto-tune on the CPU alone](#auto-tune-on-the-cpu-alone).
+5. **Result:** q4 context memory (on the CPU alone, the type that Auto-tune measured), the best speculation, the context and the slots (2 if two slots of that context fit), the batch size, and the load mode of its test starts (each test start reads the weights into the memory when the free memory allows it, as a start does).
    - **The context is never less than 96K if 96K fits one slot.** Users need that much context for their work.
    - Above 96K, Auto-tune keeps the catalogue context if a cold read of it is not worse than slow on this Mac, and if it fits. Else, it selects the largest standard context in the fast zone (minimum 96K).
    - If 96K does not fit (for example `orcarouter-27b-q3` on a 24 GB Mac), it selects the largest standard context that fits.
 
 - CARL saves the result in `~/.config/carl/models.json`. Each later start of the model uses it. A value that you set in the settings file has priority ([The settings file](#the-settings-file)).
-- `./carl.sh tune all` tunes each downloaded model, one after the other. A model that fails does not stop the others.
+
+#### Auto-tune on the CPU alone
+
+When the start runs on the CPU alone (see [Context memory](#8-context-memory-q4-or-q8)), Auto-tune changes two steps. Both exist because the CPU reads prompts slowly: a read of 32K tokens with the q4 context memory took 35 min on a Ryzen 9 3900X (16 tok/s), and the whole tune took 58 min.
+
+- **Context memory type** (step 2, after the memory step): each type that fits the RAM (f16, q8, q4; the same test as a start: the free RAM covers the start and the load reserve) starts the model at the model's `-ub`, reads a cold prompt of 8K tokens and writes 128 tokens. f16 is kept unless a later type reads or writes 3% faster without reading or writing more than 3% slower. The result (`results.kv`, `kv_note`) and the type (`settings.kv`) go into the record, every later step runs with the type, and each later start of the model uses it. A model whose result has no such measure (a result from before this step) does not count as a choice on the CPU: the start picks the type as above.
+- **The record says where it was measured.** It keeps the llama.cpp build and the backend (`cpu`, `cuda-13`, `metal` ...). At every start CARL compares them with the installed build. When they differ, the start keeps the settings of the result, and its line (in router mode, the model's line; and the Auto-tune card) says that the result is from another build, so it is an estimate now, and offers `carl tune NAME`.
+- **Prompt reading** reads up to 8K tokens (2K, 4K and 8K; `--quick`: 4K and 8K). The reads that the other computers make beyond that (32K, 64K; `--long`: 128K and 192K) are an estimate from the slope of the measured ones, and the output says so (`results.prompt_read_estimate`, `read_note`). The context zones use the estimate.
+- `carl tune all` tunes each downloaded model, one after the other. A model that fails does not stop the others.
 - CAUTION: **Auto-tune needs the GPU for itself.** It does not start in these conditions: a server runs on port 9275 (or 8080, CARL's earlier port), another large process (more than 8 GiB, `BIG_GB`) is in memory, or a known model server runs. `ALLOW_SECOND_MODEL=1` skips the check for a large process. Stop the server first. The **Auto-tune** panel of the dashboard stops the server for you, and starts it again after the tune.
 - Auto-tune uses its own server on port 8093 (`--port` changes it). `--dry-run` measures, but does not save.
-- NOTE: The edit workload copies `tools/carl_core/adapters/llama_server.py`. Thus, the edit speeds are not directly comparable with older Auto-tune results.
+- NOTE: The edit workload is a frozen copy of one file of CARL's code (`llama_server.py`) from one commit (`src/carl/data/tune-edit-workload.txt`). The edit speeds stay comparable when the code changes. They are not directly comparable with older Auto-tune results.
 
 ---
 
 ## 10. The dashboard
 
-The dashboard is `tools/llama-monitor.py`. It shows the live state of the server, and it changes the server's settings.
+The dashboard is `carl dashboard`. It shows the live state of the server, and it changes the server's settings.
 
 ### Start and quit
 
 **It runs in the terminal in which you start the server.**
-- `./carl.sh` with no arguments opens the dashboard. It attaches to a llama.cpp server on port 9275. If no server runs, it starts llama.cpp with your saved settings. If no model is downloaded, it offers to download Auto fit's choice for this Mac.
+- `carl` with no arguments opens the dashboard. It attaches to a llama.cpp server on port 9275. If no server runs, it starts llama.cpp with your saved settings. If no model is downloaded, it offers to download Auto fit's choice for this Mac.
 - When the dashboard opens, a **CARL STARTS** card shows its progress: it reads the server state, the model list and what fits this Mac.
-- `./carl.sh llama` starts the server in the background, in its own process group under `nohup`. Thus, Ctrl-C cannot stop the server by accident. The dashboard then uses the terminal.
+- `carl start` starts the server in the background, in its own process group under `nohup`. Thus, Ctrl-C cannot stop the server by accident. The dashboard then uses the terminal.
 - The server writes its log file (`~/models/logs/llama-server-<time>.log`). Its console output goes to `~/models/logs/.console-<port>.out`. The Log tab shows the log file. If that file is missing or empty, it shows the console file.
 - If the server stops on its own (a crash, a failed start), the header shows **STOPPED**. The SERVER card of the Live tab shows `stopped`. After a failed start, its **State** row says `The last start failed.`, and the card shows the lines of the launcher ("The last start failed. The launcher said:"). Then `q` opens a short dialog ("No server runs."): push `q` again to quit.
 - **A refused start** (for example, a setup that does not fit) shows the launcher's `error:` line and the lines after it on the Live tab (SERVER card) and in the MEMORY section of Settings > Server.
-- `MONITOR=0 ./carl.sh llama` runs the server in the foreground with plain log output. Scripts and `nohup` starts do this automatically.
+- `MONITOR=0 carl start` runs the server in the foreground with plain log output. Scripts and `nohup` starts do this automatically.
 
 **To quit:**
 1. Push `q` or Ctrl-C, or click **[ Quit ]** (top right).
@@ -1278,7 +1307,7 @@ The dashboard is `tools/llama-monitor.py`. It shows the live state of the server
    | Key | Option |
    |---|---|
    | `s` | **Stop the server and quit.** The dashboard saves the sessions first. It sends SIGTERM, and SIGKILL after 30 s. The message line shows the progress. |
-   | `l` | **Leave it running and quit.** The server continues after you close the terminal. To open the dashboard again, run `./carl.sh`. |
+   | `l` | **Leave it running and quit.** The server continues after you close the terminal. To open the dashboard again, run `carl`. |
    | Esc | **Cancel** |
 
 ### A turn is running
@@ -1296,9 +1325,9 @@ Stop, Apply, Auto-tune and a router load stop the model. If an agent's turn is r
 
 **To attach by hand** (after "leave it running", or from a different terminal):
 ```bash
-./carl.sh monitor                       # finds the server's address itself
-./carl.sh monitor --port 9277           # a server on a different port
-./carl.sh monitor --once                # print the Live tab one time, at the saved levels
+carl monitor                       # finds the server's address itself
+carl monitor --port 9277           # a server on a different port
+carl monitor --once                # print the Live tab one time, at the saved levels
 ```
 
 ### Levels: collapsed, simple or full
@@ -1312,7 +1341,7 @@ Each screen is made of **sections**: the cards of the Live tab, and the parts of
 | Full | `▾ SLOTS ●● …` | Also the other values |
 
 - A section where full adds nothing has two levels: collapsed (`▸`) and open (`▾`). Its title has no dots. Examples: the SERVER card of the Live tab, the HOW IT WORKS sections.
-- The Requests tab and the Log tab have one section each. They have no collapsed level: simple and full only.
+- The REQUESTS section of the Requests tab and the Log tab's one section have no collapsed level: simple and full only.
 - ● and ○ in a title show the level. In a list, they keep their other meanings (downloaded, measured on this Mac, connected).
 
 **To change the level of one section:**
@@ -1325,7 +1354,7 @@ A click on the title of a section selects it and changes its level in the same w
 
 - The tab line shows `detail: simple`, `detail: full` or `detail: mixed` (the sections of the screen have different levels).
 - The dashboard saves the level of each section in `~/.config/carl/dashboard.json`, next to `config.json`. It never writes `config.json` for this.
-- `--expand` (for example `./carl.sh monitor --expand`) shows every section at full for one run. It does not change the saved levels.
+- `--expand` (for example `carl monitor --expand`) shows every section at full for one run. It does not change the saved levels.
 
 ### Layout
 
@@ -1381,9 +1410,9 @@ A click on the title of a section selects it and changes its level in the same w
 |---|---|
 | **1 Live** | A sentence with the state of the server, for example "No request is running. The 2 slots are free.". Then the cards, and under them the RECENT REQUESTS card and the LOG card ([Live cards](#live-cards)). |
 | **2 Connect** | Two sub-tabs. **Setup:** OpenCode and Pi on this Mac, a VM or another computer, and by hand (the address, the key and the configs to copy). **Clients:** each computer that syncs, and its config ([Connect tab](#connect-tab)). |
-| **3 Requests** | All finished requests in the log, newest first: **Started**, **Context**, **New tokens**, **Read tok/s**, **Output**, **Write tok/s**, **Took**, **Guesses ACPT** (the % of the guessed tokens that were accepted) and **Reused** (the tokens that the server did not read again). The **Mean** row under the header gives the mean read and write speeds of the requests in the list. A failed request shows `error` in the Guesses ACPT column. The title shows the count, for example `50 since 13:02`. The full level adds **Slot** (the slot of the request) and **Reused from** (where the reused tokens came from). Reused from shows `–` when it is not known. On a narrow terminal, these two values are on a second row under the request. |
+| **3 Requests** | All finished requests in the log, newest first: **Started**, **Context**, **New tokens**, **Read tok/s**, **Output**, **Write tok/s**, **Took**, **Guesses ACPT** (the % of the guessed tokens that were accepted) and **Reused** (the tokens that the server did not read again). The **Mean** row under the header gives the mean read and write speeds of the requests in the list. A failed request shows `error` in the Guesses ACPT column. The title shows the count, for example `50 since 13:02`. The full level adds **Slot** (the slot of the request) and **Reused from** (where the reused tokens came from). Reused from shows `–` for now: a later CARL version fills it. On a narrow terminal, these two values are on a second row under the request. |
 | **4 Log** | The full server log, which you can scroll. `w` wraps the lines (**[ Wrap lines: off (w) ]**). `f` shows only the errors and the warnings (**[ Errors and warnings: off (f) ]**). End goes back to the end. Red lines are errors, yellow lines are warnings, and dim lines are routine lines (they are normal at any time). A known llama.cpp warning is grey, with a dim line under it that gives the reason (`↳ known: …`). The HEALTH card counts it as a routine notice. The full level adds the milliseconds to the times, and the path of the log file (**File** row). |
-| **5 Settings** | Six panels: **Server**, **Models**, **Auto fit**, **Auto-tune**, **Router**, **Caching** ([The Settings tab](#the-settings-tab)) |
+| **5 Settings** | Seven panels: **Server**, **Models**, **Agents**, **Auto fit**, **Auto-tune**, **Router**, then the group **Context management**: **Caching** ([The Settings tab](#the-settings-tab)) |
 
 ### Live cards
 
@@ -1411,10 +1440,10 @@ If a value is not available, the card shows a dash or a sentence (for example `n
 | THIS MAC (`pressure normal`; `GPU 95%` when the GPU is 90% busy or more) | **Memory**: a bar and the RAM that this Mac uses. It is the same value as **Memory Used** in Activity Monitor: app memory + wired + compressed. **Pressure**: the macOS memory pressure (`normal`, `warning`, `critical`). **Swap** (`none (no swap file)` when the Mac has no swap file). **GPU**: a bar and `38% busy`. **Power**. **Heat** (`normal`, `warm`, `hot`, `very hot`). The card shows also when no server runs. | **App memory**, **Wired**, **Compressed** (the three parts of **Memory**), **Cached files** (files in RAM that macOS can free when apps need the memory; not in **Memory**), **Free**, **Load** (1, 5 and 15 min), **Disk free** |
 | CONNECT (`this Mac only`) | **Address**, **Key** (masked; `k` shows it), **Connections** (and the computers they come from, when another computer is connected), **OpenCode, Pi** (if they are set up), **Disk cache** (`2.4 of 10 GB`) | **Saved** (the saved prompts and sessions), **Model name**, **From**, **Key file**, the copy buttons |
 | HEALTH (`no errors`, `N problems`, `GPU failed` or `old llama.cpp`) | **Log**: `✓ No errors.`, the number of errors and warnings in the log (the same lines as **Errors and warnings** in the Log tab), or `✗ The GPU failed. Restart the server (Settings > Server, a).`. **Sleep**: if the Mac stays awake while the server runs. Only when llama.cpp is older than the version that CARL is tested with: **Version** (`⚠ llama.cpp 0.4.1 (build 9001) is older than the tested version, 0.6.0 (build 11429).`) and **To update** (`Run brew upgrade llama.cpp, then restart the server.`). | **Version** (also the tested or a newer llama.cpp), **Errors**, **Warnings**, **Routine notices**, **GPU errors**, **Health check** (ms), **Sleeps**, the last errors, the sleep and wake events |
-| MODEL (the quantization, for example `UD-IQ3_XXS`) | **File**, **Speculation** | **Weights**, **MTP drafter** (its file and size), **Layers**, **MTP**, **Experts**, **Thinking**, **Batch**, **Flash attention**, **Architecture**, **Process** (the PID) |
+| MODEL (the quantization, for example `UD-IQ3_XXS`) | **File**, **Speculation** | **Weights**, **MTP drafter** (its file and size), **Layers**, **MTP**, **Experts**, **Thinking**, **Batch**, **Load** (read into memory or mapped from the file, and why), **Flash attention**, **Architecture**, **Process** (the PID) |
 | RECENT REQUESTS (`50 finished`) | The newest requests, as in the Requests tab | The **Slot** and **Reused from** columns |
 | LOG (the number of errors and the file name) | The last lines of the server log, with their times | The **File** row (the path), and the times with milliseconds |
-| SERVER (`stopped`; only when no server runs; collapsed or open) | **State**, **Next start** (the model, and `auto` or `your choice`), **With** (the slots and the context), **Fits**, **To start** (push `a`, or run `./carl.sh`), **Last log**. After a failed start, the lines of the launcher. | |
+| SERVER (`stopped`; only when no server runs; collapsed or open) | **State**, **Next start** (the model, and `auto` or `your choice`), **With** (the slots and the context), **Fits**, **To start** (push `a`, or run `carl`), **Last log**. After a failed start, the lines of the launcher. | |
 
 ### Connect tab
 
@@ -1436,9 +1465,9 @@ The buttons of the Setup sub-tab:
 
 | Button | Key | Does |
 |---|---|---|
-| **[ Install on this Mac (i) ]** (**[ Install again (i) ]** when OpenCode and Pi are set up) | `i`, then `y` (**[ Run it (y) ]**) | Runs `./carl.sh install` (the setup, with the choices of your last setup, without questions) and shows its output in the card **INSTALLER**. `n` or Esc: no. `x` closes the output. |
-| **[ Update Config and Install CARL Plugins (u) ]** | `u`, then `y` | Runs `./carl.sh install --config-only`: the configs, CARL's plugins and agents; it installs nothing |
-| **[ Make the client package (z) ]** | `z` | Runs the code of `./carl.sh package`. The card **CLIENT PACKAGE** shows the path of the zip, its size, the key warning and the next steps. Or it tells you why CARL made no package (for example: the server serves only this Mac). **[ Make it again (z) ]**. **[ Close (x) ]** or `x` closes the card. |
+| **[ Install on this Mac (i) ]** (**[ Install again (i) ]** when OpenCode and Pi are set up) | `i`, then `y` (**[ Run it (y) ]**) | Runs `carl install` (the setup, with the choices of your last setup, without questions) and shows its output in the card **INSTALLER**. `n` or Esc: no. `x` closes the output. |
+| **[ Update Config and Install CARL Plugins (u) ]** | `u`, then `y` | Runs `carl install --config-only`: the configs, CARL's plugins and agents; it installs nothing |
+| **[ Make the client package (z) ]** | `z` | Runs the code of `carl package`. The card **CLIENT PACKAGE** shows the path of the zip, its size, the key warning and the next steps. Or it tells you why CARL made no package (for example: the server serves only this Mac). **[ Make it again (z) ]**. **[ Close (x) ]** or `x` closes the card. |
 | **[ Show it in the Finder (f) ]** | `f` | Shows the zip in the Finder. The button shows after `z`. |
 | **[ Send the config (P) ]** | `P` | Sends the client config to the computers that sync |
 | **[ OpenCode config (o) ]**, **[ Pi config (p) ]**, **[ curl test (c) ]** | `o`, `p`, `c` | Copies the config to the clipboard and shows it below. `t` also copies the curl test. |
@@ -1469,7 +1498,7 @@ The buttons of the Setup sub-tab:
 
 ### The Settings tab
 
-The Settings tab (tab 5) has seven panels: **Server**, **Models**, **Agents** ([Agents panel](#agents-panel)), **Auto fit**, **Auto-tune**, **Router** ([Router mode](#router-mode-switch-models-from-opencode-or-pi)) and **Caching** ([The disk cache](#7-fast-starts-the-disk-cache)). Push `[` or `]`, or click the name of a panel, to change the panel.
+The Settings tab (tab 5) has seven panels: **Server**, **Models**, **Agents** ([Agents panel](#agents-panel)), **Auto fit**, **Auto-tune**, **Router** ([Router mode](#router-mode-switch-models-from-opencode-or-pi)) and **Caching** ([The disk cache](#7-fast-starts-the-disk-cache)). Caching opens the group **Context management**: in the panel bar a `│` and, where the bar has room, the group's name come before it. The group holds how CARL keeps the context of each session: **Caching** (the slots and the RAM cache, which the Server panel sets because a change restarts the server, and the disk cache). A plugin's panel comes in its group, or after another `│` when it has none. Push `[` or `]`, or click the name of a panel, to change the panel.
 
 #### Server panel
 
@@ -1564,10 +1593,10 @@ For a model with sliding-window layers (Gemma), the MEMORY section tells you whi
 **Notes:**
 - CAUTION: **Apply stops the server.** If an agent's turn is running, the dashboard asks first ([A turn is running](#a-turn-is-running)).
 - **If the new server does not start,** the dashboard starts the old server again with its old values. The MEMORY section shows the launcher's `error:` line.
-- **The dashboard saves the settings in `~/.config/carl/config.json`** ([The settings file](#the-settings-file)). `./carl.sh llama` uses this file the next time. Flags and environment variables have priority over the file.
+- **The dashboard saves the settings in `~/.config/carl/config.json`** ([The settings file](#the-settings-file)). `carl start` uses this file the next time. Flags and environment variables have priority over the file.
   - Server-wide values go to the `llama` section. The dashboard writes only the values that are different from the defaults.
   - Model values (context memory type, context, slots, speculation, sampling) go to the profile of the model (`models.<name>`). The dashboard writes only the values that are different from the recommended values of that model.
-- **After a change of the model, the context or the slots,** run the setup again on each client (`./carl.sh install --config-only` on this Mac, `./setup` on other computers). The clients then get the new context limit, and the coder subagent is added or removed.
+- **After a change of the model, the context or the slots,** run the setup again on each client (`carl install --config-only` on this Mac, `./setup` on other computers). The clients then get the new context limit, and the coder subagent is added or removed.
 - **If the catalogue or `models.json` cannot be loaded** (for example after a bad edit), the Settings tab shows a **SETTINGS UNAVAILABLE** card with the error. The other tabs continue to work.
 
 **More settings (the full level):**
@@ -1579,10 +1608,12 @@ For a model with sliding-window layers (Gemma), the MEMORY section tells you whi
 | Rows (default) | Launcher variable |
 |---|---|
 | Presence (0), Top k (20), Top p (0.95), Min p (0), Repeat penalty (1.0) | `PRESENCE`, `TOP_K`, `TOP_P`, `MIN_P`, `REPEAT` |
-| Batch size (512), Checkpoints (8), Checkpoint step (4096) | `UB`, `CKPT`, `CKPT_STEP` (and `BATCH` for `-b`, default 2048) |
+| Batch size (the model's own), Checkpoints (8), Checkpoint step (4096) | `UB`, `CKPT`, `CKPT_STEP` (and `BATCH` for `-b`, default 2048) |
+
+The Batch size row is the model's own `-ub`: the one Auto-tune found for it (2048 on a PC and 512 on a Mac before a tune). A value you choose is saved for that model only (`models.NAME.ub`); there is no batch size for every model. When a model has an Auto-tune result and you change the row, Apply asks once: **Use tuned**, or **Keep 512 for this model** (512 is your value). The same question comes at `carl start` in a terminal when `config.json` still has the old `llama.ub` (or a value you kept before the model was tuned again) that differs from the tuned size. A start with nobody to ask (a script, router mode, the clients) uses the tuned size and says so: `Batch: -ub 2048 (tuned); config's 512 ignored.` A `-ub` you type in the server options (`llama.extra_args`) or on `carl start` always wins, and asks nothing.
 
 - CAUTION: **The default values are tuned and measured** ([The llama.cpp server](reference/server.md)). A change can make the model slower, or its answers worse. To go back, push `x` (**Use the recommended settings**) and apply.
-- The dashboard saves these values in the same settings file. You can also set them as environment variables, for example `TOP_K=40 ./carl.sh llama`.
+- The dashboard saves these values in the same settings file. You can also set them as environment variables, for example `TOP_K=40 carl start`.
 
 #### Models panel
 
@@ -1599,6 +1630,7 @@ The list has the catalogue models and each `.gguf` in the models folder. For eac
 | `v` | **[ Check the file (v) ]**: verify the SHA-256 (about 1 min) |
 | `x` | **[ Delete (x) ]**: delete the file (a downloaded or partial file), and its MTP drafter. It asks first (**DELETE THE MODEL?**). It refuses the loaded model. |
 | `u` | **[ Auto-tune (u) ]**: open the Auto-tune panel for this model |
+| `k` / `K` | The row **Hugging Face token**: `k` types your access token (it shows as dots), `K` removes the one CARL keeps ([a gated repo](#9-downloading-and-adding-models)) |
 | `h` | **[ Add from Hugging Face (h) ]**: type `OWNER/REPO` (or a URL to a `.gguf`). A list of the GGUF files of the repo opens. Select one and push Enter to download it. |
 | `e` | **[ Edit its card (e) ]**: edit the card of a custom model ([Cards for custom models](#cards-for-custom-models)). On a catalogue model, `e` tells you that its card is read-only. |
 | `s` / `S`, `f` / `F` | Sort (next / previous), show (next / previous) |
@@ -1666,7 +1698,7 @@ The Auto fit panel shows the full [Auto fit](#auto-fit-the-best-model-for-this-m
 2. Select the length: **quick**, **normal** or **long** (on the command line: `--quick`, no option, `--long`). Click one, or push space for the next one.
 3. Push Enter (**[ Run Auto-tune (Enter) ]**) to run Auto-tune ([Auto-tune](#auto-tune)). The panel shows each step and the last lines of its output. `c` cancels the run.
 
-- **All models:** push ← from the first model (or select all models in the list). Auto-tune then tunes each downloaded model, one after the other. A model that fails does not stop the others. The panel shows the last result of each model. On the command line: `./carl.sh tune all`.
+- **All models:** push ← from the first model (or select all models in the list). Auto-tune then tunes each downloaded model, one after the other. A model that fails does not stop the others. The panel shows the last result of each model. On the command line: `carl tune all`.
 - CAUTION: Auto-tune needs the GPU for itself. If a server runs, the panel asks first (**STOP THE SERVER FOR AUTO-TUNE?**; and, if an agent's turn is running, if it must wait for its end). Then it stops the server, runs the tune, and starts the server again with the saved settings and the new tune.
 - **Last result** (in the AUTO-TUNE section): **Date**, **Mac**, **Length**, the chosen settings (**Speculation**, **Context memory**, **Context**, **Slots**), the speed of each speculation mode (prose, code, edit and their weighted mean, with `◀ chosen`), the read speeds and the context zones. The full level adds the llama.cpp build (**Build**).
 - While a run runs, the **RUN** section shows its step and the last lines of its output.
@@ -1728,7 +1760,7 @@ The footer shows the keys of the screen that you see. `?` shows all of them: the
 | `P` | Connect tab: send the client config to the computers that sync |
 | `w` / `f`, End | Log tab: wrap the lines / only the errors and the warnings; back to the end |
 | ↑ ↓, ← →, Enter, `a`, `r`, `x`, `A`, `m`, `s` `S` `f` `F` | Settings tab, Server panel: select a setting, change the value, choose a model (Model row) or keep a typed value, apply, undo, the recommended settings, the Auto fit panel, keys to the model list, sort and show the list |
-| ↑ ↓, Enter, `d`, `v`, `u`, `x`, `e`, `h`, `s` `S` `f` `F`, `t`, `c` | Settings tab, Models panel: select a model, use it, download, check, Auto-tune, delete, edit the card, add from Hugging Face, sort and show, the speeds view, cancel the download |
+| ↑ ↓, Enter, `d`, `v`, `u`, `x`, `e`, `h`, `k` `K`, `s` `S` `f` `F`, `t`, `c` | Settings tab, Models panel: select a model, use it, download, check, Auto-tune, delete, edit the card, add from Hugging Face, keep or clear the Hugging Face token, sort and show, the speeds view, cancel the download |
 | Enter, `d`, `g`, `f` | Settings tab, Auto fit panel: use this, download it, the other goal, the other candidates |
 | ← →, space, Enter, `c`, `x` | Settings tab, Auto-tune panel: select a model, the length, run, cancel the run, the recommended settings |
 | `s`, `r`, ↑ ↓, Enter, `u` | Settings tab, Router panel: single model, router mode, select a model, load or unload it (router mode), update the configs |
@@ -1756,26 +1788,26 @@ Auto fit chooses the best **stock** model that fits this Mac, with its slots and
 | `everyday` (default) | The fast builds: MoE (35B-A3B), and the Gemma 4 E4B on 16 GB Macs | Fast, and usually sufficient. CARL gives priority to speed. |
 | `hard-code` | The dense builds (27B; the Gemma 4 12B on 16 GB Macs) | Better at code and hard tasks, but slower |
 
-- **Quality rank** is the catalogue `rank` (1 = best): published benchmarks and CARL's code test first, then the quantization. These ranks are temporary.
-- **The rule:** in the goal's family, the best quality rank that holds the first setup of this order, on every Mac: **2 slots × 96K tokens**, 2 × 64K, 2 × 48K (the main session and a coder subagent), then 1 slot × 96K, 1 × 64K, 1 × 48K. Nothing below 48K. If no build of the family fits, the best of the other family (it tells you).
+- **Quality rank** is the catalogue `rank` (1 = best): published benchmarks and CARL's code test first, then the quantization. These ranks are temporary. A later CARL version measures quality on your Mac.
+- **The rule:** in the goal's family, the best quality rank that holds the first setup of this order, on every Mac: **2 slots × 96K tokens**, 2 × 64K, 2 × 48K (the main session and a coder subagent), then 1 slot × 96K, 1 × 64K, 1 × 48K. Nothing below 48K. On a PC with an NVIDIA GPU the order starts at 128K (**2 slots × 128K tokens**, 2 × 96K, 2 × 64K, 2 × 48K, then 1 × 128K and so on), each setup checked against the GPU memory that is free when you start, so a busy desktop only costs the setup; the start tells you which setup it took and why. If no build of the family fits, the best of the other family (it tells you).
 - **MTP goes first:** when a model fits a setup only without MTP, Auto fit uses n-gram speculation only, before it removes a slot or makes the context smaller. It says so: `MTP does not fit with 2 slots × 96K tokens on this Mac, so the speculation is n-gram only.` A start of any model whose context is not set by you follows the same order and says what it changed.
 - **Memory:** the smaller of the GPU memory limit and the RAM less the memory kept free for macOS and apps (6 GiB; 10 GiB while VMware's network is up; `RESERVE_GB` or `--reserve-gb`).
 - **Stock only:** Auto fit and each automatic default never choose an abliterated model. You select those yourself.
 - **Custom models** (Hugging Face, the models folder) are candidates only when their [card](#cards-for-custom-models) switches `auto_fit` on (with a rank and an arch, and not abliterated). Your rank is not measured.
 - **16 GB Macs:** no MoE build fits. `everyday` selects the Gemma 4 E4B (fast). `hard-code` selects the Gemma 4 12B (it writes correct code, but it thinks for a long time).
-- `./carl.sh download default` and the download offer name only catalogue models.
+- `carl download default` and the download offer name only catalogue models.
 - **Candidates (`llama.auto_fit`):**
   - `catalogue` (default): every catalogue model. Auto fit offers the download of its choice. Until then, a start with `model auto` uses the best downloaded model that fits.
   - `downloaded` (**downloaded only** in the dashboard): only the models on this Mac.
-- **Where Auto fit is used:** `llama.model = auto`, `./carl.sh download default`, the download offer of `./carl.sh` on a new Mac, the `auto` entry of the model list, and the **Auto fit** panel.
+- **Where Auto fit is used:** `llama.model = auto`, `carl download default`, the download offer of `carl` on a new Mac, the `auto` entry of the model list, and the **Auto fit** panel.
 
-`./carl.sh fit` shows these parts:
+`carl fit` shows these parts:
 - **Memory.** The GPU memory limit of this Mac, and what a model can use, in sentences.
-- **AUTO FIT.** The choice for each goal. `(your goal)` marks the goal of your settings. Then why, and each model with a better quality rank that Auto fit passed over, with the reason. For example: `qwen3.8-27b (quality rank 1) is dense: Auto fit keeps it for the hard code goal`. A model that does not fit says `does not fit` first.
-- **ALL MODELS.** For each model: `rank` (the quality rank), `weights` (GiB), the context memory `per 1K tokens` (MiB), and the `largest context` of each slot that fits, with q4 and with q8. For a Gemma model, the largest context is with the cache that Auto fit plans (your setting `cache.swa`). A note gives the context with the other cache. A legend under the table explains the columns.
+- **AUTO FIT.** The choice for each goal. `(your goal)` marks the goal of your settings. Then why, and each model with a better quality rank that Auto fit passed over, with the reason. For example: `qwen3.8-27b (quality rank 1) is dense: Auto fit keeps it for the hard code goal`. A model that does not fit says `does not fit` first. The last line tells how a start of the choice runs: its batch size (`-ub`) and where it comes from, and the load mode (read into the RAM, or mapped from the file), each with the reason.
+- **ALL MODELS.** For each model: `rank` (the quality rank), `weights` (GiB), the context memory `per 1K tokens` (MiB), and the `largest context` of each slot that fits, with q4 and with q8. For a Gemma model, the largest context is with the cache that Auto fit plans (your setting `cache.swa`). A note gives the context with the other cache. Each model is sized at its own batch size (`-ub`: one you typed in the server options, else your choice for the model, else its Auto-tune result, else the default). A start takes a smaller `-ub` before a smaller context, so a note gives the largest context at `-ub` 512 when that is more. A figure marked `~` is CARL's estimate. The choices of Auto fit and the models you name are measured by llama-server's own fit (`carl fit NAME`: on the file, or before a download on a stub of its header, the first 24 MB), and the table keeps each answer and shows it later without a run. A legend under the table explains the columns.
 - At the end, a line for experts only: how to give the GPU more memory, with the risk first.
 
-`./carl.sh fit --ram 24` (or 16, 36, 64, …) shows a different Mac. The choices, all with 2 × 96K except Saluki (2 × 48K, its catalogue window):
+`carl fit --ram 24` (or 16, 36, 64, …) shows a different Mac. The choices, all with 2 × 96K except Saluki (2 × 48K, its catalogue window):
 
 | RAM | everyday | hard code |
 |---|---|---|
@@ -1787,46 +1819,48 @@ Auto fit chooses the best **stock** model that fits this Mac, with its slots and
 - On 32 GB, this is true only while VMware's network is down. With the network up, CARL keeps 10 GiB free for macOS and the VM, and the everyday choice becomes the IQ3.
 - Previews (`--ram`) estimate the GPU memory limit at 2/3 of the RAM below 32 GB, and 3/4 from 32 GB. A real Mac reports its own limit.
 
-**A start over the GPU memory limit is refused.** `serve-llama.sh` (and thus `./carl.sh llama` and the dashboard) checks the setup before the model loads. If it needs more than the GPU memory limit, it stops with one `error:` sentence, for example:
+**A start over the GPU memory limit is refused.** The start (and thus `carl start` and the dashboard) checks the setup before the model loads. If it needs more than the GPU memory limit, it stops with one `error:` sentence, for example:
 ```
 error: qwen3.6-35b-a3b-iq3 does not fit this Mac with 4 slots × 256K tokens (q8): it needs 24.97 GiB, and the GPU memory limit is 24.96 GiB. CARL refuses the start, because the model would fail to load or the Mac would become very slow.
 ```
-The next lines give the largest context that fits, Auto fit's choice, and how to start anyway. Expert override: `FIT_CHECK=0 ./carl.sh llama ...`. The model can then fail to load, or make the Mac swap and become very slow.
+The next lines give the largest context that fits, Auto fit's choice, and how to start anyway. Expert override: `FIT_CHECK=0 carl start ...`. The model can then fail to load, or make the Mac swap and become very slow.
 
 ### The settings file
 
-The dashboard and the launchers keep your settings in `~/.config/carl/config.json`.
+The dashboard and the commands keep your settings in `~/.config/carl/config.json`.
 
 | Section | What it holds |
 |---|---|
-| `llama` | Server-wide llama.cpp settings: `model` (`auto` = Auto fit's choice for this Mac), `auto_goal` (`everyday` \| `hard-code`), `auto_fit` (`catalogue` \| `downloaded`), `mode` (`single` \| `router`), `net` (`local` \| `vm`; default local), `host`, `cache_ram`, `ub`, `batch`, `ckpt`, `ckpt_step`, `think_toggle`, `extra_args` (more `llama-server` flags, as a list) |
-| `models.<name>` | The profile of one model: `kv`, `ctx`, `slots`, `spec`, `spec_n`, `temp`, `top_p`, `top_k`, `min_p`, `presence`, `repeat`, `alias`, and the clients' `thinking_main` and `thinking_coder` (off, on, low, medium or xhigh) |
+| `llama` | Server-wide llama.cpp settings: `model` (`auto` = Auto fit's choice for this Mac), `auto_goal` (`everyday` \| `hard-code`), `auto_fit` (`catalogue` \| `downloaded`), `mode` (`single` \| `router`), `net` (`local` \| `vm`; default local), `host`, `cache_ram`, `api_port` (the dashboard API's port: `auto` or a port), `ub` (the old batch size for every model, read only for a model without an Auto-tune result and asked about once for one with a result; each model has its own `-ub` now, see `models.<name>`), `batch`, `ckpt`, `ckpt_step`, `think_toggle`, `load_reserve_gib` (the free memory that load mode none leaves, default 8: a start reads the weights into the memory when the free memory holds what the server needs and this much more, else the weights stay mapped from the file), `extra_args` (more `llama-server` flags, as a list) |
+| `models.<name>` | The profile of one model: `kv`, `ctx`, `slots`, `spec`, `spec_n`, `temp`, `top_p`, `top_k`, `min_p`, `presence`, `repeat`, `alias`, `ub` (the batch size you chose for this model, with `ub_tune`, the Auto-tune result it was chosen against: a later tune asks again), and the clients' `thinking_main` and `thinking_coder` (off, on, low, medium or xhigh) |
 | `paths` | `models_dir` (default `~/models/gguf`) |
-| `cache` | The [disk cache](#7-fast-starts-the-disk-cache): `disk_gb` (default 10), `prefix` (each agent's prompt, default true), `sessions` (each session, default true), `save` (`auto` \| `turn` \| `switch` \| `stop`), `auto_s` (default 120 s), `share` (default true), `swa` (`auto` \| `full` \| `window`) |
+| `cache` | The [disk cache](#7-fast-starts-the-disk-cache): `disk_gb` (default 10), `prefix` (each agent's prompt, default true), `sessions` (each session, default true), `save` (`auto` \| `turn` \| `switch` \| `stop`), `auto_s` (default 120 s), `share` (default true), `swa` (`auto` \| `full` \| `window`), `move` (`off` \| `auto`; Other templates) |
+| `delegation` | `gate`: the new-file gate (0 to 99; default 0, off). The dashboard sets it (Connect > Setup, `g`). |
+| `plugins.ID` | `enabled` and the keys a plugin declares (`carl config show` lists them). [The plugins and extensions](reference/plugins.md) tells more. |
 
-- **Order of priority** for a llama.cpp start: command-line flags, then environment variables, then `config.json`, then the Auto-tune result of this Mac, then the catalogue (`host/catalog.json`), then the built-in defaults.
+- **Order of priority** for a llama.cpp start: command-line flags, then environment variables, then `config.json`, then the Auto-tune result of this Mac, then the catalogue (`src/carl/data/catalog.json`), then the built-in defaults.
 - **CARL checks the file.** Each value must have the correct type, range or choice. A bad value stops the start with an error that names the key. CARL ignores an unknown key.
 - **Earlier versions used `llama.env`** in the same folder. If `config.json` does not exist, CARL copies its values into it one time. After that, CARL does not read the old file.
-- **A file from before 1.2.0 can hold settings of features that 1.2.0 removed** (CHANGELOG.md). It still loads: CARL ignores them (`./carl.sh config show` warns about a removed section). They go away the next time that CARL saves the file.
-- `SETTINGS_FILE=none ./carl.sh llama` ignores `config.json`. The Auto-tune result and the catalogue still apply.
+- **A file from before 1.2.0 can hold settings of features that 1.2.0 removed** (CHANGELOG.md). It still loads: CARL ignores them (`carl config show` warns about a removed section). They go away the next time that CARL saves the file.
+- `SETTINGS_FILE=none carl start` ignores `config.json`. The Auto-tune result and the catalogue still apply.
 - To go back to the defaults, delete the file, or remove a value with `config unset`.
-- **The settings folder.** `CARL_CONF_DIR=FOLDER` uses a different settings folder (`config.json`, `models.json`, `slots/`, `router-presets.ini`, `dashboard.json`). `tools/carl.py`, the launchers and the dashboard use it. The API key stays in `~/.config/carl`.
+- **The settings folder.** `CARL_CONF_DIR=FOLDER` uses a different settings folder (`config.json`, `models.json`, `slots/`, `router-presets.ini`, `dashboard.json`). CARL's commands, the start and the dashboard use it. The API key (`api-key`) is in that folder too. `API_KEY_FILE` still wins.
 - The dashboard keeps the level of each section (collapsed, simple or full) in `dashboard.json` in the same folder, not in `config.json`.
 
 ```bash
-./carl.sh config show                                 # the file, then every key: what it does, its values, its default
-./carl.sh config get llama.net
-./carl.sh config set models.qwen3.6-35b-a3b.ctx 128k  # sizes as N or Nk
-./carl.sh config unset models.qwen3.6-35b-a3b.ctx
-./carl.sh config path                                 # where the file is
+carl config show                                 # the file, then every key: what it does, its values, its default
+carl config get llama.net
+carl config set models.qwen3.6-35b-a3b.ctx 128k  # sizes as N or Nk
+carl config unset models.qwen3.6-35b-a3b.ctx
+carl config path                                 # where the file is
 ```
 
 ### Log files
 
 **Mac:**
 ```bash
-tools/llama-log.sh -f                     # follow the current server log (plain text)
-tools/llama-log.sh | grep "prompt processing"   # prompt progress lines
+carl log -f                               # follow the current server log (plain text)
+carl log | grep "prompt processing"       # prompt progress lines
 ls ~/models/logs/                         # one log per server start; llama-server-latest.log = the newest start
 ```
 
@@ -1854,7 +1888,7 @@ ps -o rss=,command= -p $PID                                                     
 
 For a server that started with `--vm`, use `192.168.42.1` in place of `127.0.0.1`.
 
-NOTE: CARL does not use `lsof`. On a Mac with a stale network share (for example a Time Machine SMB volume that is disconnected), `lsof` can hang, and Ctrl-C cannot stop it. `netstat -anv` shows the process ID in its `process:pid` column.
+NOTE: CARL does not use `lsof` to find the server (except when `netstat` prints nothing at all, and then with `-b`, which does not touch the volumes, and with a time limit of 5 seconds: an `lsof` that does not answer is given up on, and CARL then cannot tell, which is not the same as a free port). On a Mac with a stale network share (for example a Time Machine SMB volume that is disconnected), `lsof` can hang, and Ctrl-C cannot stop it. `netstat -anv` shows the process ID in its `process:pid` column.
 
 ---
 
@@ -1865,9 +1899,9 @@ Run the setup again in these conditions:
 - CARL changed (a new version with new plugins or options).
 - You restarted the server with a different `--ctx`, model or number of slots.
 
-**On the server Mac,** run `./carl.sh install --config-only` from the CARL folder, or push `u` in the dashboard's Connect tab.
+**On the server Mac,** run `carl install --config-only` from the CARL folder, or push `u` in the dashboard's Connect tab.
 
-**On other computers,** send the config from the dashboard: push `P` in the Connect tab (**[ Send the config (P) ]**), or run `./carl.sh push`. The sync service on each computer applies it ([Clients on other computers](reference/client-sync.md)).
+**On other computers,** send the config from the dashboard: push `P` in the Connect tab (**[ Send the config (P) ]**), or run `carl push`. The sync service on each computer applies it ([Clients on other computers](reference/client-sync.md)).
 
 **For a new CARL version, or a computer without the sync service:** make a new client package, unzip it over the old folder, and run the setup there ([Updating a client computer](#updating-a-client-computer)):
 ```bash
@@ -1909,7 +1943,7 @@ Then **fully restart OpenCode or Pi.**
 **The models.** In single-model mode, it writes one entry: the model that the server runs. In router mode, it writes one entry for each installed model. Each entry has the model's own name.
 - Each entry gets its family's thinking options (custom models: the *thinking* field of their card) and its context. The model that runs gets the context of the server. The others (router mode) get the context of their own settings.
 - **The default model** (`model` / `small_model`, Pi's `defaultModel`) is the model that the server runs now, when the server runs a single model that is in the installed list. Else, it is the model that a server start loads (`llama.model`, or Auto fit's choice). In router mode, it is the model that a start loads.
-  - Reason: the dashboard saves the model that it applies (`llama.model`), so a restart runs it again. Only `./carl.sh --model NAME` is not saved: the next start without `--model` runs the saved model again.
+  - Reason: the dashboard saves the model that it applies (`llama.model`), so a restart runs it again. Only `carl --model NAME` is not saved: the next start without `--model` runs the saved model again.
   - The setup changes the default only if it is unset, or if it still has the value that the setup set before. Your own default model stays.
 - It replaces the `llamacpp` provider as a complete block. Thus, removed models do not stay in the config. (A deep merge never deletes keys, so old variants stayed in the configs.) It keeps your other providers and settings.
 - It sets the llama.cpp context limit from the server.
@@ -1922,7 +1956,7 @@ Then **fully restart OpenCode or Pi.**
 
 **The smoke test.** At the end, it checks the connection to the server: `OK: the server answers at http://HOST:PORT/v1. It has MODEL.`
 
-**It does not overwrite settings that you own.** `client/configure.py` does the merge:
+**It does not overwrite settings that you own.** `client/carl_client/app/configure.py` does the merge:
 
 | Item | Rule |
 |---|---|
@@ -1936,17 +1970,15 @@ Then **fully restart OpenCode or Pi.**
 | A second run | With the same input, it changes nothing. |
 
 **Formerly LLM-Deploy.** Before 1.2.0, CARL's files had the name `llm-deploy`: the folder `~/.config/llm-deploy`, the records `llm-deploy.json`, the prompt folder `~/.config/opencode/llm-deploy/`, the provider `llm-deploy` and the coder `llm-deploy-coder`.
-- The first `./carl.sh` command (or the setup) moves the folder to `~/.config/carl`. It leaves a link with the old name, so the old configs continue to work.
+- The first `carl` command (or the setup) moves the folder to `~/.config/carl`. It leaves a link with the old name, so the old configs continue to work.
 - The setup then changes CARL's own items to the new names (`carl.json`, `~/.config/opencode/carl/`, `carl`, `carl-coder`), with the usual backups.
 - Your own items with these names stay.
 
-### Internals: install-clients.sh and install.sh
+### Internals: the setup program
 
-The setup has two parts in the client folder. You do not need to run them yourself:
-- `install-clients.sh [both|opencode|pi]` installs OpenCode and Pi (and Node 22 when necessary).
-- `install.sh` writes the configs, adds the sync service and does the smoke test. The sync service runs it with your recorded choices. Its options (`--vm`, `--local`, `--host ADDR`, `--port N`, `--key-file FILE`, and the old positional form `HOST [X] [PORT]`) and its switches are in `./install.sh --help`.
+The setup is one Python program in the client folder (`client/carl_setup.py`). `./setup` and `setup.command` (macOS) start it. You do not need to run the program yourself. It installs OpenCode and Pi (and Node 22 when necessary), writes the configs, adds the sync service and does the smoke test. The sync service runs it again with your recorded choices. Its options (`--vm`, `--local`, `--host ADDR`, `--port N`, `--key-file FILE`) and its switches are in `./setup --help`.
 
-Both still work alone, for scripts and for the instructions of earlier versions. Their `--help` pages say to use `./setup`.
+Before 1.21.0, `install-clients.sh` and `install.sh` were the two parts of the setup. They are removed ([the CHANGELOG](CHANGELOG.md) lists the move).
 
 ---
 
@@ -1954,17 +1986,17 @@ Both still work alone, for scripts and for the instructions of earlier versions.
 
 | Symptom | Cause | Remedy |
 |---|---|---|
-| `error: MODEL does not fit this Mac with N slots × CTX tokens (q4): it needs N GiB, and the GPU memory limit is M GiB. …` at the start (the start is refused) | The model and the context are larger than the memory that macOS lets the GPU use. The model would fail to load, or swap. | Use the suggested `--ctx`, Auto fit's choice (shown), a smaller build, or q4 context memory. See `./carl.sh fit`. Expert override: `FIT_CHECK=0` (it can fail to load, or swap). |
-| No dashboard shows; plain server output shows | You did not start the server from a terminal (a script, `nohup`), or `MONITOR=0` is set. | This is correct. To attach, run `./carl.sh monitor`. |
+| `error: MODEL does not fit this Mac with N slots × CTX tokens (q4): it needs N GiB, and the GPU memory limit is M GiB. …` at the start (the start is refused) | The model and the context are larger than the memory that macOS lets the GPU use. The model would fail to load, or swap. | Use the suggested `--ctx`, Auto fit's choice (shown), a smaller build, or q4 context memory. See `carl fit`. Expert override: `FIT_CHECK=0` (it can fail to load, or swap). |
+| No dashboard shows; plain server output shows | You did not start the server from a terminal (a script, `nohup`), or `MONITOR=0` is set. | This is correct. To attach, run `carl monitor`. |
 | The header shows **STOPPED** directly after the start, and the Live tab says "The server stopped." | The server did not start (bad flag, file not found, out of memory). | Read the lines of the launcher in the SERVER card ("The last start failed. The launcher said:"). The full output is in `~/models/logs/.console-9275.out`. |
-| You closed the terminal, and you do not know if the server still runs | The server continues to run, because it runs under `nohup`. | To attach again, run `./carl.sh monitor`. Then push `q` → `s` to stop it. |
-| Clients on the Mac cannot connect to 127.0.0.1 | The server started for the VM (192.168.42.1). | Run `./carl.sh install --config-only` again (it uses the address on which the server listens). Or start the server without `--vm`. |
-| The VM cannot reach 192.168.42.1:9275 | Since 1.3.0, the server serves only this Mac unless you ask for more. | Start it with `./carl.sh --vm`, or set **Network** to **this Mac and the VM** in Settings (`llama.net = vm`). The Connect tab tells you which one runs. |
+| You closed the terminal, and you do not know if the server still runs | The server continues to run, because it runs under `nohup`. | To attach again, run `carl monitor`. Then push `q` → `s` to stop it. |
+| Clients on the Mac cannot connect to 127.0.0.1 | The server started for the VM (192.168.42.1). | Run `carl install --config-only` again (it uses the address on which the server listens). Or start the server without `--vm`. |
+| The VM cannot reach 192.168.42.1:9275 | Since 1.3.0, the server serves only this Mac unless you ask for more. | Start it with `carl --vm`, or set **Network** to **this Mac and the VM** in Settings (`llama.net = vm`). The Connect tab tells you which one runs. |
 | `error: --vm: no network interface has the address 192.168.42.1. …` | The Fusion network is not up. | Start VMware Fusion, or use `--local`. |
 | The HEALTH card says `✗ The GPU failed (out of memory or a compute error). …` | GPU out-of-memory or compute errors in the log | Restart the server. Make sure that no other large program runs. |
 | The start or the HEALTH card says `llama.cpp … is older than the version that CARL is tested with` (or `… older than the tested version`) | The installed llama.cpp is older than the version that CARL is tested with. Some functions can fail or work differently. | Run `brew upgrade llama.cpp`, then restart the server (Settings > Server, `a`). |
-| `error: a server runs on port 9275 already (process PID). One model at a time: …` | A server runs already (one model at a time). | Stop it first: `./carl.sh monitor`, then `q` and `s`. Or use the `kill` command of [Daily use](#stop-the-server-or-keep-it-running). Or only watch it with `./carl.sh monitor`. |
-| `error: port 9275 is in use by another program (NAME, process PID). Port 9276 is free: …` | A different program uses the port, and the start has no terminal to ask in. | Start the server on the free port: `PORT=9276 ./carl.sh llama`. Or stop the other program. In a terminal, the start asks you ([Daily use](#2-daily-use)). |
+| `error: a server runs on port 9275 already (process PID). One model at a time: …` | A server runs already (one model at a time). | Stop it first: `carl monitor`, then `q` and `s`. Or use the `kill` command of [Daily use](#stop-the-server-or-keep-it-running). Or only watch it with `carl monitor`. |
+| `error: port 9275 is in use by another program (NAME, process PID). Port 9276 is free: …` | A different program uses the port, and the start has no terminal to ask in. | Start the server on the free port: `PORT=9276 carl start`. Or stop the other program. In a terminal, the start asks you ([Daily use](#2-daily-use)). |
 | `error: another large process (possibly a model) is in memory. …` | A model server runs already: llama.cpp, or a server that started in a different way. Two models do not fit in the GPU memory. | Stop the other server first. The message shows its process ID and its size. If the large process is not a model, start with `ALLOW_SECOND_MODEL=1`. |
 | The prompt progress stops for many minutes, then continues | The Mac went to sleep (lid closed on battery power, or `KEEP_AWAKE=0`). | Connect the power supply and keep the lid open. To check, run `pmset -g log \| grep -E "Sleep\|Wake"`. |
 | All requests fail with `Compute error`, but `/health` says ok | A GPU out-of-memory event. Usually, a second model started at the same time. | Restart the server. CAUTION: Do not run two models at the same time. |
@@ -1974,26 +2006,32 @@ Both still work alone, for scripts and for the instructions of earlier versions.
 | The first message takes minutes | A cold prompt: the system prompt and the tools (~9K), or a long session after a restart without the disk cache | This is correct for the first session. The 35B reads prompts ~6× faster. The [disk cache](#7-fast-starts-the-disk-cache) makes later starts fast. |
 | A new session or a session after a restart reads the whole prompt again | The disk cache is off, the prompt changed (a new tool, an update), or a different model file or llama.cpp build | Look at `/carl` and at the Caching panel. After a prompt change, the first new session saves the new prompt. |
 | Slow replies late in a long session | The write speed decreases as the context becomes larger (27B: ~7 tok/s at 60–80K). | Compact the session or start a new session. Or use the 35B. |
-| The client shows the wrong model name | The client selection does not control the server. | Select the entry that agrees with `./carl.sh --model ...`. OpenCode's model check warns you. |
-| The setup waits at the API key prompt | The client folder has no key (not a client package). | Paste the key, or make a client package on the server Mac (`./carl.sh package`) and use it. |
+| The client shows the wrong model name | The client selection does not control the server. | Select the entry that agrees with `carl --model ...`. OpenCode's model check warns you. |
+| The setup waits at the API key prompt | The client folder has no key (not a client package). | Paste the key, or make a client package on the server Mac (`carl package`) and use it. |
 | Smoke test: `Note: no server runs at http://HOST:PORT. …` | The server is not up, or the VM cannot reach the Mac. | Start the server. From the VM, run `curl -s http://192.168.42.1:9275/health`. |
 | The download stops or fails its checksum | A network interruption, or a bad file (`*.bad`) | First, delete the `.bad` file. Then run `download` again (it continues from where it stopped). |
-| The dashboard or `./carl.sh` freezes, and Ctrl-C does not stop it (versions before 1.1.0) | Old versions used `lsof` to find the server. `lsof` checks each mounted volume. On a stale network share (for example a disconnected Time Machine SMB volume), it hangs, and you cannot stop it. | Update CARL: it now uses `netstat`. To release the hang now, eject the stale volume in Finder (or `diskutil unmount force /Volumes/NAME`), then close the terminal. |
+| The dashboard or `carl` freezes, and Ctrl-C does not stop it (versions before 1.1.0) | Old versions used `lsof` to find the server. `lsof` checks each mounted volume. On a stale network share (for example a disconnected Time Machine SMB volume), it hangs, and you cannot stop it. | Update CARL: it now uses `netstat`. To release the hang now, eject the stale volume in Finder (or `diskutil unmount force /Volumes/NAME`), then close the terminal. |
 | `CARL needs these programs, and they are not installed: llama.cpp aria2 ansifilter zstd.` | Homebrew tools are missing. | Answer `Y`, and CARL runs `brew install`. Or install them yourself. `SKIP_DEPS=1` skips the check. If Homebrew is missing, install it first (https://brew.sh). |
 | `No model is downloaded. CARL looks for the best model for this Mac. …` | A new installation | Answer `Y` to download Auto fit's choice for this Mac. Or answer `n`: the dashboard opens without a server, and you can download a model in its **Models** panel. |
-| `Auto fit chooses X for this Mac, but it is not downloaded (./carl.sh download X). CARL starts Y, the best downloaded model that fits.` | `llama.model` is `auto`, and Auto fit chooses from the whole catalogue (`llama.auto_fit catalogue`). | This is correct. To use X, run `./carl.sh download X` (or push `A` in the Settings tab). To choose only from downloaded models, run `./carl.sh config set llama.auto_fit downloaded`. To always use Y, run `./carl.sh config set llama.model Y`. |
-| `error: Auto fit: No stock model with a quality rank fits this Mac (downloaded models only). …` | `llama.model` is `auto`, and only abliterated (or no fitting) models are downloaded. Auto fit never chooses an abliterated model. | Download Auto fit's choice (`./carl.sh download default`), or select the model by name: `./carl.sh config set llama.model NAME`. |
-| `error: models.NAME.ctx: ... is out of range` (or a different key) | A bad value in `~/.config/carl/config.json` | Correct the value, or remove it with `./carl.sh config unset KEY`. `./carl.sh config show` lists the valid keys. |
-| `error: a server runs on port 9275. Stop it first: two models do not fit in the memory.` from `./carl.sh tune` | Auto-tune needs the GPU for itself. | Stop the server first, or run Auto-tune from the dashboard (Settings, **Auto-tune** panel): it stops and starts the server for you. |
-| `error: another large process (possibly a model) is in memory: …` from `./carl.sh tune` | A different model server, or another process larger than 8 GiB (`BIG_GB`), runs. | Stop it first. If the process is not a model, run with `ALLOW_SECOND_MODEL=1`. |
+| `Auto fit chooses X for this Mac, but it is not downloaded (carl download X). CARL starts Y, the best downloaded model that fits.` | `llama.model` is `auto`, and Auto fit chooses from the whole catalogue (`llama.auto_fit catalogue`). | This is correct. To use X, run `carl download X` (or push `A` in the Settings tab). To choose only from downloaded models, run `carl config set llama.auto_fit downloaded`. To always use Y, run `carl config set llama.model Y`. |
+| `error: Auto fit: No stock model with a quality rank fits this Mac (downloaded models only). …` | `llama.model` is `auto`, and only abliterated (or no fitting) models are downloaded. Auto fit never chooses an abliterated model. | Download Auto fit's choice (`carl download default`), or select the model by name: `carl config set llama.model NAME`. |
+| `error: models.NAME.ctx: ... is out of range` (or a different key) | A bad value in `~/.config/carl/config.json` | Correct the value, or remove it with `carl config unset KEY`. `carl config show` lists the valid keys. |
+| `error: a server runs on port 9275. Stop it first: two models do not fit in the memory.` from `carl tune` | Auto-tune needs the GPU for itself. | Stop the server first, or run Auto-tune from the dashboard (Settings, **Auto-tune** panel): it stops and starts the server for you. |
+| `error: another large process (possibly a model) is in memory: …` from `carl tune` | A different model server, or another process larger than 8 GiB (`BIG_GB`), runs. | Stop it first. If the process is not a model, run with `ALLOW_SECOND_MODEL=1`. |
 | `error: …opencode.json is not plain JSON (comments?)` from the setup | The setup cannot merge a config file with comments (JSONC). | Remove the comments, or move the file. Then run the setup again. It changed nothing. |
 | A config that you send does not arrive on a client computer | The sync service is not running, the dashboard is not running, or new configs wait for you (`/carl`: **Apply New Configs at Once** is `off`). | Look at the Clients sub-tab of the Connect tab, and at `/carl` on the client. When a new config waits, select **Apply the Waiting Config** in `/carl`. |
 
-**To check what the server does with a request** (thinking, the template, the sampling): see [Verifying behaviour](reference/verifying.md).
+**To check what the server does** (thinking, the template, the sampling): see [Verifying behaviour](reference/verifying.md).
 
 ---
 
-## 13. Rules of thumb
+## 13. Benchmarking and testing
+
+The easy way to find the best speculation and context for a model on this Mac is Auto-tune: `carl tune NAME` ([Auto-tune](#auto-tune)). Stop the server first: Auto-tune does not start while a server runs on port 9275, or while another model is in memory.
+
+---
+
+## 14. Rules of thumb
 
 - **Run only one model server at a time.**
 - **Keep the Mac connected to power and awake** during long work.
@@ -2002,46 +2040,46 @@ Both still work alone, for scripts and for the instructions of earlier versions.
 - **Select the client model that agrees with the server.**
 - **Use thinking `low` as the default** on the 27B. Use `none` for quick, mechanical edits. Use `xhigh` only for difficult problems.
 - **Use the 35B-A3B for speed.** Use the abliterated 27B when you need an uncensored model or the best measured quality.
-- CAUTION: **Do not bind to `0.0.0.0`.** The macOS firewall is off, so a wildcard bind makes the model available to the LAN. The launchers refuse this address, also through `HOST=0.0.0.0`.
+- CAUTION: **Do not bind to `0.0.0.0`.** The macOS firewall is off, so a wildcard bind makes the model available to the LAN. CARL refuses this address, also through `HOST=0.0.0.0`.
 
 ---
 
-## 14. Command reference
+## 15. Command reference
 
 **Mac:**
 
 | Command | Does |
 |---|---|
-| `./carl.sh` | Opens the dashboard: attaches to a llama.cpp server on 9275, else starts llama.cpp with the saved settings. It first checks for `llama-server`, `aria2c`, `ansifilter` and `zstd` (offers `brew install`), and offers to download a model if none is downloaded. |
-| `./carl.sh llama` | llama.cpp with the model of Auto fit (`qwen3.6-35b-a3b`; the IQ3 build on 24 GB; the Gemma 4 E4B on 16 GB), q4 context memory, 2 slots |
-| `./carl.sh monitor` | Attaches the live dashboard (a server start shows it in the same terminal) |
-| `./carl.sh --no-start` (or `dashboard`) | The dashboard only: attaches to a server, or opens it without a server (no model loads). `--expand`: every section at full for this run. |
-| `./carl.sh llama --local` / `--vm` | Serves only this Mac (the default) / the VM address too |
-| `./carl.sh llama --host ADDR` | Serves on one address of this Mac (LAN, Parallels, …); never 0.0.0.0 |
-| `./carl.sh --router` / `--single` | Router mode (OpenCode and Pi change models) / one model (the default); `llama.mode` saves the choice |
-| `./carl.sh llama --slots 1` … `--slots 4` | One session / the main session and subagents (default: auto = 2 when they fit) |
-| `./carl.sh --model NAME\|PATH` | A different model (catalogue, models folder or Hugging Face download) or a `.gguf` path |
-| `./carl.sh --kv q8` / `--q8` / `--q4` | The context memory type |
-| `./carl.sh --ctx 192k` | The context of each slot (4k to 256k) |
-| `./carl.sh install [opencode\|pi] [--yes] [--config-only\|--clients-only] [--vm\|--host ADDR] [--port N]` | The setup on this Mac: installs OpenCode and Pi, and connects them to this server |
-| `./carl.sh package [--anyway] [--out DIR]` | Makes the client package for another computer ([The client package](#the-client-package)) |
-| `./carl.sh models` | The catalogue, the models folder and your downloads, with the size (GB), the download status and the source |
-| `./carl.sh fit [--ram GB] [--ctx N] [--slots N] [--goal everyday\|hard-code] [--scope catalogue\|downloaded] [--reserve-gb N]` | Auto fit's choice for each goal and why; which models fit this Mac, and the largest context of each model |
-| `./carl.sh download NAME\|default\|all` | Downloads catalogue models |
-| `./carl.sh download hf:OWNER/REPO/FILE.gguf` | Downloads any GGUF from Hugging Face (verified). `hf:OWNER/REPO` lists its GGUF files. |
-| `./carl.sh verify [NAME...]` | Verifies downloaded models (size and SHA-256). No names: every downloaded model. |
-| `./carl.sh delete NAME` | Deletes a downloaded model file |
-| `./carl.sh card NAME [set FIELD VALUE\|unset FIELD]` | A model's card. Custom models: set or remove one field of your card ([Cards for custom models](#cards-for-custom-models)). |
-| `./carl.sh tune NAME\|all [--quick\|--long]` | Auto-tunes a model (or every downloaded model) for this Mac: speculation, context, slots (~5–10 min; quick ~4 min; long +10–40 min, up to 192K; stop the server first) |
-| `./carl.sh config [show\|path\|get KEY\|set KEY VALUE\|unset KEY]` | The settings file `~/.config/carl/config.json`. KEY is like `llama.net` or `models.NAME.ctx`. `show` lists every key with what it does, its values and its default. |
-| `./carl.sh cache [show\|trim\|clear]` | The [disk cache](#7-fast-starts-the-disk-cache) that OpenCode and Pi fill: the saved prompts and saved sessions, trim to the limit (and store new saved sessions as changes), remove all |
-| `./carl.sh push` | Sends the client config (the models for the clients: single-model mode, the model that a start loads; router mode, the installed models) to the clients on other computers ([Clients on other computers](reference/client-sync.md)) |
-| `./carl.sh help COMMAND` | The help for one command: llama, dashboard (or monitor), install, package, models, fit, download, verify, delete, card, tune, config, cache, push. Also the topics env and tuning. `./carl.sh COMMAND --help` and `./carl.sh COMMAND -h` do the same. The help wraps to the width of the terminal. |
-| `./carl.sh -h` | The help: all commands. An unknown command gives one `error:` line and exits with 2. |
-| `./carl.sh --help-adv` | All `llama-server` flags |
-| `./host/models.sh list\|download\|verify\|delete NAME\|path NAME\|get NAME FIELD\|default\|downloaded` | The models tool (a wrapper around `tools/carl.py`; `./carl.sh models\|download\|verify\|delete` use it): list, download, verify, delete, the local path, one field, the default model for this Mac, the downloaded models |
-| `tools/make-share-zip.sh [--with-docs] [OUT]` | Makes a clean zip of the folder to share |
-| `tools/llama-log.sh [-f] [FILE]` | The server log as plain text (no ANSI codes). `-f` follows the log. |
+| `carl` | Opens the dashboard: attaches to a llama.cpp server on 9275, else starts llama.cpp with the saved settings. It first checks for `llama-server`, `aria2c`, `ansifilter` and `zstd` (offers `brew install`), and offers to download a model if none is downloaded. |
+| `carl start` | llama.cpp with the model of Auto fit (`qwen3.6-35b-a3b`; the IQ3 build on 24 GB; the Gemma 4 E4B on 16 GB), q4 context memory, 2 slots |
+| `carl monitor` | Attaches the live dashboard (a server start shows it in the same terminal) |
+| `carl --no-start` (or `dashboard`) | The dashboard only: attaches to a server, or opens it without a server (no model loads). `--expand`: every section at full for this run. |
+| `carl start --local` / `--vm` | Serves only this Mac (the default) / the VM address too |
+| `carl start --host ADDR` | Serves on one address of this Mac (LAN, Parallels, …); never 0.0.0.0 |
+| `carl --router` / `--single` | Router mode (OpenCode and Pi change models) / one model (the default); `llama.mode` saves the choice |
+| `carl start --slots 1` … `--slots 4` | One session / the main session and subagents (default: auto = 2 when they fit) |
+| `carl --model NAME\|PATH` | A different model (catalogue, models folder or Hugging Face download) or a `.gguf` path |
+| `carl --kv q8` / `--q8` / `--q4` | The context memory type |
+| `carl --ctx 192k` | The context of each slot (4k to 256k) |
+| `carl install [opencode\|pi] [--yes] [--config-only\|--clients-only] [--vm\|--host ADDR] [--port N]` | The setup on this Mac: installs OpenCode and Pi, and connects them to this server |
+| `carl package [--anyway] [--out DIR]` | Makes the client package for another computer ([The client package](#the-client-package)) |
+| `carl models` | The catalogue, the models folder and your downloads, with the size (GB), the download status and the source |
+| `carl fit [--ram GB] [--ctx N] [--slots N] [--goal everyday\|hard-code] [--scope catalogue\|downloaded] [--reserve-gb N] [NAME...]` | Auto fit's choice for each goal and why; which models fit this Mac, and the largest context of each model. The figures marked `~` are estimates; the models you name are measured by llama-server's own fit |
+| `carl download NAME\|default\|all` | Downloads catalogue models |
+| `carl download hf:OWNER/REPO/FILE.gguf` | Downloads any GGUF from Hugging Face (verified). `hf:OWNER/REPO` lists its GGUF files. |
+| `carl hf token [show\|set\|clear]` | Shows, keeps or removes your Hugging Face access token (a gated repo needs it). `set` reads it from standard input or asks with nothing shown. Never an argument. |
+| `carl verify [NAME...]` | Verifies downloaded models (size and SHA-256). No names: every downloaded model. |
+| `carl delete NAME` | Deletes a downloaded model file |
+| `carl card NAME [set FIELD VALUE\|unset FIELD]` | A model's card. Custom models: set or remove one field of your card ([Cards for custom models](#cards-for-custom-models)). |
+| `carl tune NAME\|all [--quick\|--long]` | Auto-tunes a model (or every downloaded model) for this Mac: speculation, context, slots (~10–20 min; quick ~5–10 min; long +10–40 min, up to 192K; stop the server first) |
+| `carl config [show\|path\|get KEY\|set KEY VALUE\|unset KEY]` | The settings file `~/.config/carl/config.json`. KEY is like `llama.net` or `models.NAME.ctx`. `show` lists every key with what it does, its values and its default. |
+| `carl cache [show\|trim\|clear]` | The [disk cache](#7-fast-starts-the-disk-cache) that OpenCode and Pi fill: the saved prompts and saved sessions, trim to the limit (and store new saved sessions as changes), remove all |
+| `carl push` | Sends the client config (the models for the clients: single-model mode, the model that a start loads; router mode, the installed models) to the clients on other computers ([Clients on other computers](reference/client-sync.md)) |
+| `carl help COMMAND` | The help for one command: start, engine, log, dashboard (or monitor), install, package, models, fit, download, verify, delete, card, tune, config, cache, push. Also the topics env and tuning. `carl COMMAND --help` and `carl COMMAND -h` do the same. The help wraps to the width of the terminal. |
+| `carl -h` | The help: all commands. An unknown command gives one `error:` line and exits with 2. |
+| `carl engine version` | The version of llama.cpp, and a hint when it is older than the version that CARL is tested with |
+| `carl engine help` | All `llama-server` flags |
+| `carl log [-f] [FILE]` | The server log as plain text (no ANSI codes). `-f` follows the log. |
 
 **Environment variables of the launcher:**
 
@@ -2063,13 +2101,13 @@ Both still work alone, for scripts and for the instructions of earlier versions.
 | `MONITOR=0` | No dashboard: the server runs in the foreground |
 | `ALLOW_SECOND_MODEL=1` | Start also when a process larger than 8 GiB (`BIG_GB`) is in memory. CAUTION: a second model can stop the Mac. |
 | `SETTINGS_FILE=none` | Ignore the saved settings in `~/.config/carl/config.json` |
-| `CARL_CONF_DIR` | A different settings folder (default `~/.config/carl`): `config.json`, `models.json`, the disk cache, the router presets. The API key stays in `~/.config/carl`. |
+| `CARL_CONF_DIR` | A different settings folder (default `~/.config/carl`): `config.json`, `models.json`, the disk cache, the router presets, and the API key (`api-key`). |
 | `MODELS_DIR` | The models folder (default `~/models/gguf`; also `paths.models_dir` in `config.json`) |
 | `SKIP_DEPS=1` | Do not check for the Homebrew tools (`llama-server`, `aria2c`, `ansifilter`, `zstd`) |
 
 The script sends all other arguments after the flags to `llama-server`.
 
-**Setup switches** (put them in front of `./carl.sh install` or `./setup`; the setup keeps them for the next time, and `=0` turns a `NO_…` switch back off):
+**Setup switches** (put them in front of `carl install` or `./setup`; the setup keeps them for the next time, and `=0` turns a `NO_…` switch back off):
 
 | Variable | Does |
 |---|---|

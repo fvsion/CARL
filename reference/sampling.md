@@ -24,9 +24,9 @@ Gemma 4 (every size): temperature 1.0, top_p 0.95, top_k 64, "for all use cases"
 
 | Situation | Sampling | Source |
 |---|---|---|
-| Thinking on, a Qwen model or a custom model (normal use) | 1.0 / 0.95 / 20 / 0 / presence 0 / repetition 1.0 | The catalogue `tune` of the model (for a custom model, CARL's defaults). `serve-llama.sh` gives these values explicitly. `TEMP`, `TOP_P`, `TOP_K`, `MIN_P`, `PRESENCE` and `REPEAT` override them, and so do the `models.<name>` keys in `config.json`. The clients send no sampling fields: the capture proxy showed only `model`, `stream`, `store` and `reasoning_effort`. |
+| Thinking on, a Qwen model or a custom model (normal use) | 1.0 / 0.95 / 20 / 0 / presence 0 / repetition 1.0 | The catalogue `tune` of the model (for a custom model, CARL's defaults). The start gives these values explicitly. `TEMP`, `TOP_P`, `TOP_K`, `MIN_P`, `PRESENCE` and `REPEAT` override them, and so do the `models.<name>` keys in `config.json`. The clients send no sampling fields: the capture proxy showed only `model`, `stream`, `store` and `reasoning_effort`. |
 | Thinking on, a Gemma 4 model | 1.0 / 0.95 / **64** / 0 / presence 0 / repetition 1.0 | The catalogue `tune` (Google's values), with the same overrides |
-| OpenCode `none` variant (thinking off) | 0.7 / 0.80 / 20 / 0 / presence 1.5 | The variant sends `temperature`, `top_p` and `presence_penalty` with `reasoning_effort: none` (`client/carl_models.py`). OpenCode sends variant options in the request body. The same mechanism carried `chat_template_kwargs` in the 2026-09-24 captures. These fields were not captured again yet. |
+| OpenCode `none` variant (thinking off) | 0.7 / 0.80 / 20 / 0 / presence 1.5 | The variant sends `temperature`, `top_p` and `presence_penalty` with `reasoning_effort: none` (`client/carl_client/domain/models.py`). OpenCode sends variant options in the request body. The same mechanism carried `chat_template_kwargs` in the 2026-09-24 captures. These fields were not captured again yet. |
 | Pi `off` (thinking off) | the thinking-mode values | Pi changes only `chat_template_kwargs` for each level. It cannot change the sampling for each level. The effect is small: direct answers are a little more random. |
 
 - **Reason for the explicit flags:** the five catalogue GGUFs that were checked contain 1.0 / 20 / 0.95 (`general.sampling.*`). The flags also cover the other catalogue builds and custom models, which were not checked. A GGUF without these values would get the generic llama.cpp defaults with no warning (temperature 0.8, top_k 40, min_p 0.05).
@@ -41,7 +41,7 @@ Gemma 4 (every size): temperature 1.0, top_p 0.95, top_k 64, "for all use cases"
 | | llama.cpp |
 |---|---|
 | Server limit | None by default (`n_predict -1`): the model writes until it stops or the context is full. |
-| OpenCode | The config sets `limit.output` = half the context, at most 32,000. A captured request had no `max_tokens`. |
+| OpenCode | The config sets `limit.output` = half the context, at most 32,000. The capture proxy showed no `max_tokens` in the request. |
 | Pi | Sends `max_tokens` = `maxTokens`. The config sets it to half the context, at most 32,768. |
 
 ---
@@ -53,7 +53,7 @@ Gemma 4 (every size): temperature 1.0, top_p 0.95, top_k 64, "for all use cases"
 - **Client limit above the server limit:** when the session is larger than the server context, each request fails with `HTTP 400 exceed_context_size_error`. The client never compacts by itself.
 - **Server limit above the client limit:** this causes no problem. The extra memory is not used.
 
-**The setup (`client/install.sh`) keeps the two limits the same:**
+**The setup keeps the two limits the same:**
 - Each installed model gets the context of its own settings (`installed-models.json`).
 - The model that runs now gets its limit from `LLAMA_CTX`, then from `/props` → `default_generation_settings.n_ctx` of the server, then 96K (98304).
 - After you change `--ctx`, run the setup again. Then restart the client.

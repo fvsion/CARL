@@ -41,7 +41,7 @@ A request reads its whole prompt unless a cache already holds the start of it. T
 - **More checkpoints give no gain.** Each turn adds to the end of the session. The server keeps earlier reasoning (`preserve_thinking`). Thus, the cached prompt stays the start of the new prompt, and the server reads only the new tokens.
 - **q8 fits at 96K on 36 GB.** On the 35B, it reads approximately 4% faster, with the same write speed and 0.36 GiB more swap. q4 stays the default, because it uses less memory and has the recall tests.
 - NOTE: **The 27B with `--kv q8` has a small cache.** The automatic size is 1792 MiB. At 34 KiB for each token, this holds only ~54K tokens. Thus, the server reads a removed long 27B session again in full. With q4, the 27B gets 4864 MiB (~276K tokens), which is sufficient.
-- **With OpenCode and Pi pinning slots (measured 2026-10-11, Phase 23.5.1.2):** the A3B IQ3, 2 slots, llama.cpp 0.6.0, this M2 Max, a matrix of client setups with the save rule "before a stop" (a session whose slot is taken is not saved). A session that came back after its slot was taken went back to a slot that held another session, and llama.cpp took it from the RAM cache: 64 tokens read of 38,041 (OpenCode), 63 of 33,233 (Pi). llama.cpp #28139 (a request pinned to an **empty** slot skips the RAM cache's lookup) does not happen in CARL's runs: CARL never clears an idle slot, and a session loses its slot only when every slot is in use. As a guard, carl-cache puts such a session in a slot that holds a conversation when there is one, never in an empty slot.
+- **With OpenCode and Pi pinning slots (measured 2026-10-11, Phase 23.5.1.2):** the A3B IQ3, 2 slots, llama.cpp 0.6.0, this M2 Max, the cache matrix with the save rule "before a stop" (a session whose slot is taken is not saved). A session that came back after its slot was taken went back to a slot that held another session, and llama.cpp took it from the RAM cache: 64 tokens read of 38,041 (OpenCode), 63 of 33,233 (Pi). llama.cpp #28139 (a request pinned to an **empty** slot skips the RAM cache's lookup) does not happen in CARL's runs: CARL never clears an idle slot, and a session loses its slot only when every slot is in use. As a guard, carl-cache puts such a session in a slot that holds a conversation when there is one, never in an empty slot.
 - **llama.cpp looks in its RAM cache only when the slot would keep less than half its tokens** (llama.cpp #28276). The slot holds another session of the same agent, which shares the agent's prompt, so a session shorter than about twice that prompt was read again before 1.20.1: the A3B IQ3 with 4,500-word sessions, 19,687 of 19,689 tokens (OpenCode: a hybrid model keeps nothing then); the E4B, 7,967 of 18,948 (its own part). carl-cache now moves the slot's conversation to the RAM cache first (a one-token request, `toRamCache()`): the slot keeps nothing of the request, and llama.cpp looks in the RAM cache: 64 and 62 tokens. Pi's agent prompt (~6.5K) is under half its slots in these runs, so Pi was not hit.
 - **Across client processes (Phase 23.5.1.10, measured 2026-10-12):** the process that let a session go to the RAM cache knows it, but a new OpenCode or Pi process (a restart, another window) did not: it put the agent's saved prompt in the slot, so the slot kept more than half of the request and llama.cpp skipped its RAM cache. carl-cache now leaves a note when a session's slot is taken without a save (`.ram+FILE.json` in the slots folder, this user only; a client on another computer through the dashboard's API: `POST /carl/cache/ram`, `GET /carl/cache/ram`, `POST /carl/cache/unram`). Any process that places that session takes the RAM path. The note goes when the session is in a slot again, saved or compacted; it does not count after a server restart (its task ids start again), after a newer save, or after an hour (llama.cpp may have dropped it). The A3B IQ3, the save rule "before a stop", a client restart right after another session took the slot: OpenCode 26,436 of 37,945 tokens read again (79.9 s) to 64 (4.9 s); Pi 26,376 of 32,998 (71.8 s) to 63 (3.6 s).
 - The RAM cache is lost when the server stops or when router mode changes the model. The disk cache of OpenCode and Pi covers these cases ([below](#the-disk-cache-of-opencode-and-pi-measured-2026-10-03-and-2026-10-04)).
@@ -57,7 +57,7 @@ The RAM cache is lost when the server stops or when router mode changes the mode
 | `client/shared/carl-cache.js` | The client code. It uses only the server's API, so it also works from a VM or another computer. |
 | OpenCode plugin `carl-cache` | Wraps `fetch` (the AI SDK calls the global one). `chat.headers` marks the requests of CARL's provider with the session, the agent, and whether it is a subagent. |
 | Pi extension `carl-cache` | Uses `before_provider_request` and `message_end` |
-| The dashboard (`tools/monitor/diskcache.py`), the launcher, `./carl.sh cache` | Keep the disk limit |
+| The dashboard (`src/carl/adapters/common/slot_folder.py`), the launcher, `carl cache` | Keep the disk limit |
 
 ### Before each request
 
@@ -128,7 +128,7 @@ A state saved directly after a reply fits when the template renders the reply ag
 | Model | Does it fit? |
 |---|---|
 | Qwen 35B and 27B templates, with `preserve_thinking` (CARL sends it) | Yes, with thinking on and off |
-| Qwen 9B | Its template has no `preserve_thinking`, and drops earlier reasoning. `host/gguf-chat-template.py` adds it, as in the newer templates. |
+| Qwen 9B | Its template has no `preserve_thinking`, and drops earlier reasoning. The thinking-toggle template (`src/carl/domain/server/thinking_template.py`) adds it, as in the newer templates. |
 | Gemma 4 | It drops earlier reasoning. The client checks this one time for each model and thinking mode (with a probe session). Where the state does not fit, the client first sets the slot back to the end of the last prompt (`/completion`). Then it saves. |
 
 ### Sliding-window models
@@ -140,19 +140,19 @@ A state saved directly after a reply fits when the template renders the reply ag
 
 | `cache.swa` | Effect |
 |---|---|
-| `auto` (default) | `--swa-full` when it fits with the slots that `llama-fit.py --plan` gives. A second slot has priority. |
+| `auto` (default) | `--swa-full` when it fits with the slots that `carl fit --plan` gives. A second slot has priority. |
 | `full` | Always `--swa-full` (the full cache). Restores work. More memory. |
 | `window` | Only the window (the window cache). Less memory. Restores do not work. |
 
 - The router presets do the same for each model (`swa-full = true`).
 - **The clients and the window cache.** With the window cache, OpenCode and Pi restore and save nothing: a saved state cannot be used, so a restore and a save only cost time and disk. They still keep each session in its own slot. With the full cache, Gemma 4 prompts and sessions are saved and restored as for any other model. `cache.swa = auto` (full when it fits) stays the default.
-- The clients learn the cache of each model from the server file `~/.config/carl/server-PORT.json` (`tools/carl_core/domain/runtime.py`). The launcher writes it at each start: each model's `swa` (`full`, `window` or `none`), `kv`, `ctx` and `slots`. A client on another computer gets the same from the dashboard API (`GET /carl/cache/settings?port=N`). `carl-cache` writes one line in its log for a model with the window cache.
+- The clients learn the cache of each model from the server file `~/.config/carl/server-PORT.json` (`src/carl/domain/server/runtime_doc.py`). The launcher writes it at each start: each model's `swa` (`full`, `window` or `none`), `kv`, `ctx` and `slots`. A client on another computer gets the same from the dashboard API (`GET /carl/cache/settings?port=N`). `carl-cache` writes one line in its log for a model with the window cache.
 - The Caching panel shows a **Window cache** row when the running model has the window cache.
 - The memory estimate reads these GGUF keys:
   - `attention.sliding_window_pattern`: 35 of the 42 layers of Gemma 4 E4B
   - `shared_kv_layers`: the last 18 layers use the KV of earlier layers
   - the sliding-window key and value lengths
-- Gemma 4 E4B has 24 layers with their own context memory: 4 full-attention layers (8,192 elements for each token) and 20 sliding-window layers (20,480 elements). The sliding-window layers count at full length with `--swa-full`, else as the window + 512 tokens for each slot.
+- Gemma 4 E4B has 24 layers with their own context memory: 4 full-attention layers (8,192 elements for each token) and 20 sliding-window layers (20,480 elements). The sliding-window layers count at full length with `--swa-full`, else as the window + the batch size (`-ub`, 512 on a Mac) for each slot.
 - Before this change, the estimate counted each layer at full length with the global head size. This gave 86,016 elements for each token, about 3× too much.
 
 ### Measurements
@@ -174,7 +174,7 @@ The table gives the wait before the answer starts: with the cache, and without i
 
 ### Drive writes (measured 2026-10-12)
 
-Phase 23.5.1.4. The M3 Pro, CARL 1.20.3, the Qwen3.6-35B-A3B IQ3 at 2 × 96K, the cache settings at their defaults (`cache.save = auto`), the coder on, OpenCode 1.19.0 and Pi 1.1.0. 24 agent coding tasks (medium tasks, 1–8 min each), 83 min in all. The bytes come from the saved files and from the drive's own write counter (all of the Mac).
+Phase 23.5.1.4. The M3 Pro, CARL 1.20.3, the Qwen3.6-35B-A3B IQ3 at 2 × 96K, the cache settings at their defaults (`cache.save = auto`), the coder on, OpenCode 1.19.0 and Pi 1.1.0. 24 agent tasks of the agent bench (medium coding tasks, 1–8 min each), 83 min in all. The bytes come from the saved files and from the drive's own write counter (all of the Mac).
 
 | | CARL's saves | The whole drive |
 |---|---|---|
@@ -198,7 +198,7 @@ Phase 23.5.1.4. The M3 Pro, CARL 1.20.3, the Qwen3.6-35B-A3B IQ3 at 2 × 96K, th
 
 ### The cache settings
 
-The `cache` section of `config.json` (the Caching panel of the dashboard: **Disk limit**, **Saved prompts**, **Saved sessions**, **When to save**, **Save after**, **Shared storage**, **Gemma models**; the **Sliding window** row of the Server panel is the same `cache.swa`). The clients on this Mac read it. A client on another computer reads it through the dashboard's API.
+The `cache` section of `config.json` (the Caching panel of the dashboard: **Disk limit**, **Saved prompts**, **Saved sessions**, **When to save**, **Save after**, **Shared storage**, **Gemma models**, **Other templates**; the **Sliding window** row of the Server panel is the same `cache.swa`). The clients on this Mac read it. A client on another computer reads it through the dashboard's API.
 
 | Key | Default | Effect |
 |---|---|---|
@@ -209,11 +209,12 @@ The `cache` section of `config.json` (the Caching panel of the dashboard: **Disk
 | `auto_s` | 120 | `auto`: the seconds of unsaved reading before a save (10–3600) |
 | `share` | true | Store a saved session as the changes to its saved prompt (see below) |
 | `swa` | `auto` | Sliding-window models (Caching panel: **Gemma models**): `auto`, `full` (the full cache), `window` (the window cache) |
+| `move` | `off` | A chat template that CARL does not know (Caching panel: **Other templates**): `off` leaves the project part in place, `auto` moves it to the first user message ([Before each request](#before-each-request)) |
 
 - With `prefix` and `sessions` both false, the cache does nothing.
 - In the environment of OpenCode or Pi, `CARL_CACHE=0` turns the cache off, and `CARL_CACHE_SAVE=MODE` overrides `save`.
-- `NO_CACHE=1 ./carl.sh install --config-only` (`NO_CACHE=1 ./setup` on other computers) leaves the OpenCode plugin and the Pi extension out.
-- `./carl.sh cache show` lists the saved prompts and the saved sessions (sizes in GB and MB; `*` marks a session stored as the changes to its saved prompt). Each saved session shows its name next to its ID: the OpenCode title, or the Pi `/name` (else its first message). The Caching panel's file list shows the name too, with the ID in grey. `./carl.sh cache trim` applies the limit. `./carl.sh cache clear` removes each file.
+- `NO_CACHE=1 carl install --config-only` (`NO_CACHE=1 ./setup` on other computers) leaves the OpenCode plugin and the Pi extension out.
+- `carl cache show` lists the saved prompts and the saved sessions (sizes in GB and MB; `*` marks a session stored as the changes to its saved prompt). Each saved session shows its name next to its ID: the OpenCode title, or the Pi `/name` (else its first message). The Caching panel's file list shows the name too, with the ID in grey. `carl cache trim` applies the limit. `carl cache clear` removes each file.
 
 ### What the cache did (the counters)
 
@@ -222,13 +223,13 @@ Phase 23.5.1.1. The Caching panel's **WHAT THE CACHE DID** table and the Live ta
   - `place`: a request of a session put in a slot, with where its state came from (`slot`, `ram`, `window`, `session`, `start`, `prompt`, `read`), the tokens restored, and whether the session had earlier turns;
   - `save`: a session or an agent's prompt saved, with its tokens and the bytes written;
   - `retire`: a saved file that could not be restored whole, or the file of a session its client compacted;
-  - `compact`: a client compacted a session (Phase 23.5.1.3). It stays in the event file; no table counts it.
+  - `compact`: a client compacted a session (Phase 23.5.1.3; kept, not shown yet).
 
   A client on this Mac appends them to `~/.config/carl/cache-events/DAY.jsonl` (DAY is the local date; small appends stay whole across processes). A client on another computer sends them to the dashboard API (`POST /carl/cache/events`), which appends them to the same file with the client's address. An event never holds a key or a prompt's text.
 - **The server log.** The dashboard's log reader keeps each answered request's prompt tokens and the tokens it read, so the reused tokens. CARL's own requests are not counted. "Still in their slot" is the tokens reused less the tokens CARL restored. "Read again" takes the first request on that slot after the placement.
 - **The read speed.** The time saved is the restored tokens at the measured read speed of the requests in the same time span.
 
-The dashboard reads the files as they grow (`tools/monitor/cachestats.py`) and removes the day files older than two days in its minute check. "since the start" counts from the server's start (its log).
+The dashboard reads the files as they grow (`src/carl/adapters/common/cache_events.py`) and removes the day files older than two days in its minute check. "since the start" counts from the server's start (its log).
 
 ### When a client compacts a session
 
@@ -324,8 +325,8 @@ For each token, the state holds the context memory (the KV cache) of the attenti
 
 ## Shared storage: saved sessions stored as changes (zstd patches)
 
-- A saved session is stored as a zstd patch against the saved prompt of the agent that it starts with (`tools/monitor/slotpack.py`, `cache.share`, default on). The Caching panel calls this **Shared storage**. The prompt files stay whole: they are the bases.
-- The dashboard makes the patches in its minute loop. `./carl.sh cache trim` also makes them. A new file waits 30 s. CARL keeps a patch only when it is at most 80% of the file.
+- A saved session is stored as a zstd patch against the saved prompt of the agent that it starts with (`src/carl/adapters/common/zstd_patch.py`, `cache.share`, default on). The Caching panel calls this **Shared storage**. The prompt files stay whole: they are the bases.
+- The dashboard makes the patches in its minute loop. `carl cache trim` also makes them. A new file waits 30 s. CARL keeps a patch only when it is at most 80% of the file.
 - Before a restore, the file is made whole again. A client on this Mac uses zstd. A client on another computer uses the dashboard's API (`POST /carl/cache/unpack`). The copy gets the time of the patch, so the tidy step removes it after one minute.
 - When the limit removes a prompt file, it also removes the patches that need it.
 - zstd is a dependency (`brew install zstd`; `ensure_deps` offers it). Without zstd, the files stay whole.

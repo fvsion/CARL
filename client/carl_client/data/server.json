@@ -1,0 +1,7 @@
+{
+  "_comment": "CARL's server as a client knows it (carl_client.domain.remote): the server's default port, where a moved dashboard API is looked for when remote.json has no port, and how many ports after it are asked. The setup's config step (carl_client.app.install) also takes from here the address of a VM's host (--vm) and the context for the clients when no server answers.",
+  "default_port": 9275,
+  "find_span": 20,
+  "vm_host": "192.168.42.1",
+  "default_ctx": 98304
+}

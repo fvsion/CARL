@@ -1,0 +1,24 @@
+{
+  "note": "The shared files each plugin or extension folder gets: the setup copies them next to the folder's own files (carl_client.app.configure), and the JS tests stage the folders the same way. A folder may import a shared file only when it is listed here, with the shared files that one imports (a test checks it). Paths are relative to the client folder.",
+  "folders": {
+    "opencode/plugins/carl-background": [],
+    "opencode/plugins/carl-cache": ["shared/carl-cache.js", "shared/carl-panel.js", "shared/carl-api.js",
+                                   "shared/carl-paths.js", "shared/carl-proc.js"],
+    "opencode/plugins/carl-delegation": ["shared/carl-delegation.js", "shared/carl-brief.js", "shared/carl-brief-check.mjs",
+                                         "shared/carl-chain.js", "shared/carl-api.js", "shared/carl-paths.js",
+                                         "shared/carl-proc.js"],
+    "opencode/plugins/carl-model-check": ["shared/carl-model-check.js"],
+    "opencode/plugins/carl-panel": ["shared/carl-panel.js", "shared/carl-api.js", "shared/carl-tui.js",
+                                   "shared/carl-paths.js", "shared/carl-proc.js"],
+    "opencode/plugins/session-switcher": ["shared/carl-tui.js"],
+    "opencode/plugins/subagents-sidebar": ["shared/carl-tui.js"],
+    "pi/extensions/carl-cache": ["shared/carl-cache.js", "shared/carl-panel.js", "shared/carl-api.js",
+                                 "shared/carl-paths.js", "shared/carl-proc.js"],
+    "pi/extensions/carl-delegation": ["shared/carl-delegation.js", "shared/carl-brief.js", "shared/carl-brief-check.mjs",
+                                      "shared/carl-api.js"],
+    "pi/extensions/carl-model-check": ["shared/carl-model-check.js"],
+    "pi/extensions/carl-panel": ["shared/carl-panel.js", "shared/carl-api.js", "shared/carl-proc.js"],
+    "pi/extensions/subagent": ["shared/carl-brief.js", "shared/carl-brief-check.mjs", "shared/carl-chain.js",
+                               "shared/carl-paths.js", "shared/carl-proc.js"]
+  }
+}

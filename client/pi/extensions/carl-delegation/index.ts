@@ -9,7 +9,7 @@
  *     (single, or a coder item of tasks or chain) whose TOML brief fails the check is blocked before the coder
  *     starts, with what to fix (the existing_tests paths are checked in the project folder, the call's cwd; a JSON
  *     brief of the same keys is read too; "delegation".brief_format "json" names JSON in the refusal of a task that
- *     has no brief);
+ *     has no brief: agent-bench's brief_json, now obsolete);
  *   - the coder's gates: CARL's subagent tool runs a subagent as its own Pi process with CARL_AGENT set to the
  *     agent's name. In the coder's process, its prompt ("Task: " and the brief) gives the brief, and tool_call
  *     blocks writes against its work_mode, or of a known_file to read only.

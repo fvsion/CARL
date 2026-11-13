@@ -6,7 +6,7 @@
 //   </subagent>
 // The screen shows "Coder finished (42 s)" and the result. The message's details carry the same facts
 // ({ background: { id, agent, state, took } }); a message without them (an older session) is parsed.
-// Pure functions: tests/js/pi-subagent.test.mjs runs them in node.
+// Pure functions: their tests run them in node.
 
 /** @typedef {"done" | "failed" | "stopped"} JobState */
 /** @typedef {{ id: string, agent: string, state: JobState, took: string }} JobFacts */
@@ -16,7 +16,7 @@
 export const COLLAPSED_LINES = 3;
 
 /**
- * A time span as CARL writes it everywhere (tools/carl_core/domain/units.py): 42 s, 3 min, 1 h 12 min.
+ * A time span as CARL writes it everywhere (src/carl/domain/shared/units.py): 42 s, 3 min, 1 h 12 min.
  * @param {number} ms
  * @returns {string}
  */

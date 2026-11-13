@@ -2,8 +2,8 @@
 // @ts-check
 // CARL: check a coder brief by hand, with the check that carl-delegation runs before it gives a task to the coder
 // (carl-brief.js, next to this file). Installed by client/configure.py wherever carl-brief.js is (OpenCode's
-// plugins/carl-delegation, Pi's extensions/carl-delegation and extensions/subagent). One checker for the clients
-// and a user.
+// plugins/carl-delegation, Pi's extensions/carl-delegation and extensions/subagent); agent-bench checks the briefs
+// of its runs with it too (one checker).
 //
 //     node carl-brief-check.mjs brief.toml         a brief in a file (TOML or JSON, or a task text with one in it)
 //     node carl-brief-check.mjs < brief.toml       the same from the standard input (also: FILE "-")
@@ -15,7 +15,7 @@
 //                                                  a JSON list of task texts; prints a JSON list of
 //                                                  { format, valid, problems }, one for each
 //
-// The brief is revision 4's; a key of revision 1 is a problem that
+// The brief is revision 4's (approved 2026-10-09); a key of revision 1 is a problem that
 // names the new key. It prints the format, then "The brief is valid." or each problem as a sentence. Exit code: 0 the
 // brief is valid; 1 it has problems, or the text has no brief; 2 the command is wrong or the input cannot be read.
 //   format: "toml" or "json" (a brief that CARL's reader finds), "kv" (two or more lines that start with "Key:", the

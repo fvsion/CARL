@@ -9,7 +9,8 @@
 //     shape (Brief); checkBrief: what is missing or wrong, as whole sentences that a small model can act on (they
 //     name the brief's own keys; a key of revision 1, such as mode or goal, gets the new key's name);
 //     briefRefusal: the text that sends a task back to the main agent.
-//   - the same brief as JSON: parseJson, a small JSON reader whose errors name the line as the TOML reader's do; parseBrief also takes a ```json fence, or a
+//   - the same brief as JSON (the reader stays: agent-bench's brief_json variant, now obsolete): parseJson, a small
+//     JSON reader whose errors name the line as the TOML reader's do; parseBrief also takes a ```json fence, or a
 //     JSON object with prose around it, with the same keys, and gives the same shape; the check's sentences then
 //     name the keys the JSON way ("work_mode": "code"); writeBriefJson writes it back.
 //   - the chain's helpers: filesByAction, requirementIds, checkIds, testsSetting (Phase 23.4.6), testSessionDue,
@@ -805,7 +806,7 @@ function inProjectThere(p, root, exists) {
   const top = resolve(root);
   const abs = resolve(top, p);
   const r = relative(top, abs);
-  return r !== ".." && !r.startsWith("../") && !isAbsolute(r) && exists(abs);
+  return !/^\.\.(?:[\\/]|$)/.test(r) && !isAbsolute(r) && exists(abs);     // up: ".." and "/" or "\" (Windows)
 }
 
 /**
@@ -933,7 +934,7 @@ export function checkBrief(b, format = "toml", o = {}) {
 /**
  * The text that sends a coder task back to the main agent, or "" when its brief is complete. A TOML brief's problems
  * name the keys the TOML way, a JSON brief's the JSON way. o.format: the brief's format in the main agent's
- * instructions, named when the text has no brief at all (CARL's default: TOML; the option "json": JSON).
+ * instructions, named when the text has no brief at all (CARL's default: TOML; agent-bench's brief_json: JSON).
  * o.root: the project folder (checkBrief: the existing_tests paths are checked there).
  * o.freeForm: false when the main session's model may not write detailed_brief.
  * @param {string} taskText
@@ -1095,7 +1096,7 @@ export function checklist(b, format = "toml") {
 
 // ------------------------------------------------------------------ the request's literals (Phase 23.4.3 addendum)
 // The Request Check: the literals of the user's request (what a brief must carry word for word) and which of them a
-// brief lacks. Tested on 17 agent coding prompts and the 36 format runs' briefs: the E4B's
+// brief lacks. Tested on agent-bench's prompts and the 36 format runs' briefs (docs: phase23.4.3/literals): the E4B's
 // briefs lost return types, output formats and the entry point. A literal: backticked text, an exit code, a call or a
 // signature (its name and its return type), a file path, a --flag, quoted text. Left out: a bare number (only as an exit
 // code), quoted text right after [ or ( (a key in code), a literal that is part of a longer one. In matching, an upper

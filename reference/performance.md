@@ -18,7 +18,7 @@ All values in this page come from an M3 Pro 36 GB with llama.cpp 0.4.1 (2026-09-
 - The 27B uses 1 guess. The 35B uses 2.
 - The 27B with MTP alone and more guesses: 2 guesses 9.0 / 9.6 / 11.5, 3 guesses 6.6 / 7.7 / 9.8.
 - The IQ3 builds and the 9B were measured on an M2 Max ([IQ3 speculation](models.md#iq3-speculation-measured-2026-10-03)). The Gemma 4 models: [Gemma 4](models.md#gemma-4).
-- Auto-tune (`./carl.sh tune NAME`) does this measurement again on your Mac.
+- Auto-tune (`carl tune NAME`) does this measurement again on your Mac.
 
 | | Qwen3.8-27B | Qwen3.6-35B-A3B |
 |---|---|---|

@@ -15,7 +15,7 @@
 //     is refused before the coder starts (thrown in tool.execute.before, as the gate does); a call with task_id
 //     (it continues an earlier task) is not checked; the existing_tests paths are checked in the project folder; a
 //     JSON brief of the same keys is read and checked too (option "briefFormat": "json" names JSON in the refusal of
-//     a task that has no brief);
+//     a task that has no brief: agent-bench's brief_json, now obsolete);
 //   - the coder's gates: chat.message names the agent of each user message; the first message of a coder session
 //     is its brief, kept for that session (a later one replaces it only when it is a complete brief too); the
 //     coder's writes against its work_mode, or of a known_file to read only, are refused in tool.execute.before;
@@ -47,7 +47,7 @@
 // { "<provider>/<model>": reasoningEffort } (the dashboard's Coder thinking, written by CARL's client setup). The
 // chat.params hook sets output.options.reasoningEffort on each request of the coder agent (its test and code
 // sessions of the chain too) whose model has an entry; OpenCode sends it as reasoning_effort (checked with OpenCode
-// 1.18.34 against a fake server, 2026-10-09). A model without an entry ("same as main", the default):
+// 1.18.34 against agent-bench's fake server, 2026-10-09). A model without an entry ("same as main", the default):
 // the request stays as it is, so the model entry's own reasoningEffort (the main session's thinking) applies.
 // Phase 23.4.5 (the coder on an external model): option "coderModel": "<provider>/<model>" (the coder agent's
 // "model", written by CARL's client setup; the agent has no temperature then) and "coderVariant": the variant /carl
@@ -408,7 +408,7 @@ export default {
     // the Tests setting (Phase 23.4.6): read at each coder task, so /carl's change needs no restart
     const stateFile = typeof opts.stateFile === "string" ? opts.stateFile : "";
     const tests = () => (stateFile ? testsFrom(stateFile) : "after");
-    const gates_on = opts.gate !== false;                        // the run gate ("gate": false turns it off)
+    const gates_on = opts.gate !== false;                        // the run gate (agent-bench's measurements: false)
     const loop = () => (stateFile ? loopFrom(stateFile) : { gate: true, rounds: 1 });
     const requestSetting = () => (stateFile ? requestFrom(stateFile) : "reminder");
     /** @type {Map<string, boolean>} a main session: its model may write the free-form part (its last system prompt) */
@@ -421,8 +421,8 @@ export default {
       if (!r) requests.set(id, (r = new RequestCheck()));
       return r;
     };
-    // the brief's format in the main agent's instructions, named when a task has no brief at all (the option
-    // briefFormat "json" sets JSON; a JSON brief is read either way)
+    // the brief's format in the main agent's instructions, named when a task has no brief at all (agent-bench's
+    // brief_json variant sets "json"; a JSON brief is read either way)
     const briefFormat = opts.briefFormat === "json" ? "json" : "toml";
     const cwd = String(/** @type {any} */ (ctx)?.directory ?? process.cwd());
     // the project's identity for the held chains' records (the 23.4.5 follow-up)

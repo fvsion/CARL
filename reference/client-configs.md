@@ -4,7 +4,7 @@
 
 ## OpenCode config
 
-The installer writes these settings into `~/.config/opencode/opencode.json` (template: `client/opencode/opencode.json`). It makes a backup first (`FILE.before-carl` once, then one `FILE.bak` with the version before the last change), and it changes only CARL's own entries (`client/configure.py`). With `~/.config/opencode` behind a symbolic link, the plugin paths are written with the link resolved.
+The installer writes these settings into `~/.config/opencode/opencode.json` (template: `client/opencode/opencode.json`). It makes a backup first (`FILE.before-carl` once, then one `FILE.bak` with the version before the last change), and it changes only CARL's own entries (`client/carl_client/app/configure.py`). With `~/.config/opencode` behind a symbolic link, the plugin paths are written with the link resolved.
 
 ### The provider and the models
 
@@ -12,18 +12,18 @@ The installer writes these settings into `~/.config/opencode/opencode.json` (tem
 |---|---|
 | Provider id | `llamacpp`, or `carl` when you have your own provider `llamacpp` |
 | Provider package | `@ai-sdk/openai-compatible`, base URL `http://HOST:PORT/v1`, the key from `~/.config/carl/api-key` |
-| Models | Single-model mode: only the model that the server runs. Router mode: one entry for each installed model. Each entry has its CARL name (`client/carl_models.py`). |
+| Models | Single-model mode: only the model that the server runs. Router mode: one entry for each installed model. Each entry has its CARL name (`client/carl_client/domain/models.py`). |
 | Context (`limit.context`) | The running model: the context of the server. The other models (router mode): the context of their own settings. |
 | Output (`limit.output`) | Half the context, at most 32,000 |
 | Model options | `reasoningEffort` (the model's **Main thinking**: `none` for off, `high` for on, or the level) and `parallel_tool_calls: true`. A variant that you select is stronger than it. |
-| `model`, `small_model` | The model that the server runs now, when it runs a single model that is in the installed list. Else (and in router mode), the model that a server start loads (`llama.model`, or Auto fit's choice). `default_model()` in `client/configure.py`. The installer sets them only when they are not set, or still have CARL's earlier value. |
+| `model`, `small_model` | The model that the server runs now, when it runs a single model that is in the installed list. Else (and in router mode), the model that a server start loads (`llama.model`, or Auto fit's choice). `default_model()` in `client/carl_client/app/configure.py`. The installer sets them only when they are not set, or still have CARL's earlier value. |
 
 ### The model list: single-model mode and router mode (Phase 23.4.4)
 
 In single-model mode, the server answers with its one model, whatever model a request names. Thus the OpenCode and Pi configs list only that model, not all the installed models.
 
-- On the server Mac, `tools/carl.py client-models --running NAME` writes `installed-models.json` with only the model that the server runs (NAME: the `model_alias` in the server's `/props`). With no server, the list has the model that a server start loads. When CARL cannot find that model, the list has all the installed models.
-- `client/configure.py --running NAME` also keeps only NAME when the list has it (`only_running()` in `client/carl_models.py`). Thus an older list with all the models also gives one entry.
+- On the server Mac, `carl client-models --running NAME` writes `installed-models.json` with only the model that the server runs (NAME: the `model_alias` in the server's `/props`). With no server, the list has the model that a server start loads. When CARL cannot find that model, the list has all the installed models.
+- `configure.py --running NAME` also keeps only NAME when the list has it (`only_running()` in `client/carl_client/domain/models.py`). Thus an older list with all the models also gives one entry.
 - Router mode (`role: router` in `/props`, or `llama.mode = router` with no server): all the installed models, as before (`client-models --router`).
 - When the server starts a different model, the configs are out of date. The dashboard says so on the Connect tab (Setup, This Mac: the client list against the model of the server; the tab label gets ⚠). Press **u** to write the configs on this Mac again. For the other computers, the Connect tab says that the last config sent is out of date: press **P** to send the new one. The sync service applies it. The client package (**z**) has the model that the server runs when you make it.
 
@@ -53,7 +53,7 @@ The dashboard has two thinking settings for each model (Settings > Agents): **Ma
 
 #### An external coder model (Phase 23.4.5)
 
-`/carl`'s Coder model (`CODER_MODEL=PROVIDER/MODEL` in `~/.config/carl/client-install.env`; `main` or no line: the main session's model) is a setup switch like the others. `install.sh` passes it to `configure.py` (`--coder-model`, and `--coder-model-thinking` for `CODER_MODEL_THINKING`):
+`/carl`'s Coder model (`CODER_MODEL=PROVIDER/MODEL` in `~/.config/carl/client-install.env`; `main` or no line: the main session's model) is a setup switch like the others. The config step passes it to `configure.py` (`--coder-model`, and `--coder-model-thinking` for `CODER_MODEL_THINKING`):
 
 | | OpenCode | Pi |
 |---|---|---|
@@ -77,9 +77,9 @@ The dashboard has two thinking settings for each model (Settings > Agents): **Ma
 `/carl` > **Coder Subagent** > **Coder Thinking** overrides the dashboard's Coder thinking on one computer, for one model (user, 2026-10-09: "/carl overrides the dashboards default for that computer only"; stored per model).
 
 - It is a setup switch: `CODER_THINKING=MODEL:VALUE,MODEL:VALUE` in `~/.config/carl/client-install.env` (VALUE: `main`, `on`, `off`, `low`, `medium`, `xhigh`). `carl-sync.py set CODER_THINKING=MODEL:VALUE` changes one model's entry and keeps the others; `set CODER_THINKING=MODEL:default` (`/carl`'s `dashboard default`) removes the model's entry, so the dashboard's value applies again (no entry left: the line goes). `./setup` and each sync apply it again, as the other switches. `CODER_THINKING=… ./setup` also works.
-- `install.sh` passes it to `configure.py` (`--coder-thinking`). `configure.py` puts each entry over the dashboard's `thinking_coder` of that model (from `installed-models.json`) before it writes `coderThinking` (OpenCode) and `"thinking": {"coder": …}` (Pi). A model that the entry does not name keeps the dashboard's value. An entry that is not a model name and a value is left out. A level on an on / off model is `on` there, as in the dashboard.
+- The config step passes it to `configure.py` (`--coder-thinking`). `configure.py` puts each entry over the dashboard's `thinking_coder` of that model (from `installed-models.json`) before it writes `coderThinking` (OpenCode) and `"thinking": {"coder": …}` (Pi). A model that the entry does not name keeps the dashboard's value. An entry that is not a model name and a value is left out. A level on an on / off model is `on` there, as in the dashboard.
 - Both state files (`~/.config/opencode/carl.json`, `~/.pi/agent/carl.json`) get `"models"`: for each model that the client has, `{"thinking": KIND, "main": VALUE, "coder": VALUE, "dashboard": VALUE}`: main and coder as written (the override merged), and `dashboard`, the dashboard's coder value without the override (what `dashboard default` gives). The `/carl` panel reads its Coder thinking row from it, and this computer's entries from `client-install.env`.
-- Which model's entry `/carl` sets: the model that the coder runs on. With Coder model `same as main`, the model of the session `/carl` is opened in, else the config's default model ([the panel](plugins.md#carl-panel-the-carl-panel-opencode-and-pi)). The coder really runs on the session's model in both clients: OpenCode's task tool starts a subagent with no model of its own on the model of the calling message (`agent.model ?? {modelID, providerID}` of the main agent's message, read in OpenCode 1.18.35), and with its variant; Pi's `subagent` tool passes `--model PROVIDER/MODEL` of `ctx.model` to an agent with no model. Checked with the real clients against a fake server (2026-10-09; a temp HOME made by `configure.py`, two models, the default model A): a session on model B gave the coder's requests model B in OpenCode 1.18.35 and Pi 1.1.0; with `--coder-thinking B:xhigh` the coder's request had `reasoning_effort` `xhigh` (Pi: `chat_template_kwargs.reasoning_effort`), and a session on model A gave the coder A's own thinking (same as main).
+- Which model's entry `/carl` sets: the model that the coder runs on. With Coder model `same as main`, the model of the session `/carl` is opened in, else the config's default model ([the panel](plugins.md#carl-panel-the-carl-panel-opencode-and-pi)). The coder really runs on the session's model in both clients: OpenCode's task tool starts a subagent with no model of its own on the model of the calling message (`agent.model ?? {modelID, providerID}` of the main agent's message, read in OpenCode 1.18.35), and with its variant; Pi's `subagent` tool passes `--model PROVIDER/MODEL` of `ctx.model` to an agent with no model. Checked with the real clients against agent-bench's fake server (2026-10-09; a temp HOME made by `configure.py`, two models, the default model A): a session on model B gave the coder's requests model B in OpenCode 1.18.35 and Pi 1.1.0; with `--coder-thinking B:xhigh` the coder's request had `reasoning_effort` `xhigh` (Pi: `chat_template_kwargs.reasoning_effort`), and a session on model A gave the coder A's own thinking (same as main).
 - OpenCode must restart to use a change (the plugin reads its options when it starts). Pi reads `carl.json` each time it starts the coder.
 
 - The `none` variant of a Qwen model also sends Qwen's sampling for thinking off (temperature 0.7, top_p 0.8, presence penalty 1.5, from the Qwen model cards). Gemma 4 and the custom models use one sampling for all uses, so their `none` variant only turns thinking off (`off_sampling` in `installed-models.json`: `qwen` or `same`).
@@ -103,7 +103,7 @@ The dashboard has two thinking settings for each model (Settings > Agents): **Ma
 | `coder` agent | `agent` in `opencode.json` | [The coder subagent](models.md#the-coder-subagent) |
 | `browser` agent | `agent` in `opencode.json` | The Playwright MCP tools (`carl-browser`). They are off for the main agents and on for this subagent. `NO_BROWSER=1` leaves it out. |
 
-To update the plugins, run the setup again (`./carl.sh install`, or a new client package and `./setup` on other computers) and restart OpenCode.
+To update the plugins, run the setup again (`carl install`, or a new client package and `./setup` on other computers) and restart OpenCode.
 
 ### Tool switches
 
@@ -117,7 +117,7 @@ OpenCode reads some tool switches only from the environment. The installer write
 
 ### Tools and the prompt budget
 
-Measured in Phase 8 (2026-10-03, OpenCode 1.18.34, the template and the tokenizer of Qwen3.6 35B-A3B IQ3). The values are the tokens of the system prompt and the tool definitions in the first request. A capture proxy saved the full request, and the server's `/apply-template` and `/tokenize` counted it.
+Measured in Phase 8 (2026-10-03, OpenCode 1.18.34, the template and the tokenizer of Qwen3.6 35B-A3B IQ3). The values are the tokens of the system prompt and the tool definitions in the first request. A request-capture proxy captured the full request, and the server's `/apply-template` and `/tokenize` counted it.
 
 | Setup | System + tools | Note |
 |---|---|---|

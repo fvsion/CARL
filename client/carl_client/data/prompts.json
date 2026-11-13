@@ -1,0 +1,15 @@
+{
+  "_comment": "The agent prompts' lines for one OS (carl_client.domain.merge.for_os): on Windows the line in \"posix\" of a prompt is replaced by the one in \"windows\". The prompts in client/agents stay as they are (the benches read them byte for byte, contract C-603), so macOS and Linux keep their text. A test checks that each posix line is in its prompt once.",
+  "windows": [
+    {
+      "file": "agents/coder.md",
+      "posix": "- Stay inside the project directory. Scratch output (logs, a run's output) goes to `/tmp`, not into the project.",
+      "windows": "- Stay inside the project directory. Scratch output (logs, a run's output) goes to the temporary folder (`/tmp` in bash, `$env:TEMP` in PowerShell), not into the project."
+    },
+    {
+      "file": "agents/delegation.md",
+      "posix": "1. Start the app yourself with bash, in the background, as the report says (for example `python3 -m http.server 8765 >/dev/null 2>&1 &`). Check that it answers (`curl -s -o /dev/null -w \"%{http_code}\" URL`). The browser subagent cannot start it.",
+      "windows": "1. Start the app yourself with the shell tool, in the background, as the report says (for example `py -m http.server 8765 >/dev/null 2>&1 &` in bash). Check that it answers (`curl -s -o /dev/null -w \"%{http_code}\" URL`). The browser subagent cannot start it."
+    }
+  ]
+}

@@ -1,0 +1,37 @@
+{
+  "_generated": "Written by CARL: do not edit. Each client package gets this file when it is built.",
+  "by_os": {
+    "macos": {
+      "machine": "this Mac",
+      "server": "the server Mac",
+      "host": "Mac host"
+    },
+    "windows": {
+      "machine": "this computer",
+      "server": "the server computer",
+      "host": "Windows host"
+    },
+    "linux": {
+      "machine": "this computer",
+      "server": "the server computer",
+      "host": "Linux host"
+    }
+  },
+  "sync": {
+    "macos": {
+      "installer": "the setup",
+      "service_managers": "launchd",
+      "setup_command": "./setup"
+    },
+    "windows": {
+      "installer": "the setup",
+      "service_managers": "Task Scheduler",
+      "setup_command": "setup.cmd"
+    },
+    "linux": {
+      "installer": "the setup",
+      "service_managers": "systemd --user",
+      "setup_command": "./setup"
+    }
+  }
+}

@@ -1,5 +1,5 @@
 // @ts-check
-// OpenCode server plugin (installed by CARL's client/install.sh): CARL's disk cache (carl-cache.js) for
+// OpenCode server plugin (installed by CARL's setup): CARL's disk cache (carl-cache.js) for
 // the requests OpenCode sends to CARL's provider. Each session's conversation is saved on the server's
 // disk after its turn and restored before its next request when the server no longer holds it (after a
 // restart, a model switch, or many other sessions); each agent's prompt is read once and saved.

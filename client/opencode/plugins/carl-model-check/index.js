@@ -1,5 +1,5 @@
 // @ts-check
-// OpenCode server plugin (installed by CARL's client/install.sh): before each request to
+// OpenCode server plugin (installed by CARL's setup): before each request to
 // CARL's provider, checks the model picked against the server (carl-model-check.js) and shows a
 // toast when they don't match:
 //   single-model mode   the server runs another model (it answers with that one)

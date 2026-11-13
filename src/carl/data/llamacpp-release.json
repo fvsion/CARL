@@ -1,0 +1,214 @@
+{
+  "schema": 1,
+  "tag": "b11738",
+  "version": "0.7.0",
+  "build": 11738,
+  "url": "https://github.com/ggml-org/llama.cpp/releases/download/{tag}/{name}",
+  "api": "https://api.github.com/repos/ggml-org/llama.cpp/releases/tags/{tag}",
+  "platforms": {
+    "windows": {
+      "x64": {
+        "cuda-13": {
+          "cuda": "13.4",
+          "files": [
+            {
+              "name": "llama-b11738-bin-win-cuda-13.4-x64.zip",
+              "bytes": 155186348,
+              "sha256": "682b518340e82e4061f58f224bad273cccca243287bbcb6902b69e7a3c10e6da"
+            },
+            {
+              "name": "cudart-llama-bin-win-cuda-13.4-x64.zip",
+              "bytes": 423535356,
+              "sha256": "738f8c251ac22b70c3ae6f83a10cf222725df0395246a2cf58f32bdb85fbe668"
+            }
+          ]
+        },
+        "cuda-12": {
+          "cuda": "12.4",
+          "files": [
+            {
+              "name": "llama-b11738-bin-win-cuda-12.4-x64.zip",
+              "bytes": 267552372,
+              "sha256": "b9d4f37d8ef9757c7f590852138c7334889a9a47b00802c76e5a64be644c6cfe"
+            },
+            {
+              "name": "cudart-llama-bin-win-cuda-12.4-x64.zip",
+              "bytes": 391443627,
+              "sha256": "8c79a9b226de4b3cacfd1f83d24f962d0773be79f1e7b75c6af4ded7e32ae1d6"
+            }
+          ]
+        },
+        "rocm": {
+          "files": [
+            {
+              "name": "llama-b11738-bin-win-rocm-10.0-x64.zip",
+              "bytes": 258877798,
+              "sha256": "dcba016fbe15aa4e9151a2064d258991e2047c74b7703a8c04ffe585d483bcf3"
+            }
+          ]
+        },
+        "vulkan": {
+          "files": [
+            {
+              "name": "llama-b11738-bin-win-vulkan-x64.zip",
+              "bytes": 32358940,
+              "sha256": "ef623c883e0b67e84b92ca5fde04b65b74ef3691898b9510ff335c8d601076bd"
+            }
+          ]
+        },
+        "cpu": {
+          "files": [
+            {
+              "name": "llama-b11738-bin-win-cpu-x64.zip",
+              "bytes": 19707505,
+              "sha256": "ccb97cc6c188425c0f56679d7ba433e05e8c1b7e0201ad3134f2f876db362b75"
+            }
+          ]
+        }
+      },
+      "arm64": {
+        "cuda-13": {
+          "cuda": "13.4",
+          "files": [
+            {
+              "name": "llama-b11738-bin-win-cuda-13.4-arm64.zip",
+              "bytes": 147378988,
+              "sha256": "e44fb688031cded3fb97ed899c5a4e216e2085c0eecd9b8a9442acef53a019c8"
+            },
+            {
+              "name": "cudart-llama-bin-win-cuda-13.4-arm64.zip",
+              "bytes": 153262407,
+              "sha256": "642dcde8805b3e3165ca710a5443b3b4044b27d96bd3ee3132473988c9bcb774"
+            }
+          ]
+        },
+        "cuda-12": {
+          "missing": "the release has no such asset"
+        },
+        "rocm": {
+          "missing": "the release has no such asset"
+        },
+        "vulkan": {
+          "files": [
+            {
+              "name": "llama-b11738-bin-win-vulkan-arm64.zip",
+              "bytes": 24976824,
+              "sha256": "ba5613357dd8cc3a5aacb0c6153d7a084dd1aff3b023f1e0f9fb2657e77fb55c"
+            }
+          ]
+        },
+        "cpu": {
+          "files": [
+            {
+              "name": "llama-b11738-bin-win-cpu-arm64.zip",
+              "bytes": 12594121,
+              "sha256": "5f229ed843e043dd1b65b88cc323d4cb0b8b2ec0699cc7c9aec0a09767e81781"
+            }
+          ]
+        }
+      }
+    },
+    "linux": {
+      "x64": {
+        "cuda-13": {
+          "cuda": "13.4",
+          "files": [
+            {
+              "name": "llama-b11738-bin-ubuntu-cuda-13.4-x64.tar.gz",
+              "bytes": 154244667,
+              "sha256": "c48881ae73dface588b8470e3acb308d06365af91303799ed8bf010e8de6b681"
+            },
+            {
+              "name": "cudart-llama-b11738-bin-ubuntu-cuda-13.4-x64.tar.gz",
+              "bytes": 440236537,
+              "sha256": "d60c7698166bfcbc9516c5d053321d8ac850a2c0316d3c009260dfd11c905330"
+            }
+          ]
+        },
+        "cuda-12": {
+          "cuda": "12.8",
+          "files": [
+            {
+              "name": "llama-b11738-bin-ubuntu-cuda-12.8-x64.tar.gz",
+              "bytes": 173429794,
+              "sha256": "6bed1e4e7d0744952da044eb0950bb4b2226f5b2a7db1c1d20653536acb4528d"
+            },
+            {
+              "name": "cudart-llama-b11738-bin-ubuntu-cuda-12.8-x64.tar.gz",
+              "bytes": 594377811,
+              "sha256": "f0565fb68f090ccccb045055efda038b576f1bfb2b57d31c2c33ce91d555681c"
+            }
+          ]
+        },
+        "rocm": {
+          "files": [
+            {
+              "name": "llama-b11738-bin-ubuntu-rocm-10.0-x64.tar.gz",
+              "bytes": 245432162,
+              "sha256": "6a0578335721f6ca3656f66bece7340d8ec2de2b97eb8e284b662ea6ff0df094"
+            }
+          ]
+        },
+        "vulkan": {
+          "files": [
+            {
+              "name": "llama-b11738-bin-ubuntu-vulkan-x64.tar.gz",
+              "bytes": 30641818,
+              "sha256": "adb6c5db6c0e5997f4bc8a69002a43632add4276e835e2cd6a7d88387a37c295"
+            }
+          ]
+        },
+        "cpu": {
+          "files": [
+            {
+              "name": "llama-b11738-bin-ubuntu-x64.tar.gz",
+              "bytes": 17996719,
+              "sha256": "4d4101b8a51eace7fee64f6dbaec8e536221567ef6d8b99563345cbab7b4f2a8"
+            }
+          ]
+        }
+      },
+      "arm64": {
+        "cuda-13": {
+          "cuda": "13.4",
+          "files": [
+            {
+              "name": "llama-b11738-bin-ubuntu-cuda-13.4-arm64.tar.gz",
+              "bytes": 149778814,
+              "sha256": "5c92cde4df9ccc250cb5f7c916cb8c6755dd56a17cdc5302f3e6aaa953f512c4"
+            },
+            {
+              "name": "cudart-llama-b11738-bin-ubuntu-cuda-13.4-arm64.tar.gz",
+              "bytes": 552521417,
+              "sha256": "cb2fad66e87892f665dbb10209b4829503be3050baff94bfdff16668583af9c3"
+            }
+          ]
+        },
+        "cuda-12": {
+          "missing": "the release has no such asset"
+        },
+        "rocm": {
+          "missing": "the release has no such asset"
+        },
+        "vulkan": {
+          "files": [
+            {
+              "name": "llama-b11738-bin-ubuntu-vulkan-arm64.tar.gz",
+              "bytes": 24340945,
+              "sha256": "c4eeb443622b213fac592148f80c07f7a6c3eaa2bb892e118f81cbfab5eb8e84"
+            }
+          ]
+        },
+        "cpu": {
+          "files": [
+            {
+              "name": "llama-b11738-bin-ubuntu-arm64.tar.gz",
+              "bytes": 14055943,
+              "sha256": "1ee64aea979ef9219c8d1e38374265313c45013ee7cd57047a74a6a588d99f21"
+            }
+          ]
+        }
+      }
+    }
+  }
+}

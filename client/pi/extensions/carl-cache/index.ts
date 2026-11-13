@@ -1,5 +1,5 @@
 /**
- * CARL: the disk cache for Pi (installed by CARL's client/install.sh). Each session's conversation is
+ * CARL: the disk cache for Pi (installed by CARL's setup). Each session's conversation is
  * saved on the CARL server's disk after its turn and restored before its next request when the server no
  * longer holds it (after a restart, a model switch, or many other sessions); each agent's prompt is read
  * once and saved. The work is in carl-cache.js (shared with the OpenCode plugin).

@@ -1,9 +1,10 @@
 // @ts-check
-// CARL: the chain of a test session and a code session (Phase 23.4.3, item 3). Shared by Pi's subagent extension (it runs the two sessions
+// CARL: the chain of a test session and a code session (Phase 23.4.3, item 3, as the user decided
+// it). Shared by Pi's subagent extension (it runs the two sessions
 // itself) and OpenCode's carl-delegation (the task tool runs the test session; the plugin starts the code session);
 // each carries a copy next to carl-brief.js, installed by client/configure.py.
 //
-// Revision 4 of the brief, "What CARL does".
+// Revision 4 of the brief ("What CARL does").
 // A coder task with work_mode = "code", work_type = "new_feature", no [failed_attempt] / [[tried_fix]] and not a
 // continued task (testSessionDue), with the Tests setting "before" (Phase 23.4.6: /carl's Tests row, the client's state
 // file "coder_tests", read at each task; test-first, for a full spec: the default is "after" since Phase 23.5.0):
@@ -34,11 +35,12 @@
 // work_mode tests-only: one session. Else: one session, as before. I/O: the project's test files (read and hashed)
 // and the check commands (run).
 
-import { spawn } from "node:child_process";
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { changedFiles, checkBrief, hashFiles, isTestFile, namesTests, parseBrief, parseReport, testSessionBrief,
          testSessionDue, testsSetting, writeBrief, writeBriefJson } from "./carl-brief.js";
+import { goesUp, pathFor, pathParts } from "./carl-paths.js";
+import { killTree, onPath, spawnProgram } from "./carl-proc.js";
 
 export const CHAIN_MARK = "[CARL] Chain";
 export const WARN_MARK = "[CARL] Warning";
@@ -167,13 +169,15 @@ export function existingTestFiles(b, root) {
 // ruff as well"): a plain test runner or ruff on the project's files. Any other command is not run: the test
 // session's report decides. CARL parses the command itself and starts the program with no shell:
 //   - no shell syntax: none of ; & | < > ` $ ( ) \ * ? [ ] { } ~ ! # and no line break; quotes ('...' or "...")
-//     only group words (with $ and ` refused, the two quotes mean the same);
+//     only group words (with $ and ` refused, the two quotes mean the same). On Windows "\" is a path separator
+//     (no shell CARL runs reads it as an escape), so it is allowed there (Phase W, W7.4);
 //   - KEY=value words first (as a shell would read them) for the names in SAFE_ENV only;
 //   - an optional `uv run` (followed by the runner straight away) or `uvx` (pytest or ruff);
 //   - the runner: pytest, python -m pytest, python3 -m pytest, node --test, npm test, npm run test, go test,
 //     cargo test, ruff check (no --fix), ruff format --check;
 //   - then flags (-x, --name, --name=VALUE) and words; every word, and every value, is a path in the project
-//     (an absolute path or a path with .. must stay in the project folder); a few flags that run other programs
+//     (an absolute path or a path with .. must stay in the project folder; ".." with either separator, so
+//     ..\x is refused on Windows); a few flags that run other programs
 //     or write elsewhere are refused (NO_FLAGS).
 // It runs in the project folder, with the time limit RUN_MS.
 
@@ -182,7 +186,11 @@ export const SAFE_ENV = new Set(["CI", "NO_COLOR", "FORCE_COLOR", "TERM", "TZ", 
                                  "PYTHONDONTWRITEBYTECODE", "PYTHONHASHSEED", "PYTHONUNBUFFERED", "PYTHONWARNINGS",
                                  "NODE_ENV", "RUST_BACKTRACE", "RUST_LOG", "RUST_TEST_THREADS", "CGO_ENABLED"]);
 const SHELL_CHARS = /[;&|<>`$()\\*?[\]{}~!#\n\r]/;
+const SHELL_CHARS_WIN = /[;&|<>`$()*?[\]{}~!#\n\r]/;         // Windows: "\" is a path separator
 const WORD = /^[A-Za-z0-9_.,:@%+=\/ -]*$/;                  // a word's characters (a space only from quotes)
+const WORD_WIN = /^[A-Za-z0-9_.,:@%+=\/\\ -]*$/;           // ...on Windows, with "\"
+// Windows: split a word at = , spaces and ":", but not at a drive's ":" (after a lone letter that starts a piece)
+const WIN_SPLIT = /[=,\s]+|:(?<!(?:^|[=,:\s])[A-Za-z]:)|:(?=:)/;
 /** The flags that a runner must not get: they run another program, load code from elsewhere, or write files. */
 const NO_FLAGS = {
   node: ["-e", "--eval", "-p", "--print", "-r", "--require", "--import", "--loader", "--experimental-loader", "-i", "--interactive"],
@@ -196,11 +204,12 @@ const NO_FLAGS = {
 /**
  * The words of a command, as a shell would split it (quotes group words). null: shell syntax that CARL does not
  * run (see SHELL_CHARS) or a quote that does not end.
- * @param {string} run @returns {string[] | null}
+ * @param {string} run @param {string} [platform] the computer's own by default
+ * @returns {string[] | null}
  */
-export function commandWords(run) {
+export function commandWords(run, platform = process.platform) {
   const s = String(run ?? "").trim();
-  if (!s || SHELL_CHARS.test(s)) return null;
+  if (!s || (platform === "win32" ? SHELL_CHARS_WIN : SHELL_CHARS).test(s)) return null;
   /** @type {string[]} */
   const out = [];
   let cur = "";
@@ -229,15 +238,21 @@ export function commandWords(run) {
 }
 
 /** A word (or a flag's value) is in the project: each path in it (split at = , : and spaces) that is absolute or
- * has .. stays in the project folder. @param {string} w @param {string} root */
-function inProject(w, root) {
-  if (!WORD.test(w)) return false;
-  const top = resolve(root);
-  return w.split(/[=,:\s]+/).every((piece) => {
+ * has .. (after "/" or "\") stays in the project folder. Paths as the platform reads them (path.win32 on Windows).
+ * On Windows a drive's ":" (a lone letter at the start of a piece, not "::") stays with its path, so D:\x is
+ * checked as a whole, and a drive-relative path (D:x, from drive D's current folder) is refused.
+ * @param {string} w @param {string} root @param {string} platform */
+function inProject(w, root, platform) {
+  const win = platform === "win32";
+  if (!(win ? WORD_WIN : WORD).test(w)) return false;
+  const p = pathFor(platform);
+  const top = p.resolve(root);
+  return w.split(win ? WIN_SPLIT : /[=,:\s]+/).every((piece) => {
     if (!piece) return true;
-    if (!isAbsolute(piece) && !piece.split("/").includes("..")) return true;
-    const r = relative(top, resolve(top, piece));
-    return r === "" || (!r.startsWith("..") && !isAbsolute(r));
+    if (win && /^[A-Za-z]:/.test(piece) && !/^[A-Za-z]:[\\/]/.test(piece)) return false;
+    if (!p.isAbsolute(piece) && !goesUp(piece)) return true;
+    const r = p.relative(top, p.resolve(top, piece));
+    return r === "" || (!r.startsWith("..") && !p.isAbsolute(r));
   });
 }
 
@@ -249,18 +264,21 @@ function inProject(w, root) {
 /**
  * Whether CARL runs a check's command itself for the red start, and how (the program's argv and the KEY=value
  * words; no shell). See the rules above.
- * @param {string} run @param {string} root the project folder @returns {Allowed}
+ * @param {string} run @param {string} root the project folder
+ * @param {{ platform?: string }} [o] platform: the computer's own by default (a test passes another)
+ * @returns {Allowed}
  */
-export function allowedCheck(run, root) {
+export function allowedCheck(run, root, o = {}) {
+  const platform = o.platform ?? process.platform;
   const no = (/** @type {string} */ why) => ({ ok: /** @type {false} */ (false), why });
-  const words = commandWords(run);
+  const words = commandWords(run, platform);
   if (!words) return no("shell syntax");
   /** @type {Record<string, string>} */
   const env = {};
   let i = 0;
   for (let m; i < words.length && (m = /^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/s.exec(words[i])); i++) {
     if (!SAFE_ENV.has(m[1])) return no(`the variable ${m[1]}`);
-    if (!inProject(m[2], root)) return no(`the value of ${m[1]}`);
+    if (!inProject(m[2], root, platform)) return no(`the value of ${m[1]}`);
     env[m[1]] = m[2];
   }
   let w = words.slice(i);
@@ -294,8 +312,8 @@ export function allowedCheck(run, root) {
       const name = eq < 0 ? arg : arg.slice(0, eq);
       if (NO_FLAGS[runner].includes(name)) return no(`the flag ${name}`);
       if (!/^--?[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(name) && arg !== "-" && arg !== "--") return no(`the flag ${name}`);
-      if (eq >= 0 && !inProject(arg.slice(eq + 1), root)) return no(`the value of ${name}`);
-    } else if (!inProject(arg, root)) return no(`${arg} is not in the project`);
+      if (eq >= 0 && !inProject(arg.slice(eq + 1), root, platform)) return no(`the value of ${name}`);
+    } else if (!inProject(arg, root, platform)) return no(`${arg} is not in the project`);
   }
   return { ok: true, argv: [...prefix, ...w], env, runner };
 }
@@ -331,7 +349,8 @@ export function runArgv(argv, env, cwd, ms) {
     /** @type {import("node:child_process").ChildProcess} */
     let proc;
     try {
-      proc = spawn(argv[0], argv.slice(1), { cwd, env: base, stdio: ["ignore", "pipe", "pipe"], detached: process.platform !== "win32" });
+      proc = spawnProgram(argv, { cwd, env: base, stdio: ["ignore", "pipe", "pipe"], detached: process.platform !== "win32" },
+                          { env: base });
     } catch (e) {
       done({ code: null, timedOut: false, output: String(e) });
       return;
@@ -341,12 +360,7 @@ export function runArgv(argv, env, cwd, ms) {
     };
     proc.stdout?.on("data", keep);
     proc.stderr?.on("data", keep);
-    const kill = () => {
-      try {
-        if (proc.pid && process.platform !== "win32") process.kill(-proc.pid, "SIGKILL");   // the whole group
-        else proc.kill("SIGKILL");
-      } catch { /* gone */ }
-    };
+    const kill = () => killTree(proc, { group: process.platform !== "win32" });   // the whole group or tree
     const timer = setTimeout(() => {
       timedOut = true;
       kill();
@@ -879,8 +893,8 @@ export async function codeChecks(cwd, changed, o = {}) {
   if (py.length) {
     await check("a changed Python file does not compile", ["python3", "-m", "py_compile", ...py]);
     if (has("ruff")) await check("the language check finds errors", ["ruff", "check", "--no-cache", "--select", "E9,F63,F7,F82", "--output-format", "concise", ...py]);
-    for (const m of py.filter((f) => f === "__main__.py" || f.endsWith("/__main__.py"))) {
-      const pkg = dirname(m).split("/").filter((x) => x && x !== ".").join(".");
+    for (const m of py.filter((f) => pathParts(f).at(-1) === "__main__.py")) {
+      const pkg = pathParts(dirname(m)).filter((x) => x && x !== ".").join(".");
       if (pkg) await check(`python -m ${pkg} does not start`, ["python3", "-m", pkg, "--help"]);
     }
   }
@@ -888,11 +902,6 @@ export async function codeChecks(cwd, changed, o = {}) {
   if (there.some((f) => f.endsWith(".go")) && has("go")) await check("the Go code does not build or vet", ["go", "vet", "./..."]);
   if (there.some((f) => f.endsWith(".rs")) && has("cargo")) await check("the Rust code does not build", ["cargo", "check", "--quiet", "--color", "never"]);
   return { notDone, checked };
-}
-
-/** Is a program on the PATH? @param {string} cmd */
-function onPath(cmd) {
-  return String(process.env.PATH ?? "").split(":").some((d) => d && existsSync(join(d, cmd)));
 }
 
 /**

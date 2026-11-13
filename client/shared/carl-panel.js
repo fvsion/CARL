@@ -34,11 +34,11 @@
 // both state files (carl.json "coder_tests"), which the chain reads at each coder task: no restart in either client.
 // The 23.4.3 addendum: Request Check (after Tests): on, single reminder (the default), off; CODER_REQUEST_CHECK, carl.json
 // "request_check", read by carl-delegation at each coder task: no restart.
-import { spawn } from "node:child_process";
 import * as fs from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { isCarl } from "./carl-api.js";
+import { spawnProgram, syncPython } from "./carl-proc.js";
 
 const HOME = homedir();
 const CARL = join(HOME, ".config", "carl");
@@ -171,7 +171,7 @@ export function piSearch(entry) {
 }
 
 /**
- * A time span as CARL writes it everywhere (tools/carl_core/domain/units.py): 42 s, 3 min, 1 h 12 min,
+ * A time span as CARL writes it everywhere (src/carl/domain/shared/units.py): 42 s, 3 min, 1 h 12 min,
  * 2 days.
  * @param {number} seconds
  * @returns {string}
@@ -256,7 +256,7 @@ export function row(label, value, width = 16) {
 }
 
 /**
- * The version of the client package (VERSION in the client folder, written by ./carl.sh package) and the CARL
+ * The version of the client package (VERSION in the client folder, written by carl package) and the CARL
  * version of the server: the one the sync service last heard from the dashboard API (state server_version), else
  * remote.json "version" (written at each server start; it comes with the package, so it is the same at first);
  * "" when not known.
@@ -994,16 +994,24 @@ function switchOutcome(action, code, client, result, session) {
 
 /**
  * Run carl-sync.py (in the client folder the setup recorded) with args: its exit code (-1: none) and what it printed.
+ * It runs with the interpreter the setup recorded, else python3 (carl-proc.js).
  * @param {string[]} args
  * @returns {Promise<{ code: number, out: string }>}
  */
 function exec(args) {
-  const bundle = bundleOf(obj(json(join(CARL, "client-sync.json"))));
+  const st = obj(json(join(CARL, "client-sync.json")));
+  const bundle = bundleOf(st);
   const tool = bundle ? join(bundle, "carl-sync.py") : "";
   if (!tool || !exists(tool)) return Promise.resolve({ code: -1, out: "" });
   return new Promise((ok) => {
     let out = "";
-    const p = spawn("python3", [tool, ...args], { stdio: ["ignore", "pipe", "ignore"] });
+    let p;
+    try {
+      p = spawnProgram([...syncPython(st), tool, ...args], { stdio: ["ignore", "pipe", "ignore"] });
+    } catch {
+      ok({ code: -1, out });
+      return;
+    }
     p.stdout?.on("data", (d) => {
       if (out.length < 1 << 16) out += String(d);
     });
@@ -1046,9 +1054,11 @@ export function checkOnce() {
   const st = obj(json(join(CARL, "client-sync.json")));
   const bundle = bundleOf(st);
   if (st.service || !bundle || !exists(join(bundle, "remote.json"))) return;
-  const p = spawn("python3", [join(bundle, "carl-sync.py"), "once"], { stdio: "ignore", detached: true });
-  p.on("error", () => {});
-  p.unref();
+  try {
+    const p = spawnProgram([...syncPython(st), join(bundle, "carl-sync.py"), "once"], { stdio: "ignore", detached: true });
+    p.on("error", () => {});
+    p.unref();
+  } catch { /* no interpreter: the next start tries again */ }
 }
 
 // ------------------------------------------------------------------ the speeds (Phase 23.5 item 9)

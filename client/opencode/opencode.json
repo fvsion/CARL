@@ -3,7 +3,7 @@
   "provider": {
     "llamacpp": {
       "npm": "@ai-sdk/openai-compatible",
-      "name": "llama.cpp (Mac host)",
+      "name": "llama.cpp (__HOST_LABEL__)",
       "options": {
         "baseURL": "http://__HOST__:__LLAMA_PORT__/v1",
         "apiKey": "{file:__HOME__/.config/carl/api-key}",

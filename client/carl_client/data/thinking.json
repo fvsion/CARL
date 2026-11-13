@@ -1,0 +1,26 @@
+{
+  "_comment": "The thinking values (Phase 23.4.4; decision 12: no values in code). carl_client.domain.thinking holds the rules and carl_client.domain.models the client entries; they take these values from here. roles: the levels of a model with effort levels (Qwen3.8's template has no high), each role's default per kind, and the level that on means on an effort model. opencode: the reasoningEffort variants, the ones a kind offers, the values for on and off, and the sampling of the none variant per off_sampling (qwen: Qwen's non-thinking sampling; same: thinking off only). pi: the thinking level map per kind (null: not offered), the level for on, and the default level.",
+  "roles": {
+    "levels": ["low", "medium", "xhigh"],
+    "defaults": {"effort": {"main": "low", "coder": "main"}, "on-off": {"main": "on", "coder": "main"}},
+    "on_level": {"main": "low", "coder": "medium"}
+  },
+  "opencode": {
+    "levels": ["minimal", "low", "medium", "high", "xhigh"],
+    "on": {"on-off": ["high"], "effort": ["low", "medium", "xhigh"]},
+    "on_effort": "high",
+    "off_effort": "none",
+    "off_sampling": {
+      "qwen": {"reasoningEffort": "none", "temperature": 0.7, "top_p": 0.8, "presence_penalty": 1.5},
+      "same": {"reasoningEffort": "none"}
+    }
+  },
+  "pi": {
+    "level_map": {
+      "on-off": {"minimal": null, "low": null, "medium": null, "xhigh": null},
+      "effort": {"minimal": null, "high": null, "xhigh": "xhigh"}
+    },
+    "on_level": "high",
+    "default_level": "low"
+  }
+}

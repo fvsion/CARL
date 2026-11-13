@@ -20,11 +20,12 @@
 // each failure it let go to that file (never a key or a prompt).
 
 import { createHash } from "node:crypto";
-import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { isCarl } from "./carl-api.js";
+import { isFsRoot, isUnder } from "./carl-paths.js";
+import { onPath, runProgramSync } from "./carl-proc.js";
 
 export const MIN_PREFIX_TOKENS = 1024;   // a shorter prompt is quick to read: no file
 export const MIN_SESSION_TOKENS = 4096;  // a shorter conversation is quick to read again
@@ -55,7 +56,7 @@ const OFF = new Set(["none", "minimal", "off", "disable", "disabled"]);
 const STATE_MODE = 0o600;            // the claim, turn and record files and the log: only this user
 // What the cache did (Phase 23.5.1.1, the counters): one JSON line per event in ~/.config/carl/cache-events/DAY.jsonl
 // (a client on this Mac; small appends are whole across processes), or POST /carl/cache/events (a client on another
-// computer). The dashboard counts them (tools/monitor/cachestats.py) and removes files older than two days.
+// computer). The dashboard counts them (src/carl/adapters/common/cache_events.py) and removes files older than two days.
 export const EVENTS_DIR = "cache-events";
 // a saved state's name as carl-cache.js and the dashboard make them (safeName parts): never a path
 const STATE_NAME = /^carl-(?:prefix|session)\+[A-Za-z0-9._+-]+\.bin$/;
@@ -248,7 +249,7 @@ export function splitOpenCode(text) {
   if (text[j] === "\n") j++;
   const env = text.slice(i, j);
   const roots = [...env.matchAll(/^\s*(?:Working directory|Workspace root folder): (.+)$/gm)]
-    .map((m) => m[1].trim()).filter((r) => r && r !== "/");
+    .map((m) => m[1].trim()).filter((r) => r && !isFsRoot(r));
   const rest = text.slice(j);
   const s = rest.indexOf(OC_SKILLS);
   const body = s < 0 ? rest : rest.slice(0, s);
@@ -259,7 +260,7 @@ export function splitOpenCode(text) {
   starts.forEach((at, k) => {
     const block = body.slice(at, starts[k + 1] ?? body.length);
     const path = block.slice("Instructions from: ".length, block.indexOf("\n") < 0 ? undefined : block.indexOf("\n")).trim();
-    const own = roots.some((r) => path === r || path.startsWith(r.endsWith("/") ? r : r + "/"));
+    const own = roots.some((r) => isUnder(path, r));
     (own ? moved : kept).push(own ? block.trimEnd() : block);
   });
   kept.push(tail);
@@ -375,7 +376,7 @@ export function takeFile(path) {
 
 /**
  * The saved states in the folder, each in all its forms (the file; for a conversation stored as a patch
- * against its prompt, the patch .zst and its .json: tools/monitor/slotpack.py), as { name, bytes, mtime, base }.
+ * against its prompt, the patch .zst and its .json: src/carl/adapters/common/zstd_patch.py), as { name, bytes, mtime, base }.
  * @param {string} dir
  * @returns {{ name: string, bytes: number, mtime: number, base: string }[]}
  */
@@ -401,7 +402,7 @@ function listing(dir) {
   return [...found.values()];
 }
 
-const SEQ_MAGIC = 0x67677371;        // "ggsq": a llama_state_seq file (tools/monitor/slotpack.py tokens())
+const SEQ_MAGIC = 0x67677371;        // "ggsq": a llama_state_seq file (src/carl/adapters/common/zstd_patch.py tokens())
 const MAX_HEAD_TOKENS = 1 << 20;
 
 /**
@@ -767,7 +768,7 @@ export class CarlCache {
 
   /**
    * How the model's cache is set up, from the launcher's file on this Mac (~/.config/carl/server-PORT.json,
-   * tools/carl_core/domain/runtime.py): "full", "window" (a sliding-window model without --swa-full: a saved state
+   * src/carl/domain/server/runtime_doc.py): "full", "window" (a sliding-window model without --swa-full: a saved state
    * cannot be reused) or "none" (no sliding window); undefined when not known (another computer, an older CARL).
    * @param {string} model @returns {"full" | "window" | "none" | undefined}
    */
@@ -1311,8 +1312,10 @@ export class CarlCache {
   }
 
   /**
-   * A conversation stored as a patch against its prompt (tools/monitor/slotpack.py) made whole again
-   * before a restore: here with zstd, for a remote client by the dashboard's API. True when it is whole.
+   * A conversation stored as a patch against its prompt (src/carl/adapters/common/zstd_patch.py) made whole again
+   * before a restore: here with zstd, for a remote client by the dashboard's API. True when it is whole. zstd is
+   * optional: without it on PATH here, the dashboard's API makes it whole when one is set (cacheApi); with none,
+   * it is not made whole (false: the request goes on without it).
    * @param {string} file
    */
   async whole(file) {
@@ -1328,8 +1331,12 @@ export class CarlCache {
     // the prompt it is a patch against: a name in the same folder, never a path
     const base = isStateName(meta.base) ? join(this.dir, meta.base) : "";
     if (!base || !fs.existsSync(base) || !fs.existsSync(`${path}.zst`)) return false;
-    const r = spawnSync("zstd", ["-q", "-f", "--long=31", "-d", `--patch-from=${base}`, `${path}.zst`, "-o", `${path}.tmp`],
-                        { stdio: "ignore", timeout: 600_000 });
+    if (!onPath("zstd")) {                // zstd is optional (Windows has none): the dashboard's API, else not whole
+      if (!this.cacheApi) return false;
+      return (await this.api("POST", "/carl/cache/unpack", { file })).status === 200;
+    }
+    const r = runProgramSync(["zstd", "-q", "-f", "--long=31", "-d", `--patch-from=${base}`, `${path}.zst`, "-o", `${path}.tmp`],
+                             { stdio: "ignore", timeout: 600_000 });
     try {
       if (r.status !== 0 || fs.statSync(`${path}.tmp`).size !== meta.size) throw new Error(`zstd exit ${r.status}`);
       if (typeof meta.packed_at !== "number") throw new Error("no packed_at");

@@ -188,7 +188,7 @@ export function shellWrites(command, dirs) {
   for (const m of text.matchAll(/(?:^|[^<>&0-9])(?:&>>?|>>?|>\|)\s*("[^"]+"|'[^']+'|[^\s;|&()<>]+)/g)) add(m[1]);
   for (const seg of text.split(/[;|&()]+/)) {
     const words = seg.trim().split(/\s+/).filter((w) => w && !/^[<>]/.test(w));
-    const cmd = (words[0] ?? "").split("/").pop() ?? "";
+    const cmd = (words[0] ?? "").split(/[\\/]/).pop() ?? "";          // a program's path with either separator
     const plain = words.slice(1).filter((w) => !w.startsWith("-"));
     if (MAKERS.has(cmd) && (dirs || cmd !== "mkdir")) plain.forEach(add);
     if (COPIERS.has(cmd) && plain.length >= 2) add(plain[plain.length - 1]);

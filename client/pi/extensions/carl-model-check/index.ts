@@ -1,5 +1,5 @@
 /**
- * CARL: the model check for Pi (installed by CARL's client/install.sh; Phase 23.5, as OpenCode's carl-model-check
+ * CARL: the model check for Pi (installed by CARL's setup; Phase 23.5, as OpenCode's carl-model-check
  * plugin): before a request to CARL's provider, the model Pi asks for against what the server runs
  * (carl-model-check.js), and a notice once per situation:
  *   single-model mode   the server runs another model (it answers with that one)

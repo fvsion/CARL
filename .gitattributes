@@ -1,0 +1,6 @@
+# Files that run in cmd.exe on Windows keep their CRLF line ends
+*.cmd text eol=crlf
+# Python and shell scripts keep LF line ends in a checkout on Windows too (a shebang line or bash breaks on CRLF)
+*.py text eol=lf
+*.sh text eol=lf
+client/setup text eol=lf

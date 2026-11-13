@@ -19,14 +19,14 @@ llama.cpp gives these request fields to the template:
 
 `--reasoning-format deepseek` moves the thinking text into the `reasoning_content` field of the response.
 
-**The patch.** OpenCode can send only `reasoning_effort`. The Qwen3.8 template has no effort value that means "off". For this reason, `host/serve-llama.sh` extracts the template from the GGUF (`host/gguf-chat-template.py`) and adds one rule at the start:
+**The patch.** OpenCode can send only `reasoning_effort`. The Qwen3.8 template has no effort value that means "off". For this reason, the start extracts the template from the GGUF (`src/carl/adapters/common/template_files.py`, `carl chat-template`) and adds one rule at the start:
 
 ```jinja
 {%- if reasoning_effort is defined and reasoning_effort in ('none', 'minimal', 'off', 'disable', 'disabled') %}{%- set enable_thinking = false %}{%- endif %}
 ```
 
 - The rest of the template does not change, with one exception: a Qwen template without `preserve_thinking` (the 9B) gets it ([Whether a state fits](caching.md#whether-a-state-fits)).
-- The patched copy is cached as `~/models/templates/<model>.thinking-toggle.jinja`.
+- The patched copy is cached as `<model>.thinking-toggle.jinja` in the `template/` folder of the model's own folder (`~/models/gguf/MODEL/template/`); a model that is not in a folder of its own in the models folder (a file directly in it, or in a folder outside it) has it in `~/models/templates/`. A template that cannot be written (an unwritable folder) is a warning on stderr and the start goes on without it.
 - The launcher makes it again when the GGUF or the script is newer than the copy.
 - A model whose template has no `enable_thinking` gets its stock template.
 - `THINK_TOGGLE=0` (or `llama.think_toggle = false`) turns the patch off.
@@ -61,7 +61,7 @@ llama.cpp gives these request fields to the template:
 | OpenCode → llama.cpp | `@ai-sdk/openai-compatible`, `options.reasoningEffort` and variants | top-level `reasoning_effort: "<level>"` | top-level `reasoning_effort: "none"` (patched template → `enable_thinking=false`) |
 | Pi → llama.cpp | `thinkingFormat: "chat-template"` and `chatTemplateKwargs` | `chat_template_kwargs {enable_thinking: true, preserve_thinking: true, reasoning_effort: "<level>"}` | `chat_template_kwargs {enable_thinking: false, preserve_thinking: true}` (no effort value) |
 
-**Thinking per role** (Phase 23.4.4): the dashboard sets the main session's and the coder's thinking for each model (Settings > Server: Main thinking, Coder thinking). The main session's goes into each OpenCode model entry's `options.reasoningEffort` and Pi's `modelThinkingLevels`; the coder's into the OpenCode coder agent's `options.reasoningEffort` and the Pi subagent extension (`carl.json` `"thinking"`). Details: [OpenCode and Pi configs](client-configs.md#thinking-per-role-phase-2344).
+**Thinking per role** (Phase 23.4.4): the dashboard sets the main session's and the coder's thinking for each model (Settings > Agents: Main thinking, Coder thinking). The main session's goes into each OpenCode model entry's `options.reasoningEffort` and Pi's `modelThinkingLevels`; the coder's into the OpenCode coder agent's `options.reasoningEffort` and the Pi subagent extension (`carl.json` `"thinking"`). Details: [OpenCode and Pi configs](client-configs.md#thinking-per-role-phase-2344).
 
 **OpenCode precedence:** provider options → model `options` → agent `options` → **variant**.
 - OpenCode merges the variant last, so the variant has priority.
@@ -72,7 +72,7 @@ llama.cpp gives these request fields to the template:
 
 ## The full thinking matrix
 
-What you select → what occurs. The provider is `llamacpp` (or `carl` when you have your own `llamacpp` provider). The model ids are the CARL names (`client/carl_models.py`).
+What you select → what occurs. The provider is `llamacpp` (or `carl` when you have your own `llamacpp` provider). The model ids are the CARL names (`client/carl_client/domain/models.py`).
 
 ### OpenCode (`/variants`, ctrl+t)
 

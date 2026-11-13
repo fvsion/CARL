@@ -1,0 +1,154 @@
+{
+  "_comment": "The client switch vocabulary for carl-panel.js, written from carl_client/domain/switches.py (a test checks that the two agree).",
+  "switches": [
+    "CLIENTS",
+    "CODER",
+    "NO_CODER",
+    "WEB_SEARCH",
+    "NO_LSP",
+    "LSP",
+    "NO_BROWSER",
+    "BROWSER_HEADED",
+    "NO_SIDEBAR",
+    "NO_SWITCHER",
+    "NO_MODEL_CHECK",
+    "NO_BACKGROUND_SUBAGENTS",
+    "NO_CACHE",
+    "LLAMA_CTX",
+    "NO_REMINDER",
+    "CODER_THINKING",
+    "CODER_MODEL",
+    "CODER_MODEL_THINKING",
+    "CODER_TESTS",
+    "CODER_REQUEST_CHECK",
+    "CODER_RUN_GATE",
+    "CODER_FIX_ROUNDS",
+    "CODER_FREE_FORM"
+  ],
+  "off_switches": [
+    "NO_CODER",
+    "NO_BACKGROUND_SUBAGENTS",
+    "NO_REMINDER",
+    "NO_BROWSER",
+    "NO_LSP",
+    "NO_SIDEBAR",
+    "NO_SWITCHER",
+    "NO_CACHE",
+    "NO_MODEL_CHECK"
+  ],
+  "settable": {
+    "NO_CODER": [
+      "1",
+      "on"
+    ],
+    "NO_BACKGROUND_SUBAGENTS": [
+      "1",
+      "on"
+    ],
+    "NO_REMINDER": [
+      "1",
+      "on"
+    ],
+    "NO_BROWSER": [
+      "1",
+      "on"
+    ],
+    "NO_LSP": [
+      "1",
+      "on"
+    ],
+    "NO_SIDEBAR": [
+      "1",
+      "on"
+    ],
+    "NO_SWITCHER": [
+      "1",
+      "on"
+    ],
+    "NO_CACHE": [
+      "1",
+      "on"
+    ],
+    "NO_MODEL_CHECK": [
+      "1",
+      "on"
+    ],
+    "WEB_SEARCH": [
+      "exa",
+      "parallel",
+      "off"
+    ],
+    "CODER": [
+      "1",
+      "auto"
+    ],
+    "CODER_THINKING": [],
+    "CODER_MODEL": [],
+    "CODER_MODEL_THINKING": [],
+    "CODER_TESTS": [
+      "after",
+      "before",
+      "off"
+    ],
+    "CODER_REQUEST_CHECK": [
+      "reminder",
+      "on",
+      "off"
+    ],
+    "CODER_RUN_GATE": [
+      "on",
+      "off"
+    ],
+    "CODER_FIX_ROUNDS": [
+      "0",
+      "1",
+      "2",
+      "3"
+    ],
+    "CODER_FREE_FORM": [
+      "model",
+      "on",
+      "off"
+    ]
+  },
+  "defaults": {
+    "WEB_SEARCH": "exa",
+    "CODER_THINKING": "",
+    "CODER_MODEL": "main",
+    "CODER_MODEL_THINKING": "default",
+    "CODER_TESTS": "after",
+    "CODER_REQUEST_CHECK": "reminder",
+    "CODER_RUN_GATE": "on",
+    "CODER_FIX_ROUNDS": "1",
+    "CODER_FREE_FORM": "model"
+  },
+  "thinking_default": "default",
+  "coder_model_main": "main",
+  "live": {
+    "opencode": [
+      "CODER_TESTS",
+      "CODER_REQUEST_CHECK",
+      "CODER_RUN_GATE",
+      "CODER_FIX_ROUNDS",
+      "CODER_FREE_FORM"
+    ],
+    "pi": [
+      "NO_LSP",
+      "NO_SIDEBAR",
+      "NO_SWITCHER",
+      "CODER_THINKING",
+      "CODER_MODEL",
+      "CODER_MODEL_THINKING",
+      "CODER_TESTS",
+      "CODER_REQUEST_CHECK",
+      "CODER_RUN_GATE",
+      "CODER_FIX_ROUNDS",
+      "CODER_FREE_FORM"
+    ]
+  },
+  "opencode_env": [
+    "WEB_SEARCH",
+    "NO_LSP",
+    "NO_BACKGROUND_SUBAGENTS"
+  ]
+}
