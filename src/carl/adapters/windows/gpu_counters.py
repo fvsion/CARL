@@ -8,6 +8,8 @@ names):
                     "\\GPU Adapter Memory(*)\\Dedicated Usage" is the VRAM in use per adapter (instance
                     luid_0x..._0x..._phys_0), "\\GPU Process Memory(*)\\Dedicated Usage" per process
                     (pid_N_luid_..._phys_0): nvidia-smi says [N/A] per process on Windows (WDDM).
+  counter_total()   counters without instances added up, by their English paths (the standby list's three:
+                    "\\Memory\\Standby Cache Core Bytes" ...; W1.6); None when one of them gives nothing.
 
 Each call gives [] or {} when Windows does not answer, never an error. Plain values only: adapters/gpu/
 windows_counters.py turns them into Gpu values (the composition wires the two, rule R3).
@@ -15,7 +17,7 @@ windows_counters.py turns them into Gpu values (the composition wires the two, r
 from __future__ import annotations
 
 import ctypes
-from typing import Dict, List, Union
+from typing import Dict, List, Optional, Sequence, Union
 
 Value = Union[str, int, bool]
 
@@ -164,3 +166,34 @@ def counter_values(path: str, double: bool = False) -> Dict[str, float]:
     finally:
         pdh.PdhCloseQuery(query)
     return out
+
+
+def counter_total(paths: Sequence[str]) -> Optional[float]:
+    """The sum of counters without instances, by their English paths, in one query (an instantaneous counter needs
+    one collection); None when Windows does not answer or one of them has no valid value."""
+    try:
+        pdh = ctypes.WinDLL("pdh")
+    except (AttributeError, OSError):
+        return None
+    query = ctypes.c_void_p()
+    if pdh.PdhOpenQueryW(None, None, ctypes.byref(query)) != 0:
+        return None
+    try:
+        counters = []
+        for path in paths:
+            counter = ctypes.c_void_p()
+            if pdh.PdhAddEnglishCounterW(query, ctypes.c_wchar_p(path), None, ctypes.byref(counter)) != 0:
+                return None
+            counters.append(counter)
+        if pdh.PdhCollectQueryData(query) != 0:
+            return None
+        total = 0.0
+        for counter in counters:
+            value = _CounterValue()
+            if pdh.PdhGetFormattedCounterValue(counter, PDH_FMT_LARGE, None, ctypes.byref(value)) != 0 or \
+                    value.CStatus not in (PDH_CSTATUS_VALID_DATA, PDH_CSTATUS_NEW_DATA):
+                return None
+            total += float(value.value.largeValue)
+        return total
+    finally:
+        pdh.PdhCloseQuery(query)

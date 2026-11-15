@@ -50,7 +50,9 @@ class Gpu:
     """One GPU. backend: the llama.cpp device kind (CUDA, ROCm, Vulkan, MTL...) or the tool that saw it
     (nvidia-smi, sysfs, d3dkmt); free None: not known. pci: its PCI address (0000:01:00.0, lower case; "" when not
     known); uuid: NVIDIA's GPU-... id; luid: the Windows adapter's LUID (0x00000000_0x0000c2b5); integrated: a
-    source said it shares the RAM; device: llama.cpp's name for it (CUDA0, Vulkan1; "" when not known)."""
+    source said it shares the RAM; device: llama.cpp's name for it (CUDA0, Vulkan1; "" when not known). os_total and
+    os_used: the OS's own figures of the card (Windows: D3DKMT's dedicated memory, which leaves out what the driver
+    reserves, and the adapter counter's use, the programs'); 0 and None when not known (W1.6: where the memory goes)."""
     name: str
     total: int
     free: Optional[int] = None
@@ -65,6 +67,8 @@ class Gpu:
     integrated: bool = False
     device: str = ""
     shared: int = 0
+    os_total: int = 0
+    os_used: Optional[int] = None
 
     def label(self) -> str:
         """NVIDIA GeForce RTX 2070 SUPER, 8.0 GiB"""

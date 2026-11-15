@@ -16,14 +16,16 @@ from typing import Callable, Dict, List, Mapping, NamedTuple, Optional, Sequence
 
 from ..domain.catalog import thinking
 from ..domain.catalog.drafts import FILE_SPECS, TUNE_NS
-from ..domain.catalog.quants import mtp_kind
+from ..domain.catalog.inventory import group_of
+from ..domain.catalog.layout import FALLBACK_QUANT
+from ..domain.catalog.quants import ModelGroup, group_models, mtp_kind, quant_of
 from ..domain.config import server_rows
 from ..domain.config.settings import CACHE_KEYS, DELEGATION_KEYS, GPU_KEYS, LLAMA_KEYS, coerce
 from ..domain.config.server_rows import (INT_KEYS, MODEL_ROW_KEYS, NUMERIC, Pending, SettingRow,  # noqa: F401
-                                         Value, parse_typed)
-from ..domain.memory.autofit import AutoFit, setup_text
-from ..domain.memory import offload
-from ..domain.memory.fit import DEFAULT_CTX, UBATCH, Spec, max_ctx, mtp_spec, need_bytes, need_parts, ub_choice
+                                         Value, number_text, parse_typed, step_number, stepped, typed_at)
+from ..domain.memory.autofit import AutoFit, Candidate, model_plan, setup_text, window_cap
+from ..domain.memory import loaded, offload
+from ..domain.memory.fit import (DEFAULT_CTX, UBATCH, Spec, max_ctx, mtp_spec, need_bytes, need_parts, ub_choice)
 from ..domain.server import ub_order as uo
 from ..domain.memory.split import (Slot, calib_of, fits as split_fits, load_of, max_ctx as split_max_ctx, one_limit,
                                     plan_split)
@@ -33,7 +35,7 @@ from ..domain.server.launch_plan import own_load
 from ..domain.server.snapshot import (JSONDict, ModelInfo, ServerData, Shape, draft_bytes, drafter_missing, jdict,
                                       spec_draft_bytes, vision_bytes)
 from ..domain.shared.ansi import GRN, RED, YEL
-from ..domain.shared.units import MIB, memory, tokens
+from ..domain.shared.units import GIB, MIB, memory, tokens
 from . import fit as budget_builder
 from .model_list import ModelList
 
@@ -67,8 +69,9 @@ class Schema:
         return server_rows.adv_rows(self.os_name)
 
     def saved_rows(self) -> List[SettingRow]:
-        """The rows saved to config.json (the More settings rows and the Auto fit panel's included)."""
-        return self.llama + self.adv + AUTO_ROWS
+        """The rows saved to config.json (the More settings rows and the Auto fit panel's included; not a view such as
+        Quantization, which is the Model row's entry)."""
+        return [r for r in self.llama + self.adv + AUTO_ROWS if r.loc]
 
     def defaults(self) -> Pending:
         """Every row at its default."""
@@ -117,8 +120,16 @@ def row_instruction(key: str) -> str:
     """How to change a Settings row, for someone new to the dashboard."""
     if key == "model":
         return "Press Enter to choose a model from the list. Press A to see Auto fit's choice and why."
+    if key == "quant":
+        return "Press ← → for another quantization of this model. ● downloaded, ○ not downloaded."
+    if key == "cpu_moe":
+        return ("Press ← → for the presets; ← from 0 is auto. At the full level (L), ← → change it by one layer, and "
+                "you can type a number, then press Enter.")
+    if key in NUMERIC and stepped(key):
+        return ("Press ← → to step through the presets. At the full level (L), ← → take fine steps, and you can "
+                "type a number, then press Enter.")
     if key in NUMERIC:
-        return "Press ← → for the usual values. Or type a number, then press Enter."
+        return "Press ← → for auto. Or type a number, then press Enter."
     return "Press ← → to change the value."
 
 
@@ -147,7 +158,7 @@ def fmt_val(key: str, v: object) -> Value:
     if key in ("ctx", "cache"):
         return int(str(v)) if str(v).isdigit() else (v if isinstance(v, (str, int)) else str(v))
     if key in ("temp", "repeat") and _is_number(v):
-        return f"{float(str(v)):.1f}"
+        return number_text(key, float(str(v)))          # 1.0, 0.65 (a step of 0.05 is kept)
     if key in ("presence", "min_p", "top_p") and _is_number(v):
         return f"{float(str(v)):g}"
     return str(v)
@@ -177,12 +188,14 @@ def settings_to_config(p: Pending, cfg: JSONDict, schema: Schema, model: Optiona
                        ub_loaded: Optional[str] = None) -> JSONDict:
     """config.json with the pending settings: server-wide values that differ from the defaults,
     and the model's profile = the values that differ from its tune (Auto-tune / catalogue).
-    model / tuned: the model a start loads and its tune. ub_auto: that model's own -ub (its Auto-tune record's, else
-    this OS's default; A45): the Batch size row is saved as that model's choice (models.NAME.ub, stamped with the tune
-    it was made against: ub_stamp) only when the person changed the row from ub_loaded, the value it was loaded with
-    (the -ub order's, so a typed -ub or llama.ub is not a choice made here, A53); a row left alone keeps whatever the
-    model has saved. ub_loaded None: any row off ub_auto is a choice, as before A53. There is no global -ub (A51). A
-    choice that stands keeps its stamp. Returns a new dict."""
+    model / tuned: the model a start loads and its tune. ub_auto: unused (the Batch size row holds "auto" itself since
+    W1.6). The Batch size row is saved as that model's choice (models.NAME.ub, a size stamped with the tune it was made
+    against: ub_stamp) only when the person changed the row from ub_loaded, the value it was loaded with (the -ub
+    order's, so a typed -ub or llama.ub is not a choice made here, A53); a row left alone keeps whatever the model has
+    saved. auto (W1.6): the order picks the -ub; the model saves nothing, or "auto" when a llama.ub would else apply.
+    ub_loaded None: any row is a choice, as before A53. There is no global -ub (A51). A choice that stands keeps its
+    stamp. The Experts in RAM row (W1.6, B2) is the model's own models.NAME.n_cpu_moe,
+    saved only when it differs from llama.n_cpu_moe (else auto), which it never changes. Returns a new dict."""
     cfg = copy.deepcopy(cfg)
     for key, _, _, loc, default in schema.saved_rows():
         if not loc or loc.startswith("m:"):
@@ -206,15 +219,23 @@ def settings_to_config(p: Pending, cfg: JSONDict, schema: Schema, model: Optiona
         cfg.setdefault("models", {})
         old = jdict(cfg["models"].get(model))
         prof.update({k: old[k] for k in THINKING_ROWS if k in old})    # the Agents panel's: saved at once, kept
-        auto = str(ub_auto if ub_auto is not None else UBATCH)
         if "ub" in p and ub_loaded is not None and str(p["ub"]) == str(ub_loaded):
             for k in ("ub", "ub_tune"):                                 # the row was left alone (C-126): what is
                 if k in old:                                            # saved stays, nothing is added
                     prof[k] = old[k]
-        elif "ub" in p and str(p["ub"]) != auto:
+        elif "ub" in p and str(p["ub"]) == "auto":          # the order picks (W1.6): auto over a llama.ub only
+            if isinstance(jdict(cfg.get("llama")).get("ub"), int):
+                prof["ub"] = "auto"
+        elif "ub" in p:
             prof["ub"] = int(str(p["ub"]))                              # this model's choice (A51)
             same = str(old.get("ub")) == str(p["ub"])
             prof["ub_tune"] = str(old.get("ub_tune") or "") if same else ub_stamp
+        if "cpu_moe" in p:      # Experts in RAM, the model's own (B2): saved when it is not what llama.n_cpu_moe gives
+            fallback = jdict(cfg.get("llama")).get("n_cpu_moe", "auto")
+            if str(p["cpu_moe"]) != str(fallback):
+                prof["n_cpu_moe"] = int(str(p["cpu_moe"])) if str(p["cpu_moe"]).isdigit() else "auto"
+        elif "n_cpu_moe" in old:                                        # a computer without the row: kept
+            prof["n_cpu_moe"] = old["n_cpu_moe"]
         if prof:
             cfg["models"][model] = prof
         else:
@@ -251,8 +272,13 @@ class FitInfo:
     gpus: int = 0                   # the GPUs the setup was checked over as a split (0: one limit)
     split_ok: bool = True           # over several GPUs: the layers fit them (the rooms added up are not enough)
     cpu_moe: int = 0                # a MoE model's layers whose experts stay in the RAM (--n-cpu-moe; W6.8)
+    moe_layers: int = 0             # the model's layers with experts: the Experts in RAM row's top (0: dense, unknown)
     experts: float = 0              # their bytes in the RAM
     ram_ok: bool = True             # the RAM side fits the RAM less the reserve
+    ram_need: float = 0             # the RAM side: the experts, the other weights there, the CPU's compute buffer (W1.6)
+    ram_room: float = 0             # the RAM less the part kept for the system and apps (0: not known)
+    ram_other: float = 0            # of the RAM side, the weights besides the experts (token_embd, Gemma's per-layer)
+    ub: int = 0                     # the -ub the fit is at: the one the start uses (start_fit; 0: not known)
 
     @property
     def fits(self) -> bool:
@@ -330,11 +356,21 @@ def offload_fit(name: str, shape: Shape, file: int, drafter: int, kv: str, ctx: 
     parts = need_parts(shape, file, ctx, sp.slots, kv, sw, sp.spec, ub, calib_of(devices))
     on_gpu = max(parts.weights - off.experts, 0.0)          # the weights less the experts in the RAM
     rest = off.split.need - on_gpu - parts.drafter - parts.context - parts.state
+    calib = calib_of(devices)
+    other = (float(shape.get("embd_bytes", 0) or 0) if calib.gpu_weights else 0.0) + calib.ram_bytes(shape)
     return FitInfo(name=name, need=off.split.need, limit=off.split.room, ctx=ctx, slots=sp.slots, kv=kv,
                    full=sp.swa_full, largest=ctx if off.fits else 0, weights=on_gpu, drafter=int(parts.drafter),
                    context=parts.context, state=parts.state, buffers=max(rest, 0.0), spec=sp.spec.kind,
                    dropped=sp.dropped, gpus=len(devices), split_ok=off.gpu_fits, cpu_moe=off.n, experts=off.experts,
-                   ram_ok=off.ram_fits)
+                   ram_ok=off.ram_fits, ram_need=off.ram, ram_room=off.room, ram_other=min(other, off.ram))
+
+
+def ram_resolved(asked: str, ran: str, cpu_moe: object) -> bool:
+    """The speculation a start ran (ran) is the one asked for (asked) as a start with experts in the RAM resolves it:
+    MTP off, its n-gram part on (offload.ram_spec, A51), with some layers' experts in the RAM (W1.6: not a change)."""
+    n = int(str(cpu_moe)) if str(cpu_moe).isdigit() else 0
+    want = Spec(asked or "none")
+    return n > 0 and want.mtp and asked != ran and want.without_mtp().kind == ran
 
 
 def cpu_moe_of(p: Pending) -> Optional[int]:
@@ -353,13 +389,16 @@ def pending_spec(p: Pending) -> Tuple[str, int, int]:
     return str(p.get("spec") or "none"), num(p.get("specn"), 1), num(p.get("ub"), UBATCH)
 
 
+UB_AUTO = "auto"                # the Batch size row's auto (W1.6): the -ub order picks the size
+
+
 def start_fit(at: Callable[[int], FitInfo], ub: int, auto: bool, pick: bool = False) -> FitInfo:
     """The fit at the -ub the start uses: ub as it is (a person's: typed, the model's saved choice, llama.ub), or (auto:
     the model's own, A45) the -ub that keeps the setup -ub 512 gets (fit.ub_choice: the slots, the cache, the
-    speculation and the fit), as the start's plan lowers it; pick (no tune record, A52): of the sizes up to ub the one
-    that keeps the most experts on the GPUs (ub_order.ub_pick). at(ub): the fit at that -ub."""
+    speculation and the fit), as the start's plan lowers it; pick (no tune record, W1.6): of the sizes up to ub the
+    largest that keeps that setup (ub_order.ub_pick). at(ub): the fit at that -ub."""
     if not auto:
-        return at(ub)
+        return replace(at(ub), ub=ub)
     seen: Dict[int, FitInfo] = {}
 
     def setup(u: int) -> Tuple[object, str]:
@@ -368,7 +407,7 @@ def start_fit(at: Callable[[int], FitInfo], ub: int, auto: bool, pick: bool = Fa
     if pick and ub > UBATCH:
         ub = uo.ub_pick(ub, lambda u: (setup(u)[0], seen[u].cpu_moe))
     chosen = ub_choice(ub, setup).ub
-    return seen.get(chosen) or at(chosen)
+    return replace(seen.get(chosen) or at(chosen), ub=chosen)
 
 
 DEVICES_TTL = 5.0       # seconds the GPUs of a PC stand (the adapter asks the driver what the servers hold)
@@ -392,8 +431,7 @@ class SettingsService:
         self._plans: Dict[str, Tuple[float, Optional[FitInfo]]] = {}  # model -> (list time, its plan here)
         self._slots: Dict[Tuple[str, str, str, str], int] = {}      # (model, ctx, kv, swa) -> most slots that fit
         self._gpus: Tuple[float, List[Slot]] = (-DEVICES_TTL, [])    # (when they were read, the PC's GPUs)
-        self._ub_auto: Optional[str] = None     # the Batch size row follows the model's -ub (A51): the value it was given
-        self._ub_loaded: Optional[str] = None   # the row as it was loaded (the order's -ub): Apply saves only a change (A53)
+        self._ub_loaded: Optional[str] = None   # the row as it was loaded (ub_row): Apply saves only a change (A53)
 
     def devices(self) -> List[Slot]:
         """The GPUs the check works on, as the launcher's plan does (FitService.slots through the store): over several
@@ -411,12 +449,59 @@ class SettingsService:
     def rows(self, p: Pending) -> List[SettingRow]:
         """The rows shown for p (the model row offers every model; the slots row 3 and 4 only when
         they fit this Mac with the pending model, window and KV cache)."""
-        out = rows(p, self.schema, self.models.choices, self.full)
+        out = [r._replace(choices=self.model_choices(p)) if r.key == "model" else
+               r._replace(choices=self.quant_choices(p)) if r.key == "quant" else r
+               for r in rows(p, self.schema, self.models.choices, self.full)]
         if self.fit_cached(p).full is None:                 # no sliding-window layers: no such row
             out = [r for r in out if r.key != "swa"]
         most = self.max_slots(p)
+        out = [r._replace(choices=None) if r.key == "cpu_moe" and self.dense(p) else r     # nothing to choose
+               for r in out]
         return [r._replace(choices=[c for c in (r.choices or []) if not str(c).isdigit() or int(str(c)) <= max(most, 2)])
                 if r.key == "slots" else r for r in out]
+
+    # ------------------------------------------------------------ the model and its quantization (W1.6, B1)
+    def group(self, name: str) -> Optional[ModelGroup]:
+        """The model an entry is a quantization of (None: not a known entry)."""
+        return group_of(self.models.get(), name) if name and name != "auto" else None
+
+    def model_name(self, name: str) -> str:
+        """The name of the model an entry is of (the Model row shows it): qwen3.6-35b-a3b for its IQ3's entry."""
+        g = self.group(name)
+        return g.name if g is not None else name
+
+    def quant_name(self, name: str) -> str:
+        """The quantization of an entry (UD-IQ3_XXS): its file name's, else the catalogue's word for it; "" for a name
+        that is not an entry or a file that names none."""
+        m = self.models.by_name(name)
+        if not m:
+            return ""
+        q = quant_of(m)
+        return q if q != FALLBACK_QUANT else str(m.get("quant") or "")
+
+    def model_choices(self, p: Pending) -> List[str]:
+        """The Model row's values: auto, then each model once (its entry: the pending one for the pending model, else
+        the model's default quantization), in the order of the model list."""
+        cur = str(p.get("model", "auto"))
+        defaults = self.models.defaults()
+        of = {str(e.get("name", "")): g for g in group_models(self.models.get()) for e in g.entries}
+        out: List[str] = []
+        seen = set()
+        for name in self.models.choices():
+            g = of.get(name)
+            if g is None or not g.several:
+                out.append(name)
+            elif g.name not in seen:
+                seen.add(g.name)
+                names = [e.get("name", "") for e in g.entries]
+                out.append(cur if cur in names else defaults.get(g.name) or names[0])
+        return out
+
+    def quant_choices(self, p: Pending) -> Optional[List[str]]:
+        """The Quantization row's values: the entries of the pending model, the largest first (None: Model auto, or a
+        model with one quantization: nothing to choose there)."""
+        g = self.group(str(p.get("model", "auto")))
+        return [e.get("name", "") for e in g.entries] if g is not None and g.several else None
 
     # ------------------------------------------------------------ the Agents panel (Phase 23.4.4)
     def agents(self, name: str) -> "AgentsInfo":
@@ -567,9 +652,16 @@ class SettingsService:
         for key, pk in MODEL_ROW_KEYS.items():
             if key != "ub":
                 p[key] = fmt_val(key, vals[pk])
-        if "ub" not in p or (self._ub_auto is not None and str(p.get("ub")) == self._ub_auto):
-            p["ub"] = self._ub_auto = str(self.current_ub(resolved))
-        self._ub_loaded = str(self.current_ub(resolved))
+        row = self.ub_row(resolved)
+        if "ub" not in p or str(p.get("ub")) in (UB_AUTO, self._ub_loaded):        # not a person's change: follow
+            p["ub"] = row
+        self._ub_loaded = row
+        if self.has_row("cpu_moe"):                         # the model's own count (B2), else llama.n_cpu_moe
+            p["cpu_moe"] = self.cpu_moe_saved(resolved)
+
+    def has_row(self, key: str) -> bool:
+        """This OS has the row (the GPU rows: off the Mac)."""
+        return any(r.key == key for r in self.schema.llama)
 
     def tune_stale(self, m: ModelInfo) -> str:
         """How this computer's llama.cpp build and backend differ from those of the model's Auto-tune record (the Auto-tune
@@ -601,17 +693,19 @@ class SettingsService:
         except Exception:           # a store that cannot tell: the model's own -ub
             return None
 
-    def current_ub(self, name: str) -> int:
-        """The -ub the Batch size row shows for a model: the order's (its saved choice, its tuned -ub, ...)."""
+    def ub_row(self, name: str) -> str:
+        """The Batch size row of a model as it loads (W1.6): auto when the order picks the -ub (the tune record's or
+        this computer's, which a start may lower), else the person's size (typed, the model's saved choice, llama.ub)."""
         o = self.order(name)
-        return o.ub if o else self.model_ub(name)
+        return str(o.ub) if o is not None and o.fixed else UB_AUTO
 
     def ub_auto(self, name: str, ub: object) -> bool:
-        """The pending -ub is the model's own (A45): the start may lower it to keep the setup (fit.ub_choice)."""
-        return str(ub) == str(self.model_ub(name))
+        """The pending -ub is auto (W1.6): the start picks it from the model's own and may lower it to keep the setup
+        (fit.ub_choice). name: unused (the row holds auto itself)."""
+        return str(ub) == UB_AUTO
 
     def ub_pick(self, name: str) -> bool:
-        """The model has no tune record: its start picks the -ub that keeps the most experts on the GPUs (A52)."""
+        """The model has no tune record: its start picks the largest -ub that keeps the setup (W1.6)."""
         o = self.order(name)
         return bool(o) and not o.tuned  # type: ignore[union-attr]
 
@@ -623,6 +717,8 @@ class SettingsService:
         o = self.order(self.resolved_model(p))
         if o is None or not o.tuned:
             return None
+        if str(p.get("ub")) == UB_AUTO:             # auto as loaded asks what the order asks; a new auto: nothing
+            return o.ask if self._ub_loaded == UB_AUTO else None
         try:
             row = int(str(p.get("ub")))
         except ValueError:
@@ -640,7 +736,47 @@ class SettingsService:
         """The answer to ub_question: the row follows it (Use tuned: the tuned -ub; Keep: the choice), and config.json
         too (ub_order.answer_config), so the question is not asked again until the model's next tune."""
         self.store.answer_ub(name, ask, choice)
-        p["ub"] = self._ub_auto = self._ub_loaded = str(ask.mine if choice == uo.KEEP else ask.tuned)
+        p["ub"] = self._ub_loaded = str(ask.mine) if choice == uo.KEEP else UB_AUTO
+
+    # ------------------------------------------------------------ the number rows (W1.6, B6)
+    def top(self, key: str, p: Pending) -> Optional[float]:
+        """The top of a number row that depends on the model or this computer (None: the schema's): Experts in RAM the
+        model's layers with experts, the RAM cache this computer's RAM (MiB), GPU memory kept the smallest GPU, Shared
+        GPU limit the RAM (GiB)."""
+        if key == "cpu_moe":
+            return float(self.fit_cached(p).moe_layers) or None
+        if key == "cache" and self.ram:
+            return float(self.ram // MIB)
+        if key == "keep":
+            gpus = [s.gpu.total for s in self.devices() if s.gpu.total]
+            return round(min(gpus) / GIB, 1) if gpus else None
+        if key == "shared" and self.ram:
+            return float(self.ram // GIB)
+        return None
+
+    def step(self, key: str, p: Pending, step: int) -> Value:
+        """The value ← (step -1) or → (1) gives on a number row: its presets at the simple level, its ladder at the full
+        level (self.full), from the value shown, to the row's top (server_rows.step_number). From auto, Experts in RAM
+        steps from auto's count now, Batch size from auto's -ub."""
+        auto_at = (float(self.fit_cached(p).cpu_moe) if key == "cpu_moe" else
+                   float(self.fit_cached(p).ub or self.model_ub(self.resolved_model(p))) if key == "ub" else None)
+        return step_number(key, p[key], step, self.top(key, p), auto_at, self.full)
+
+    def dense(self, p: Pending) -> bool:
+        """The pending model is known to have no experts: the Experts in RAM row has nothing to choose."""
+        f = self.fit_cached(p)
+        return f.known and f.downloaded and not f.error and not f.moe_layers
+
+    def cpu_moe_saved(self, name: str, cfg: Optional[JSONDict] = None) -> Value:
+        """The Experts in RAM row of a model: its own models.NAME.n_cpu_moe (W1.6, B2), else llama.n_cpu_moe, else
+        auto."""
+        try:
+            cfg = self.store.load_config() if cfg is None else cfg
+        except Exception:           # a config.json that cannot be read: auto
+            return "auto"
+        own = jdict(jdict(cfg.get("models")).get(name)).get("n_cpu_moe")
+        v = own if own is not None else jdict(cfg.get("llama")).get("n_cpu_moe")
+        return "auto" if v in (None, "", "auto") else str(v)
 
     def running(self, d: ServerData) -> Pending:
         """The settings the running server uses."""
@@ -652,7 +788,7 @@ class SettingsService:
         the start may have lowered it at its window), so Apply does not save it as the model's choice."""
         run = self.running(d)
         p: Pending = {}
-        self._ub_auto = self._ub_loaded = None
+        self._ub_loaded = None
         for key, _, _, loc, default in self.schema.saved_rows():
             if not loc or loc.startswith("m:"):
                 continue
@@ -668,9 +804,12 @@ class SettingsService:
         p.pop("ub", None)
         self.load_profile(p, str(p["model"]))
         if run:
+            asked = (str(p.get("spec") or ""), p.get("specn"))
             for key in FROM_RUNNING:
                 if key in run and run[key] not in (None, "N/A"):
                     p[key] = fmt_val(key, run[key])
+            if ram_resolved(asked[0], str(run.get("spec") or ""), run.get("cpu_moe")):
+                p["spec"], p["specn"] = asked   # n-gram ran for MTP because experts are in the RAM (A51): not a change
             if "net" not in llama_cfg and not llama_cfg.get("host"):
                 p["net"] = run.get("net", p["net"]) if run.get("net") in self.schema.net_choices else p["net"]
         return p
@@ -686,8 +825,8 @@ class SettingsService:
         for key, pk in MODEL_ROW_KEYS.items():
             if key != "ub":
                 q[key] = fmt_val(key, vals[pk])
-        q["ub"] = self._ub_auto = str(self.model_ub(name))          # the model's own -ub (A45), not a saved choice
-        self._ub_loaded = str(self.current_ub(name))                # so Apply clears a saved choice the row left
+        q["ub"] = UB_AUTO                                           # the order picks the -ub (W1.6), not a choice
+        self._ub_loaded = self.ub_row(name)                         # so Apply clears a saved choice the row left
         return q
 
     def value_color(self, key: str, p: Pending) -> str:
@@ -758,14 +897,37 @@ class SettingsService:
             shape, weights = self.store.shape_of(m["path"]), self.weights(m) - draft_bytes(m) + drafter
             devices = [replace(s, room=max(s.room + more, 0)) for s in self.devices()]
             limit = max(self.gpu_limit() + more * len(devices), 0) if devices else self.gpu_limit()
+            ctx = self.order_ctx(p, rec, src, shape, weights, mtp_spec(spec, spec_n, shape, drafter, kept,
+                                                                      self.vision_of(m)), devices, limit)
 
             def at(u: int) -> FitInfo:
-                return llama_fit(name, weights, shape, str(p["kv"]), int(p["ctx"]), str(p["slots"]), limit,
+                return llama_fit(name, weights, shape, str(p["kv"]), ctx, str(p["slots"]), limit,
                                  self.swa_mode(p), drafter, spec, spec_n, u, devices, ram=self.ram,
                                  cpu_moe=cpu_moe_of(p), kept=kept, vision=self.vision_of(m))
-            return start_fit(at, ub, self.ub_auto(name, p.get("ub")), self.ub_pick(name))
+            auto = self.ub_auto(name, p.get("ub"))
+            found = start_fit(at, self.model_ub(name) if auto else ub, auto, self.ub_pick(name))
+            # the layers that load (A52: without MTP the head's are not there): the row's top, "40 of 40" (W1.6)
+            mtp = any(x == "draft-mtp" for x in found.spec.split(","))
+            return replace(found, moe_layers=offload.layers_of(loaded.trimmed(shape, mtp, calib_of(devices))))
         except Exception as e:      # a GGUF that can't be read, a value that is not a number, ...: say so
             return FitInfo(name, error=str(e))
+
+    def order_ctx(self, p: Pending, rec: JSONDict, src: Dict[str, str], shape: Shape, weights: float, spec: Spec,
+                  devices: Sequence[Slot], limit: float) -> int:
+        """The window a start of the pending setup takes (W1.6): the pending one when it is the user's (config.json,
+        Auto-tune, or the row changed here), else the first in Auto fit's order that fits (autofit.model_plan with
+        window_cap: on an NVIDIA card from 128K, never above the model's own; the start's apply_order), so the plan the
+        MEMORY section shows is the one a start runs (a PC: 38 layers at 96K here, 40 at the start's 128K)."""
+        ctx = int(p["ctx"])
+        if src.get("ctx") in ("config", "auto-tune") or str(fmt_val("ctx", rec.get("ctx"))) != str(p["ctx"]):
+            return ctx
+        want = str(p.get("slots", "auto"))
+        budget = budget_builder.settings_budget(limit, self.ram, devices, self.swa_mode(p))
+        c = Candidate("", "moe" if offload.is_moe(shape) else "dense", 1, False, True, int(weights), shape,
+                      kv=str(p.get("kv") or "q4_0"), spec=spec, calib=calib_of(devices))
+        _, plan = model_plan(c, budget.allowed, budget.swa_full, window_cap(ctx, budget.tiers),
+                             int(want) if want.isdigit() else None, UBATCH, budget)
+        return plan.ctx if plan else ctx
 
     @staticmethod
     def drafter_of(m: ModelInfo, spec_type: str) -> bool:

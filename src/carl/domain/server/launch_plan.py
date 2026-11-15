@@ -46,7 +46,8 @@ from ..memory.autofit import RAM_MTP_NOTE
 from ..memory import dry_run
 from ..memory import server_fit as sf
 from ..memory.calibration import backend_of
-from ..shared.constants import DEFAULT_PORT, NGRAM, VM_ADDR
+from . import runtime_doc as rd
+from ..shared.constants import DEFAULT_PORT, NGRAM, UBATCH, VM_ADDR
 from ..shared.contracts import require
 from ..shared.errors import ConfigError
 from ..shared.paths import policy_for
@@ -107,7 +108,8 @@ def launch_env(m: ModelInfo, vals: Settings, src: Mapping[str, SettingSource], c
     comes from (None: unknown): MTP_SOURCE, and DRAFT = the drafter's file when that is the
     source (the launcher passes -md DRAFT when SPEC uses draft-mtp, also a SPEC from the
     environment). os_name: the profile's OS: a server-wide key gives a line only on its platforms
-    (SettingSpec.platforms), and only when the start reads its variable (ALLOWED). ub: the order's -ub (ub_order.py,
+    (SettingSpec.platforms), and only when the start reads its variable (ALLOWED); a model's own models.NAME.n_cpu_moe
+    (W1.6) is N_CPU_MOE in place of llama.n_cpu_moe's, and its auto drops that line. ub: the order's -ub (ub_order.py,
     A51): a person's (a -ub typed in the server options, the model's saved choice, llama.ub for a model without a tune
     record) is UB, as it is; a typed one is still in EXTRA_ARGS, which the server gets on its command line. The model's
     own (its Auto-tune record, else the OS's default) is UB_AUTO, which the memory plan may lower to keep the setup
@@ -135,11 +137,17 @@ def launch_env(m: ModelInfo, vals: Settings, src: Mapping[str, SettingSource], c
         if v is not None and s.env in ALLOWED and v != "" and not (k in AUTO_KEYS and v == "auto") \
                 and s.on(os_name) and not (k == "ub" and ub is not None):
             env[s.env] = v
+    own = MODEL_KEYS["n_cpu_moe"]
+    if src.get("n_cpu_moe", "default") != "default" and own.on(os_name):    # the model's own count wins (W1.6, B2)
+        if vals.get("n_cpu_moe", AUTO) == AUTO:
+            env.pop(N_CPU_MOE, None)
+        else:
+            env[N_CPU_MOE] = vals["n_cpu_moe"]
     if ub is not None and ub.source in FIXED:
         if ub.ub:
             env[UB] = ub.ub
     elif ub is not None:
-        if ub.ub != LLAMA_KEYS["ub"].default:
+        if ub.ub != UBATCH:
             env[UB_AUTO] = ub.ub
         if ub.source == TUNED:
             env[UB_FROM] = ub.source
@@ -173,7 +181,7 @@ LLAMA_MODE, NET, HOST, CACHE_RAM, UB, BATCH, CKPT, CKPT_STEP, THINK_TOGGLE, VISI
 LOAD_RESERVE = _env(LLAMA_KEYS, "load_reserve_gib")  # the GiB the free RAM keeps beyond load mode none's need
 SWA_MODE = _env(CACHE_KEYS, "swa")
 N_CPU_MOE = _env(LLAMA_KEYS, "n_cpu_moe")           # the layers whose MoE experts stay in the RAM (auto: the plan's)
-AUTO_KEYS = ("cache_ram", "n_cpu_moe")              # auto gives no line: the start works the value out itself
+AUTO_KEYS = ("cache_ram", "n_cpu_moe", "ub")        # auto gives no line: the start works the value out itself
 # Every OS's settings, and the keys of some platforms only that a start reads: llama.n_cpu_moe (W6.7; launch-env gives
 # its line only on its platforms). llama.path is read by the composition (W6.2), not the start.
 SCHEMA_VARS = tuple(str(s.env) for keys in (MODEL_KEYS, LLAMA_KEYS, CACHE_KEYS) for s in keys.values()
@@ -221,6 +229,7 @@ PLAN_LINE = re.compile(r"([1-9]) ([0-9]+) (full|window|-) ([a-z,-]+)")   # llama
 DEVICES_LINE = re.compile(r"devices ([A-Za-z0-9_.-]+(?:,[A-Za-z0-9_.-]+)*)(?: ([0-9]+(?:,[0-9]+)*))?")  # its 2nd line
 CPU_MOE_LINE = re.compile(r"cpu-moe ([0-9]{1,3})")  # then the MoE experts in the RAM (W6.7)
 UB_LINE = re.compile(r"ub ([0-9]{2,4})")            # the -ub the plan keeps (A45; only with --ub-auto)
+ROOM_LINE = re.compile(r"room ([0-9]{1,15})")       # the bytes a model could use on the GPUs it planned on (W1.6)
 LOAD_LINE = re.compile(r"load (none|mapped)")       # the load mode (A44, A45; only when the free RAM is known)
 MTP_RAM_LINE = re.compile(r"mtp ram")               # MTP is off because experts are in the RAM (A51)
 KV_LINE = re.compile(r"kv (f16|q8_0|q4_0)")         # a start on the CPU alone: the type the memory plan chose (A71)
@@ -262,6 +271,7 @@ class Options:
     slots: str = ""
     net: str = ""                       # --local or --vm: local, vm
     host: str = ""                      # --host ADDR
+    port: str = ""                      # --port N: the server's port, as PORT (W1.6: given to llama-server once)
     mode: str = ""                      # --router or --single
     help: str = ""
     rest: List[str] = field(default_factory=list)
@@ -269,7 +279,7 @@ class Options:
 
 def parse_options(argv: Sequence[str]) -> Options:
     """The options as host/serve-llama.sh reads them: --model, --quant, --kv, --ctx, --slots, --local, --vm, --host,
-    --single, --router, --q4, --q8; "--opt VALUE" or "--opt=VALUE" (an empty "=VALUE" takes the next word).
+    --port, --single, --router, --q4, --q8; "--opt VALUE" or "--opt=VALUE" (an empty "=VALUE" takes the next word).
     Raises LaunchError (exit 2) for a wrong value."""
     o = Options()
     args = list(argv)
@@ -299,6 +309,10 @@ def parse_options(argv: Sequence[str]) -> Options:
             o.host = value(a, "--host")
             if not o.host:
                 raise LaunchError("error: --host needs an address.", 2)
+        elif named(a, "--port"):
+            o.port = value(a, "--port")
+            if not is_port(o.port):
+                raise LaunchError(f"error: --port takes a TCP port from 1 to 65535, not '{o.port}'.", 2)
         elif a in ("--q4", "--q8"):
             o.kv = a[2:] + "_0"
         elif named(a, "--kv"):
@@ -397,6 +411,7 @@ class LaunchPlan:
     devices: str = ""                           # -dev: the devices the memory plan put the model on (CUDA0,CUDA1), "" none
     tensor_split: str = ""                      # -ts: the layers of each (21,20), "" for one device or no plan
     n_cpu_moe: int = 0                          # --n-cpu-moe: the layers whose MoE experts stay in the RAM, 0 none
+    room: int = 0                               # the bytes a model could use on the GPUs when the plan ran (0 unknown)
     ub_auto: bool = False                       # -ub is the model's (UB_AUTO), so the plan may lower it (A45)
     ub_pick: bool = False                       # ...and it has no tune record: the plan picks the size (A52)
     ub_ask: Optional[UbAsk] = None              # a config -ub against the tuned one, not answered yet (A51)
@@ -498,7 +513,7 @@ def resolve(plan: LaunchPlan, words: PlatformWords, home: str, conf_dir: str, ke
                                               has_addr, words, addr_tool)
     except NetworkRefused as e:
         raise LaunchError(str(e), e.code) from None
-    v[PORT] = plan.get(PORT) or str(DEFAULT_PORT)
+    v[PORT] = o.port or plan.get(PORT) or str(DEFAULT_PORT)
     if not is_port(v[PORT]):
         raise LaunchError(f"error: {PORT} must be a TCP port from 1 to 65535, not '{v[PORT]}'.", 2)
     v[API_KEY_FILE] = plan.get(API_KEY_FILE) or key_file
@@ -517,7 +532,7 @@ def resolve(plan: LaunchPlan, words: PlatformWords, home: str, conf_dir: str, ke
     # a typed -ub (the options, the command line, the environment's UB) wins over the question (A51)
     plan.ub_ask = None if given or plan.get(UB) else UbAsk.from_var(plan.get(UB_ASK), plan.get(UB_STAMP))
     plan.ub_pick = plan.ub_auto and plan.get(UB_FROM) != TUNED      # no tune record: the plan picks the size (A52)
-    v[UB] = given or plan.get(UB) or plan.get(UB_AUTO) or shell_value(LLAMA_KEYS["ub"].default)
+    v[UB] = given or plan.get(UB) or plan.get(UB_AUTO) or str(UBATCH)
     spec = plan.get(SPEC) or shell_value(MODEL_KEYS["spec"].default)
     if ":" in spec:                                  # SPEC=spec:n
         v[SPEC_N] = plan.get(SPEC_N) or spec.rsplit(":", 1)[1]
@@ -735,7 +750,7 @@ def _spec_fit(plan: LaunchPlan) -> List[str]:
 
 def _ub_load(plan: LaunchPlan) -> List[str]:
     """The plan's own: --ub-auto when -ub is the model's (the plan may lower it, A45; --ub-pick without a tune record
-    too: it picks the size that keeps the most experts on the GPUs, A52), and the load reserve."""
+    too: it picks the largest size that keeps the setup, W1.6), and the load reserve."""
     out = ["--ub-auto"] if plan.ub_auto else []
     out += ["--ub-pick"] if plan.ub_pick else []
     return out + (["--load-reserve-gib", plan.get(LOAD_RESERVE)] if plan.get(LOAD_RESERVE) else [])
@@ -806,12 +821,21 @@ def sysmem_warning(plan: LaunchPlan) -> str:
             "failing.")
 
 
+def start_record(plan: LaunchPlan) -> Dict[str, object]:
+    """What the start resolved, for its server file (runtime_doc.start_record, W1.6): the room it planned with (the
+    answer's `room` line), the layers whose experts it keeps in the RAM and whether that count was CARL's (the setting
+    auto or unset), its -ub and its speculation. The dashboard shows the plan now beside them, with the reason."""
+    ub = plan.get(UB)
+    return rd.start_record(plan.room, plan.n_cpu_moe, plan.get(N_CPU_MOE) in ("", AUTO), int(ub) if ub.isdigit() else 0,
+                           plan.get(SPEC))
+
+
 def apply_plan(plan: LaunchPlan, ok: bool, answer: str, words: PlatformWords) -> None:
     """The memory plan's answer (ok: it ran; answer: its output). Auto fit's order: MTP goes (n-gram stays) before
     a slot. Without an answer: one slot for auto, a 4 GiB RAM cache, and the setting's MoE experts in the RAM (N_CPU_MOE
     when it is a number). After the first line a PC may answer a devices line (-dev, and -ts for several: `devices
-    CUDA0,CUDA1 21,20`), a line of the MoE experts in the RAM (`cpu-moe 12`: --n-cpu-moe) and lines about its GPUs
-    and the RAM (the notes). Any start may answer `ub N` (the -ub that keeps the setup, taken when -ub is the model's:
+    CUDA0,CUDA1 21,20`), a line of the MoE experts in the RAM (`cpu-moe 12`: --n-cpu-moe), the room it planned with
+    (`room BYTES`, W1.6: the server file records it) and lines about its GPUs and the RAM (the notes). Any start may answer `ub N` (the -ub that keeps the setup, taken when -ub is the model's:
     A45) and `load none` or `load mapped` with its line (A44, A45; the user's own --load-mode, --mmap or --no-mmap
     wins, and the line says so). Raises
     LaunchError for a CUDA start with different K and V types (mixed_kv_refusal); FIT_CHECK=0 on Windows with CUDA
@@ -826,6 +850,7 @@ def apply_plan(plan: LaunchPlan, ok: bool, answer: str, words: PlatformWords) ->
             d = DEVICES_LINE.fullmatch(line.strip())
             n = CPU_MOE_LINE.fullmatch(line.strip())
             u = UB_LINE.fullmatch(line.strip())
+            rm = ROOM_LINE.fullmatch(line.strip())
             ld = LOAD_LINE.fullmatch(line.strip())
             k = KV_LINE.fullmatch(line.strip())
             if MTP_RAM_LINE.fullmatch(line.strip()):
@@ -838,6 +863,8 @@ def apply_plan(plan: LaunchPlan, ok: bool, answer: str, words: PlatformWords) ->
             elif u:
                 if plan.ub_auto:
                     v[UB] = u.group(1)
+            elif rm:
+                plan.room = int(rm.group(1))
             elif ld:
                 plan.load_mode = "" if own else ld.group(1)
             elif own and line.strip().startswith(LOAD_WORDS):

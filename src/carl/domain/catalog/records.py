@@ -92,8 +92,13 @@ def _card(entry: Dict[str, JsonValue], names: Optional[AbstractSet[str]], at: st
     if rank is not None and (not isinstance(rank, int) or isinstance(rank, bool) or rank < 1):
         raise ConfigError(f"{at}: rank must be a whole number, 1 or more (1 is the best quality)")
     if "fast" in entry and not (entry["fast"] is True and entry.get("arch") == "dense"):
-        raise ConfigError(f"{at}: fast is true or absent, and only on a dense model (auto fit's everyday goal "
-                          "takes it with the MoE builds)")
+        raise ConfigError(f"{at}: fast is true or absent, and only on a dense model (auto fit takes it only when no "
+                          "other model of its rank or better fits, else names it as the fast option)")
+    speed = entry.get("ram_speed")
+    if speed is not None and not (isinstance(speed, dict) and all(
+            isinstance(speed.get(k), (int, float)) and not isinstance(speed.get(k), bool) and speed[k] > 0
+            for k in ("write", "read"))):
+        raise ConfigError(f"{at}: ram_speed needs write and read, in tok/s (more than 0)")
     if "thinking" in entry and entry["thinking"] not in THINKING:
         raise ConfigError(f"{at}: thinking must be one of: {', '.join(THINKING)}")
     if "engine" in entry and entry["engine"] not in ENGINES:       # absent: llama.cpp (domain/server/engines.py)

@@ -27,7 +27,7 @@ from .clients import Drift, drift, serving
 from .settings_texts import fit_sentence
 from ..domain.llama.version import LlamaVersion, VersionCheck, check_version, tested_for
 from ..domain.server.slot_files import short_id
-from ..domain.server.snapshot import ServerData, flag, jdict
+from ..domain.server.snapshot import JSONDict, ServerData, flag, jdict
 from ..domain.shared.units import duration, tokens
 from ..ports import PluginHost
 from ..ports.cache import CacheEvent
@@ -49,7 +49,8 @@ from .render.settings import SettingsView
 from .render.settings.common import subpanel_bar
 from .render.settings.models import ModelsDir
 from .render.tabs.connect import install_width
-from .render.tabs.live import body_connect, body_live, body_log, body_requests, drain_dialog, keys_card, quit_dialog
+from .render.tabs.live import (body_connect, body_live, body_log, body_requests, drain_dialog, keys_card, quit_dialog,
+                               unload_dialog)
 from .sections import THREE_LEVELS, is_plugin_section
 from .state import SP_AGENTS, SP_CACHE, SP_FIT, SP_MODELS, SP_ROUTER, SP_SERVER, SUBPANELS, TABS, UIState
 
@@ -424,6 +425,13 @@ class App:
             self._names = (time.time(), ids, self.host.session_names(self.opts.home, ids))
         return self._names[2]
 
+    def start_record(self, d: ServerData) -> JSONDict:
+        """The running model's start record (the launcher's server file: what it resolved; W1.6), {} when none."""
+        doc = self.host.server_file(os.path.dirname(self.jobs.paths.config_file), self.endpoint.port)
+        models = jdict(doc.get("models"))
+        name = d.alias or (next(iter(models)) if len(models) == 1 else "")
+        return jdict(jdict(models.get(name)).get("start"))
+
     def window_model(self, d: ServerData) -> str:
         """The running model when it has the window cache (the launcher's server file), else ""."""
         doc = self.host.server_file(os.path.dirname(self.jobs.paths.config_file), self.endpoint.port)
@@ -487,12 +495,15 @@ class App:
         regions = self.ctl.regions
         regions.clear()
         self.svc.full = ui.full
+        d.start = self.start_record(d) if d.pid or d.up else {}
         height = (rows - 6) if not once else 10**4
         shown = Shown()                                   # the screen drawn next tells its keys, sections and scrolls
         if ui.drain:
             body = drain_dialog(ui.drain, cols, height, ui, shown)
         elif ui.quit:
             body = quit_dialog(d, ui, cols, height, shown)
+        elif ui.unload_ask:
+            body = unload_dialog(d, cols, height, shown)
         else:
             body = self.body(d, cols, height, shown)
             apply_shown(ui, shown)
@@ -606,8 +617,8 @@ class App:
         if ui.sp >= len(SUBPANELS) + len(panels):          # a plugin's panel is gone (the plugin was turned off)
             ui.sp = SP_CACHE
         out: List[Row] = [subpanel_bar(ui.sp, [p.title for p in panels], cols, [p.group for p in panels]), ("", [])]
-        if ui.sp != getattr(self, "_last_sp", ui.sp):     # another panel: its page starts at the top
-            ui.page_scroll = 0
+        if ui.sp != getattr(self, "_last_sp", ui.sp):     # another panel: its page starts at the top, and a value
+            ui.page_scroll, ui.edit = 0, None             # typed on the one left is dropped
         self._last_sp = ui.sp
         if ui.picker:
             return out + self.view.picker(ui.picker, cols, height - 2, ui, shown)
@@ -637,7 +648,8 @@ class App:
                 files = self.cache.files(folder)
                 did, when = self.cache_did()
                 body = self.view.caching(ui, self.jobs.cache_conf(), files, folder, cols, api, height - 2,
-                                         self.session_names(files), self.window_model(d), did, when, shown)
+                                         self.session_names(files), self.window_model(d), did, when, shown,
+                                         disk_free(folder))
             elif ui.sp >= len(SUBPANELS):
                 body = self.view.plugin(ui, panels[ui.sp - len(SUBPANELS)], cols, height - 2, shown)
             elif ui.sp == SP_MODELS:

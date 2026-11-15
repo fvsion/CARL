@@ -15,12 +15,14 @@ import threading
 import time
 import urllib.parse
 from dataclasses import dataclass
-from typing import Callable, Dict, List, Mapping, Optional, Protocol
+from typing import Callable, Dict, List, Mapping, Optional, Protocol, Tuple
 
 from ...domain.catalog.layout import locate
 from ...domain.clients.package import Outcome
+from ...domain.server import slot_handoff as handoff
 from ...domain.server.cmdline import CLEAN_ENV, SETTINGS_FILE, env_from_cmd
-from ...domain.server.snapshot import ServerData, SlotInfo, clean, draft_bytes, jlist
+from ...domain.server.snapshot import ServerData, SlotInfo, clean, draft_bytes, jdict, jlist
+from ...domain.shared.units import etime_seconds
 from ...domain.shared.types import JsonObject, JsonValue
 from ...domain.tune.progress import Kind
 from ...ports import ServerEndpoint
@@ -29,10 +31,13 @@ from ..model_list import ModelList
 from ..settings_service import REINSTALL, Pending, SettingsService
 from ..stop_server import StopServer
 from .host import CacheSettings, JobsHost
-from .notifier import (AskTuneStop, Found, Job, JobNotifier, PackageDone, RevealFailed, Settled, StartFailed, Status,
-                       Toast, failure, toast)
+from .notifier import (AskTuneStop, Found, Handoff, Job, JobNotifier, PackageDone, RevealFailed, Settled, StartFailed,
+                       Status, Toast, failure, toast)
 from .records import TUNE_ALL, Child, Download, Drain, HFLookup, InstallRun, PackageRun, TuneRun
 
+SAVING_SESSIONS = "CARL is saving the sessions in the slots…"     # a stop's status line while the slots are saved
+RETRY_SLOTS = 2.0               # s: a restore asks /slots once more after this
+ROUTER_LOAD_WAIT = 600.0        # s: a router load the dashboard asked for gets its kept slots back only this long
 HF_REPO = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*")   # OWNER/REPO: nothing else goes into the API path
 FETCH_ERRORS = (OSError, ValueError)        # what the server's API raises (ServerEndpoint, C-052)
 STOP_TIMEOUT = 30.0                         # seconds for a server to exit before it is ended
@@ -161,6 +166,9 @@ class ServerJobs:
         self.install: Optional[InstallRun] = None
         self.package: Optional[PackageRun] = None
         self.hf: Optional[HFLookup] = None
+        self._handled: Optional[int] = None                       # the server whose kept slots were looked at
+        self._router_load = ("", 0.0)                              # a model the dashboard asked a router to load, when
+        self._restored: Tuple[Optional[int], str, Dict[int, int]] = (None, "", {})  # put back: (pid, model, slot: tokens)
 
     def _job(self, slot: str, record: object) -> None:
         """A job's new record: kept here, and handed to the dashboard."""
@@ -246,8 +254,8 @@ class ServerJobs:
                 raise OSError(f"cannot read {path}")
             host.make_folder(os.path.dirname(console))
             self.svc.save(p)
-            say(Status("CARL is saving the sessions in the slots…"))
-            self.save_before_stop(d)
+            say(Status(SAVING_SESSIONS))
+            self.save_before_stop(d, SAVING_SESSIONS)
             say(Status("CARL is stopping the server…"))
             self.collector.server_pid = None
             self._stop(old_pid)
@@ -321,8 +329,8 @@ class ServerJobs:
 
         def work() -> None:
             if running:
-                self.notify.post(Status("CARL is saving the sessions in the slots…", time.time()))
-                self.save_before_stop(d)
+                self.notify.post(Status(SAVING_SESSIONS, time.time()))
+                self.save_before_stop(d, SAVING_SESSIONS)
                 self.notify.post(Status("CARL is stopping the server for Auto-tune…"))
                 self.collector.server_pid = None
                 self._stop(pid)
@@ -475,10 +483,12 @@ class ServerJobs:
             self.save_before_stop(d)            # the loaded model stops
             try:
                 self.collector.endpoint.post(f"/models/{what}", {"model": name}, timeout=600)
+                self._router_load = ("", 0.0) if unload else (name, time.time())   # its kept slots go back once it runs
                 self.notify.post(toast(f"{name}: " + ("unloaded." if unload else "the load started (30 s to 2 min). "
                                                                                  "The Router panel shows when it is "
                                                                                  "loaded."), 10))
             except FETCH_ERRORS as e:
+                self._router_load = ("", 0.0)
                 self.notify.post(failure(f"{name}: CARL cannot {what} it: {e}", "", 10))
 
         def go() -> None:
@@ -530,11 +540,16 @@ class ServerJobs:
             self.notify.post(Job("drain", None))
             dr.go()
 
-    def save_before_stop(self, d: ServerData) -> None:
+    def save_before_stop(self, d: ServerData, status: Optional[str] = None) -> None:
         """Before CARL stops the server or its model (Stop, Apply, Auto-tune, a router load): the
-        sessions OpenCode and Pi left in the slots, saved to their files (save_recorded)."""
+        sessions OpenCode and Pi left in the slots, saved to their files (save_recorded), then the other slots that
+        hold a prompt, kept for after the start (save_slots, cache.keep_slots). status: the caller's status line,
+        put back after the slots' own (None: no status line)."""
         if d.up and d.alias:
+            owned = self.owned_slots(d, self._read_slots(d) or [])   # before save_recorded drops the records it saved
             self.save_recorded(d.alias, d.router is not None)
+            self.save_slots(d, owned, status)
+        self._restored = (None, "", {})          # the server or its model stops: what was put back is gone with it
 
     def save_recorded(self, model: str, router: bool = True) -> int:
         """Save the sessions the clients recorded in a model's slots (slot_folder.py residents), each only
@@ -564,6 +579,177 @@ class ServerJobs:
                 n += 1
             except FETCH_ERRORS:
                 continue
+        return n
+
+    # ------------------------------------------------------------ the slot handoff (cache.keep_slots, C-138)
+    def _slots_query(self, d: ServerData) -> str:
+        return f"?model={urllib.parse.quote(d.alias)}" if d.router is not None else ""
+
+    def _read_slots(self, d: ServerData) -> Optional[List[SlotInfo]]:
+        try:
+            return [SlotInfo.from_json(x) for x in jlist(json.loads(
+                self.collector.endpoint.get("/slots" + self._slots_query(d), timeout=5)))]
+        except FETCH_ERRORS:
+            return None
+
+    def _fingerprint(self, d: ServerData) -> Dict[str, str]:
+        path = handoff.model_path_of(d.props, d.cmd)
+        return handoff.fingerprint(path, self.host.file_stamp(path) if path else None,
+                                   str(d.props.get("build_info") or ""), d.cmd)
+
+    def _record_path(self, model: str) -> str:
+        return os.path.join(self.paths.slots, handoff.record_name(model))
+
+    def _read_set(self, model: str) -> Optional[handoff.HandoffSet]:
+        text = self.host.read_text(self._record_path(model))
+        try:
+            return handoff.record_of(json.loads(text)) if text else None
+        except ValueError:
+            return None
+
+    def _drop_set(self, model: str, keep: Optional[handoff.HandoffSet] = None) -> None:
+        """Remove a model's kept slots and their record (one set per model); only carl-slot+ files and the record."""
+        old = keep or self._read_set(model)
+        if old is not None and old.files:
+            self.host.remove_states(self.paths.slots, [f.file for f in old.files])
+        if self.host.exists(self._record_path(model)):
+            try:
+                self.host.remove(self._record_path(model))
+            except OSError:
+                pass
+
+    def owned_slots(self, d: ServerData, slots: List[SlotInfo]) -> List[int]:
+        """The slots a client with CARL's plugins holds: a record of its session while the slot still runs the
+        recorded task (slots: /slots now; a record of an earlier task is stale: a plain client took the slot), or a
+        session it put there since the server started (its cache events; with save = turn it keeps no record). The
+        plugin saves those."""
+        if not d.alias:
+            return []
+        task = {s.id: s.task for s in slots}
+        owned = {r.slot for r in self.host.residents(self.paths.slots, d.alias) if task.get(r.slot) == r.task}
+        up = etime_seconds(d.etime)
+        since = time.time() - up if up is not None else 0.0
+        owned.update(self.host.placed(os.path.dirname(self.paths.config_file), d.alias, since))
+        return sorted(owned)
+
+    def save_slots(self, d: ServerData, owned: List[int], status: Optional[str] = None) -> int:
+        """Save the idle slots that hold a prompt and that no plugin owns, by number, with the fingerprint of the
+        server, for the next start (cache.keep_slots; the disk rule of the clients). One set per model: a new set
+        takes the old one's place. The number saved; a save that fails is skipped (the stop goes on, C-117). The
+        status line says it while the saves run, then shows status again (the caller's; None: none). Nothing is saved
+        while the snapshot's command line is not the server's (handoff.is_server_cmd): the next start would refuse
+        the set."""
+        conf = self.cache_conf(fresh=True)
+        if not d.alias or not conf.keep_slots or not self.host.free_enough(self.paths.slots):
+            return 0
+        if d.router is None and not handoff.is_server_cmd(d.cmd):      # a Windows start's launcher: not its fingerprint
+            return 0
+        slots = self._read_slots(d)
+        pid, model, restored = self._restored
+        picks = handoff.to_save(slots or [], owned, restored if (pid, model) == (d.pid or d.target_pid, d.alias) else {})
+        if not picks:
+            return 0
+        self.notify.post(Status(handoff.saving_status(len(picks))))
+        try:
+            return self._save_picks(d, picks)
+        finally:
+            self.notify.post(Status(status))
+
+    def _save_picks(self, d: ServerData, picks: List[SlotInfo]) -> int:
+        fp = self._fingerprint(d)
+        self._drop_set(d.alias)
+        router = d.router is not None
+        saved: List[handoff.SavedSlot] = []
+        for rank, s in enumerate(picks):
+            name = handoff.file_name(d.alias, fp, int(s.id or 0))
+            try:
+                got = jdict(json.loads(self.collector.endpoint.post(
+                    f"/slots/{s.id}?action=save", {"filename": name, **({"model": d.alias} if router else {})},
+                    timeout=600) or "null"))
+            except FETCH_ERRORS:
+                continue
+            n = got.get("n_written")
+            size = n if isinstance(n, int) and n > 0 else self.host.file_size(os.path.join(self.paths.slots, name))
+            saved.append(handoff.SavedSlot(int(s.id or 0), name, handoff.tokens_of(s), size, rank))
+        if saved:
+            self.host.make_folder(self.paths.slots)
+            self.host.write_private(self._record_path(d.alias), json.dumps(handoff.record_doc(
+                handoff.HandoffSet(d.alias, fp, time.time(), tuple(saved)))))
+        return len(saved)
+
+    def after_start(self, d: ServerData) -> None:
+        """On the dashboard's thread, each refresh: a server it has not looked at yet (a new pid: after an Apply, the
+        start after Auto-tune, a Stop then a start), or the model a router loaded at the dashboard's ask, gets its
+        kept slots back once, in a thread (restore_slots). A model a client loads through a router is not seen
+        before its request: nothing goes back there, nor after a load that has not run within ROUTER_LOAD_WAIT. A
+        snapshot whose command line is not the server's (a Windows start's launcher, until the listener is found) is
+        not looked at: the next refresh is."""
+        if not d.up or not d.alias or not d.slots:
+            return
+        if d.router is not None:
+            name, asked = self._router_load
+            if not name or d.alias != name or time.time() - asked > ROUTER_LOAD_WAIT:
+                return
+            self._router_load = ("", 0.0)
+        else:
+            pid = d.pid or d.target_pid
+            if pid is None or pid == self._handled or not handoff.is_server_cmd(d.cmd):
+                return
+            self._handled = pid
+        if not self.host.exists(self._record_path(d.alias)):
+            return
+        threading.Thread(target=self.restore_slots, args=(d,), daemon=True).start()
+
+    def restore_slots(self, d: ServerData) -> int:
+        """Put a model's kept slots back into the idle, empty slots of the server that runs it now, the slot used
+        last first, when every part of the fingerprint is the same; else keep the set (the old settings may come
+        back) and say why. A file llama.cpp refuses is removed; after the attempt the set goes (one-shot). A toast
+        and the Caching panel's line say what happened (or why nothing went back: no free slot, the server refused
+        them, the files are gone); each slot put back is a cache event (WHAT THE CACHE DID). /slots that cannot be
+        read is asked once more after RETRY_SLOTS seconds; then the set stays. The number of slots put back."""
+        if not self.cache_conf(fresh=True).keep_slots:
+            return 0
+        kept = self._read_set(d.alias)
+        if kept is None or not kept.files:
+            return 0
+        why = handoff.difference(kept.fingerprint, self._fingerprint(d))
+        if why:
+            self.notify.post(toast(handoff.not_put_back_toast(why), 10))
+            self.notify.post(Handoff(f"none: {why}"))
+            return 0
+        slots = self._read_slots(d)
+        if slots is None:
+            time.sleep(RETRY_SLOTS)
+            slots = self._read_slots(d)
+        if slots is None:
+            self.notify.post(Handoff(f"none: {handoff.NO_SLOTS}"))
+            return 0
+        router = d.router is not None
+        n = tokens = gone = refused = 0
+        conf_dir = os.path.dirname(self.paths.config_file)
+        places = handoff.placements(kept.files, slots)
+        back: Dict[int, int] = {}            # slot: tokens put back (/slots shows them empty until a request: C-138)
+        for f, target in places:
+            if not self.host.exists(os.path.join(self.paths.slots, f.file)):
+                gone += 1
+                continue
+            try:
+                self.collector.endpoint.post(f"/slots/{target}?action=restore",
+                                             {"filename": f.file, **({"model": d.alias} if router else {})}, timeout=600)
+            except FETCH_ERRORS:
+                refused += 1
+                continue
+            n, tokens = n + 1, tokens + f.tokens
+            back[target] = f.tokens
+            self.host.cache_event(conf_dir, {"e": "place", "t": time.time(), "model": d.alias, "slot": target,
+                                             "from": "session", "tokens": f.tokens, "file": f.file})
+        self._drop_set(d.alias, kept)
+        self._restored = (d.pid or d.target_pid, d.alias, back)
+        if n:
+            self.notify.post(toast(handoff.put_back_toast(n, tokens), 10))
+            self.notify.post(Handoff(handoff.put_back_note(n, tokens)))
+        else:
+            self.notify.post(Handoff("none: " + handoff.none_reason(len(places), refused, gone)))
         return n
 
     # ------------------------------------------------------------ Connect: the client config push

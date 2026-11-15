@@ -7,11 +7,12 @@ addresses are the socket library's (adapters/common/socket_addresses.py, one ada
 """
 from __future__ import annotations
 
+import glob
 import os
 import re
 import socket
 import subprocess
-from typing import Dict, List, Optional, Set
+from typing import Dict, List, Optional, Set, Tuple
 
 from ...domain.hardware.processes import ProcessInfo
 
@@ -61,6 +62,20 @@ def _read(path: str) -> str:
             return f.read()
     except OSError:
         return ""
+
+
+def process_tree(root: str = "/proc") -> List[Tuple[str, int, int]]:
+    """[(program name, pid, parent pid)] of every process (/proc/PID/stat: the name in brackets, then the state and the
+    parent's pid); a process that ends while it is read is left out."""
+    out: List[Tuple[str, int, int]] = []
+    for path in glob.glob(os.path.join(root, "[0-9]*", "stat")):
+        text = _read(path)
+        head, _, rest = text.rpartition(")")
+        fields = rest.split()
+        if "(" not in head or len(fields) < 2 or not fields[1].isdigit():
+            continue
+        out.append((head.partition("(")[2], int(os.path.basename(os.path.dirname(path))), int(fields[1])))
+    return out
 
 
 class ProcPorts:

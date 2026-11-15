@@ -3,8 +3,10 @@ Apply and its question."""
 from __future__ import annotations
 
 import os
+from typing import List, Optional
 
-from ....application.settings_service import NUMERIC, Pending, parse_typed, spec_value, step_choice
+from ....application.settings_service import (NUMERIC, Pending, Value, parse_typed, spec_value, step_choice,
+                                              stepped, typed_at)
 from ....domain.server.ub_order import KEEP, USE_TUNED
 from ....ui.words import command, computer
 from ...act import Action, Verb, act
@@ -66,6 +68,12 @@ class ServerActions:
             step = 1 if verb is Verb.SETINC else -1
             if row.key == "spec" and row.choices:
                 p["spec"], p["specn"] = str(step_choice(row.choices, spec_value(p), step)).split("|")
+            elif row.key == "quant":
+                self.step_quant(p, row.choices, step)
+            elif row.key == "cpu_moe" and svc.dense(p):
+                ui.toast(f"{svc.resolved_model(p)} has no experts. The row is for MoE models.", 6)
+            elif row.key in NUMERIC and stepped(row.key):         # a number row: its ladder, stopping at the ends (B6)
+                p[row.key] = svc.step(row.key, p, step)
             elif row.choices:
                 p[row.key] = step_choice(row.choices, p[row.key], step)
             if row.key == "model":
@@ -105,6 +113,19 @@ class ServerActions:
             c.jobs.restart(p, d, port=ui.confirm_port, ran=ui.set_run)
             ui.confirm_port = None
 
+    def step_quant(self, p: Pending, choices: Optional[List[Value]], step: int) -> None:
+        """The Quantization row (B1): the model's next or previous quantization, in the catalogue's order (it goes
+        round), as a choice of the model (its profile, the lists show it); with Model auto or one quantization it says
+        why nothing changes."""
+        c = self.c
+        if p.get("model") == "auto":
+            c.ui.toast("Model auto chooses the quantization too. To choose one, choose the model first (Enter on the "
+                       "Model row).", 8)
+        elif not choices:
+            c.ui.toast(f"{c.svc.model_name(str(p['model']))} has one quantization.", 6)
+        else:
+            c.choose_model(str(step_choice(choices, p["model"], step)))
+
     def ub_question(self, p: Pending) -> bool:
         """A Batch size that differs from the model's tuned -ub, or a config -ub the tune outdates, is asked about
         once before Apply goes on (A51): Use tuned, or keep it for this model. True when the question is shown."""
@@ -143,6 +164,11 @@ class ServerActions:
         if value is None:
             ui.toast(err, 5)
         elif ui.pending is not None:
+            top = self.c.svc.top(key, ui.pending) if key == "cpu_moe" else None
+            if top is not None and int(str(value)) > top:        # over the model's layers: its top, and why (B2)
+                value = int(top)
+                ui.toast(f"{self.c.svc.resolved_model(ui.pending)} has {value} layers with experts, so Experts in RAM "
+                         f"is {value} (every expert in the RAM).", 8)
             ui.pending[key] = value
 
     def edit_key(self, k: str) -> bool:
@@ -163,8 +189,8 @@ class ServerActions:
 
     def key(self, k: str) -> bool:
         """The Server panel: ↑↓ a row, ← → its value, Enter (the model list, or type a number), a apply,
-        r undo, x the recommended settings, A Auto fit, m the model list beside it, s f its sort and filter,
-        PgUp PgDn scroll."""
+        r undo, x the recommended settings, A Auto fit, m the model list beside it (each model once: the Quantization
+        row chooses the quantization, B1), s f its sort and filter, PgUp PgDn scroll."""
         c = self.c
         ui = c.ui
         p = ui.pending
@@ -176,12 +202,6 @@ class ServerActions:
                 ui.srow = max(ui.srow - 1, 0)
             elif k == DOWN:
                 ui.srow = min(ui.srow + 1, len(items) - 1)
-            elif k in (RIGHT, LEFTKEY) and ui.srow > 0:         # another quantization of the model (A68)
-                rows = c.visible()
-                at = rows[ui.srow - 1] if ui.srow <= len(rows) else None
-                if at is not None and c.cycle_quant(at, -1 if k == LEFTKEY else 1):
-                    ui.srow = 1 + next((i for i, x in enumerate(c.visible()) if x.get("group") == at.get("group")),
-                                       ui.srow - 1)
             elif k in ENTER and items:
                 c.choose_model(items[min(ui.srow, len(items) - 1)])
                 ui.slist = False
@@ -204,8 +224,10 @@ class ServerActions:
             key = self.selected_key()
             if key == "model":
                 c.open_model_picker()
-            elif key in NUMERIC:
+            elif key in NUMERIC and typed_at(key, c.svc.full):
                 ui.edit = ""
+            elif key in NUMERIC:            # a number row at the simple level: its presets only (W1.6, B6)
+                ui.toast("To type a value, open the full level of SERVER (L). Here ← → step through the presets.", 6)
         elif k in SERVER_KEYS:
             c.act(SERVER_KEYS[k])
         elif k == "m":

@@ -247,12 +247,14 @@ class GpuUse:
 @dataclass
 class PcStats(SystemStats):
     """A PC's memory (Windows, W6.8): SystemStats's fields as the Mac's cards read them (the memory in use in anon, the
-    standby files in files, the available memory in free; no pressure figure, no load average), plus what a PC has of
-    its own. available: the memory that is free or can be freed at once; swap: the page file; cpu: the processor's use
-    since the last sample (percent); gpus: each GPU with its own memory; server: what the server's processes hold on
-    each GPU, by the GPU's key (the processes the dashboard asked about since the last sample: the server, and a
-    router's model server). Its cards are the PC variants (render/cards)."""
+    available memory in free; no pressure figure, no load average), plus what a PC has of its own. available: the
+    memory that is free or can be freed at once; file_cache: of it, the standby list (the files Windows keeps in the RAM
+    after a read and frees at once; W1.6), None when Windows does not give it; swap: the page file; cpu: the
+    processor's use since the last sample (percent); gpus: each GPU with its own memory; server: what the server's
+    processes hold on each GPU, by the GPU's key (the processes the dashboard asked about since the last sample: the
+    server, and a router's model server). Its cards are the PC variants (render/cards)."""
     available: int = 0
+    file_cache: Optional[int] = None
     cpu: Optional[float] = None
     gpus: List[GpuUse] = field(default_factory=list)
     server: Dict[str, int] = field(default_factory=dict)
@@ -342,6 +344,8 @@ class ServerData:
     log_path: Optional[str] = None
     log_filter_stopped: bool = False    # the server runs at -lv 4, and CARL's log filter for it stopped (23.4.4)
     router: Optional[RouterInfo] = None # a llama.cpp router: its models (props, slots, cmd: the loaded one's)
+    start: JSONDict = field(default_factory=dict)   # the start's own record of what it resolved (server-PORT.json's
+                                                    # models.NAME.start: room, cpu_moe, cpu_moe_auto, ub, spec; W1.6)
 
     @property
     def alias(self) -> str:

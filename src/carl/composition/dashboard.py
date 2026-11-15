@@ -178,6 +178,13 @@ class JobsHostAdapter:
         from ..adapters.common import installed_clients
         return installed_clients.file_size(path)
 
+    def file_stamp(self, path: str) -> Optional[Tuple[int, float]]:
+        try:
+            st = os.stat(path)
+        except OSError:
+            return None
+        return st.st_size, st.st_mtime
+
     def exists(self, path: str) -> bool:
         return os.path.exists(path)
 
@@ -257,6 +264,17 @@ class JobsHostAdapter:
                        for n in os.listdir(folder))
         except OSError:
             return False
+
+    def placed(self, conf_dir: str, model: str, since: float) -> List[int]:
+        from ..adapters.common import cache_events
+        from ..domain.server.slot_files import SLOT_PREFIX
+        return sorted({int(e["slot"]) for e in cache_events.EventLog(conf_dir).poll()       # type: ignore[call-overload]
+                       if e["e"] == "place" and isinstance(e.get("slot"), int) and float(e["t"]) >= since  # type: ignore[arg-type]
+                       and e.get("model") in (None, model) and not str(e.get("file", "")).startswith(SLOT_PREFIX)})
+
+    def cache_event(self, conf_dir: str, event: JSONDict) -> None:
+        from ..adapters.common import cache_events
+        cache_events.append(conf_dir, [event], "")
 
     # ------------------------------------------------------------ the clients
     def publish(self, conf_dir: str, models: JSONDict) -> str:

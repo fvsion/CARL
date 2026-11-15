@@ -100,6 +100,39 @@ def rooms(gpus: Sequence[Gpu], keep: int, own: Optional[Mapping[int, int]] = Non
             Room(g, own.get(g.index, 0), vram_limit(g, keep, own.get(g.index, 0))) for g in gpus]
 
 
+@dataclass(frozen=True)
+class CardParts:
+    """Where a discrete GPU's memory goes (W1.6, A-M1), in bytes; the parts add up to the card:
+      total = in_use + kept + model       in_use = reserved + programs + other
+    in_use: what others hold (the card less its free memory and less CARL's own servers, own); reserved: the driver's
+    part that the OS leaves out of its figure of the card (Windows: nvidia-smi's total less D3DKMT's); programs: the
+    OS's counter of the programs' use less CARL's own (None: no such counter, then other is the rest of in_use);
+    other: in no program's figure (the driver's, CUDA's); kept: gpu.vram_keep (less where the card has no room);
+    model: the room (vram_limit)."""
+    total: int
+    in_use: int
+    reserved: int
+    programs: Optional[int]
+    other: int
+    kept: int
+    model: int
+    own: int
+
+
+def card_parts(gpu: Gpu, keep: int, own: int = 0) -> Optional[CardParts]:
+    """The parts of a discrete GPU's memory (CardParts); None for a GPU that shares the RAM or whose free memory is not
+    known."""
+    if shares_ram(gpu) or gpu.free is None or gpu.total <= 0:
+        return None
+    model = vram_limit(gpu, keep, own)
+    in_use = max(gpu.total - gpu.free - own, 0)
+    kept = max(gpu.total - in_use - model, 0)
+    in_use = gpu.total - kept - model                         # the remainder: the parts add up to the card
+    reserved = min(max(gpu.total - gpu.os_total, 0), in_use) if gpu.os_total else 0
+    programs = min(max(gpu.os_used - own, 0), in_use - reserved) if gpu.os_used is not None else None
+    return CardParts(gpu.total, in_use, reserved, programs, in_use - reserved - (programs or 0), kept, model, own)
+
+
 def total(found: Sequence[Room]) -> int:
     """What a model may use over every GPU."""
     return sum(r.limit for r in found)

@@ -6,7 +6,8 @@ The order is the bash dispatch's, and so are the texts and the exit codes:
   1. `log-filter` (hidden) is the log filter. `--version` first, or in a start's arguments, is CARL's version: one
      line, on every OS, and nothing is read or written in the settings folder (WFIN). On Windows the commands of the table that run there run here too (W4.1),
      and the help; every other command goes to the profile's Windows path (the profile gives the Dispatch a `preview`
-     callable: it runs the start here and answers what does not run on Windows yet with an error, W4.2; the
+     callable: it runs the start here, the client setup as a child (W1.6) and answers what does not run on Windows
+     yet with an error, W4.2; the
      table says where each command runs; the cli code has no platform check).
   2. The settings folder's old name is moved before anything reads it: not for help, nor for a command that does not
      exist (ConfDirMigration; only the macOS profile has one).

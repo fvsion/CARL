@@ -65,7 +65,7 @@ class ModelCard:
             L.append(row("good for", ", ".join(good_for_chip(t) for t in good)))
         group = group_of(svc.models.get(), name)
         if group is not None and group.several:                      # the model's quantizations (A68)
-            L.append(row("quantization", quant_line(row_of(group, m)) + f"   {DIM}(Enter, then ← →){R}"))
+            L.append(row("quantization", quant_line(row_of(group, m))))   # the Quantization row chooses it (B1)
         think = THINKING_NAMES.get(str(m.get("thinking") or ""), "")
         if think:
             L.append(row("thinking", think))

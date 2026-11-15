@@ -66,15 +66,18 @@ def speed(v: Optional[float]) -> str:
     return f"{v:.0f} tok/s" if v >= 100 else f"{v:.1f} tok/s"
 
 
-def duration(s: Optional[float]) -> str:
-    """Seconds as 1.2 s / 42 s / 3 min / 1 h 12 min."""
+def duration(s: Optional[float], secs: bool = False) -> str:
+    """Seconds as 1.2 s / 42 s / 3 min / 1 h 12 min. secs: a setting's time, with its seconds under 10 min (90 s is
+    1 min 30 s, not 1 min) and whole seconds under 10 s (W1.6)."""
     if s is None:
         return DASH
-    if s < 10:
+    if s < 10 and not (secs and s == int(s)):
         return f"{s:.1f} s"
     if s < 60:
         return f"{s:.0f} s"
     m = int(s // 60)
+    if secs and m < 10 and int(s) % 60:
+        return f"{m} min {int(s) % 60} s"
     if m < 60:
         return f"{m} min"
     return f"{m // 60} h {m % 60} min" if m % 60 else f"{m // 60} h"
@@ -83,3 +86,18 @@ def duration(s: Optional[float]) -> str:
 def percent(frac: Optional[float]) -> str:
     """A fraction as a whole percent: 79%."""
     return DASH if frac is None else f"{frac * 100:.0f}%"
+
+
+def etime_seconds(etime: Optional[str]) -> Optional[float]:
+    """ps's elapsed time ([[dd-]hh:]mm:ss) in seconds; None when it can't be read."""
+    if not etime:
+        return None
+    try:
+        days, _, rest = etime.rpartition("-")
+        parts = [int(x) for x in rest.split(":")]
+    except ValueError:
+        return None
+    secs = 0
+    for p in parts:
+        secs = secs * 60 + p
+    return secs + (int(days) * 86400 if days.isdigit() else 0)

@@ -7,7 +7,8 @@ The order, first match wins:
   tuned    the model's Auto-tune record (its -ub, with A45's context-first choice in it).
   config   llama.ub (a global for every model: how config.json held it before A51), for a model without a tune record.
   default  this computer's -ub (2048 on a PC, 512 on a Mac), which a start without a tune record may still replace by
-           the -ub that keeps the most experts on the GPUs (ub_pick).
+           the largest -ub that keeps the setup, n-gram on (ub_pick: 2048 where it fits, else 1024, else 512;
+           W1.6).
 
 A config value (llama.ub, or a kept choice a later tune has outdated) that differs from the tuned -ub is never applied
 silently over the record: UbAsk says what to ask. A start that can ask (the dashboard, `carl start` in a terminal) asks
@@ -136,16 +137,17 @@ def ub_order(typed: int, kept: int, kept_for: str, config: int, tuned: int, stam
 
 
 def ub_pick(default: int, ram_layers: Callable[[int], Tuple[object, int]]) -> int:
-    """The -ub of a start without a tune record (A52): of the sizes up to this computer's default, the one that keeps
-    the most expert layers on the GPUs at the chosen context, decode speed first (the A3B IQ3 at 2 x 96K wrote 25.0
-    tok/s at -ub 1024 with 40 layers in the RAM, 21.6 at -ub 2048 with all 41); a larger -ub only when it keeps as many.
-    ram_layers(ub): (the setup's key, the layers in the RAM); the sizes whose setup is not the best size's setup are
-    out (the context comes first, A45). A model with no experts in the RAM gives the default."""
+    """The -ub of a start without a tune record: of the sizes up to this computer's default, the largest whose setup is
+    the smallest size's setup (the slots, the context and the speculation, n-gram on: the context comes first, A45). W1.6
+    (the user, 2026-11-13: "We want ngram still so batch 1024 if we must"): -ub 2048 where it fits beside n-gram, else
+    1024, rather than A52's size that kept the most expert layers on the GPUs (a PC, the A3B Q4 with every expert in the
+    RAM: -ub 2048 read 61% faster than 1024 at the same write speed, A-repro.md). ram_layers(ub): (the setup's key, the
+    layers in the RAM); the layers no longer choose. A model with no experts in the RAM gives the largest size too. It
+    gives 512 when neither 2048 nor 1024 keeps the setup: the context comes first, 1024 is not a floor."""
     sizes = [u for u in UB_CANDIDATES if u <= default] or [default]
     got = {u: ram_layers(u) for u in sizes}
     ref = got[min(sizes)][0]
-    same = [u for u in sizes if got[u][0] == ref] or [max(sizes)]
-    return max(same, key=lambda u: (-got[u][1], u))
+    return max(u for u in sizes if got[u][0] == ref)
 
 
 def answer_config(cfg: JsonObject, model: str, ask: UbAsk, choice: str) -> JsonObject:

@@ -55,8 +55,9 @@ def unknown_command(word: str, words: PlatformWords) -> str:
     return f"error: unknown command '{word}'. Run {words.command} -h to see the commands."
 
 
-# The commands that do not run on Windows yet: the dispatch answers them with not_on_windows.
-NOT_ON_WINDOWS = ("install",)
+# The commands that do not run on Windows yet: the dispatch answers them with not_on_windows. None today: install
+# runs the client setup there too (W1.6).
+NOT_ON_WINDOWS: Tuple[str, ...] = ()
 
 
 def not_on_windows(word: str, words: PlatformWords) -> str:

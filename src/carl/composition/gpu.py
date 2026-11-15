@@ -7,7 +7,8 @@ the pids of CARL's own servers, and one inventory per process (the GPU limit, `c
             amdgpu's fdinfo; llama-server's list
 
 CARL's own server is the process listening on the port of a server-PORT.json in the settings folder (the start
-writes it, the stop removes it).
+writes it, the stop removes it), and the llama-server processes it started: a router's model servers (W1.6:
+without them the room fell by the loaded model in router mode).
 """
 from __future__ import annotations
 
@@ -46,7 +47,8 @@ def settings_reader(env: Mapping[str, str], conf_dir: str) -> Callable[[], GpuSe
 
 
 def own_pids(os_name: str, conf_dir: str) -> Callable[[], List[int]]:
-    """The pids of CARL's own llama-servers: the listeners on the ports of the settings folder's server files."""
+    """The pids of CARL's own llama-servers: the listeners on the ports of the settings folder's server files and the
+    llama-servers they started (a router's model servers, W1.6)."""
     def pids() -> List[int]:
         try:
             ports = [int(m.group(1)) for m in map(_SERVER_FILE.match, os.listdir(conf_dir)) if m] if conf_dir else []
@@ -54,13 +56,15 @@ def own_pids(os_name: str, conf_dir: str) -> Callable[[], List[int]]:
             ports = []
         if not ports:
             return []
+        from ..domain.hardware.processes import own_servers
         if os_name == "windows":
+            from ..adapters.windows.processes import snapshot_tree
             from ..adapters.windows.tcp_table import listeners
             table = listeners()
-            return [table[p] for p in ports if p in table]
-        from ..adapters.linux.ss_proc import ProcPorts
+            return own_servers([table[p] for p in ports if p in table], snapshot_tree() or [])
+        from ..adapters.linux.ss_proc import ProcPorts, process_tree
         probe = ProcPorts()
-        return [pid for pid in (probe.owner(p) for p in ports) if pid]
+        return own_servers([pid for pid in (probe.owner(p) for p in ports) if pid], process_tree())
     return pids
 
 

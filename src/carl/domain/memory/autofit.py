@@ -3,10 +3,12 @@ better-ranked model was passed over.
 
 Quality is the catalogue rank (1 = best: published benchmarks and CARL's code test first, then the quantization).
 CARL prioritises speed, so the goal decides the family first:
-  everyday   the fast builds: MoE (35B-A3B: fast, usually sufficient) and the small dense
-             builds the catalogue marks fast (Gemma 4 E4B); another build only when no fast
-             build fits (said so in the result)
-  hard-code  the dense builds (27B: better at code and hard tasks, slower); MoE as the fallback
+  everyday   the fast builds: MoE (35B-A3B: fast, usually sufficient); another build only when
+             no MoE build fits (said so in the result: on a 16 GB Mac the Gemma 4 12B). The small
+             dense builds the catalogue marks fast (Gemma 4 E4B) are the last resort (W1.6, below)
+  hard-code  the dense builds (27B: better at code and hard tasks, slower); MoE as the fallback, also when the only
+             dense models that fit rank below the best MoE model that fits (W1.6: a PC, the A3B Q4 with its experts in
+             the RAM, not the Qwen 9B at 1 x 64K)
 Only ranked stock models are candidates: abliterated models are picked by hand. A custom
 model takes part only when the user's card opts it in (auto_fit: a rank, an arch, stock):
 its rank is the user's word, not measured, so it never joins by default.
@@ -23,26 +25,35 @@ A model whose catalogue window is smaller (Saluki: 48K, sized for 16 GB Macs) ru
 at its own window: its full window counts as the first pass. The hard code pick on a 16 GB Mac is the Gemma 4 12B
 (user, 2026-10-13: "12b is clearly the better pick for default"; Saluki's rank is below it). In each pass a model with MTP that fits only without it drops MTP (n-gram stays)
 before Auto fit drops a slot or the window, and says so.
-On discrete GPUs (Windows, Linux) a MoE model that fits no pass whole tries the same passes again with some of its
-experts in the RAM (W6.7, offload.py: the smallest --n-cpu-moe N whose GPU side splits over the devices and whose RAM
-side fits the RAM less the reserve): the whole-GPU passes first, then the experts-in-RAM passes, within each family.
-A dense model is never offloaded, and a Mac never offloads.
+On discrete GPUs (Windows, Linux) a MoE model that does not fit a pass whole tries it with some of its experts in the
+RAM (W6.7, offload.py: the smallest --n-cpu-moe N whose GPU side splits over the devices and whose RAM side fits the RAM
+less the reserve). The pass comes first, then the rank (W1.6, the user, 2026-11-13: "We want ngram still so batch 1024
+if we must. E4B should be consciously chosen"): in each pass each model of the family by rank, whole on the GPUs or
+else with experts in the RAM, so the better model at the larger window wins. An experts-in-RAM setup is taken only
+when it writes at least RAM_WRITE_FLOOR and reads at least RAM_READ_FLOOR tok/s there (RamSpeed: this computer's
+Auto-tune record, else the catalogue's ram_speed); n-gram stays on. A dense model is never offloaded, and a Mac never
+offloads.
+The fast small dense builds (the catalogue's fast mark: the Gemma 4 E4B) are the last resort (W1.6, the user,
+2026-11-14: "Install E4B, you over-specified what i meant"): Auto fit takes the best one that fits only when no other model
+of its quality rank or better fits any pass (a tie goes to the other model), and then it is the pick like any other. Otherwise the result names it as the fast option
+(AutoFit.fast), and a person may choose it.
 The memory allowed is the smaller of the GPU limit and RAM minus the reserve for macOS and
 apps (more with the VM up), so a pick leaves the Mac usable. Pure: shapes, sizes and the
 limits come in as values.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from typing import Dict, List, Literal, Optional, Sequence, Tuple
 
 from .budget import cap
 from .calibration import METAL, Calibration
-from .fit import NO_SPEC, UBATCH, Spec, mtp_spec, need_bytes, window_label
+from .fit import NO_SPEC, UBATCH, Spec, mtp_spec, need_bytes, ub_choice, window_label
 from .gguf import GIB, ModelShape, ctx_train
-from .offload import plan_of as offload_plan, ram_spec
+from .offload import is_moe, plan_of as offload_plan, ram_spec
 from .split import Slot, calib_of
 from ..catalog.inventory import draft_bytes, spec_draft_bytes
+from ..server.ub_order import ub_pick
 from ..shared.constants import DEFAULT_CTX
 from ..shared.platform_words import MACOS, PlatformWords
 from ..shared.types import ModelInfo
@@ -85,6 +96,54 @@ def setup_text(slots: int, ctx: Optional[int], kv: Optional[str] = None) -> str:
     return f"{head} ({KV_TEXT.get(kv, kv)})" if kv else head
 
 
+RAM_WRITE_FLOOR = 15.0      # tok/s an experts-in-RAM pick writes at least (W1.6, the user, 2026-11-13)
+RAM_READ_FLOOR = 300.0      # tok/s it reads a prompt at least (a PC measured 21 to 26 and 530 to 860)
+
+
+@dataclass(frozen=True)
+class RamSpeed:
+    """A MoE model's speed with experts in the RAM: write and read in tok/s, and where they come from ("Auto-tune":
+    this computer's record; "catalogue": the catalogue's ram_speed, measured on another PC; "": not known, 0, 0)."""
+    write: float = 0.0
+    read: float = 0.0
+    source: str = ""
+
+    @property
+    def known(self) -> bool:
+        return self.write > 0 and self.read > 0
+
+    @property
+    def fast(self) -> bool:
+        """Fast enough for Auto fit to take it with experts in the RAM (the floor)."""
+        return self.known and self.write >= RAM_WRITE_FLOOR and self.read >= RAM_READ_FLOOR
+
+    def words(self) -> str:
+        """writes about 21 tok/s and reads about 530 (the catalogue's figure)"""
+        if not self.known:
+            return "has no speed figure with experts in the RAM (Auto-tune measures it)"
+        whose = "this computer's Auto-tune record" if self.source == "Auto-tune" else "the catalogue's figure"
+        return f"writes about {self.write:.0f} tok/s and reads about {self.read:.0f} ({whose})"
+
+
+def ram_speed_of(m: ModelInfo) -> RamSpeed:
+    """The speed with experts in the RAM (RamSpeed): this computer's Auto-tune record (the best write score of its
+    speculation, with experts in the RAM when it measured that, and its first prompt read), else the catalogue's
+    ram_speed ({"write": tok/s, "read": tok/s}), else not known."""
+    local = ((m.get("local") or {}).get("tune") or {})
+    res = local.get("results") or {}
+    spec = res.get("speculation_ram") or res.get("speculation") or {}
+    writes = [float((r or {}).get("score") or 0) for r in spec.values()] if isinstance(spec, dict) else []
+    reads = res.get("prompt_read") or []
+    read = float(reads[0][1]) if reads and isinstance(reads[0], (list, tuple)) and len(reads[0]) > 1 else 0.0
+    if writes and max(writes) > 0 and read > 0:
+        return RamSpeed(max(writes), read, "Auto-tune")
+    cat = m.get("ram_speed") or {}
+    w, r = cat.get("write"), cat.get("read")
+    if isinstance(w, (int, float)) and isinstance(r, (int, float)) and not isinstance(w, bool) and w > 0 and r > 0:
+        return RamSpeed(float(w), float(r), "catalogue")
+    return RamSpeed()
+
+
 @dataclass(frozen=True)
 class Candidate:
     """A model as auto fit sees it. shape None: its GGUF header could not be read. weights: the model
@@ -98,7 +157,7 @@ class Candidate:
     shape: Optional[ModelShape]
     kv: str = "q4_0"
     opted_in: bool = True           # a custom model: its card's auto_fit (catalogue models: always)
-    fast: bool = False              # a small dense build the everyday goal takes with the MoE builds
+    fast: bool = False              # a small fast dense build (the E4B): the last resort, else the fast option (W1.6)
     spec: Spec = NO_SPEC            # its speculation: this Mac's Auto-tune result, else the catalogue's (MTP only with
                                     # a head or a drafter)
     window: int = 0                 # the catalogue's window when it is below the passes' (0: the passes')
@@ -106,6 +165,7 @@ class Candidate:
     calib: Calibration = METAL      # the constants of the backend it runs on (calibration.py; a Mac: its own formula)
     cpu_over: str = ""              # a start on the CPU alone: why this IQ4_NL or Q4_0 comes before the K-quant of its
                                     # model and size (quants.cpu_quant_note; A72); "" for any other candidate
+    ram_speed: "RamSpeed" = field(default_factory=lambda: RamSpeed())   # its speed with experts in the RAM (W1.6)
 
     @property
     def order(self) -> Tuple[int, bool, str]:
@@ -173,7 +233,7 @@ def candidate(m: ModelInfo, shape: Optional[ModelShape]) -> Candidate:
                      abliterated=bool(m.get("abliterated")), downloaded=m.get("status") == "downloaded",
                      weights=int(m.get("bytes", 0)), shape=shape, kv=kv if isinstance(kv, str) else "q4_0",
                      opted_in=not m.get("custom") or m.get("auto_fit") is True, fast=m.get("fast") is True,
-                     spec=spec, window=window, mtp_modes=measured_mtp(m, shape))
+                     spec=spec, window=window, mtp_modes=measured_mtp(m, shape), ram_speed=ram_speed_of(m))
 
 
 @dataclass(frozen=True)
@@ -302,6 +362,7 @@ class Plan:
     dropped: bool = False
     cpu_moe: int = 0
     ram_off: bool = False       # MTP is off because experts are in the RAM (offload.ram_spec, A51), not for lack of room
+    ub: int = UBATCH            # the -ub it is planned at (at_ub: a pick with experts in the RAM at its start's, W1.6)
 
     def ram_text(self) -> str:
         """", the experts of 12 layers in the RAM" ("" with every expert on the GPUs)."""
@@ -403,7 +464,7 @@ def plan_for(c: Candidate, tier: Tier, allowed: float, swa_full: bool = True, ub
     for spec, dropped in setups(c):
         need = need_bytes(c.shape, c.weights, tier.ctx, tier.slots, c.kv, swa_full, spec, ub, c.calib)
         if need <= allowed:
-            return Plan(tier.ctx, tier.slots, c.kv, need, spec, dropped)
+            return Plan(tier.ctx, tier.slots, c.kv, need, spec, dropped, ub=ub)
     return None
 
 
@@ -421,29 +482,38 @@ def ram_plan_for(c: Candidate, tier: Tier, budget: Budget, ub: int = UBATCH) -> 
         if off is None:                     # a dense model: never in the RAM
             return None
         if off.fits:
-            return Plan(tier.ctx, tier.slots, c.kv, off.split.need, spec, dropped, off.n, off_by_default)
+            return Plan(tier.ctx, tier.slots, c.kv, off.split.need, spec, dropped, off.n, off_by_default, ub)
     return None
 
 
-def passes(budget: Optional[Budget]) -> Tuple[bool, ...]:
-    """The kinds of pass in order: whole on the GPUs, then (discrete GPUs) with experts in the RAM."""
-    return (False, True) if budget is not None and budget.offloads else (False,)
+def setup_of(c: Candidate, tier: Tier, budget: Optional[Budget], floor: bool = True, ub: int = UBATCH,
+             allowed: Optional[float] = None, swa_full: Optional[bool] = None) -> Optional[Plan]:
+    """The plan of a candidate in one pass: whole on the GPUs, else (discrete GPUs, a MoE model) with some of its experts
+    in the RAM; None when neither fits. floor: Auto fit's own pick takes the experts-in-RAM setup only when its speed
+    there meets the floor (RamSpeed.fast); a model a person named (model_plan) does not. allowed, swa_full: the
+    budget's unless given (no budget: both must be given)."""
+    room = allowed if allowed is not None else budget.allowed if budget is not None else 0.0
+    full = swa_full if swa_full is not None else budget.swa_full if budget is not None else True
+    plan = plan_for(c, tier, room, full, ub)
+    if plan or budget is None or not budget.offloads or (floor and not c.ram_speed.fast):
+        return plan
+    return ram_plan_for(c, tier, budget, ub)
 
 
 def model_plan(c: Candidate, allowed: float, swa_full: bool = True, cap: Optional[int] = None,
                slots: Optional[int] = None, ub: int = UBATCH, budget: Optional[Budget] = None) -> Tuple[int, Optional[Plan]]:
     """Auto fit's order for one model (a start whose window is not the user's): (the pass, its plan), or
     (the last pass, None) when no pass fits. cap: the model's own window (no pass above it); slots: a
-    number the user set (only its passes). budget: with discrete GPUs, the passes with experts in the RAM follow, and
-    its ladder is the order (budget.tiers; no budget: A45's)."""
+    number the user set (only its passes). budget: with discrete GPUs, a pass the model does not fit whole is tried with
+    experts in the RAM before the next pass (no speed floor: the model was named), and its ladder is the order
+    (budget.tiers; no budget: A45's)."""
     tiers = budget.tiers if budget is not None else TIERS
-    for ram in passes(budget):
-        for t, tier in enumerate(tiers):
-            if (cap is not None and tier.ctx > cap) or (slots is not None and tier.slots != slots):
-                continue
-            plan = ram_plan_for(c, tier, budget, ub) if ram and budget else plan_for(c, tier, allowed, swa_full, ub)
-            if plan:
-                return t, plan
+    for t, tier in enumerate(tiers):
+        if (cap is not None and tier.ctx > cap) or (slots is not None and tier.slots != slots):
+            continue
+        plan = setup_of(c, tier, budget, False, ub, allowed, swa_full)
+        if plan:
+            return t, plan
     return len(tiers) - 1, None
 
 
@@ -462,20 +532,48 @@ def order_note(name: str, tier: int, plan: Plan, cap: int, words: PlatformWords 
     return " ".join(parts)
 
 
-def why_not(c: Candidate, tier: Tier, allowed: float, swa_full: bool = True) -> str:
-    """Why a candidate fails a pass, with the numbers (the memory without MTP: the least it needs)."""
+def why_not(c: Candidate, tier: Tier, allowed: float, swa_full: bool = True, budget: Optional[Budget] = None) -> str:
+    """Why a candidate fails a pass, with the numbers (the memory without MTP: the least it needs). budget: with discrete
+    GPUs a MoE model's reason is its experts-in-RAM setup (_why_not_ram), not the whole-GPU need."""
     if c.shape is None:
         return "has an unknown size: CARL cannot read its GGUF header (possibly no network)"
+    short = (f"does not fit: its trained context is {window_label(ctx_train(c.shape))} tokens, "
+             f"less than {window_label(MIN_WINDOW)}")
+    if budget is not None and budget.offloads and is_moe(c.shape):
+        return short if ctx_train(c.shape) < MIN_WINDOW else _why_not_ram(c, tier, budget)
     spec = c.spec.without_mtp()
     alone = need_bytes(c.shape, c.weights, 0, 1, c.kv, swa_full, spec, calib=c.calib)
     if alone > allowed:
         return f"does not fit: the weights and buffers alone need {gib(alone)}, and a model can use {gib(allowed)}"
     tier = own_tier(c, tier)
     if ctx_train(c.shape) < MIN_WINDOW:
-        return (f"does not fit: its trained context is {window_label(ctx_train(c.shape))} tokens, "
-                f"less than {window_label(MIN_WINDOW)}")
+        return short
     need = need_bytes(c.shape, c.weights, tier.ctx, tier.slots, c.kv, swa_full, spec, calib=c.calib)
     return f"does not fit: {tier.label()} need {gib(need)}, and a model can use {gib(allowed)}"
+
+
+def _why_not_ram(c: Candidate, tier: Tier, budget: Budget) -> str:
+    """Why a MoE candidate on discrete GPUs fails a pass: it fits only with experts in the RAM and is below the speed
+    floor (or its speed there is not known), or the GPU side or the RAM side does not fit even so."""
+    assert c.shape is not None
+    tier = own_tier(c, tier)
+    if tier.ctx > ctx_train(c.shape):
+        return f"does not fit: {tier.label()} are more than its trained context"
+    off = offload_plan(c.shape, c.weights, tier.ctx, tier.slots, c.kv, budget.swa_full, ram_spec(c.spec), UBATCH,
+                       budget.devices, budget.ram, budget.reserve, c.calib)
+    if off is None:
+        return f"does not fit: {tier.label()} need more than a model can use, {gib(budget.allowed)}"
+    if off.fits:
+        if not c.ram_speed.known:
+            return (f"fits {tier.label()} only with {off.words()}, and its speed there is not known (Auto-tune "
+                    f"measures it)")
+        return (f"fits {tier.label()} only with {off.words()}, where it {c.ram_speed.words()}: below Auto fit's "
+                f"floor of {RAM_WRITE_FLOOR:.0f} tok/s writing and {RAM_READ_FLOOR:.0f} reading")
+    if not off.gpu_fits:
+        return (f"does not fit: with {off.words()}, {tier.label()} need {gib(off.split.need)} on the GPU, and a model "
+                f"can use {gib(off.split.room)}")
+    return (f"does not fit: with {off.words()}, the RAM side needs {gib(off.ram)}, and the RAM has {gib(off.room)} for "
+            f"a model")
 
 
 @dataclass(frozen=True)
@@ -493,8 +591,10 @@ class Rejection:
 @dataclass(frozen=True)
 class AutoFit:
     """Auto fit's answer: the pick (None when nothing fits), how it runs, and why every
-    better-ranked candidate was passed over. fallback: no model of the goal's family fits,
-    the pick is of the other family. tier: the pass the pick met (an index of budget.tiers)."""
+    better-ranked candidate was passed over. fallback: no model of the goal's family fits, or (outranked, the goal
+    hard code) the only ones that fit rank below the pick, which is of the other family. tier: the pass the pick met
+    (an index of budget.tiers). fast: the fast option (a fast small dense build that fits, not the pick: another model of
+    its rank or better fits) and its plan, None when none fits or it is the pick."""
     goal: Goal
     scope: Scope
     budget: Budget
@@ -503,30 +603,54 @@ class AutoFit:
     tier: int
     fallback: bool
     rejected: Tuple[Rejection, ...]
+    fast: Optional[Tuple[Candidate, Plan]] = None
+    outranked: bool = False
 
     @property
     def name(self) -> Optional[str]:
         return self.pick.name if self.pick else None
 
-    def because(self) -> str:
-        """Why the pick (or that nothing fits), in short sentences without the last full stop."""
+    def because(self, need: Optional[float] = None) -> str:
+        """Why the pick (or that nothing fits), in short sentences without the last full stop. need: the pick's need as
+        llama-server's own fit measured it (carl fit's goal line, W1.6 wave 3: one figure in both), else the plan's."""
         if not self.pick or not self.plan:
             return (f"No stock model with a quality rank fits {self.budget.words.machine} ({SCOPE_TEXT[self.scope]}). "
                     f"A model can use {self.budget.describe()}")
         arch = self.pick.kind()
         here = "downloaded " if self.scope == "downloaded" else ""
-        lead = (f"No {here}{FAMILY_TEXT[self.goal]} model fits, so this is the best {arch} model that fits. It holds "
-                if self.fallback else
-                f"Of the stock {arch} models that hold ")
-        tail = "" if self.fallback else ", this model has the best quality rank"
+        if self.pick.fast:                                      # the last resort (W1.6)
+            lead, tail = f"No other {here}model of the fast option's rank or better fits, so Auto fit takes it. It holds ", ""
+        elif self.outranked:
+            lead, tail = (f"The only {here}{FAMILY_TEXT[self.goal]} models that fit rank below this one, so this is "
+                          f"the best {arch} model that fits. It holds "), ""
+        elif self.fallback:
+            lead, tail = (f"No {here}{FAMILY_TEXT[self.goal]} model fits, so this is the best {arch} model that fits. "
+                          f"It holds "), ""
+        else:
+            lead, tail = f"Of the stock {arch} models that hold ", ", this model has the best quality rank"
         note = self.plan.spec_note(self.budget.words)
         if self.pick.cpu_over:                                  # a start on the CPU alone chose the faster quantization
             note = f"{self.pick.cpu_over}" + (f". {note}" if note else "")
-        needs = (f"It needs {gib(self.plan.need)}" if not self.plan.cpu_moe else
-                 f"No setup fits the GPUs whole, so the experts of {self.plan.cpu_moe} layers stay in the RAM. On "
-                 f"the GPUs it needs {gib(self.plan.need)}")
+        t = Tier(self.plan.slots, self.plan.ctx)
+        n = self.plan.need if need is None else need
+        needs = (f"It needs {gib(n)}" if not self.plan.cpu_moe else
+                 f"{t.label()} {'does' if t.slots == 1 else 'do'} not fit the GPUs whole, so the experts of "
+                 f"{self.plan.cpu_moe} layers stay in the RAM, where it {self.pick.ram_speed.words()}. On the GPUs it "
+                 f"needs {gib(n)}")
         return (f"{lead}{self.holds()}{tail}. {needs}, and a model can use "
-                f"{self.budget.describe()}" + (f". {note}" if note else ""))
+                f"{self.budget.describe()}" + (f". {note}" if note else "") +
+                (f". {self.fast_text()}" if self.fast else ""))
+
+    def fast_text(self) -> str:
+        """The fast option in one sentence without the last full stop ("" when there is none): For speed:
+        gemma-4-e4b (small dense, quality rank 9) fits with 2 slots × 64K tokens (q4). Auto fit takes it only when no
+        other model of its rank or better fits: choose it by name (carl config set llama.model gemma-4-e4b)."""
+        if not self.fast:
+            return ""
+        c, plan = self.fast
+        return (f"For speed: {c.name} ({c.kind()}, quality rank {c.rank}) fits with {plan.describe()}. Auto fit takes "
+                f"it only when no other model of its rank or better fits: choose it by name "
+                f"({self.budget.words.command} config set llama.model {c.name})")
 
     def holds(self) -> str:
         """The setup of the pick and why Auto fit took it, as a phrase: two slots of 64K tokens (the main
@@ -568,35 +692,94 @@ def _order(cands: Sequence[Candidate], keep: bool, goal: Goal) -> List[Candidate
     return sorted((c for c in cands if in_family(c, goal) == keep), key=lambda c: c.order)
 
 
+def fast_option(cands: Sequence[Candidate], budget: Budget) -> Optional[Tuple[Candidate, Plan]]:
+    """The best-ranked fast small dense build that fits a pass whole (the first pass it fits), None when none does."""
+    for c in sorted((c for c in cands if c.fast), key=lambda c: c.order):
+        for tier in budget.tiers:
+            plan = plan_for(c, tier, budget.allowed, budget.swa_full)
+            if plan:
+                return c, plan
+    return None
+
+
 def auto_fit(candidates: Sequence[Candidate], budget: Budget, goal: Goal = "everyday",
              scope: Scope = "catalogue") -> AutoFit:
-    """The best ranked stock candidate for the goal that fits the budget (module docstring)."""
+    """The best ranked stock candidate for the goal that fits the budget (module docstring): the goal's family first,
+    then the other (for hard code also when the only dense fits rank below the other family's pick); in each, pass by
+    pass, each candidate by rank, whole or (setup_of) with experts in the RAM at the speed floor. The fast option is a
+    candidate only when no other model of its rank or better fits any pass (the last resort); else AutoFit.fast names it."""
     allowed = budget.allowed
     tiers = budget.tiers
     eligible = [c for c in candidates if c.eligible]
     in_scope = [c for c in eligible if scope == "catalogue" or c.downloaded]
-    groups = [_order(in_scope, True, goal), _order(in_scope, False, goal)]
-    for g, group in enumerate(groups):
-        for ram in passes(budget):
-            for t, tier in enumerate(tiers):
-                for c in group:
-                    plan = ram_plan_for(c, tier, budget) if ram else plan_for(c, tier, allowed, budget.swa_full)
-                    if plan:
-                        return AutoFit(goal, scope, budget, c, plan, t, g == 1,
-                                       tuple(_rejections(eligible, c, t, g == 1, scope, goal, allowed,
-                                                         budget.swa_full, tiers)))
-    return AutoFit(goal, scope, budget, None, None, len(tiers) - 1, False,
-                   tuple(_rejections(eligible, None, len(tiers) - 1, False, scope, goal, allowed, budget.swa_full,
-                                     tiers)))
+    pickable = [c for c in in_scope if not c.fast]
+    fast = fast_option(in_scope, budget)
+    if fast and not any((c.rank or 0) <= (fast[0].rank or 0) and _fits_somehow(c, allowed, budget.swa_full, tiers, budget)
+                        for c in pickable):
+        pickable.append(fast[0])            # the last resort: no other model of its rank or better fits (W1.6)
+
+    def first(group: Sequence[Candidate]) -> Optional[Tuple[Candidate, Plan, int]]:
+        for t, tier in enumerate(tiers):
+            for c in group:
+                plan = setup_of(c, tier, budget)
+                if plan:
+                    return c, plan, t
+        return None
+    own = first(_order(pickable, True, goal))
+    other = first(_order(pickable, False, goal)) if own is None or goal == "hard-code" else None
+    outranked = (own is not None and other is not None and other[0].order < own[0].order and
+                 not any(c.order < other[0].order and _fits_somehow(c, allowed, budget.swa_full, tiers, budget)
+                         for c in pickable if in_family(c, goal)))
+    got, fallback = (own, False) if own is not None and not outranked else (other, other is not None)
+    if got is None:
+        return AutoFit(goal, scope, budget, None, None, len(tiers) - 1, False,
+                       tuple(_rejections(eligible, None, len(tiers) - 1, False, scope, goal, allowed, budget.swa_full,
+                                         tiers, budget)), fast)
+    c, plan, t = got
+    return AutoFit(goal, scope, budget, c, plan, t, fallback,
+                   tuple(_rejections(eligible, c, t, fallback, scope, goal, allowed, budget.swa_full, tiers, budget,
+                                     outranked)), None if fast and fast[0].name == c.name else fast, outranked)
+
+
+def at_ub(fit: AutoFit, ub: int, fixed: bool = False, pick: bool = False) -> AutoFit:
+    """Auto fit's answer with a pick whose experts stay in the RAM planned at the -ub its start runs (W1.6): the count
+    depends on the -ub (a PC, the A3B Q4 at 2 x 128K: 38 layers at -ub 512, 40 at the start's 2048), so the reason,
+    Settings and carl fit name the start's count. ub: the start's -ub as its order gives it (ub_order); fixed (a
+    person's): as it is; pick (no tune record, this computer's default): the largest size up to ub that keeps the setup
+    -ub 512 gets (ub_order.ub_pick); then, as the start lowers it, ub when its setup is -ub 512's, else 1024 or 512
+    (fit.ub_choice). The pass, the rank and the reasons stay -ub 512's: the setup is the same. fit as it is for a pick
+    whole on the GPUs, at -ub 512, or one that does not fit at a fixed ub (the start's own check refuses it)."""
+    c, plan = fit.pick, fit.plan
+    if c is None or plan is None or not plan.cpu_moe or ub == UBATCH:
+        return fit
+    tier = Tier(plan.slots, plan.ctx)
+    plans: Dict[int, Optional[Plan]] = {UBATCH: plan}
+
+    def at(u: int) -> Optional[Plan]:
+        if u not in plans:
+            plans[u] = setup_of(c, tier, fit.budget, False, u)
+        return plans[u]
+
+    def setup(u: int) -> Tuple[object, str]:
+        p = at(u)
+        return ((p.slots, p.ctx, p.spec.kind, p.cpu_moe > 0) if p is not None else None), ""
+    if not fixed:
+        if pick and ub > UBATCH:
+            ub = ub_pick(ub, lambda u: (setup(u)[0], at(u).cpu_moe if at(u) is not None else 0))  # type: ignore
+        ub = ub_choice(ub, setup).ub
+    got = at(ub)
+    return replace(fit, plan=got) if got is not None else fit
 
 
 def _rejections(eligible: Sequence[Candidate], pick: Optional[Candidate], tier: int, fallback: bool, scope: Scope,
                 goal: Goal, allowed: float, swa_full: bool = True,
-                tiers: Sequence[Tier] = TIERS) -> List[Rejection]:
-    """Every eligible candidate ranked above the pick (and, after a fallback, the whole goal
-    family), best rank first, with the reason it lost."""
+                tiers: Sequence[Tier] = TIERS, budget: Optional[Budget] = None,
+                outranked: bool = False) -> List[Rejection]:
+    """Every eligible candidate ranked above the pick (and, after a fallback where none of the goal family fits, the
+    whole goal family), best rank first, with the reason it lost. budget: the experts-in-RAM reasons on discrete GPUs.
+    outranked: the goal family's fits rank below the pick (hard code's MoE fallback): only those ranked above it."""
     def better(c: Candidate) -> bool:
-        if pick is None or (fallback and in_family(c, goal)):
+        if pick is None or (fallback and not outranked and in_family(c, goal)):
             return True
         return c.order < pick.order
 
@@ -606,22 +789,25 @@ def _rejections(eligible: Sequence[Candidate], pick: Optional[Candidate], tier: 
             continue
         if scope == "downloaded" and not c.downloaded:
             reason = "is not downloaded"
+        elif c.fast and _fits_somehow(c, allowed, swa_full, tiers):
+            reason = "is the fast option: Auto fit takes it only when no other model of its rank or better fits"
         elif pick is not None and not fallback and not in_family(c, goal) and _fits_somehow(c, allowed, swa_full,
-                                                                                            tiers):
+                                                                                            tiers, budget):
             other: Goal = "everyday" if goal == "hard-code" else "hard-code"
             reason = f"is {c.kind()}: Auto fit keeps it for the {GOAL_NAME[other]} goal"
         elif pick is not None and not fallback and not in_family(c, goal):
-            reason = why_not(c, tiers[-1], allowed, swa_full)       # it fits no pass: say that, not the family
+            reason = why_not(c, tiers[-1], allowed, swa_full, budget)    # it fits no pass: say that, not the family
         else:
             failed = tier if pick is not None and not (fallback and in_family(c, goal)) else len(tiers) - 1
-            reason = why_not(c, tiers[failed], allowed, swa_full)
+            reason = why_not(c, tiers[failed], allowed, swa_full, budget)
         out.append(Rejection(c.name, c.rank or 0, reason))
     return out
 
 
-def _fits_somehow(c: Candidate, allowed: float, swa_full: bool, tiers: Sequence[Tier] = TIERS) -> bool:
-    """Does the candidate fit any pass (its family aside)?"""
-    return any(plan_for(c, t, allowed, swa_full) for t in tiers)
+def _fits_somehow(c: Candidate, allowed: float, swa_full: bool, tiers: Sequence[Tier] = TIERS,
+                  budget: Optional[Budget] = None) -> bool:
+    """Does the candidate fit any pass (its family aside; with a budget, with experts in the RAM at the floor too)?"""
+    return any(setup_of(c, t, budget, True, UBATCH, allowed, swa_full) for t in tiers)
 
 
 def best_downloaded(fit: AutoFit, candidates: Sequence[Candidate]) -> AutoFit:

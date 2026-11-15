@@ -15,13 +15,16 @@
  *     blocks writes against its work_mode, or of a known_file to read only.
  * Only these: in a subagent's process there is no reminder and no new-file gate (the subagent tool also keeps
  * APPEND_SYSTEM.md, with the delegation rule, from subagents).
+ * W1.6 (the coder brief): before the check, the lenient reader (repairCall) cuts leaked tool-call markup from each coder
+ * task and fixes the brief's mechanical slips, in the call's input (Pi passes the changed input on, so the subagent
+ * gets the fixed brief); the tool_result event adds the [CARL] note of what changed to the call's result.
  */
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { checkBrief, parseBrief } from "./carl-brief.js";
-import { CoderGate, FREE_FORM_TEXT, GateSetting, RequestCheck, Turn, freeFormFor, isCoderName, requestFrom, withReminder } from "./carl-delegation.js";
+import { checkBrief, fixedText, parseBrief } from "./carl-brief.js";
+import { CoderGate, FREE_FORM_TEXT, GateSetting, RequestCheck, Turn, freeFormFor, isCoderName, repairCall, requestFrom, withReminder } from "./carl-delegation.js";
 
 /** Pi's agent folder (carl.json is there). */
 const agentDir = (): string => process.env.PI_CODING_AGENT_DIR || join(homedir(), ".pi", "agent");
@@ -68,6 +71,7 @@ export default function carlDelegation(pi: ExtensionAPI) {
 	const turn = new Turn();
 	const request = new RequestCheck(); // the Request Check (the 23.4.3 addendum): the user's messages since the last brief taken
 	const gateSetting = new GateSetting({ cacheApi: set.cacheApi, carlId: set.carlId });
+	const fixedNotes = new Map<string, string>(); // a coder call (its toolCallId) -> CARL's note of what it changed (W1.6)
 	pi.on("input", async (event) => {
 		if (set.brief) request.user(event.text.trimStart().replace(/^\/\S+\s*/, "")); // "/code TASK": the task's words
 		if (!set.reminder || !event.text.trim() || event.text.trimStart().startsWith("/")) return { action: "continue" as const };
@@ -85,6 +89,8 @@ export default function carlDelegation(pi: ExtensionAPI) {
 		const tool = String(event.toolName);
 		const input = (event.input ?? {}) as Record<string, unknown>;
 		if (set.brief) {
+			// the lenient reader first (W1.6): the fixed brief goes into the input, in place
+			const fixed = repairCall(tool, input, { root: String(ctx.cwd ?? process.cwd()) });
 			// a coder task with an incomplete brief (and the turn's memory: no switch to tests-only after a refusal)
 			const why = turn.brief(tool, input, { format: set.briefFormat, root: String(ctx.cwd ?? process.cwd()),
 				freeForm: freeForm(ctx as { model?: { provider?: string; id?: string } }) });
@@ -92,10 +98,20 @@ export default function carlDelegation(pi: ExtensionAPI) {
 			// the request's literals in the brief (carl.json "request_check": on, reminder, off; read at each task)
 			const missing = request.check(tool, input, requestFrom(join(agentDir(), "carl.json")));
 			if (missing) return { block: true, reason: missing };
+			const id = String((event as { toolCallId?: string }).toolCallId ?? "");
+			if (fixed.length && id) fixedNotes.set(id, fixedText(fixed));
 		}
 		const gate = await gateSetting.get(); // the dashboard's setting (Connect > Setup)
 		if (!gate) return undefined;
 		const why = turn.before(gate, "pi", tool, input, String(ctx.cwd ?? process.cwd()), existsSync, set.coder);
 		return why ? { block: true, reason: why } : undefined;
+	});
+	// what the lenient reader changed in a coder call: after its result (W1.6)
+	pi.on("tool_result", async (event) => {
+		const e = event as { toolCallId?: string; content?: unknown[] };
+		const note = fixedNotes.get(String(e.toolCallId ?? ""));
+		if (!note) return undefined;
+		fixedNotes.delete(String(e.toolCallId));
+		return { content: [...(Array.isArray(e.content) ? e.content : []), { type: "text" as const, text: note }] };
 	});
 }

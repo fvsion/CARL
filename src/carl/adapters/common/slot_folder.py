@@ -21,9 +21,9 @@ import shutil
 from typing import Dict, List, Sequence
 
 from . import zstd_patch as slotpack
-from ...domain.server.slot_files import (AUTO_S, CONVERSATION, DEFAULT_GB, MOVES, PROMPT, SAVES, SWAS,  # noqa: F401
-                                         CacheConfig, CacheFile, Resident, config_of, describe, gate_of, gb,
-                                         is_resident_name, over_budget, resident_of, shared_saving, used)
+from ...domain.server.slot_files import (AUTO_S, CONVERSATION, DEFAULT_GB, MOVES, PROMPT, SAVES, SLOT,  # noqa: F401
+                                         STATE_PREFIXES, SWAS, CacheConfig, CacheFile, Resident, config_of, describe,
+                                         gate_of, gb, is_resident_name, over_budget, resident_of, shared_saving, used)
 from ...domain.server.snapshot import jdict
 
 MIN_FREE_BYTES = 10 * 1000 ** 3  # no saves below 10 GB of free disk (the clients' rule too)
@@ -31,14 +31,16 @@ MIN_FREE_BYTES = 10 * 1000 ** 3  # no saves below 10 GB of free disk (the client
 
 def listing(folder: str) -> List[CacheFile]:
     """The saved states in the folder, oldest first: each one in all its forms (the file, and for a
-    conversation stored as a patch against its prompt, the patch and its meta: adapters/common/zstd_patch.py)."""
+    conversation stored as a patch against its prompt, the patch and its meta: adapters/common/zstd_patch.py). The
+    slots kept over a restart (carl-slot+…, slot_handoff.py) are listed too; their record (.slots+MODEL.json) is not
+    a saved state."""
     try:
         names = os.listdir(folder)
     except OSError:
         return []
     found: Dict[str, CacheFile] = {}
     for n in names:
-        if not n.startswith(("carl-prefix+", "carl-session+")):
+        if not n.startswith(STATE_PREFIXES):
             continue
         stem = n[:n.index(".bin") + 4] if ".bin" in n else ""
         if not stem or n not in (stem, stem + slotpack.PACK, stem + slotpack.META):

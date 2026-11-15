@@ -229,7 +229,7 @@ class DeviceGpuLimit:
         GPU and the room a model may use there. A GPU llama-server does not see is left out; [] when no GPU has a
         name (no GPU, or none can be named)."""
         names = self.inventory.names()
-        return [Slot(names[r.gpu.index], r.gpu, r.limit, r.shared) for r in self.rooms() if r.gpu.index in names]
+        return [Slot(names[r.gpu.index], r.gpu, r.limit, r.shared, r.own) for r in self.rooms() if r.gpu.index in names]
 
     def limit(self) -> Tuple[int, str]:
         now = self.inventory.clock()

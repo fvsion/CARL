@@ -6,7 +6,10 @@ what each process holds there. A call Windows does not answer gives nothing, nev
 
 What the Mac's figures become here (PcStats; the dashboard's PC cards read them):
   memory in use     the RAM less the available memory (GlobalMemoryStatusEx), as Task Manager's In use
-  standby files     the system cache (GetPerformanceInfo)
+  file cache        the standby list: "\\Memory\\Standby Cache Core Bytes", "Normal Priority Bytes" and "Reserve
+                    Bytes" added up (W1.6). It is a part of the available memory (the standby list and the free and
+                    zero pages), the files Windows frees at once; GetPerformanceInfo's SystemCache is not (it holds
+                    the system's working set too). None when Windows does not give them
   page file         its size (the commit limit less the RAM) and its use ("\\Paging File(_Total)\\% Usage")
   CPU               the processor's busy share since the last sample, since boot for the first (GetSystemTimes);
                     Windows has no load average
@@ -46,10 +49,11 @@ from .process import FileTime, PROCESS_QUERY_LIMITED_INFORMATION, creation_time,
 from .processes import INVALID_HANDLE, TH32CS_SNAPPROCESS, _Entry, command_text, recorded_argv, working_set_kib
 
 NVIDIA = "nvidia-smi"
-NVIDIA_ARGS = ["--query-gpu=pci.bus_id,name,memory.total,memory.used,utilization.gpu,temperature.gpu",
+NVIDIA_ARGS = ["--query-gpu=pci.bus_id,name,memory.total,memory.used,utilization.gpu,temperature.gpu,memory.free",
                "--format=csv,noheader,nounits"]
 NVIDIA_EVERY = 5.0                       # seconds between two nvidia-smi runs (it takes a few tenths on Windows)
 PAGE_FILE = "\\Paging File(*)\\% Usage"
+STANDBY = tuple(f"\\Memory\\Standby Cache {k} Bytes" for k in ("Core", "Normal Priority", "Reserve"))
 STATE_LISTEN, STATE_ESTABLISHED = 2, 5   # MIB_TCP_STATE
 WILDCARDS = ("0.0.0.0", "::")
 PORT_SPAN = 100
@@ -224,33 +228,42 @@ class NvidiaRow(NamedTuple):
     used: Optional[int]
     util: Optional[int]         # percent
     temp: Optional[int]         # degrees C
+    free: Optional[int] = None  # bytes (W1.6: the card less it is what is in use, the reserved part with it)
 
 
 def parse_nvidia(text: str) -> List[NvidiaRow]:
-    """`nvidia-smi --query-gpu=pci.bus_id,name,memory.total,memory.used,utilization.gpu,temperature.gpu` (csv, MiB;
-    "[N/A]" is None)."""
+    """`nvidia-smi --query-gpu=pci.bus_id,name,memory.total,memory.used,utilization.gpu,temperature.gpu[,memory.free]`
+    (csv, MiB; "[N/A]" is None)."""
     out: List[NvidiaRow] = []
     for line in text.splitlines():
         f = [x.strip() for x in line.split(",")]
         if len(f) < 6 or not pci_tail(f[0]):
             continue
         total, used = _int(f[2]), _int(f[3])
+        free = _int(f[6]) if len(f) > 6 else None
         out.append(NvidiaRow(pci_tail(f[0]), f[1], total * MIB if total is not None else None,
-                             used * MIB if used is not None else None, _int(f[4]), _int(f[5])))
+                             used * MIB if used is not None else None, _int(f[4]), _int(f[5]),
+                             free * MIB if free is not None else None))
     return out
 
 
 def gpu_uses(gpus: Sequence[Gpu], nvidia: Sequence[NvidiaRow]) -> List[GpuUse]:
     """Each GPU with its own memory (the inventory's, any vendor), its use and heat from nvidia-smi by PCI address;
-    nvidia-smi's GPUs alone when the inventory has none."""
+    nvidia-smi's GPUs alone when the inventory has none. One source per figure (W1.6, A-M1): where nvidia-smi names the
+    GPU, its size is nvidia-smi's and in use is that less nvidia-smi's free memory (the driver's reserved part counts as
+    in use), the figures the room is made of; the Windows counters leave the reserved part out of both."""
     by_pci = {r.pci: r for r in nvidia}
     out: List[GpuUse] = []
     for g in gpus:
         r = by_pci.get(pci_tail(g.pci)) if g.pci else None
+        if r is not None and r.total and r.free is not None:
+            out.append(GpuUse(g.name, r.total, max(r.total - r.free, 0), r.util, r.temp, g.luid))
+            continue
         used = (g.total - g.free) if g.free is not None else (r.used if r else None)
         out.append(GpuUse(g.name, g.total, used, r.util if r else None, r.temp if r else None, g.luid))
     if not out:
-        out = [GpuUse(r.name, r.total, r.used, r.util, r.temp) for r in nvidia if r.total]
+        out = [GpuUse(r.name, r.total, r.total - r.free if r.total and r.free is not None else r.used, r.util, r.temp)
+               for r in nvidia if r.total]
     return out
 
 
@@ -264,15 +277,19 @@ def server_share(vram: Dict[int, Dict[str, int]], pids: Set[int]) -> Dict[str, i
 
 
 def pc_stats(mem: Tuple[int, int], perf: Tuple[int, int, int], page_used_pct: Optional[float],
-             cpu: Optional[float], gpus: List[GpuUse], server: Dict[str, int], power: str) -> PcStats:
-    """The figures as PcStats. mem: (RAM, available); perf: (commit limit, physical total, system cache), bytes."""
+             cpu: Optional[float], gpus: List[GpuUse], server: Dict[str, int], power: str,
+             standby: Optional[int] = None) -> PcStats:
+    """The figures as PcStats. mem: (RAM, available); perf: (commit limit, physical total, system cache), bytes;
+    standby: the standby list (the file cache, a part of the available memory; None: not known). A standby list
+    larger than the available memory is not one: it is left out."""
     total, avail = mem
-    limit, physical, cache = perf
+    limit, physical, _ = perf
+    cache = standby if standby is not None and 0 <= standby <= avail else None
     page = max(limit - physical, 0)
     used_page = page * page_used_pct / 100 if page_used_pct is not None else 0.0
     utils = [g.util for g in gpus if g.util is not None]
     used = [g.used for g in gpus if g.used is not None]
-    return PcStats(anon=max(total - avail, 0), free=avail, files=cache, swap=(float(used_page), float(page)),
+    return PcStats(anon=max(total - avail, 0), free=avail, file_cache=cache, swap=(float(used_page), float(page)),
                    gpu=max(utils) if utils else None, gpumem=sum(used) if used else None, power=power,
                    available=avail, cpu=cpu, gpus=gpus, server=server)
 
@@ -322,6 +339,11 @@ class Win32Reads:
     def page_file_use(self) -> Optional[float]:
         """The page file's use in percent (its _Total instance)."""
         return gpu_counters.counter_values(PAGE_FILE, double=True).get("_Total")
+
+    def standby(self) -> Optional[int]:
+        """The standby list in bytes (its three counters added up), None when Windows does not give them."""
+        total = gpu_counters.counter_total(STANDBY)
+        return int(total) if total is not None else None
 
     def cpu_times(self) -> Optional[Tuple[int, int]]:
         """(busy, total) of GetSystemTimes, 100 ns (the kernel time holds the idle time)."""
@@ -462,7 +484,7 @@ class _Reader:
         p = self.win.power()
         return pc_stats(self.win.memory() or (0, 0), self.win.performance() or (0, 0, 0), self.win.page_file_use(),
                         self.cpu(), gpu_uses(found, self.nvidia()), server_share(vram, pids),
-                        power_text(*p) if p else "")
+                        power_text(*p) if p else "", self.win.standby())
 
 
 class WindowsServerWatch:

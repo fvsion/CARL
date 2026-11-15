@@ -12,7 +12,7 @@ import threading
 from collections import deque
 from typing import Deque, List, Optional
 
-from ...application.server_jobs.notifier import (JOB_SLOTS, AskTuneStop, Found, Job, JobEvent, PackageDone,
+from ...application.server_jobs.notifier import (JOB_SLOTS, AskTuneStop, Found, Handoff, Job, JobEvent, PackageDone,
                                                  RevealFailed, Settled, StartFailed, Status, Toast)
 from ...application.server_jobs.records import Drain
 from ...domain.server.snapshot import clean
@@ -108,5 +108,7 @@ class UiNotifier:
                 yes_label="Stop the server and tune")
         elif isinstance(e, PackageDone):
             e.run.outcome, e.run.done = e.outcome, True
+        elif isinstance(e, Handoff):
+            ui.handoff = e.text
         elif isinstance(e, RevealFailed):
             ui.toast(f"CARL cannot open the {file_manager()}. The zip is {e.path}", 10, error=True)

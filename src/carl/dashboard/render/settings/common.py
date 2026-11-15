@@ -31,6 +31,17 @@ def quant_line(m: ModelInfo) -> str:
     return "   ".join(parts)
 
 
+def quant_spans(m: ModelInfo) -> List[Tuple[int, int, str]]:
+    """The click targets of quant_line(m): each quantization shows that one (mquant:=NAME; W1.6 B3)."""
+    out, col = [], 0
+    for q in m.get("quants") or []:
+        text = f"{q['quant']} {file_size(q['bytes'])} ●" + (f" {mtp_mark(q.get('mtp', ''))}" if q.get("mtp") else "")
+        width = len(text) + (2 if q["name"] == m["name"] else 0)
+        out.append((col, col + width, make(Verb.MQUANT, f"={q['name']}")))
+        col += width + 3
+    return out
+
+
 def subpanel_bar(sp: int, extra: Sequence[str] = (), cols: int = 0, groups: Sequence[str] = ()) -> Row:
     """The Server / Models / ... switch: the selected panel in brackets and reverse video. extra: the titles of the
     plugins' panels, after Caching (WP); groups: the group of each (a key of GROUPS, "" for none; A73). A group's panels
@@ -202,17 +213,18 @@ def speeds_table(m: ModelInfo, w: int) -> List[CardLine]:
     """The speeds of a model by source, one row each (tok/s): this Mac's Auto-tune and the catalogue's, with the
     Mac, the date and the speculation they were measured with."""
     narrow = w < 84
-    head = f"{DIM}{'Tok/s':<11}{'Prose':>6}{'Code':>6}{'Edit':>6}   {'Measured on':<20}{'Date':<13}" + \
+    lw = max(11, len(computer()) + 2)               # "This computer" (a PC) needs more than "This Mac" (W1.6)
+    head = f"{DIM}{'Tok/s':<{lw}}{'Prose':>6}{'Code':>6}{'Edit':>6}   {'Measured on':<20}{'Date':<13}" + \
         ("" if narrow else "Speculation") + R
     out: List[CardLine] = [head]
     for src, v in speed_sources(m):
         if v is None:
             what = "Not measured. Run Auto-tune (Settings > Auto-tune)." if src == computer() else "Not measured."
-            out.append(f"{DIM}{src[:1].upper() + src[1:]:<11}{R}{DIM}{what}{R}")
+            out.append(f"{DIM}{src[:1].upper() + src[1:]:<{lw}}{R}{DIM}{what}{R}")
             continue
         col = GRN if src == computer() else ""
         nums = "".join(f"{float(v[k]):>6.0f}" if isinstance(v.get(k), (int, float)) else f"{'–':>6}"
                        for k in ("prose", "code", "edit"))
-        out.append(f"{DIM}{src[:1].upper() + src[1:]:<11}{R}{col}{nums}{R}   {str(v.get('machine') or '–'):<20}{long_date(v.get('date')):<13}"
-                   + ("" if narrow else str(v.get("spec") or "")))
+        out.append(f"{DIM}{src[:1].upper() + src[1:]:<{lw}}{R}{col}{nums}{R}   {str(v.get('machine') or '–'):<20}"
+                   f"{long_date(v.get('date')):<13}" + ("" if narrow else str(v.get("spec") or "")))
     return out

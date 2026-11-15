@@ -57,9 +57,22 @@ function isTable(v) {
 }
 
 /**
+ * A slip that the lenient reader read through (parseToml's o.fixes, W1.6): a value without quotes (bare: read as the
+ * text it is), or a key of the brief's top that holds a list given again (repeat: its values read as one list). line: its line in the
+ * whole task text; key: the statement's key (dotted); text: the bare value as written.
+ * @typedef {{ kind: "bare" | "repeat", line: number, key: string, text: string }} TomlFix
+ */
+
+/**
  * Read a TOML text (the subset above). firstLine: the line number of the text's first line (for the errors);
  * stopAtProse: a line that is not TOML ends the text when no TOML statement follows it (a model's closing words).
- * @param {string} text @param {{ firstLine?: number, stopAtProse?: boolean }} [o]
+ * fixes (W1.6, the lenient reader): when given, a value without quotes is read as text (to the end of its line; in a
+ * list or a { table } to its comma or closing bracket) and a top-level key that holds a list (LIST_KEYS: a block's key,
+ * exact_interfaces, not_in_task, existing_tests) given again gathers its values into a list, each recorded in fixes,
+ * instead of an error. Any other key given twice stays an error. info: gets end, the offset where the reading stopped (prose after the
+ * TOML starts there; the text's length when none).
+ * @param {string} text
+ * @param {{ firstLine?: number, stopAtProse?: boolean, fixes?: TomlFix[], info?: { end?: number } }} [o]
  * @returns {Record<string, unknown>}
  */
 export function parseToml(text, o = {}) {
@@ -80,6 +93,8 @@ export function parseToml(text, o = {}) {
   const headed = new WeakSet();                               // tables opened by a [header]
   const listed = new WeakSet();                               // lists made by [[header]]
   let cur = root;
+  const fixes = o.fixes;                                      // the lenient reader (W1.6): its slips, read through
+  let stmt = "";                                              // the key of the statement being read
 
   const ws = () => {
     while (s[i] === " " || s[i] === "\t") i++;
@@ -194,8 +209,42 @@ export function parseToml(text, o = {}) {
     for (const k of path.slice(0, -1)) tab = descend(tab, k, at);
     const last = path[path.length - 1];
     if (last === "__proto__") fail("this key name is not allowed", at);
-    if (Object.prototype.hasOwnProperty.call(tab, last)) fail(`the key ${path.join(".")} is there twice: give it once`, at);
+    if (Object.prototype.hasOwnProperty.call(tab, last)) {
+      const old = tab[last];
+      if (fixes && tab === root && path.length === 1 && LIST_KEYS.has(last) && !isTable(old) && !(Array.isArray(old) && listed.has(old))
+          && !isTable(v)) {
+        tab[last] = [...(Array.isArray(old) ? old : [old]), ...(Array.isArray(v) ? v : [v])];
+        fixes.push({ kind: "repeat", line: lineAt(at), key: last, text: "" });
+        return;
+      }
+      fail(`the key ${path.join(".")} is there twice: give it once`, at);
+    }
     tab[last] = v;
+  };
+  /**
+   * The lenient reader's bare value: the text up to the line's end (top: less a comment after it), or in a list or a
+   * { table } up to a comma or the closing bracket outside ( ), [ ] and { }. "" when there is none.
+   * @param {string} stop the characters that end it besides the line's end
+   */
+  const bare = (stop) => {
+    const st = i;
+    let depth = 0;
+    for (; i < s.length && s[i] !== "\n"; i++) {
+      const c = s[i];
+      if (depth === 0 && stop.includes(c)) break;
+      if ("([{".includes(c)) depth++;
+      else if (")]}".includes(c) && depth > 0) depth--;
+    }
+    let t = s.slice(st, i);
+    if (!stop) t = t.replace(/\s+#.*$/, "");
+    t = t.trim();
+    if (!t) {
+      i = st;
+      return "";
+    }
+    if (stop) while (s[i - 1] === " " || s[i - 1] === "\t") i--;
+    fixes?.push({ kind: "bare", line: lineAt(st), key: stmt, text: t });
+    return t;
   };
   const array = () => {
     const at = i++;
@@ -208,7 +257,7 @@ export function parseToml(text, o = {}) {
         i++;
         return out;
       }
-      out.push(value());
+      out.push(value(",]"));
       blank();
       if (i >= s.length) fail("this list has no closing ]", at);
       if (s[i] === ",") {
@@ -240,7 +289,7 @@ export function parseToml(text, o = {}) {
       if (s[i] !== "=" && s[i] !== ":") fail("a key needs = and a value");
       i++;
       ws();
-      put(out, path, value(), kat);
+      put(out, path, value(",}"), kat);
       blank();
       if (s[i] === ",") {
         i++;
@@ -253,8 +302,9 @@ export function parseToml(text, o = {}) {
       fail("a { table } needs a comma between its keys and } at its end");
     }
   };
-  /** @returns {unknown} */
-  const value = () => {
+  /** @param {string} [stop] where a bare value ends (the lenient reader): "" the line's end, ",]" in a list, ",}"
+   * in a { table } @returns {unknown} */
+  const value = (stop = "") => {
     if (s.startsWith('"""', i)) return multi('"""');
     if (s.startsWith("'''", i)) return multi("'''");
     if (s[i] === '"') return basic();
@@ -268,7 +318,8 @@ export function parseToml(text, o = {}) {
       return m[1] ? m[1] === "true" : Number(m[0].replace(/_/g, ""));
     }
     if (i >= s.length || s[i] === "\n" || s[i] === "#") fail("the value is missing after =");
-    return fail('this value has no quotes: write text as "text", a list as ["a", "b"]');
+    const t = fixes ? bare(stop) : "";
+    return t || fail('this value has no quotes: write text as "text", a list as ["a", "b"]');
   };
   const header = () => {
     const at = i;
@@ -315,12 +366,25 @@ export function parseToml(text, o = {}) {
       if (s[i] !== "=") fail("a key needs = and a value");
       i++;
       ws();
-      put(cur, path, value(), at);
+      stmt = path.join(".");
+      const vat = i;
+      let v = value();
+      if (fixes && (typeof v === "number" || typeof v === "boolean")) {   // lenient: "0 errors" is text, not 0
+        const after = i;
+        ws();
+        comment();
+        if (i < s.length && s[i] !== "\n") {
+          i = vat;
+          v = bare("");
+        } else i = after;
+      }
+      put(cur, path, v, at);
     }
     ws();
     comment();
     if (i < s.length && s[i] !== "\n") fail("there is more text after the value: write one key = value on each line");
   }
+  if (o.info) o.info.end = i;
   return root;
 }
 
@@ -501,6 +565,10 @@ const SCHEMA = {
   tried_fix: ["fix_change", "fix_result"],
   test_session: ["test_files", "session_summary", "session_notes", "failing_test"],
 };
+/** The brief's top keys that hold a list: the lenient reader gathers one given twice into a list (the blocks, which
+ * may be lists, and the lists of texts); any other key given twice stays an error. */
+const LIST_KEYS = new Set(["exact_interfaces", "not_in_task", "existing_tests",
+  ...Object.keys(SCHEMA).filter((k) => SCHEMA[k] && k !== "failed_attempt" && k !== "test_session")]);
 /** Keys that are not revision 4's but name one of its keys: revision 1's keys (and the plural forms a model may
  * write, of revision 1's tables and of revision 4's). The refusal names the new key. */
 const RENAMED = /** @type {Record<string, string[]>} */ ({
@@ -593,6 +661,18 @@ export function extractToml(text) {
  * @param {string} text @returns {{ format: "toml" | "json" | "", text: string, firstLine: number }}
  */
 export function extractBrief(text) {
+  const { format, text: body, firstLine } = findBrief(text);
+  return { format, text: body, firstLine };
+}
+
+/**
+ * extractBrief's brief with where it is: t, the task text as the readers see it (line ends as \n, without Pi's
+ * "Task: "); start and end, the brief part's offsets in t (end: t's end for TOML that is not fenced; the reader may
+ * stop before it at prose).
+ * @param {string} text
+ * @returns {{ format: "toml" | "json" | "", text: string, firstLine: number, t: string, start: number, end: number }}
+ */
+function findBrief(text) {
   const t = String(text ?? "").replace(/\r\n?/g, "\n").replace(/^\s*Task:[ \t]*/, (m) => m.replace(/[^\n]/g, ""));
   const lineOf = (/** @type {number} */ p) => t.slice(0, p).split("\n").length;
   /** @type {{ format: "toml" | "json", m: RegExpExecArray } | null} */
@@ -612,15 +692,17 @@ export function extractBrief(text) {
   if (hit) {
     const body = hit.m[hit.m.length - 1];
     const start = (hit.m.index ?? 0) + hit.m[0].indexOf("\n") + 1;
-    return { format: hit.format, text: body, firstLine: lineOf(start) };
+    return { format: hit.format, text: body, firstLine: lineOf(start), t, start, end: start + body.length };
   }
   const lines = t.split("\n");
   const k = BRIEF_KEYS.test(t) ? lines.findIndex((l) => STATEMENT.test(l)) : -1;
   const tomlAt = k < 0 ? -1 : lines.slice(0, k).reduce((n, l) => n + l.length + 1, 0);
   const js = findJsonObject(t, JSON_BRIEF_KEYS);
-  if (js && (tomlAt < 0 || js.start < tomlAt)) return { format: "json", text: js.json, firstLine: lineOf(js.start) };
-  if (k >= 0) return { format: "toml", text: lines.slice(k).join("\n"), firstLine: k + 1 };
-  return { format: "", text: "", firstLine: 1 };
+  if (js && (tomlAt < 0 || js.start < tomlAt)) {
+    return { format: "json", text: js.json, firstLine: lineOf(js.start), t, start: js.start, end: js.start + js.json.length };
+  }
+  if (k >= 0) return { format: "toml", text: lines.slice(k).join("\n"), firstLine: k + 1, t, start: tomlAt, end: t.length };
+  return { format: "", text: "", firstLine: 1, t, start: 0, end: 0 };
 }
 
 // ================================================================== the brief
@@ -750,6 +832,260 @@ export function parseBrief(taskText) {
     }
     throw e;
   }
+}
+
+// ------------------------------------------------------------------ the lenient reader (W1.6)
+// Measured in W1.6 (the A3B Q4 and IQ3 on the agent bench's large requests): about half of the A3B's refused briefs had
+// only mechanical slips (a value without quotes, requirements without requirement_id that a check names as "R1",
+// covers "all", a requirement in no check, a key of the brief's top after a [[...]] header, a list written as the same
+// key twice), and some carried llama.cpp's tool-call markup after the brief (a </parameter> and the next parameter).
+// repairBrief fixes those before the check, writes the fixed brief back (the coder gets it), and says what it changed
+// (fixedText: the [CARL] note to the main agent). Anything else is left to the check and its refusal.
+
+export const FIXED_MARK = "[CARL] Brief fixed";
+/** Tool-call markup that the server's parser left in an argument (Qwen's XML form): only a tag that is followed by
+ * another tag of the form or by the text's end, so a brief that names a tag in its texts ("Parse the <tool_call>
+ * blocks") is not cut. A </parameter> before the next parameter or the call's end; a </function> or </tool_call> at
+ * the end of a call; a <function=...> or <tool_call> on its own line that opens a call. */
+const TOOL_MARKUP = new RegExp([
+  String.raw`<\/parameter>(?=\s*(?:<parameter=|<\/function>|<\/?tool_call>|<function=|$))`,
+  String.raw`<\/function>(?=\s*(?:<\/?tool_call>|<function=|$))`,
+  String.raw`<\/tool_call>(?=\s*(?:<tool_call>|$))`,
+  String.raw`(?:^|\n)[ \t]*(?:<function=[^>\n]*>|<tool_call>)(?=\s*(?:<parameter=|<function=|$))`,
+].join("|"));
+/** A check's covers that means every requirement. */
+const ALL = /^(?:all|\*|all requirements|every requirement|everything)$/i;
+
+/**
+ * The task text without leaked tool-call markup: cut at a leaked tag (TOOL_MARKUP: a </parameter> before
+ * <parameter=, </function> or the end, and the like), with what follows it (the next parameter's tags and value).
+ * The cut is at the first such tag that leaves a brief that reads; a tag inside the brief's texts stays (a cut there
+ * leaves a text that is not closed). When no cut leaves a brief that reads: the text as it is when it reads, else
+ * the cut at the first tag. cut: there was some.
+ * @param {string} text @returns {{ text: string, cut: boolean }}
+ */
+export function cutToolMarkup(text) {
+  const t = String(text ?? "");
+  const at = [...t.matchAll(new RegExp(TOOL_MARKUP.source, "g"))].map((m) => m.index ?? 0);
+  if (!at.length) return { text: t, cut: false };
+  const cuts = at.map((k) => t.slice(0, k).trimEnd() + "\n");
+  const good = cuts.find(reads);
+  if (good !== undefined) return { text: good, cut: true };
+  return reads(t) ? { text: t, cut: false } : { text: cuts[0], cut: true };
+}
+
+/** Does the task text have a brief that the lenient reader reads? @param {string} t */
+function reads(t) {
+  const at = findBrief(t);
+  if (!at.format) return false;
+  try {
+    if (at.format === "toml") parseToml(at.text, { firstLine: at.firstLine, stopAtProse: true, fixes: [] });
+    else parseJson(at.text, { firstLine: at.firstLine });
+    return true;
+  } catch (e) {
+    if (e instanceof TomlError || e instanceof JsonError) return false;
+    throw e;
+  }
+}
+
+/** A TOML key as written: bare when it can be. @param {string} k */
+const tomlKey = (k) => (/^[A-Za-z0-9_-]+$/.test(k) ? k : JSON.stringify(k));
+
+/** A TOML value on one line (a text over several lines as """..."""; a table as { ... }). @param {unknown} v
+ * @returns {string} */
+function tomlValue(v) {
+  if (typeof v === "string") return q(v);
+  if (Array.isArray(v)) return `[${v.map(tomlValue).join(", ")}]`;
+  if (isTable(v)) return `{ ${Object.entries(v).map(([k, x]) => `${tomlKey(k)} = ${tomlValue(x)}`).join(", ")} }`;
+  return String(v);
+}
+
+/** A list of tables, written as [[...]] blocks. @param {unknown} v @returns {v is Record<string, unknown>[]} */
+const tableList = (v) => Array.isArray(v) && v.length > 0 && v.every(isTable);
+
+/**
+ * A raw brief (parseToml's tables) as TOML text: each table's plain keys first, then its [tables] and its [[lists of
+ * tables]], in the order the keys came; parseToml reads it back to the same tables. Keys that are not the schema's
+ * stay (the check names them).
+ * @param {Record<string, unknown>} raw @param {string} [prefix] @returns {string}
+ */
+export function writeToml(raw, prefix = "") {
+  const path = (/** @type {string} */ k) => (prefix ? `${prefix}.${tomlKey(k)}` : tomlKey(k));
+  const plain = Object.entries(raw).filter(([, v]) => !isTable(v) && !tableList(v));
+  /** @type {string[]} */
+  const out = plain.map(([k, v]) => `${tomlKey(k)} = ${tomlValue(v)}`);
+  for (const [k, v] of Object.entries(raw)) {
+    if (isTable(v)) out.push("", `[${path(k)}]`, writeToml(v, path(k)).trimEnd());
+    else if (tableList(v)) for (const item of v) out.push("", `[[${path(k)}]]`, writeToml(item, path(k)).trimEnd());
+  }
+  return out.join("\n").replace(/^\n+/, "").replace(/\n{3,}/g, "\n\n") + "\n";
+}
+
+/** Ids as the notes write them: "R1", "R2". @param {string[]} ids */
+const quoted = (ids) => ids.map((x) => JSON.stringify(x)).join(", ");
+
+/**
+ * The mechanical slips of a raw brief, fixed in place; the notes say what changed (empty: nothing). In order: a key
+ * of the brief's top inside a [[block]] goes to the top; known_file, task_requirement, project_rule and
+ * input_example written as plain texts become blocks (a known file: "change" when it is in the project, else
+ * "create"; only with o.root); requirements without requirement_id get R1, R2 ... by their place (an id that is
+ * taken is skipped); a check's covers_requirements of "all", of an id in other case ("r1"), of a bare number (1 for
+ * R1) or of "R1, R2" in one text name the ids; and a requirement that no check covers is added to the last check
+ * (when every requirement has an id).
+ * @param {Record<string, unknown>} raw
+ * @param {{ root?: string, exists?: (p: string) => boolean }} [o]
+ * @returns {string[]}
+ */
+export function repairRaw(raw, o = {}) {
+  /** @type {string[]} */
+  const notes = [];
+  for (const [block, keys] of Object.entries(SCHEMA)) {          // a key of the top inside a block
+    if (!keys || block === "test_session") continue;
+    list(raw[block]).forEach((item, n) => {
+      if (!isTable(item)) return;
+      for (const k of Object.keys(item)) {
+        if (keys.includes(k) || !Object.prototype.hasOwnProperty.call(SCHEMA, k) || SCHEMA[k] || raw[k] !== undefined) continue;
+        raw[k] = item[k];
+        delete item[k];
+        const one = block === "failed_attempt";                // a [table], not a [[list of tables]]
+        notes.push(`${k} came after ${one ? `the [${block}] header` : `a [[${block}]] header`}, so it was inside that ` +
+          `block${one ? "" : ` (block ${nth(n + 1)})`}: CARL moved ` +
+          `it to the brief's own keys. Write the brief's own keys before the first [[...]] header; the keys after a ` +
+          `[[...]] header belong to that block.`);
+      }
+    });
+  }
+  const exists = o.exists ?? existsSync;
+  const files = list(raw.known_file);
+  if (o.root !== undefined && files.some((f) => typeof f === "string")) {
+    const root = o.root;
+    raw.known_file = files.map((f) => {
+      if (typeof f !== "string") return f;
+      const p = briefPath(f);
+      const action = p && inProjectThere(p, root, exists) ? "change" : "create";
+      notes.push(`known_file = ${JSON.stringify(f)} is a text, not a block: CARL read it as [[known_file]] with ` +
+        `file_path = ${JSON.stringify(p)} and file_action = "${action}" (${action === "change" ? "the file is there" : "the file is not there yet"}).`);
+      return { file_path: p, file_action: action };
+    });
+  }
+  for (const [block, key] of [["task_requirement", "requirement_text"], ["project_rule", "rule_text"], ["input_example", "example_text"]]) {
+    const items = list(raw[block]);
+    if (!items.some((r) => typeof r === "string")) continue;
+    raw[block] = items.map((r) => (typeof r === "string" ? { [key]: r } : r));
+    notes.push(`${block} was written as texts: CARL read each text as a [[${block}]] block with its ${key}.`);
+  }
+  const taken = new Set(list(raw.task_requirement).filter(isTable).map((r) => str(r.requirement_id)).filter(Boolean));
+  /** @type {[number, string][]} */
+  const named = [];
+  const blocks = list(raw.task_requirement).filter(isTable).map((r, n) => {
+    if (str(r.requirement_id)) return r;
+    let k = n + 1;
+    while (taken.has(`R${k}`)) k++;
+    taken.add(`R${k}`);
+    named.push([n + 1, `R${k}`]);
+    const { requirement_id: _, ...rest } = r;                 // the id first, as the template writes it
+    return { requirement_id: `R${k}`, ...rest };
+  });
+  if (named.length) {
+    raw.task_requirement = blocks;
+    const one = named.length === 1;
+    notes.push(`${one ? "Requirement number" : "Requirements number"} ${named.map(([n]) => n).join(", ")} had no requirement_id: ` +
+      `CARL gave ${one ? "it" : "them"} ${quoted(named.map(([, id]) => id))}, in order. Give each requirement its own requirement_id.`);
+  }
+  const ids = blocks.map((r) => str(r.requirement_id)).filter(Boolean);
+  const checks = list(raw.acceptance_check).filter(isTable);
+  checks.forEach((c, n) => {
+    if (c.covers_requirements === undefined) return;
+    const was = list(c.covers_requirements).map(str).filter(Boolean);
+    /** @type {string[]} */
+    const now = [];
+    /** @param {string} x @returns {string[] | null} */
+    const read = (x) => {
+      if (ids.includes(x)) return [x];
+      if (ALL.test(x)) return ids;
+      const same = ids.find((id) => id.toLowerCase() === x.toLowerCase()) ?? (/^\d+$/.test(x) && ids.includes(`R${x}`) ? `R${x}` : "");
+      if (same) return [same];
+      const parts = x.split(/[\s,]+/).filter(Boolean);
+      if (parts.length > 1) {
+        const each = parts.map(read);
+        if (each.every((p) => p && p.length === 1)) return each.flatMap((p) => p ?? []);
+      }
+      return null;
+    };
+    for (const x of was) for (const id of read(x) ?? [x]) if (!now.includes(id)) now.push(id);
+    if (now.length === was.length && now.every((x, k) => x === was[k])) return;
+    c.covers_requirements = now;
+    notes.push(`Check ${str(c.check_id) || nth(n + 1)} covers ${quoted(was)}: CARL read it as [${quoted(now)}]. ` +
+      `Name each requirement_id in covers_requirements.`);
+  });
+  if (checks.length && ids.length === blocks.length) {
+    const covered = new Set(checks.flatMap((c) => list(c.covers_requirements).map(str)));
+    const open = ids.filter((id) => !covered.has(id));
+    if (open.length) {
+      const last = checks[checks.length - 1];
+      last.covers_requirements = [...list(last.covers_requirements).map(str).filter(Boolean), ...open];
+      const one = open.length === 1;
+      notes.push(`${one ? "Requirement" : "Requirements"} ${open.join(", ")} ${one ? "was" : "were"} in no check's ` +
+        `covers_requirements: CARL added ${one ? "it" : "them"} to the last check, ${str(last.check_id) || nth(checks.length)}. ` +
+        `Cover every requirement in a check.`);
+    }
+  }
+  return notes;
+}
+
+/** A slip of the reader as a note. @param {TomlFix} f */
+function fixNote(f) {
+  if (f.kind === "repeat") {
+    return `Line ${f.line}: ${f.key} is there again: CARL read its values as one list. ` +
+      (SCHEMA[f.key] ? `Give each item its own [[${f.key}]] block.` : `Write a list once, as ${f.key} = ["a", "b"].`);
+  }
+  return `Line ${f.line}: ${f.key} has a value without quotes, ${f.text}: CARL read it as ${JSON.stringify(f.text)}. Write text in quotes.`;
+}
+
+/**
+ * The lenient reader: the task text with its mechanical slips fixed (leaked tool-call markup cut; parseToml's fixes;
+ * repairRaw), and what changed (notes; empty: the text is as it was). A fixed brief is written again in its own place
+ * of the text (TOML: writeToml, in the fence or from its first line to the prose after it; JSON: indented), so the
+ * text around it stays. A brief that does not read, or has no slip, stays as written, for the check to refuse.
+ * o.root: the project folder (a known file's action when the brief gives only its path).
+ * @param {string} taskText @param {{ root?: string, exists?: (p: string) => boolean }} [o]
+ * @returns {{ text: string, notes: string[] }}
+ */
+export function repairBrief(taskText, o = {}) {
+  /** @type {string[]} */
+  const notes = [];
+  const cut = cutToolMarkup(taskText);
+  if (cut.cut) {
+    notes.push("The task text had tool-call markup after the brief (a </parameter> tag and what came after it): CARL cut it " +
+      "off. End the task text with the brief.");
+  }
+  const at = findBrief(cut.text);
+  if (!at.format) return { text: cut.text, notes };
+  /** @type {TomlFix[]} */
+  const fixes = [];
+  const info = { end: -1 };
+  /** @type {Record<string, unknown>} */
+  let raw;
+  try {
+    raw = at.format === "toml" ? parseToml(at.text, { firstLine: at.firstLine, stopAtProse: true, fixes, info })
+      : parseJson(at.text, { firstLine: at.firstLine });
+  } catch (e) {
+    if (e instanceof TomlError || e instanceof JsonError) return { text: cut.text, notes };
+    throw e;
+  }
+  const more = [...fixes.map(fixNote), ...repairRaw(raw, o)];
+  if (!more.length) return { text: cut.text, notes };
+  const end = at.format === "toml" && info.end >= 0 ? at.start + info.end : at.end;
+  const rest = at.t.slice(end);
+  const body = at.format === "toml" ? writeToml(raw) + (rest && !/^```/.test(rest.trimStart()) ? "\n" : "") : JSON.stringify(raw, null, 2);
+  return { text: at.t.slice(0, at.start) + body + rest, notes: [...notes, ...more] };
+}
+
+/** The note to the main agent of what the lenient reader changed ("" when nothing). @param {string[]} notes */
+export function fixedText(notes) {
+  if (!notes.length) return "";
+  return `${FIXED_MARK}: CARL changed these points of your brief before the coder got it. Write them this way next time:\n` +
+    notes.map((n) => `- ${n}`).join("\n");
 }
 
 /**

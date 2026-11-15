@@ -36,10 +36,7 @@ class ModelsActions:
             ui.mspeeds = not ui.mspeeds
             return
         if verb is Verb.MQUANT:                          # ← →: another quantization of the selected model
-            ms = c.visible()
-            at = ms[min(ui.mrow, len(ms) - 1)] if ms else None
-            if at is not None and c.cycle_quant(at, -1 if a.arg == "-1" else 1):
-                ui.mrow = next((i for i, x in enumerate(c.visible()) if x.get("group") == at.get("group")), ui.mrow)
+            self.quant(a.arg)
             return
         if verb is Verb.SMODEL:                          # the Server panel's model list
             c.choose_model(a.arg)
@@ -144,6 +141,27 @@ class ModelsActions:
         except Exception as e:
             c.ui.toast(f"{RED}CARL cannot remove the token: {type(e).__name__}{R}", 10)
         c.ui.hf_token_rev += 1
+
+    def quant(self, arg: str) -> None:
+        """Another quantization of a model of the list: 1 or -1 the next or the one before of the selected row; "N,1" or
+        "N,-1" of row N (a click on the ‹ › of its Quant cell selects it too); "=NAME" that entry of the selected
+        model (a click on it in the Quantization line; W1.6 B3). The row stays selected where a sort moves it."""
+        c, ui = self.c, self.c.ui
+        ms = c.visible()
+        row, _, step = arg.rpartition(",")
+        if row.isdigit():
+            ui.mrow = min(int(row), len(ms) - 1)
+        at = ms[min(ui.mrow, len(ms) - 1)] if ms else None
+        if at is None:
+            return
+        if arg.startswith("="):
+            name = arg[1:]
+            if not any(q["name"] == name for q in at.get("quants") or []):
+                return
+            ui.mquants[at.get("group", at["name"])] = name
+        elif not c.cycle_quant(at, -1 if step == "-1" else 1):
+            return
+        ui.mrow = next((i for i, x in enumerate(c.visible()) if x.get("group") == at.get("group")), ui.mrow)
 
     def key(self, k: str) -> bool:
         """The Models panel: ↑↓ PgUp PgDn a model, Enter use it, d v x h c u e, s f (S F back)."""

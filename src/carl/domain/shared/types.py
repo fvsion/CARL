@@ -170,7 +170,8 @@ class CatalogEntry(TypedDict, total=False):
     quant: str
     mtp: bool                   # MTP speculation available: a head in the model file, or the drafter
     model: str                  # the model this entry is a quantization of, when its file name does not say (quants.py)
-    fast: bool                  # a small dense model auto fit's everyday goal takes with the MoE builds
+    fast: bool                  # a small dense model: Auto fit's last resort, else named as the fast option (W1.6)
+    ram_speed: Dict[str, object]  # tok/s with experts in the RAM ({"write", "read"}; Auto fit's floor, W1.6)
     abliterated: bool
     params: str
     min_ram_gb: int

@@ -77,9 +77,10 @@ class SettingsView:
     def caching(self, ui: UIState, conf: CacheConfig, files: Sequence[CacheFile], folder: str, cols: int,
                 api: str = "", height: int = 0, names: Optional[Mapping[str, str]] = None,
                 window: str = "", did: Sequence[StatRow] = (), did_when: str = "",
-                out: Optional[Shown] = None) -> List[Row]:
-        """Panel 6: the disk cache (caching.py)."""
-        return caching_panel(ui, conf, files, folder, cols, self.home, api, height, names, window, did, did_when, out)
+                out: Optional[Shown] = None, free: int = 0) -> List[Row]:
+        """Panel 6: the disk cache (caching.py); free: the free disk where it saves (bytes, 0 unknown)."""
+        return caching_panel(ui, conf, files, folder, cols, self.home, api, height, names, window, did, did_when, out,
+                             free)
 
     @staticmethod
     def plugin(ui: UIState, pv: PanelView, cols: int, height: int, out: Optional[Shown] = None) -> List[Row]:

@@ -87,15 +87,17 @@ class ModelLines:
         return f"{RED}no{R} ({memory(plan.need)})"
 
     @staticmethod
-    def quant_cell(m: ModelInfo) -> str:
-        """The Quant column: the quantization (in ‹ › when the model has others), then its MTP mark (A73)."""
+    def quant_cell(m: ModelInfo, arrows: bool = True) -> str:
+        """The Quant column: the quantization (in ‹ › when the model has others and the list changes it: arrows; the
+        Server panel's drop-down only shows it, W1.6 B1), then its MTP mark (A73)."""
         mark = mtp_mark(mtp_kind(m))
-        quant = f"‹{quant_of(m)}›" if m.get("quants") else quant_of(m)
+        many = bool(m.get("quants")) and arrows
+        quant = f"‹{quant_of(m)}›" if many else quant_of(m)
         pad = " " * max(QUANT_W - len(quant) - (len(mark) + 1 if mark else 0), 0)
-        return (f"{CYN if m.get('quants') else DIM}{quant}{R}" + (f" {GRN}{mark}{R}" if mark else "") + pad)
+        return (f"{CYN if many else DIM}{quant}{R}" + (f" {GRN}{mark}{R}" if mark else "") + pad)
 
     def model_line(self, m: ModelInfo, pick: Optional[str] = None, full: bool = False, w: int = 0,
-                   speeds: bool = False, quant: bool = False) -> str:
+                   speeds: bool = False, quant: bool = False, arrows: bool = True) -> str:
         """One model in a table (model_header): name (★ = Auto fit's choice, red = does not fit this Mac), the
         quantization shown (quant: in ‹ › when the model has others), download size, status, fits this Mac (full:
         rank and the largest context), speed, what it is for."""
@@ -116,7 +118,7 @@ class ModelLines:
                     f"{long_date(src.get('date')):<13}{src.get('spec') or ''}")
         qcell = ""
         if quant:
-            qcell = self.quant_cell(m) + " "
+            qcell = self.quant_cell(m, arrows) + " "
         if full:
             rank = m.get("rank") if isinstance(m.get("rank"), int) else "–"
             mid = f"{qcell}{rank!s:>4} {size:>9}  {status} {fit_cell(self.svc.max_ctx(m), 11, 'none')}"

@@ -86,6 +86,8 @@ class UIState:
     keys_more: List[str] = field(default_factory=list)         # ... and what the ? card adds
     quit: bool = False              # the quit dialog is open
     stopping: Optional[Tuple[int, float]] = None    # (server pid, SIGKILL deadline)
+    unload_ask: bool = False        # Unload on the Live tab: "unload the model?" asked (W1.6)
+    unloading: Optional[Tuple[int, float]] = None   # (server pid, SIGKILL deadline): an Unload; the dashboard stays
     exit_msg: str = ""
     toast_msg: Tuple[str, float] = ("", 0.0)        # (message, shown until): the message line
     toast_error: bool = False       # the message reports a failure: red
@@ -126,6 +128,7 @@ class UIState:
     fit_scroll: int = 0             # Auto fit panel: lines scrolled off the top
     cache_row: int = 0              # Caching panel: the selected row
     cache_window: int = 0           # Caching panel: WHAT THE CACHE DID's time (cache_events.py WINDOWS; t changes it)
+    handoff: str = ""               # Caching panel: the slots put back after the last start, or why none (C-138)
     router_row: int = 0             # Router panel: the selected model
     plugin_row: int = 0             # a plugin's panel (the panels after Caching, sp >= len(SUBPANELS)): the selected row
     agents_row: int = 1             # Agents panel: the selected row (0 the model, 1 Main thinking, 2 Coder thinking)

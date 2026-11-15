@@ -142,5 +142,6 @@ def windows_adapter(total: int, used: Optional[int], name: str, pci_id: str, lui
     PCI vendor (VEN_10DE, 0x10de) or name; luid and pci: how the other sources name it. shared: the adapter's shared
     system memory (D3DKMT), kept for a GPU that shares the RAM only."""
     g = Gpu(name=name, total=total, free=max(total - used, 0) if used is not None else None,
-            vendor=vendor_of(pci_id) or vendor_of(name), backend="d3dkmt", luid=luid, pci=pci, integrated=integrated)
+            vendor=vendor_of(pci_id) or vendor_of(name), backend="d3dkmt", luid=luid, pci=pci, integrated=integrated,
+            os_total=total, os_used=used)
     return replace(g, shared=shared) if shared > 0 and is_integrated(g) else g

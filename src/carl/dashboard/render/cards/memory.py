@@ -4,11 +4,14 @@ from __future__ import annotations
 
 from typing import List, Tuple
 
+from ....domain.memory import loaded, offload
+from ....domain.memory.calibration import CUDA, Calibration, for_devices
+from ....domain.memory.fit import RESERVE_GB
 from ....domain.server.cmdline import CPU_MOE_FLAGS
 from ....domain.server.snapshot import GpuUse, PcStats, ServerData, flag
-from ....domain.shared.units import memory, memory_pair
+from ....domain.shared.units import GIB, memory, memory_pair
 from ....ui.fmt import (DIM, R, YEL, Card, CardLine, bar, row)
-from ....ui.words import plural
+from ....ui.words import os_and_apps, os_label, plural
 from .slots import kv_info
 from .view import View
 
@@ -100,10 +103,37 @@ def gpu_label(g: GpuUse, i: int, many: bool) -> str:
     return f"GPU {i}" if many else "GPU"
 
 
+def model_split(d: ServerData, file: int) -> Tuple[int, int, int, int]:
+    """(layers with experts that loaded, the experts' bytes in the RAM, the bytes of the model in the RAM, the bytes of
+    the MTP head that did not load) of the running server, from its header and its --n-cpu-moe: the same parts as
+    Settings' plan (offload.ram_side less the CPU buffer; loaded.head_bytes, A52). (0, 0, 0, 0) without experts in the
+    RAM or a header. file: the model file's size."""
+    n = flag(d.cmd, *CPU_MOE_FLAGS)
+    if not d.shape or not n or not n.isdigit() or not int(n):
+        return 0, 0, 0, 0
+    mtp = "draft-mtp" in (flag(d.cmd, "--spec-type") or "").split(",")
+    calib = server_calib(d)
+    shape = loaded.trimmed(d.shape, mtp, calib)                                # the head loads only with MTP (A52)
+    experts = offload.experts_of(shape)
+    k = min(int(n), len(experts))
+    embd = float(shape.get("embd_bytes", 0) or 0) if calib.gpu_weights else 0.0
+    head = loaded.head_bytes(d.shape, float(file), mtp, calib) if file else 0.0
+    return len(experts), int(sum(experts[:k])), int(sum(experts[:k]) + embd + calib.ram_bytes(shape)), int(head)
+
+
+def server_calib(d: ServerData) -> Calibration:
+    """The calibration of the backend the server runs on: its -dev devices' (CUDA0, Vulkan0: calibration.for_devices),
+    else CUDA (a start on an NVIDIA card names no device; the PCs whose cards the dashboard draws)."""
+    devices = [x for x in (flag(d.cmd, "-dev", "--device") or "").split(",") if x.strip()]
+    return for_devices(devices) if devices else CUDA
+
+
 def card_memory_pc(v: View, d: ServerData, w: int = 66) -> Card:
-    """A PC's server memory (W6.8): the server in the RAM and on each GPU, each with a bar, the memory kept free on each
-    GPU, the MoE experts kept in the RAM (--n-cpu-moe), then the model's parts; at full each GPU's memory in use by all
-    apps, the GPU memory limit and the server's CPU."""
+    """A PC's server memory (W6.8; W1.6 A-M4): the server on each GPU of the part for a model there and in the RAM of
+    the RAM less the part kept, each with a bar (the same parts Settings' MEMORY draws against); the MoE experts kept in
+    the RAM (--n-cpu-moe, with the words Settings uses: 40 of 40 layers), the model split into its GPU part and its RAM
+    part, the context memory; at full where the card's and the RAM's memory go (they add up), the flag and whose count
+    it is (the start's record), and the server's CPU."""
     s = d.system
     assert isinstance(s, PcStats)
     kv = kv_info(d)
@@ -111,21 +141,27 @@ def card_memory_pc(v: View, d: ServerData, w: int = 66) -> Card:
     ram = d.rss or 0
     gpus, many = s.gpus, len(s.gpus) > 1
     vram = sum(s.server.values())
+    reserve = RESERVE_GB * GIB                         # the usual reserve (VM not counted), as Settings' MEMORY
+    room_ram = max(v.total_mem - reserve, 0) if v.total_mem else 0
+    limit = v.gpu_limit[0] if v.gpu_limit else 0
+    layers, experts, in_ram, head = model_split(d, v.model_size or 0)
+    who = {True: "auto", False: "your setting"}.get(d.start.get("cpu_moe_auto")) if isinstance(
+        d.start.get("cpu_moe_auto"), bool) else ""
     L: List[CardLine] = []
     if not d.pid:
         L.append(f"{DIM}No server process.{R}")
     else:
-        L.append(row("server RAM", f"{bar(ram / v.total_mem if v.total_mem else 0, bw)}  "
-                                   f"{memory_pair(ram, v.total_mem) if v.total_mem else memory(ram)}"))
         for i, g in enumerate(gpus):
             own = s.server.get(g.key, 0) if g.key else 0
-            L.append(row(f"server, {gpu_label(g, i, many)}", f"{bar(own / g.total if g.total else 0, bw)}  "
-                                                              f"{memory_pair(own, g.total)}"))
-    if gpus and v.vram_keep is not None:
-        L.append(row("kept free", f"{memory(v.vram_keep)} on {'each GPU' if many else 'the GPU'}"))
+            part = limit if limit and not many else g.total
+            L.append(row(gpu_label(g, i, many), f"{bar(own / part if part else 0, bw)}   {memory_pair(own, part)}"))
+        L.append(row("RAM", f"{bar(ram / room_ram if room_ram else 0, bw)}  "
+                            f"{memory_pair(ram, room_ram) if room_ram else memory(ram)}"))
     n = flag(d.cmd, *CPU_MOE_FLAGS)
     if n and n.isdigit() and int(n):
-        L.append(row("experts in RAM", f"{plural(int(n), 'layer')}   {DIM}{CPU_MOE_FLAGS[0]} {n}{R}"))
+        of = f" of {layers}" if layers else ""
+        L.append(row("experts in RAM", f"{n}{of} layers" + (f", {memory(experts)}" if experts else "") +
+                     (f"   {DIM}{who}{R}" if who and w >= 70 else "")))
     if d.pid:
         if not d.up:
             L.append(row("model", f"{YEL}loading{R}"))
@@ -133,16 +169,45 @@ def card_memory_pc(v: View, d: ServerData, w: int = 66) -> Card:
             L.append(row("model", f"{DIM}none loaded{R}"))
         else:
             L.append(row("model", f"{memory(v.model_size):>9}" if v.model_size else f"{'–':>9}"))
+            if in_ram and v.model_size:
+                wide = w >= 70
+                L.append(row("  On the GPU", f"{memory(max(v.model_size - in_ram - head, 0)):>9}" +
+                             (f"   {DIM}the model less the experts in the RAM{R}" if wide else "")))
+                L.append(row("  In the RAM", f"{memory(in_ram):>9}" +
+                             (f"   {DIM}the experts and the token embeddings{R}" if wide else "")))
+                if head:
+                    L.append(row("  Not loaded", f"{memory(head):>9}" +
+                                 (f"   {DIM}the MTP layer: it loads only with MTP{R}" if wide else "")))
             if v.drafter_size:
                 L.append(row("drafter", f"{memory(v.drafter_size):>9}"))
-            L.append(row("context memory", f"{memory((kv.kv + kv.rs) if kv else 0):>9}"))
+            L.append(row("context memory", f"{memory((kv.kv + kv.rs) if kv else 0):>9}" +
+                         (f"   {DIM}on the GPU{R}" if in_ram and w >= 70 else "")))
     if v.full:
         L.append("")
         for i, g in enumerate(gpus):
-            if g.used is not None:
-                L.append(row(f"{gpu_label(g, i, many)}, all apps", memory(g.used)))
-        if v.gpu_limit:
-            L.append(row("GPU limit", f"{memory(v.gpu_limit[0])}   {DIM}{v.gpu_limit[1]}{R}"))
+            if g.used is None:
+                continue
+            own = s.server.get(g.key, 0) if g.key else 0
+            label = "The GPU" if not many else f"GPU {i}"
+            L.append(row(label, f"{memory(g.total):>9}" + (f"   {DIM}{g.name}{R}" if w >= 70 else "")))
+            L.append(row("  In use", f"{memory(max(g.used - own, 0)):>9}   {DIM}not the server{R}"))
+            if v.vram_keep is not None:
+                L.append(row("  Kept free", f"{memory(v.vram_keep):>9}" +
+                             (f"   {DIM}the setting GPU memory kept{R}" if w >= 70 else "")))
+            if limit and not many:
+                L.append(row("  For a model", f"{memory(limit):>9}   {DIM}the server {memory(own).replace(' GiB', '')}"
+                                              + (f", free {memory(max(limit - own, 0)).replace(' GiB', '')}"
+                                                 if w >= 70 else "") + f"{R}"))
+        if v.total_mem:
+            L.append(row("The RAM", f"{memory(v.total_mem):>9}"))
+            L.append(row("  Kept", f"{memory(reserve):>9}   {DIM}for {os_and_apps() if w >= 70 else os_label()}"
+                                   f"{R}" if gpus else f"{memory(reserve):>9}"))
+            L.append(row("  For a model", f"{memory(room_ram):>9}   {DIM}the server {memory(ram).replace(' GiB', '')}"
+                                          + (f" (free now: {memory(s.available)})" if s.available and w >= 70 else "")
+                                          + f"{R}"))
+        if n and n.isdigit() and int(n):
+            plan = ": CARL's plan at the start" if who == "auto" and w >= 70 else ""
+            L.append(row("flag", f"{CPU_MOE_FLAGS[0]} {n}" + (f"  ({who}{plan})" if who else "")))
         L.append(row("server CPU", f"{d.cpu:.0f}%"))
-    summary = f"RAM {memory(ram)}" + (f", GPU {memory(vram)}" if vram else "") if d.pid and ram else ""
+    summary = (f"GPU {memory(vram)}, RAM {memory(ram)}" if vram else f"RAM {memory(ram)}") if d.pid and ram else ""
     return Card("MEMORY", summary, L)

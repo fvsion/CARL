@@ -20,7 +20,7 @@ CARL runs the llama.cpp server on a Mac (Metal), on a Windows 11 PC and on a Lin
 3. **Install llama.cpp.** `carl engine install` downloads the llama.cpp build that CARL is tested with, checks it against the SHA-256 of the release and unpacks it into the settings folder (`llama.cpp/bNNNNN-BACKEND`). It sets `llama.path`. The previous build stays. `carl engine install --list` shows the builds that CARL installed. `--backend BUILD` takes `auto` (the default), `cuda`, `cuda-13`, `cuda-12` or `cpu`. The first start of a new build can take 30 seconds (CUDA warms up).
 4. **See what fits.** `carl fit` shows the model that Auto fit chooses for the free memory of your GPU, and the largest context of each model. `carl fit --vram 8,8` previews a computer with two 8 GB GPUs.
 5. **Download a model and start.** `carl download default`, then `carl`. The server starts and the dashboard opens in the terminal. Ctrl-C or `q` in the dashboard ends it, as on a Mac.
-6. **The clients.** On Windows, `client\setup.cmd` in the client package installs OpenCode and Pi (Node's zip and npm are fetched; the Task Scheduler runs the sync service and the user's Path is changed). On Linux, `./setup` does it with `systemd --user`. `carl package` makes the client package as on a Mac; `carl install` is not available on Windows yet (run `setup.cmd` from the package). See [Clients on other computers](client-sync.md).
+6. **The clients.** On Windows, `client\setup.cmd` in the client package installs OpenCode and Pi (Node's zip and npm are fetched; the Task Scheduler runs the sync service and the user's Path is changed). On Linux, `./setup` does it with `systemd --user`. `carl package` makes the client package as on a Mac. `carl install` runs the same setup on the server's own computer, on Windows too (the clone's `client\carl_setup.py`, with CARL's Python, as a child in the same console; W1.6); the dashboard's Connect tab (i, u), the Router panel's u and the install after an Apply run it. See [Clients on other computers](client-sync.md).
 
 You already have llama.cpp? Set `llama.path` (or the variable `CARL_LLAMA_DIR`) to the folder of the build, or put `llama-server` on the path. The variable wins over the setting. Without both, CARL uses the newest build that `carl engine install` made, then the path.
 
@@ -73,7 +73,7 @@ On a Mac the GPU and the CPU share the RAM. On a PC the GPU has its own memory (
 
 ## Experts in the RAM and the load mode
 
-A mixture-of-experts model (the Qwen3.6 35B-A3B, the Gemma 4 26B-A4B) can run on a small card with the experts of some layers in the RAM (`--n-cpu-moe N`). CARL finds the smallest N for which both sides fit; `llama.n_cpu_moe` sets it by hand (`0` keeps every expert on the GPUs). Details and the measurements: [Memory](memory.md#experts-in-the-ram-layer-placement).
+A mixture-of-experts model (the Qwen3.6 35B-A3B, the Gemma 4 26B-A4B) can run on a small card with the experts of some layers in the RAM (`--n-cpu-moe N`). CARL finds the smallest N for which both sides fit; `models.NAME.n_cpu_moe` sets it by hand for one model (the Experts in RAM row saves it), and `llama.n_cpu_moe` for a model without its own (`0` keeps every expert on the GPUs). Details and the measurements: [Memory](memory.md#experts-in-the-ram-layer-placement).
 
 With any expert layer in the RAM, a start uses n-gram speculation and leaves MTP off, unless you or Auto-tune chose a speculation. `carl tune` measures MTP against n-gram there and keeps MTP only if it wins by 3%.
 
@@ -95,7 +95,7 @@ Designed and tested with fixtures:
 | `gpu.devices` | `CARL_GPU_DEVICES` | every GPU | The GPUs a model uses, by their numbers in `carl gpu` |
 | `gpu.shared_limit_gib` | `CARL_SHARED_LIMIT_GIB` | 0 | What a model may use on a GPU that shares the RAM (0 to 1024) |
 | `llama.path` | `CARL_LLAMA_DIR` | empty | The folder of the llama.cpp build |
-| `llama.n_cpu_moe` | `N_CPU_MOE` | auto | The layers whose MoE experts stay in the RAM |
+| `llama.n_cpu_moe` | `N_CPU_MOE` | auto | The layers whose MoE experts stay in the RAM, for a model without its own `models.NAME.n_cpu_moe` (which wins) |
 | `llama.load_reserve_gib` | `LOAD_RESERVE_GIB` | 8 | The free RAM that load mode none leaves |
 | `engine.name` | `CARL_ENGINE` | auto | The engine that serves the models ([Glossary](glossary.md#11-pcs-gpus-and-engines)) |
 

@@ -8,22 +8,16 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import threading
 import time
 from typing import List, Optional, Tuple
 
+from ...domain.server.slot_files import safe_name
 from ...domain.server.snapshot import JSONDict, jdict
 from . import installed_clients as fsio
 
 CLAIM_STALE_S = 120
 TURN_STALE_S = 600       # a turn mark this old is a client that went away (carl-cache.js TURN_STALE_MS)
-SAFE = re.compile(r"[^A-Za-z0-9._-]")
-
-
-def safe_name(s: str, n: int) -> str:
-    """The client's safeName (carl-cache.js): the same file names on both sides."""
-    return SAFE.sub("_", s)[:n]
 
 
 class SlotClaims:

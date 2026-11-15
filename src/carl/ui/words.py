@@ -10,7 +10,7 @@ from __future__ import annotations
 from typing import Optional
 
 from ..domain.shared.platform_words import PlatformWords
-from ..domain.shared.units import duration
+from ..domain.shared.units import duration, etime_seconds
 
 SPEC_NAMES = {"none": "none", "ngram-mod": "n-gram", "draft-mtp": "MTP", "draft-mtp,ngram-mod": "MTP + n-gram",
               "draft-dflash": "DFlash", "draft-dspark": "DSpark", "draft-eagle3": "EAGLE-3",
@@ -43,6 +43,11 @@ def computer() -> str:
 def computer_cap() -> str:
     """This computer, as a sentence starts: This Mac."""
     return _words().machine_cap()
+
+
+def os_and_apps() -> str:
+    """What the RAM's reserve is kept free for: macOS and apps, Windows and apps."""
+    return _words().os_and_apps
 
 
 def the_computer() -> str:
@@ -146,21 +151,6 @@ def goal_name(goal: object) -> str:
 
 def scope_name(scope: object) -> str:
     return SCOPE_NAMES.get(str(scope), str(scope))
-
-
-def etime_seconds(etime: Optional[str]) -> Optional[float]:
-    """ps's elapsed time ([[dd-]hh:]mm:ss) in seconds; None when it can't be read."""
-    if not etime:
-        return None
-    try:
-        days, _, rest = etime.rpartition("-")
-        parts = [int(x) for x in rest.split(":")]
-    except ValueError:
-        return None
-    secs = 0
-    for p in parts:
-        secs = secs * 60 + p
-    return secs + (int(days) * 86400 if days.isdigit() else 0)
 
 
 def uptime(etime: Optional[str]) -> str:

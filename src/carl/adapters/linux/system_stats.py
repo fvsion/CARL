@@ -38,7 +38,7 @@ from .inhibit import INHIBIT, WHO
 SYS = "/sys"
 SS_ARGS = ["ss", "-tanpH"]
 NVIDIA = "nvidia-smi"
-NVIDIA_GPUS = ["--query-gpu=name,memory.total,memory.used,utilization.gpu,temperature.gpu",
+NVIDIA_GPUS = ["--query-gpu=name,memory.total,memory.used,utilization.gpu,temperature.gpu,memory.free",
                "--format=csv,noheader,nounits"]
 NVIDIA_APPS = ["--query-compute-apps=pid,used_memory", "--format=csv,noheader,nounits"]
 CPU_SENSORS = ("coretemp", "k10temp", "zenpower", "cpu_thermal")      # the hwmon chips that are a processor's
@@ -376,13 +376,18 @@ def _int(text: str) -> Optional[int]:
 
 
 def parse_nvidia_gpus(text: str) -> List[GpuReading]:
-    """`nvidia-smi --query-gpu=name,memory.total,memory.used,utilization.gpu,temperature.gpu` (csv, MiB)."""
+    """`nvidia-smi --query-gpu=name,memory.total,memory.used,utilization.gpu,temperature.gpu[,memory.free]` (csv, MiB).
+    In use is the card less its free memory when nvidia-smi gives it (W1.6, A-M1: the reserved part counts, as in the
+    room), else its used figure."""
     out: List[GpuReading] = []
     for line in text.splitlines():
         f = [x.strip() for x in line.split(",")]
         if len(f) < 5:
             continue
         total, used = _int(f[1]), _int(f[2])
+        free = _int(f[5]) if len(f) > 5 else None
+        if total is not None and free is not None:
+            used = max(total - free, 0)
         if total is None or used is None:
             continue
         out.append(GpuReading(f[0], total * MIB, used * MIB, _int(f[3]), _int(f[4])))

@@ -49,11 +49,13 @@ BISECT_STEPS = 40                       # the share of the room is found to bett
 class Slot:
     """A device a start may use: llama.cpp's name for it (CUDA0), the GPU, and the room a model may use there
     (the free memory less the part kept free; domain/memory/budget.py). shared: of the room, the part that is the
-    RAM's (a GPU that shares the RAM)."""
+    RAM's (a GPU that shares the RAM). own: what CARL's own servers hold there, added back into the room (W1.6: the
+    parts of the card, budget.card_parts)."""
     name: str
     gpu: Gpu
     room: int
     shared: int = 0
+    own: int = 0
 
     def label(self) -> str:
         """GPU 1 (NVIDIA GeForce RTX 3060)"""

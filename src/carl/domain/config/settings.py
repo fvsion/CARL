@@ -72,6 +72,7 @@ class SettingSpec:
     items: str = ""                            # a list's items: "index" = whole numbers from 0 (gpu.devices)
     listed: bool = True                        # False: the key works, but no text lists it (engine.name, until a
     #                                            second engine exists)
+    k: bool = False                            # an intauto that takes "1k" too (the -ub: an int before W1.6)
 
     def on(self, os_name: str) -> bool:
         """The key does something on this OS (macos, windows, linux), so its texts list it."""
@@ -140,21 +141,26 @@ MODEL_KEYS: Dict[str, SettingSpec] = {
     "presence": _float(PRESENCE, 0, 2, "PRESENCE"),
     "repeat": _float(REPEAT, 0.5, 2, "REPEAT"),
     "alias": _str("", "ALIAS"),
-    # -ub, the model's own choice (A51): the Batch size row, or the answer Keep to the start's question. ub_tune: the
-    # tune record it was made against (inventory.tune_stamp): a later tune asks again. Neither is a launcher variable:
-    # ub_order.py gives the start its -ub.
-    "ub": _int(UBATCH, 64, 8192),
+    # -ub, the model's own choice (A51): the Batch size row, or the answer Keep to the start's question; auto (W1.6:
+    # also over a llama.ub): the order picks it (its tune record's, else this computer's, lowered to keep the setup).
+    # ub_tune: the tune record a size was made against (inventory.tune_stamp): a later tune asks again. Neither is a
+    # launcher variable: ub_order.py gives the start its -ub.
+    "ub": SettingSpec("intauto", "auto", None, min=64, max=8192, k=True),
     "ub_tune": SettingSpec("str", "", listed=False),             # a stamp for the code, no text lists it
     # Thinking per role (Phase 23.4.4 item 11; domain/thinking.py): the clients' setting, not the server's (no
     # variable). The default depends on the model: thinking.defaults() is its catalogue layer (effective_tune). The
     # coder's "main": as the main session (the default).
     "thinking_main": _choice("on", MAIN_VALUES),
     "thinking_coder": _choice(MAIN, CODER_VALUES),
+    # Off the Mac: the layers of this model whose MoE experts stay in the RAM (W1.6, decision B2: a count is one
+    # model's; the Experts in RAM row). Unset: llama.n_cpu_moe. Not a launcher variable of its own: launch-env gives it
+    # as llama.n_cpu_moe's (N_CPU_MOE).
+    "n_cpu_moe": SettingSpec("intauto", "auto", None, min=0, max=999, platforms=OFF_MAC),
 }
 # Server-wide llama.cpp settings (config.json "llama").
 LLAMA_KEYS: Dict[str, SettingSpec] = {
     "model": _str("auto"),                                  # auto = auto fit's pick for this Mac
-    "auto_goal": _choice("everyday", ("everyday", "hard-code")),        # auto fit: fast first (MoE, small dense), or dense first
+    "auto_goal": _choice("everyday", ("everyday", "hard-code")),        # auto fit: fast first (MoE), or dense first
     "auto_fit": _choice("catalogue", ("catalogue", "downloaded")),      # auto fit picks from these models
     "mode": _choice("single", ("single", "router"), "LLAMA_MODE"),   # router: clients switch models (opt-in)
     "net": _choice("local", NET_CHOICES, "NET"),
@@ -164,8 +170,8 @@ LLAMA_KEYS: Dict[str, SettingSpec] = {
     "api_port": SettingSpec("intauto", "auto", None, min=1024, max=65535),
     # -ub for every model: how config.json held it before A51. Read as the value the start's question asks about for a
     # model with a tune record, and used for a model without one; the Batch size row and the answer Keep set the
-    # model's own (models.NAME.ub). The environment's UB is a typed -ub.
-    "ub": _int(UBATCH, 64, 8192, "UB"),
+    # model's own (models.NAME.ub). auto (the default, W1.6): the order picks it. The environment's UB is a typed -ub.
+    "ub": SettingSpec("intauto", "auto", "UB", min=64, max=8192, k=True),
     "batch": _int(2048, 64, 16384, "BATCH"),
     "ckpt": _int(8, 0, 64, "CKPT"),
     "ckpt_step": _int(4096, 256, 65536, "CKPT_STEP"),
@@ -196,7 +202,8 @@ PATH_KEYS: Dict[str, SettingSpec] = {"models_dir": _str(DEFAULT_MODELS_DIR)}
 # (the oldest files go first). save: when a session is saved (auto = when the part not saved yet
 # would take auto_s seconds to read again, and before it leaves the server). swa: the cache of models with
 # sliding-window layers (full = restores work, more memory; auto = full when it fits). share:
-# conversations stored as patches against their agent's prompt file (adapters/common/zstd_patch.py).
+# conversations stored as patches against their agent's prompt file (adapters/common/zstd_patch.py). keep_slots: the
+# slots saved before a restart CARL makes and put back after it, for clients without CARL's plugins (slot_handoff.py).
 SAVE_CHOICES = ("auto", "turn", "switch", "stop")
 SWA_CHOICES = ("auto", "full", "window")
 # move: where the parts of the prompt that change per project go for a template CARL does not know (not Qwen, not
@@ -213,6 +220,7 @@ CACHE_KEYS: Dict[str, SettingSpec] = {
     "share": SettingSpec("bool", True),
     "swa": _choice("auto", SWA_CHOICES, "SWA_MODE"),
     "move": _choice("off", MOVE_CHOICES),
+    "keep_slots": SettingSpec("bool", True),
 }
 # The hand-off to the coder (carl-delegation in OpenCode and Pi): gate = stop the main agent's write that makes its
 # Nth new file in a turn and tell it to use the coder (0 = off, the default). Advanced, not recommended: a setting of
@@ -268,7 +276,7 @@ def _convert(spec: SettingSpec, v: object, where: str) -> SettingValue:
     if spec.kind == "float":
         return _parse_float(v)
     if spec.kind == "intauto":
-        return "auto" if str(v) == "auto" else _parse_int(v, allow_k=False)
+        return "auto" if str(v) == "auto" else _parse_int(v, allow_k=spec.k)
     if spec.kind == "bool":
         return v if isinstance(v, bool) else str(v).lower() in ("1", "true", "yes", "on")
     if spec.kind == "list":

@@ -128,8 +128,12 @@ class SettingsActions:
             return self.dialogs.confirm_key(k)
         if ui.card and ui.sp == SP_MODELS:
             return self.ctx.card.keys(k)
+        if ui.edit is not None and k in ("[", "]"):              # another panel: the text typed here is dropped
+            ui.edit = None
         if ui.edit is not None and ui.sp == SP_SERVER:
             return self.server.edit_key(k)
+        if ui.edit is not None and ui.sp == SP_CACHE:            # a number row of the Caching panel (B6)
+            return self.cache.edit_key(k)
         if k in ("[", "]"):
             ui.sp = (ui.sp + (1 if k == "]" else -1)) % self.ctx.panel_count()
             return True

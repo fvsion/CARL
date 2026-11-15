@@ -93,7 +93,8 @@ def _fill(a: Gpu, b: Gpu) -> Gpu:
     return replace(a, total=a.total or b.total, free=a.free if a.free is not None else b.free,
                    vendor=a.vendor or b.vendor, compute_cap=a.compute_cap or b.compute_cap, driver=a.driver or b.driver,
                    pci=a.pci or b.pci, uuid=a.uuid or b.uuid, luid=a.luid or b.luid,
-                   integrated=a.integrated or b.integrated, device=a.device or b.device, shared=a.shared or b.shared)
+                   integrated=a.integrated or b.integrated, device=a.device or b.device, shared=a.shared or b.shared,
+                   os_total=a.os_total or b.os_total, os_used=a.os_used if a.os_used is not None else b.os_used)
 
 
 def merge(sources: Sequence[Sequence[Gpu]]) -> List[Gpu]:

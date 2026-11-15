@@ -23,9 +23,10 @@ KEY_HELP: Dict[str, str] = {
     "llama.cache_ram": "The size of the RAM cache in MiB. auto: the free memory after the model, from 1 GiB to "
                        "8 GiB.",
     "llama.ub": "The old setting for the physical batch size (-ub) of every model. Each model has its own -ub now: "
-                "the Batch size row, or models.NAME.ub. A model with an Auto-tune result uses that result: a start in a "
-                "terminal asks about this value once, a script or router mode ignores it and says so. A model without "
-                "one uses this value, else 2048 on a PC and 512 on a Mac. A -ub in llama.extra_args wins.",
+                "the Batch size row, or models.NAME.ub. auto (the default): the start picks it. A model with an "
+                "Auto-tune result uses that result: a start in a terminal asks about a size here once, a script or "
+                "router mode ignores it and says so. A model without one uses this size, else 2048 on a PC and 512 on "
+                "a Mac. A -ub in llama.extra_args wins.",
     "llama.load_reserve_gib": "The free memory (GiB) that load mode none leaves: a start reads the weights into the "
                               "memory when the free memory holds what the server needs and this much more; else the "
                               "weights stay mapped from the file.",
@@ -51,6 +52,8 @@ KEY_HELP: Dict[str, str] = {
                   "(after each turn), switch or stop (CARL writes only a record).",
     "cache.auto_s": "For cache.save auto: the seconds of reading that make CARL save a session.",
     "cache.share": "Store a saved session as the changes to its saved prompt (less disk).",
+    "cache.keep_slots": "Save the slots before a restart that CARL makes and put them back after it (clients without "
+                        "CARL's plugins).",
     "cache.swa": "Sliding-window models (Gemma): full (full cache), window (window cache) or auto (the full cache "
                  "when it fits).",
     "cache.move": "Models whose chat template CARL does not know (not Qwen, not Gemma 4): off (the default) leaves "
@@ -86,8 +89,13 @@ KEY_HELP: Dict[str, str] = {
     "models.NAME.presence": "The presence penalty.",
     "models.NAME.repeat": "The repetition penalty (1.0 = off).",
     "models.NAME.alias": "The model name that the server shows to the clients. Empty: the model name.",
-    "models.NAME.ub": "The batch size (-ub) you chose for this model (Settings > Server, Batch size). Unset: the model's "
-                      "Auto-tune result, else 2048 on a PC and 512 on a Mac. A -ub in llama.extra_args wins.",
+    "models.NAME.ub": "The batch size (-ub) you chose for this model (Settings > Server, Batch size), which a start "
+                      "keeps. auto: the start picks it, also over llama.ub: the model's Auto-tune result, else 2048 on "
+                      "a PC and 512 on a Mac, made smaller before the context is. Unset: llama.ub, else as auto. A -ub "
+                      "in llama.extra_args wins.",
+    "models.NAME.n_cpu_moe": "For a MoE model: the number of this model's layers whose experts stay in the RAM "
+                             "(--n-cpu-moe; Settings > Server, Experts in RAM). auto: CARL plans it. Unset: "
+                             "llama.n_cpu_moe.",
     "models.NAME.thinking_main": "How the main session of OpenCode and Pi thinks with this model (Settings > Server, "
                                  "Main thinking): off, on, or a level for a model with effort levels (low, medium, "
                                  "xhigh). Default: on; low for a model with effort levels. The clients use it after "

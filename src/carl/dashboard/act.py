@@ -19,6 +19,8 @@ class Verb(str, Enum):
     LEVEL = "level"                     # level:SECTION
     DETAIL = "detail"
     LIVESTART = "livestart"
+    LIVEUNLOAD = "liveunload"           # liveunload:ask | yes | no (W1.6: Unload on the Live tab)
+    LIVELOAD = "liveload"               # a router with no model loaded: load the model of Settings > Server
     QUIT = "quit"
     CANCEL = "cancel"
     KEY = "key"
@@ -70,7 +72,7 @@ class Verb(str, Enum):
     MFILTERPICK = "mfilterpick"
     MUSEIT = "museit"
     MSPEEDS = "mspeeds"
-    MQUANT = "mquant"                   # mquant:1 | -1, the next or the previous quantization of the model
+    MQUANT = "mquant"                   # mquant:1 | -1 (the selected row), N,1 | N,-1 (row N), =NAME (that one)
     MDL = "mdl"
     MVERIFY = "mverify"
     MDELETE = "mdelete"
@@ -168,7 +170,7 @@ def _owned(owner: Owner, *verbs: Verb) -> Dict[Verb, Owner]:
 
 V = Verb
 OWNERS: Dict[Verb, Owner] = {
-    **_owned(Owner.APP, V.TAB, V.LEVEL, V.DETAIL, V.LIVESTART, V.QUIT, V.CANCEL, V.KEY, V.WRAP, V.ERRORS, V.FOLLOW,
+    **_owned(Owner.APP, V.TAB, V.LEVEL, V.DETAIL, V.LIVESTART, V.LIVEUNLOAD, V.LIVELOAD, V.QUIT, V.CANCEL, V.KEY, V.WRAP, V.ERRORS, V.FOLLOW,
              V.DETACH, V.STOP, V.DRAIN, V.CSP, V.PLUGACT),
     **_owned(Owner.CONNECT, V.OPENCODE, V.PI, V.CURL, V.INSALL, V.INSCONFIG, V.INSYES, V.INSNO, V.INSSHOW, V.INSCLOSE,
              V.INSCANCEL, V.INSPUSH, V.PKGMAKE, V.PKGSHOW, V.PKGCLOSE, V.CLFORGET),

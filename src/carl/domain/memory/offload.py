@@ -56,6 +56,12 @@ def is_moe(shape: ModelShape) -> bool:
     return any(e > 0 for e in experts_of(shape))
 
 
+def layers_of(shape: ModelShape) -> int:
+    """The layers --n-cpu-moe counts for this model (Offload.layers: the blocks with experts by blk index), the top of
+    its Experts in RAM setting (W1.6); 0 for a dense model."""
+    return len(experts_of(shape)) if is_moe(shape) else 0
+
+
 def offloads(slots: Sequence[Slot], shape: ModelShape) -> bool:
     """Can a start of this model keep experts in the RAM on these devices? A MoE model on discrete GPUs only: not on a
     Mac or the CPU (no devices), not with a GPU that shares the RAM."""

@@ -3,6 +3,64 @@
 All notable changes to CARL. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Dates are local dates on the development Mac (M3 Pro, 36 GB).
 
+## 1.21.2 - 2026-11-15
+
+A clean-up after 1.21.1: Auto fit on a PC with a small GPU, the memory a PC shows, the Settings rows, the client
+install on Windows and Linux, and the coder brief.
+
+### Added
+- **Auto fit weighs the experts in the RAM.** On a PC with a small GPU and much RAM, Auto fit tries each setup on each
+  model by rank, whole on the GPU or else with some of its experts in the RAM. So the A3B with its experts in the RAM
+  wins over a small model whole on the GPU at a smaller window. It takes an experts-in-RAM setup only when the model
+  writes at least 15 tok/s and reads at least 300 tok/s there (its Auto-tune record on this PC, else the catalogue's
+  figure). n-gram stays on.
+- **The E4B is the last resort.** Auto fit takes the Gemma 4 E4B only when no other model of its rank or better fits
+  any setup; then it is the choice like any other (the download offer, a start of `model auto`). Otherwise Auto fit
+  names it as the fast option, and you choose it by name. On a 16 GB Mac, Auto fit now chooses the Gemma 4 12B for both
+  goals.
+- **Unload on the Live tab.** `u`, or the button beside the state line, unloads the model and keeps the dashboard
+  open. It asks first and saves the sessions in the slots, as a stop does. `a` starts it again. In router mode it
+  unloads the loaded model.
+- **Keep slots, for clients without CARL's plugins** (`cache.keep_slots`, on by default). CARL saves the server's slots
+  before a restart that it makes (Apply, Stop, Auto-tune, a router load from the dashboard) and puts them back after the
+  start, so a plain client's next request reads only the new part. A toast and the Caching panel say what went back,
+  or why nothing did.
+- **A Quantization row** on the Server panel, under Model. A model with several quantizations is one row in the model
+  list.
+- **Experts in RAM takes any count**, for each model (`models.NAME.n_cpu_moe`), up to the model's own layer count.
+- **Batch size auto.** `llama.ub` and `models.NAME.ub` take `auto` (the default): the start picks the `-ub` from the
+  model's Auto-tune record, else 2048 on a PC and 512 on a Mac, and makes it smaller before it makes the context
+  smaller. The row reads `auto (N)`. A size you choose is kept as it is.
+- **`carl start --port N`.** The port is the start's own option, as `PORT=N` is.
+
+### Changed
+- **The number rows.** At the simple level they step through a short list of presets; at the full level they take
+  fine steps, and Enter types any value in range. The Context row takes a typed size at both levels. Save after has
+  the presets 15 s, 30 s, 45 s, 1 min, 90 s, 2 min and 3 min, and takes any time from 10 s to 60 min at the full
+  level. GPU memory kept takes steps of 0.25 GiB. Disk limit shows the free disk.
+- **Hard code on a small GPU.** When the only dense models that fit rank below the best MoE model that fits, the goal
+  hard code takes the MoE model (on an 8 GB card: the A3B with its experts in the RAM, not the Qwen 9B at 1 × 64K).
+- **The memory a PC shows.** Settings > Server's MEMORY names each part of the GPU's memory (in use, the part kept
+  free, the part for a model) and they add up to the card. For a MoE model it shows what goes to the GPU and what goes
+  to the RAM. Settings and the Live tab show the experts in the RAM that the server runs, beside the plan, with the
+  reason when they differ. Speculation and Batch size show what the start resolved.
+- **The room for a model stays the same when CARL's own model loads**, in router mode too.
+- **THIS PC's RAM rows.** The bar reads RAM in use; under it, RAM free and the part of it that is file cache. At the
+  full level, a File cache row says what it is.
+- **THIS MAC at the full level.** The parts of the Memory row come under the bar, each marked `in Memory` or `freed
+  when needed`.
+- **The coder brief.** OpenCode and Pi fix the brief's mechanical slips before the check (a value without quotes, a
+  requirement without an id, tool-call markup left in the task) and say what they changed. OpenCode drops a made-up
+  `task_id` from a new coder task. The refusals say more plainly what to fix.
+- **carl fit** gives one figure for a model's need: the Why line takes the one llama-server's own fit measured.
+
+### Fixed
+- **`carl install` on Windows and Linux** installs OpenCode and Pi in a new home, and a new terminal runs both. The
+  README's known-issue lines are gone.
+- **The Models panel's quantization arrows** change the quantization when you click them.
+- **llama-server got `--port` twice** when you passed it to `carl start`.
+- **Batch size's Recommended** said 2048 beside `auto (1024)`. It now reads `auto` with where the size comes from.
+
 ## 1.21.1 - 2026-11-13
 
 More places for CARL's plugins.

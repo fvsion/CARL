@@ -93,6 +93,11 @@ class Controller:
             self.toggle_detail()
         elif verb is Verb.LIVESTART:
             self.start_from_live()
+        elif verb is Verb.LIVEUNLOAD:
+            self.unload_from_live(a.arg or "ask")
+        elif verb is Verb.LIVELOAD:
+            name = self.svc.resolved_model(ui.pending or self.settings.pending_init(d))
+            self.jobs.router_load(name, d)
         elif verb is Verb.TAB:
             ui.tab = int(a.arg)
         elif verb is Verb.QUIT:
@@ -188,6 +193,32 @@ class Controller:
         if self.prefs:
             self.save_prefs(self.prefs, self.ui.detail, self.ui.levels)
 
+    def unload_from_live(self, step: str) -> None:
+        """u on the Live tab (W1.6): ask, then unload the model with the stop's save of the sessions in the slots
+        (save_before_stop, the slot handoff's too). Router mode unloads the loaded model and the router keeps running;
+        else the server stops and the dashboard stays (a, or the Live tab's Start, starts it again)."""
+        ui, d = self.ui, self.data
+        if step == "no":
+            ui.unload_ask = False
+            return
+        if step == "ask":
+            ui.unload_ask = bool(d.target_pid and not d.exited and not (d.router is not None and not d.alias))
+            return
+        ui.unload_ask = False
+        if d.router is not None:
+            if d.alias:
+                self.jobs.router_load(d.alias, d, unload=True)
+            return
+        pid = d.target_pid
+        if not pid or d.exited:
+            return
+
+        def stop() -> None:
+            self.jobs.save_before_stop(self.data)       # the sessions in the slots, as the stop saves them
+            self.jobs.host.end(pid)
+            ui.unloading = (pid, time.time() + 30)
+        self.jobs.when_idle(d, "unload the model", stop)
+
     def start_from_live(self) -> None:
         """a on the Live tab with no server: Settings > Server, and its question "start the server?"."""
         ui = self.ui
@@ -240,13 +271,15 @@ class Controller:
                     return
                 if ui.confirm and verb not in (Verb.SETYES, Verb.SETNO):
                     return
+                if ui.unload_ask and verb is not Verb.LIVEUNLOAD:
+                    return
                 self.do(r.action)
                 return
 
     def typing(self) -> bool:
         """A text is being typed in the Settings tab (a Hugging Face repo, a card field)."""
         ui = self.ui
-        return ui.tab == 4 and not (ui.quit or ui.drain or ui.confirm) and bool(
+        return ui.tab == 4 and not (ui.quit or ui.drain or ui.confirm or ui.unload_ask) and bool(
             ui.text or (ui.card is not None and ui.card.typing is not None))
 
     def handle_input(self, data: str) -> bool:
@@ -276,6 +309,12 @@ class Controller:
                 self.do(act(Verb.DRAIN, DrainOp.WAIT))
             elif k in ("n", "N", ESC):
                 self.do(act(Verb.DRAIN, DrainOp.CANCEL))
+            return False
+        if ui.unload_ask:                         # Unload's question: y / Enter yes, n / Esc no
+            if k in ("y", "Y") or k in ENTER:   # not u: a double press of u would not read the question
+                self.do(act(Verb.LIVEUNLOAD, "yes"))
+            elif k in ("n", "N", ESC):
+                self.do(act(Verb.LIVEUNLOAD, "no"))
             return False
         if ui.quit:                               # s stop, l / q / d leave it running, n / c / Esc cancel
             if k in ("s", "S"):
@@ -326,6 +365,10 @@ class Controller:
             self.do(act({"k": Verb.KEY, "o": Verb.OPENCODE, "p": Verb.PI, "c": Verb.CURL, "t": Verb.CURL}[k]))
         elif ui.tab == 0 and k == "a" and (self.data.exited or not (self.data.up or self.data.pid)):
             self.do(act(Verb.LIVESTART))
+        elif ui.tab == 0 and k == "a" and self.data.router is not None and not self.data.alias:
+            self.do(act(Verb.LIVELOAD))
+        elif ui.tab == 0 and k == "u" and self.data.target_pid and not self.data.exited:
+            self.do(act(Verb.LIVEUNLOAD, "ask"))
         elif ui.tab == 0 and k in ("+", "="):
             ui.lines = min((ui.lines or 3) + 2, 60)
         elif ui.tab == 0 and k in ("-", "_"):

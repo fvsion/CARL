@@ -2,8 +2,8 @@
 budget (application/fit.py), the ones that don't fit left out, and the model a start loads first (the rules:
 domain/server/router_presets.py). Each model's -ub and load mode are a single start's (A46, A51): the order of
 domain/server/ub_order.py (a -ub typed in the server options, the model's saved choice, its Auto-tune record's, else
-llama.ub for a model without one, else this OS's default, with the size that keeps the most experts on the GPUs for a
-model without a record) lowered as the start lowers it, and load mode none when the free RAM holds the model under it
+llama.ub for a model without one, else this OS's default, with the largest size that keeps the setup for a model
+without a record, W1.6) lowered as the start lowers it, and load mode none when the free RAM holds the model under it
 and the load reserve. Router mode cannot ask: a config -ub that differs from a model's tuned one is ignored, and the
 model's line says so. MTP is off for a model with experts in the RAM unless its speculation is a person's or Auto-tune's.
 """
@@ -75,6 +75,9 @@ class RouterService:
                 continue
             tmpl = template_file(path, templates_dir, self.config.models_dir(cfg))
             vals, src = self.fit.effective_tune(m, cfg)
+            own = vals.get("n_cpu_moe")             # the model's own Experts in RAM (W1.6, B2), else llama.n_cpu_moe's
+            m_moe = ((own if isinstance(own, int) and not isinstance(own, bool) else None)
+                     if src.get("n_cpu_moe", "default") != "default" else cpu_moe)
             source = dm.mtp_source(m, shape)
             # the router's presets know MTP and n-gram only: a drafter file of another kind (DFlash, DSpark, EAGLE-3) and the
             # vision projector are for the single-model start (WCATX)
@@ -88,7 +91,7 @@ class RouterService:
                     seen[ub] = plan_model(name, path, vals, shape, weights, budget.gpu_limit, int(budget.ram),
                                           budget.reserve, common,
                                           tmpl if ll["think_toggle"] and files.exists(tmpl) else None, draft,
-                                          files.size(draft) if draft else 0, devices, cpu_moe, ub,
+                                          files.size(draft) if draft else 0, devices, m_moe, ub,
                                           src.get("spec") in ("config", "auto-tune"))
                 return seen[ub]
 
@@ -108,7 +111,7 @@ class RouterService:
                 plan = replace(plan, ub_note=order.ask.ignored(plan.ub or order.ub))
             if plan and self.fit.cpu_kv_open(m, cfg):               # the CPU alone: the type for speed, as a start's (A72)
                 plan = self.cpu_kv(plan, vals, shape, weights, draft, files.size(draft) if draft else 0, common, tmpl,
-                                   devices, cpu_moe, src.get("spec") in ("config", "auto-tune"),
+                                   devices, m_moe, src.get("spec") in ("config", "auto-tune"),
                                    bool(ll["think_toggle"])) or plan
             parts = self.fit.tune_stale_parts(m) if plan else ""     # a record from another build or backend: said, kept (A72)
             if plan and parts:

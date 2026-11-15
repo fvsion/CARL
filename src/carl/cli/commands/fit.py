@@ -14,9 +14,10 @@ fits, per context memory type. The hidden options are the start's memory plan an
 
 Auto fit picks the best ranked stock model (rank 1 = best: published benchmarks and CARL's code test, then
 quantization; abliterated models are only picked by hand; a custom model only when its card says auto_fit: carl card
-NAME) for a goal: everyday = the fast builds first (MoE, and small dense models such as the Gemma 4 E4B), hard-code =
-the dense builds first (better at code and hard tasks, slower). Its order: 2 x 96K, 2 x 64K, 2 x 48K (main session +
-a subagent), then 1 x 96K, 1 x 64K, 1 x 48K; nothing below 48K. On NVIDIA GPUs it starts at 128K (A53): 2 x 128K, 2 x
+NAME) for a goal: everyday = the fast builds first (MoE), hard-code = the dense builds first (better at code and hard
+tasks, slower; a MoE build when the only dense builds that fit rank below it, W1.6). A small fast dense build (the
+Gemma 4 E4B) is the pick only when no other model of its rank or better fits: else it is named as the fast option (W1.6). Its
+order: 2 x 96K, 2 x 64K, 2 x 48K (main session + a subagent), then 1 x 96K, 1 x 64K, 1 x 48K; nothing below 48K. On NVIDIA GPUs it starts at 128K (A53): 2 x 128K, 2 x
 96K, 2 x 64K, 2 x 48K, then 1 x 128K, 1 x 96K, 1 x 64K, 1 x 48K. A model whose MTP fits only without it runs n-gram in
 that setup first. All within the GPU limit and RAM less a reserve for the system and apps (6 GiB, 10 with the VM up;
 --reserve-gb N). llama.model = auto starts it; config.json llama.auto_goal / llama.auto_fit (catalogue | downloaded)
@@ -141,8 +142,8 @@ def parse_args(cli: Cli, argv: Sequence[str]) -> argparse.Namespace:
     ap.add_argument("--n-cpu-moe", type=cpu_moe_arg, default=None, metavar="N",  # experts of N layers in the RAM
                     help=argparse.SUPPRESS)                                      # (auto: the plan finds N)
     ap.add_argument("--ub-auto", action="store_true", help=argparse.SUPPRESS)  # --ub is the model's: may go lower
-    ap.add_argument("--ub-pick", action="store_true", help=argparse.SUPPRESS)  # ...and untuned: the size that keeps
-    #                                                                           the most experts on the GPUs (A52)
+    ap.add_argument("--ub-pick", action="store_true", help=argparse.SUPPRESS)  # ...and untuned: the largest size that
+    #                                                                           keeps the setup (W1.6, A52 replaced)
     ap.add_argument("--spec-kept", action="store_true", help=argparse.SUPPRESS)  # MTP is a person's or Auto-tune's
     #                                                                            choice: it stays with experts in RAM
     ap.add_argument("--load-reserve-gib", type=float, default=None,           # the load reserve (load mode none)
@@ -282,9 +283,10 @@ def cmd_plan(cli: Cli, args: argparse.Namespace, limit: int) -> None:
     for a model with sliding-window layers full or window (--swa; "-" for other models). The plan and the
     budget it stands on: application/fit.py, the one builder. A MoE model that does not fit the GPUs whole: the
     experts of N layers in the RAM (`cpu-moe N` after the devices line), when the GPU side fits with some N; the check
-    then judges the RAM side too. With --ub-auto (-ub is the model's, A45) a `ub N` line names the -ub that keeps
+    then judges the RAM side too. A PC's answer ends with `room BYTES`: what a model could use on the GPUs (the start
+    records it in its server file, W1.6). With --ub-auto (-ub is the model's, A45) a `ub N` line names the -ub that keeps
     the setup -ub 512 gets (1024 or 512 when --ub would cost a slot, the context or the fit), with a line why; with
-    --ub-pick (a model without a tune record, A52) the size up to --ub that keeps the most experts on the GPUs instead;
+    --ub-pick (a model without a tune record, W1.6) the largest size up to --ub that keeps that setup, n-gram on;
     with the free RAM known a `load none` or `load mapped` line and its line (A44, A45). With --kv-auto (nobody chose
     the context memory type) on a start on the CPU alone a `kv f16` (or q8_0, q4_0) line comes right after the first one,
     with a `Context memory type:` line why (A71: cpu_kv_pick, the first type the free RAM covers). A start with any expert layer
@@ -328,6 +330,7 @@ def cmd_plan(cli: Cli, args: argparse.Namespace, limit: int) -> None:
         print("\n".join(device_lines(devices, split, need_bytes(shape, w, ctx, sp.slots, args.kv, full, sp.spec,
                                                                  ub, calib_of(devices)), off,
                                       cli.words.os_and_apps)))
+        print(f"room {sum(d.room for d in devices) + max(args.gpu_extra, 0) * len(devices)}")   # before A67's gap (W1.6)
 
 
 def start_hint(cli: Cli, fit: AutoFit) -> str:
@@ -753,8 +756,10 @@ def auto_lines(cli: Cli, fits: List[AutoFit], shown: Goal, mine: Tuple[Goal, Sco
     cmd = cli.words.command
     out = [f"{B}AUTO FIT{R}"]
     out += wrap(f"Auto fit chooses from the stock models with a quality rank ({SCOPE_TEXT[fits[0].scope]}). "
-                "It never chooses an abliterated model. The goal everyday takes the fast models first (MoE and "
-                "small dense). The goal hard code takes the dense models first: better code, but slower.", w, "  ")
+                "It never chooses an abliterated model. The goal everyday takes the fast models first (MoE). The "
+                "goal hard code takes the dense models first: better code, but slower. It takes a MoE model when "
+                "the only dense models that fit rank below it. It takes a small fast dense model only when no other "
+                "model of its rank or better fits: otherwise it names it as the fast option.", w, "  ")
     out += wrap(f"Its order of setups: {ladder_words(fits[0].budget.tiers)}. Nothing below 48K. When MTP does not "
                 "fit a setup, Auto fit uses n-gram only before it takes the next setup.", w, "  ")
     for f in fits:
@@ -769,7 +774,8 @@ def auto_lines(cli: Cli, fits: List[AutoFit], shown: Goal, mine: Tuple[Goal, Sco
             text = f"Goal {GOAL_NAME[f.goal]}{yours}: no model fits."
         out += wrap(text, w, "  ", "    ")
     sel = next(f for f in fits if f.goal == shown)
-    out += wrap(f"Why ({GOAL_NAME[shown]}): {sel.because()}.", w, "  ", "    ")
+    measured = needs.get(shown)                     # the goal line's figure, so both lines give one need (W1.6)
+    out += wrap(f"Why ({GOAL_NAME[shown]}): {sel.because(measured.need if measured else None)}.", w, "  ", "    ")
     if here and here.pick and sel.pick and not sel.pick.downloaded:
         out += wrap(f"Until {sel.pick.name} is downloaded, the model auto starts {here.pick.name} with "
                     f"{here.plan.describe() if here.plan else ''}: the best downloaded model that fits.", w, "  ", "    ")

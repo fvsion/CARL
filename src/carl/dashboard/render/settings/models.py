@@ -20,9 +20,9 @@ from ...arrange import downloaded, label as arrange_label
 from ...shown import Shown
 from ...state import UIState
 from ..cards import wrapped
-from .common import download_status, good_for_chip, quant_line, selectable, speeds_table
+from .common import download_status, good_for_chip, quant_line, quant_spans, selectable, speeds_table
 from .model_card import short_date
-from .model_lines import WIDE, ModelLines, has_quants, model_header
+from .model_lines import NAME_W, WIDE, ModelLines, has_quants, model_header
 
 
 @dataclass
@@ -43,6 +43,20 @@ def best_tune(t: object) -> str:
     plan = f"{int(ctx) // 1024}K × {st.get('slots')}" if isinstance(ctx, int) else f"? × {st.get('slots')}"
     return (f"{spec_name(st.get('spec'), st.get('spec_n'))}, context memory {str(st.get('kv', '')).split('_')[0]}, "
             f"{plan}   {DIM}Auto-tune, {short_date(tune.get('date'))}{R}")
+
+
+OTHER_QUANT = "‹ Other quantization ›"         # the button: ‹ the one before, › the next (W1.6 B3)
+
+
+def both_ways(line: Ln) -> Ln:
+    """The Other quantization button with two targets: its ‹ the quantization before, the rest the next one."""
+    out: List[Tuple[int, int, str]] = []
+    for a, b, act in line.spans:
+        if act == make(Verb.MQUANT, 1) and b - a == len(f"[ {OTHER_QUANT} ]"):
+            out += [(a, a + 4, make(Verb.MQUANT, -1)), (a + 4, b, act)]
+        else:
+            out.append((a, b, act))
+    return Ln(line.text, line.act, out)
 
 
 class ModelsPanel:
@@ -86,10 +100,10 @@ class ModelsPanel:
         if m and m.get("custom"):
             acts.append(("Edit its card (e)", make(Verb.MEDIT)))
         if m and m.get("quants"):
-            acts.append(("Other quantization (← →)", make(Verb.MQUANT, 1)))
+            acts.append((OTHER_QUANT, make(Verb.MQUANT, 1)))
         acts.append(("Add from Hugging Face (h)", make(Verb.MHF)))
 
-        S: List[CardLine] = [*button_rows("", acts, tw)]
+        S: List[CardLine] = [both_ways(b) for b in button_rows("", acts, tw)]
         if ui.dl:
             S += download_status(ui.dl)
         if ui.text:
@@ -121,8 +135,13 @@ class ModelsPanel:
             rows.append(f"{DIM}  No model matches \"{fi}\". Choose another filter (f).{R}")
         top_i = min(max(mrow - vis // 2, 0), max(len(ms) - vis, 0))
         for i in range(top_i, min(top_i + vis, len(ms))):
-            rows.append(selectable(self.lines.model_line(ms[i], pick, lfull, tw, ui.mspeeds, qc and not ui.mspeeds),
-                                   i == mrow, tw, make(Verb.MROW, i)))
+            line = selectable(self.lines.model_line(ms[i], pick, lfull, tw, ui.mspeeds, qc and not ui.mspeeds),
+                              i == mrow, tw, make(Verb.MROW, i))
+            if ms[i].get("quants") and qc and not ui.mspeeds:   # ‹ and › of the Quant cell: a click steps (B3)
+                at, q = 2 + NAME_W + 1, len(quant_of(ms[i]))
+                line.spans = [(at, at + 1, make(Verb.MQUANT, f"{i},-1")), (at + 1 + q, at + 2 + q,
+                                                                             make(Verb.MQUANT, f"{i},1"))]
+            rows.append(line)
         if len(ms) > vis:
             rows.append(f"{DIM}  {top_i + 1}-{min(top_i + vis, len(ms))} of {len(ms)} (↑↓ to scroll){R}")
         lst = draw_card("mlist", "MODELS", f"{len(ms)} of {len(all_ms)}, {here} downloaded", top + rows + legend, w,
@@ -160,13 +179,15 @@ class ModelsPanel:
         if not isinstance(m, dict):
             return "Press h to add any GGUF file from Hugging Face."
         if m.get("quants") and m["status"] != "downloaded":
-            return "Press ← → for another quantization of this model, or d to download this one."
+            return "Press ← → (or click ‹ ›) for another quantization of this model, or d to download this one."
         if m.get("custom") and not jdict(jdict(m.get("local")).get("card")):
             return "Press e to write the card of this model: its role, its tags and its rank."
         if m["status"] == "downloaded" and m.get("draft") and m.get("draft_status") != "downloaded":
             return "Press d to download its MTP drafter: speculation is then faster on new text."
         if m["status"] == "downloaded" and drafts_missing(m):
             return "Press d to download its drafters: Auto-tune then tries them."
+        if m["status"] == "downloaded" and m.get("quants"):
+            return "Press Enter to use it in the Server panel. ← → or a click on a quantization shows another one."
         if m["status"] == "downloaded":
             return "Press Enter to use it in the Server panel."
         if jdict(m.get("hf")).get("repo"):
@@ -185,8 +206,8 @@ class ModelsPanel:
             L.append(row("good for", ", ".join(good_for_chip(t) for t in good)))
         busy = dl is not None and not getattr(dl, "done", True) and getattr(dl, "name", "") == m["name"]
         state = f"{YEL}downloading{R}" if busy else status_name(m["status"])
-        if m.get("quants"):
-            L.append(row("quantization", quant_line(m)))
+        if m.get("quants"):                         # each quantization a click target (B3)
+            L.append(Ln(row("quantization", quant_line(m)), spans=quant_spans(m), rel=True))
         L.append(row("status", state + ("   It is running now." if running and running == m["name"] else "")))
         L.append(row("size", file_size(int(m.get("bytes", 0)) + draft_bytes(m)) + ("   with its MTP drafter"
                                                                                     if m.get("draft") else "")))

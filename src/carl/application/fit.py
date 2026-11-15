@@ -21,8 +21,8 @@ from ..domain.config.settings import LLAMA_KEYS, Config, default_ub
 from ..domain.memory import budget as memory_budget
 from ..domain.memory.budget import GpuSettings, gpu_settings, preview_limit, preview_slots
 from ..domain.memory.calibration import METAL, Calibration
-from ..domain.memory.autofit import (AutoFit, Budget, Candidate, Goal, Plan, Scope, as_goal, as_scope, auto_fit,
-                                     best_downloaded, candidate, model_plan, order_note, setup_text, window_cap)
+from ..domain.memory.autofit import (AutoFit, Budget, Candidate, Goal, Plan, Scope, as_goal, as_scope, at_ub,
+                                     auto_fit, best_downloaded, candidate, model_plan, order_note, setup_text, window_cap)
 from ..domain.memory.fit import (NO_SPEC, UBATCH, LoadMode, Spec, StartPlan, UbChoice, estimated_limit, mtp_spec,
                                  need_bytes, offline_default, prompt_cache_mib, reserve_bytes,
                                  start_plan as _start_plan, ub_choice)
@@ -136,6 +136,13 @@ def check_offload(mode: str, shape: ModelShape, weights: float, ctx: int, want_s
     plans it."""
     return start_offload(mode, shape, weights, ctx, want_slots, kv, allowed, spec, ub, devices, ram,
                          reserve_bytes(None, False), cpu_moe)
+
+
+def settings_budget(limit: float, ram: float, devices: Sequence[Slot], swa: str) -> Budget:
+    """The budget of the Settings tab's plan with the usual reserve (VM not counted): the window a start of the
+    pending setup takes (SettingsService.order_ctx, W1.6), over the GPUs the check works on."""
+    return Budget(float(limit), float(ram), reserve_bytes(None, False), unified=not devices, devices=tuple(devices),
+                  swa=swa)
 
 
 def ram_cache_mib(ram: int, need: float) -> int:
@@ -415,8 +422,8 @@ class FitService:
                 cpu_moe: Optional[int] = None, pick: bool = False) -> UbChoice:
         """The -ub of a start whose -ub is the model's (A45, fit.ub_choice): `want` when the plan at it keeps the
         setup that -ub 512 gets (the slots, the cache, the speculation, the experts in the RAM or not, and that it
-        fits), else 1024 or 512. pick (a model without a tune record, A52; ub_order.ub_pick): of the sizes up to `want`
-        the one that keeps the most expert layers on the GPUs at this window, a larger one only when it keeps as many."""
+        fits), else 1024 or 512. pick (a model without a tune record; ub_order.ub_pick, W1.6): of the sizes up to `want`
+        the largest that keeps that setup (2048 where it fits beside n-gram, else 1024, else 512)."""
         plans: Dict[int, Tuple[StartPlan, Optional[Offload], bool]] = {}
 
         def plan_at(ub: int) -> Tuple[StartPlan, Optional[Offload], bool]:
@@ -439,15 +446,9 @@ class FitService:
             return key(ub), words
         if pick and want > UBATCH:
             best = uo.ub_pick(want, lambda ub: (key(ub), plan_at(ub)[1].n if plan_at(ub)[1] else 0))
-            if best != want:
-                a, b = plan_at(want)[1], plan_at(best)[1]
-                more = (a.n - b.n) if a and b else 0
-                if more <= 0 or key(want) != key(best):     # the larger size loses the setup: the context comes first
-                    return UbChoice(best, want, f"Batch size -ub {best}, not {want}: with -ub {want} the setup would be "
-                                                f"{setup(want)[1]}, not {setup(best)[1]}.")
-                return UbChoice(best, want, f"Batch size -ub {best}, not {want}: it keeps the experts of {more} more "
-                                            f"layer{'s' if more != 1 else ''} on the GPU, which writes faster.")
-            want = best
+            if best != want:                                # the larger size loses the setup: the context comes first
+                return UbChoice(best, want, f"Batch size -ub {best}, not {want}: with -ub {want} the setup would be "
+                                            f"{setup(want)[1]}, not {setup(best)[1]}.")
         return ub_choice(want, setup)
 
     def tune_room(self, shape: ModelShape, weights: float,
@@ -615,8 +616,21 @@ class FitService:
 
     def auto_fit(self, models: List[ModelInfo], goal: Goal = "everyday", scope: Scope = "catalogue",
                  budget: Optional[Budget] = None) -> AutoFit:
-        """The best ranked stock model for the goal that fits (domain/autofit.py)."""
-        return auto_fit(self.candidates(models), budget or self.budget(), goal, scope)
+        """The best ranked stock model for the goal that fits (domain/autofit.py), a pick with experts in the RAM
+        planned at its start's -ub (at_start_ub)."""
+        return self.at_start_ub(auto_fit(self.candidates(models), budget or self.budget(), goal, scope), models)
+
+    def at_start_ub(self, fit: AutoFit, models: Sequence[ModelInfo], cfg: Optional[Config] = None) -> AutoFit:
+        """fit with a pick whose experts stay in the RAM planned at the -ub its start runs (autofit.at_ub, W1.6), from
+        the start's -ub order (ub_order): a person's as it is, else lowered, or without a tune record chosen, as the
+        start does. fit as it is for a pick whole on the GPUs (its count does not depend on the -ub)."""
+        if not fit.pick or not fit.plan or not fit.plan.cpu_moe:
+            return fit
+        m = self.inventory.find(fit.pick.name, list(models))
+        if m is None:
+            return fit
+        order = self.ub_order(m, cfg)
+        return at_ub(fit, order.ub, order.fixed, order.source == uo.DEFAULT)
 
     def measured_fit(self, models: List[ModelInfo], goal: Goal = "everyday", scope: Scope = "catalogue",
                      budget: Optional[Budget] = None) -> Tuple[AutoFit, Optional[sf.PickNeed]]:
@@ -628,7 +642,7 @@ class FitService:
 
     def _measured(self, cands: List[Candidate], models: List[ModelInfo], budget: Budget, goal: Goal,
                   scope: Scope) -> Tuple[AutoFit, Optional[sf.PickNeed]]:
-        fit, less = auto_fit(cands, budget, goal, scope), 0.0
+        fit, less = self.at_start_ub(auto_fit(cands, budget, goal, scope), models), 0.0
         for round_ in range(FIT_ROUNDS + 1):
             m = self.inventory.find(fit.pick.name, models) if fit.pick else None
             need = self.pick_need(m, fit.pick, fit.plan, fit.budget) if m and fit.pick and fit.plan else None
@@ -638,12 +652,12 @@ class FitService:
             if need.fits or round_ == FIT_ROUNDS:
                 return fit, need
             less = max(less, need.need - need.estimate)
-            fit = auto_fit(cands, budget.less_room(less), goal, scope)
+            fit = self.at_start_ub(auto_fit(cands, budget.less_room(less), goal, scope), models)
         return fit, None                     # not reached: the last round returns
 
     def pick_need(self, m: ModelInfo, c: Candidate, plan: Plan, budget: Budget) -> Optional[sf.PickNeed]:
-        """Auto fit's pick measured (A67 (2)): llama-server's own fit of its plan (fit_argv, at -ub 512 as Auto fit
-        plans) on its file (E), or before a download on a stub of its header (stub E); a drafter in its own file adds
+        """Auto fit's pick measured (A67 (2)): llama-server's own fit of its plan (fit_argv, at the plan's -ub: 512 as
+        Auto fit plans, a pick with experts in the RAM at its start's, at_start_ub) on its file (E), or before a download on a stub of its header (stub E); a drafter in its own file adds
         its file and its bound (draft_bound). B, CARL's upper bound, where the fit cannot run (no llama-server, no
         header). None without a server fit port, over several GPUs (a start there takes the estimate) or without a
         header shape."""
@@ -651,7 +665,7 @@ class FitService:
         if c.shape is None or len(devices) > 1:
             return None
         room = float(devices[0].room) + budget.less if devices else budget.allowed_whole
-        return self.setup_need(m, c.shape, c.weights, c.calib, plan.spec, plan.ctx, plan.slots, plan.kv, UBATCH,
+        return self.setup_need(m, c.shape, c.weights, c.calib, plan.spec, plan.ctx, plan.slots, plan.kv, plan.ub,
                                budget.swa_full, devices, plan.cpu_moe, budget.ram, budget.reserve, room, c.downloaded,
                                plan.need)
 
@@ -880,8 +894,10 @@ class FitService:
     def ub_order(self, m: ModelInfo, cfg: Optional[Config] = None) -> uo.UbOrder:
         """The -ub of a start of this model and where it comes from (A51; domain/server/ub_order.py, the one order
         every reader follows): a -ub typed in the server options, else the model's saved choice, else its Auto-tune
-        record's, else (a model without a record) llama.ub, else this OS's default. A config value that differs from the
-        record is the order's ask (UbOrder.ask); the caller asks or says it ignored it. cfg: config.json (None: read)."""
+        record's, else (a model without a record) llama.ub, else this OS's default. auto (models.NAME.ub or llama.ub,
+        W1.6) is no size: the order picks it; the model's auto also passes over a llama.ub. A config value that differs
+        from the record is the order's ask (UbOrder.ask); the caller asks or says it ignored it. cfg: config.json (None:
+        read)."""
         if cfg is None:
             try:
                 cfg = self.config.load_config()
@@ -894,8 +910,9 @@ class FitService:
 
         def size(v: object) -> int:
             return v if isinstance(v, int) and not isinstance(v, bool) and v > 0 else 0
+        auto = prof.get("ub") == "auto"                 # the model's auto: the order picks, over a llama.ub (W1.6)
         return uo.ub_order(int(typed) if typed else 0, size(prof.get("ub")), str(prof.get("ub_tune") or ""),
-                           size(cfg.llama.get("ub")), dm.tuned_ub(m) or 0, dm.tune_stamp(m),
+                           0 if auto else size(cfg.llama.get("ub")), dm.tuned_ub(m) or 0, dm.tune_stamp(m),
                            default_ub(self.os_name), dm.tuned_by_ub(m))
 
     def apply_order(self, m: ModelInfo, vals: Settings, src: Dict[str, SettingSource], cfg: Config,
@@ -938,8 +955,8 @@ class FitService:
             return ((t, p.ctx, p.slots, p.spec.kind, p.cpu_moe > 0) if p else None), (p.describe() if p else "nothing")
         fixed = ub is not None and ub.fixed
         choice = ub_choice(ub.ub, setup) if ub is not None and not fixed else None
-        at_ub = choice.ub if choice else ub.ub if ub is not None else UBATCH
-        tier, plan = model_plan(c, budget.allowed, budget.swa_full, top, slots, at_ub, budget)
+        run_ub = choice.ub if choice else ub.ub if ub is not None else UBATCH
+        tier, plan = model_plan(c, budget.allowed, budget.swa_full, top, slots, run_ub, budget)
         if plan is None:
             return ""
         if plan.ctx != ctx:

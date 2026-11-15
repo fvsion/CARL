@@ -9,13 +9,16 @@ presets); carl-cache reads it (client/shared/carl-cache.js cacheMode()), the das
      "models": {"gemma-4-e4b": {"swa": "window", "kv": "q4_0", "ctx": 98304, "slots": 2}}}
 
 swa: "full" (sliding-window layers at full length: saved states restore), "window" (the window cache: they do not),
-"none" (no sliding-window layers). The document is pure; adapters/common/runtime_files.py reads and writes the
+"none" (no sliding-window layers). A single start adds its own record of the setup it resolved (W1.6, A-M2), "start":
+{"room": the bytes a model could use on the GPUs when it planned, "cpu_moe": the layers whose experts it keeps in the
+RAM, "cpu_moe_auto": the count was CARL's (auto), not a setting, "ub": its -ub, "spec": the speculation it runs}, so the
+dashboard shows the plan now beside the running value with the reason. The document is pure; adapters/common/runtime_files.py reads and writes the
 files (atomic, mode 0600, indent 2 and a trailing newline).
 """
 from __future__ import annotations
 
 import json
-from typing import Any, Dict, Mapping
+from typing import Any, Dict, Mapping, Optional
 
 from ..shared.constants import DEFAULT_PORT  # noqa: F401  (tools/monitor/cli.py reads it here)
 
@@ -30,8 +33,17 @@ def file_name(port: int) -> str:
     return f"server-{int(port)}.json"
 
 
-def model_entry(swa: str, kv: str = "", ctx: int = 0, slots: int = 0) -> Dict[str, Any]:
-    """One model's cache set-up; swa "-" (the launcher's word for a model with no sliding window) is "none"."""
+def start_record(room: int = 0, cpu_moe: int = 0, cpu_moe_auto: bool = True, ub: int = 0,
+                 spec: str = "") -> Dict[str, Any]:
+    """A single start's record of what it resolved (the module docstring's "start")."""
+    return {"room": int(room), "cpu_moe": int(cpu_moe), "cpu_moe_auto": bool(cpu_moe_auto), "ub": int(ub),
+            "spec": str(spec)}
+
+
+def model_entry(swa: str, kv: str = "", ctx: int = 0, slots: int = 0,
+                start: Optional[Mapping[str, Any]] = None) -> Dict[str, Any]:
+    """One model's cache set-up; swa "-" (the launcher's word for a model with no sliding window) is "none". start: a
+    single start's own record (start_record), kept as given."""
     swa = "none" if swa in ("-", "") else swa
     if swa not in SWA:
         raise ValueError(f"swa takes {', '.join(SWA)}, not {swa!r}")
@@ -42,6 +54,8 @@ def model_entry(swa: str, kv: str = "", ctx: int = 0, slots: int = 0) -> Dict[st
         out["ctx"] = int(ctx)
     if slots:
         out["slots"] = int(slots)
+    if start:
+        out["start"] = dict(start)
     return out
 
 

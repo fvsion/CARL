@@ -354,7 +354,7 @@ class StartServer:
             t.out(line)
         try:                                     # what this computer's clients need to know; never in the way
             self.p.server_file.write_single(int(plan.get(lp.PORT)), plan.get(lp.ALIAS), plan.swa, plan.get(lp.KV_K),
-                                            int(plan.get(lp.CTX)), int(plan.get(lp.SLOTS)))
+                                            int(plan.get(lp.CTX)), int(plan.get(lp.SLOTS)), lp.start_record(plan))
         except (OSError, ValueError):
             pass
         return self._run(plan, engine, engine.server_argv(plan), lp.logs(plan))

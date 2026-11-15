@@ -13,7 +13,7 @@ from ....domain.shared.units import duration
 from ....ports.plugin import SLOT_MAIN, InfoLine
 from ....ui.fmt import wall as clock_text
 from ....ui.fmt import (reveal, B, DIM, R, RED, CardLine, Key, Row, aligned, buttons, cwrap, draw_card, row, heading,
-                        home_short, indent, side_by_side)
+                        home_short, indent, side_by_side, vlen)
 from ....ui.words import command, computer, plural
 from ...act import DrainOp, Verb, act as make
 from ...shown import Shown
@@ -79,6 +79,16 @@ def body_live(v: View, ui: UIState, d: ServerData, cols: int, height: int, out: 
     out = Shown() if out is None else out
     stopped = status_of(d, v.server_pid)[0] == STOPPED
     rows: List[Row] = [] if stopped else [(" " + x, list()) for x in cwrap(live_sentence(d, v.port), cols - 2)]
+    if not stopped and d.target_pid and not d.exited:                # Unload, or a router's Load (W1.6)
+        empty = d.router is not None and not d.alias
+        last = rows[-1][0] if rows else ""
+        b = buttons("", [("Load the model (a)", make(Verb.LIVELOAD)) if empty else
+                         ("Unload the model (u)", make(Verb.LIVEUNLOAD, "ask"))])
+        at = vlen(last) + 3                                   # on the sentence's last row when it fits there
+        if rows and at + vlen(b.text) <= cols - 1:
+            rows[-1] = (last + " " * (at - vlen(last)) + b.text, [(a + at, e + at, x) for a, e, x in b.spans])
+        else:
+            rows.append((" " + b.text, [(a + 1, e + 1, x) for a, e, x in b.spans]))
     rows.append(("", []))
     ncol = live_columns(cols)
     v = replace(v, selected=ui.section, cache_column=cols >= CACHE_COLUMN)
@@ -123,8 +133,11 @@ def body_live(v: View, ui: UIState, d: ServerData, cols: int, height: int, out: 
                                                                    [n for n in side if n not in loose])[0])))
         rows += shown
         out.sections = [n for g in groups for n in g] + ["requests", "log"]
-        out.keys = [("Tab", "section"), ("L", "level"), ("k", "show key"), ("o p c", "copy a config"), ("↑↓", "scroll")]
-        out.keys_more = ["o p c copy a config and open the Connect tab. A click on a section's title changes its level.",
+        out.keys = [("Tab", "section"), ("L", "level"), ("k", "show key"), ("o p c", "copy a config"), ("↑↓", "scroll"),
+                    ("u", "unload")]
+        out.keys_more = ["u unloads the model (it asks first; the sessions in the slots are saved). In router mode the "
+                         "router keeps running, and a loads the model of Settings > Server again.",
+                         "o p c copy a config and open the Connect tab. A click on a section's title changes its level.",
                         "+ and - show more or fewer log lines.",
                         "The mouse wheel scrolls. The SPEED averages count every request since the server started."]
     left = height - len(rows)
@@ -244,6 +257,26 @@ def quit_dialog(d: ServerData, ui: UIState, cols: int, height: int, out: Optiona
     if out is not None:
         out.keys = keys
     return centred(draw_card("quitbox", "QUIT", "", lines, w, 1), cols, w, height)
+
+
+def unload_dialog(d: ServerData, cols: int, height: int, out: Optional[Shown] = None) -> List[Row]:
+    """Unload on the Live tab (W1.6): what it does, then Unload or Cancel. Router mode: the loaded model goes, the
+    router stays; else the server stops and the dashboard stays."""
+    w = min(76, cols - 4)
+    what = d.alias or "The model"
+    if d.router is not None:
+        say = [f"{B}{what}{R} unloads: its memory is freed. The router keeps running, and the next request or a on the "
+               f"Live tab loads a model again."]
+    else:
+        say = [f"{B}{what}{R} unloads: the server stops and its memory is freed. OpenCode and Pi get no answer until a "
+               f"starts it again (the Live tab, or Settings > Server)."]
+    lines: List[CardLine] = ["", *cwrap(say[0], w - 4),
+                             *cwrap("CARL saves the sessions in the slots first, as the stop does.", w - 4), "",
+                             buttons("  ", [("Unload (y)", make(Verb.LIVEUNLOAD, "yes")),
+                                            ("Cancel (n)", make(Verb.LIVEUNLOAD, "no"))])]
+    if out is not None:
+        out.keys = [("y Enter", "unload"), ("n Esc", "cancel")]
+    return centred(draw_card("unloadbox", "UNLOAD THE MODEL?", "", lines, w, 1), cols, w, height)
 
 
 def sentence(text: str) -> str:

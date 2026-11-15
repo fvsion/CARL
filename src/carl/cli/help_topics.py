@@ -126,6 +126,7 @@ def topics(words: PlatformWords = MACOS, shown: Sequence[str] = (), port: int = 
                                   "llama.cpp) a start that nobody told takes f16, which reads prompts much faster "
                                   "there, when the free RAM covers it, else q8, else q4. The start line says which."),
                    ("--local, --vm, --host", "The network (see below)."),
+                   ("--port N", f"The port of the server (default {port}; the environment's PORT does the same)."),
                    ("--single, --router", "The mode (see below)."),
                    ("LLAMA-SERVER FLAGS", f"CARL gives every other flag to llama-server. {c} engine help shows them."),
                    ("-h, --help", "Show this help.")]),
@@ -371,8 +372,10 @@ def topics(words: PlatformWords = MACOS, shown: Sequence[str] = (), port: int = 
             ("h", "HOW AUTO FIT CHOOSES"),
             ("p", "Auto fit looks only at stock models with a quality rank (1 is the best). It never chooses an "
                   "abliterated model. It chooses a custom model only when the card of the model says auto_fit yes. "
-                  "The goal everyday takes the fast models first (MoE and small dense models). The goal hard-code "
-                  "takes the dense models first."),
+                  "The goal everyday takes the fast models first (MoE models). The goal hard-code takes the dense "
+                  "models first, and a MoE model when the only dense models that fit rank below it. Auto fit takes a "
+                  "small fast dense model (the Gemma 4 E4B) only when no other model of its rank or better fits. Otherwise it "
+                  "names it as the fast option, and you choose it by name."),
             ("p", "Auto fit tries these setups in this order, on every Mac: 2 slots of 96K tokens, 2 slots of 64K, "
                   "2 slots of 48K (the main session and a subagent), then 1 slot of 96K, 64K or 48K. On a PC with an "
                   "NVIDIA GPU it starts at 128K: 2 slots of 128K, 96K, 64K or 48K, then 1 slot of 128K, 96K, 64K or "

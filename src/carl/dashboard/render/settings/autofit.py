@@ -149,7 +149,7 @@ class AutoFitPanel:
         need, limit = gib_pair(af.plan.need, b.allowed)
         size = file_size(int(m["bytes"]) + draft_bytes(m)) if m else ""
         L += [row("suggests", f"{CYN}{af.pick.name}{R} ★"),
-              row("with", plan_words(af.plan.slots, af.plan.ctx)),
+              row("with", plan_words(af.plan.slots, af.plan.ctx) + af.plan.ram_text()),
               row("context memory", kv_name(af.plan.kv, short=True)),
               row("needs", f"{bar(af.plan.need / b.allowed if b.allowed else 0, 24)}  {need.replace(' GiB', '')} "
                            f"of {limit}"),

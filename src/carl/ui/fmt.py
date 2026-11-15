@@ -186,10 +186,12 @@ def lv(label: str, value: str, w: int = 10) -> str:
 
 @dataclass
 class Ln:
-    """A line of card text, optionally clickable as a whole (act) or in parts (spans of visible columns)."""
+    """A line of card text, optionally clickable as a whole (act) or in parts (spans of visible columns). rel: the line
+    is a row() and its spans count from the value, not the line (aligned() moves them past the label column)."""
     text: str = ""
     act: str | None = None
     spans: list[Span] = field(default_factory=list)
+    rel: bool = False
 
 
 CardLine = Union[str, Ln]
@@ -220,7 +222,8 @@ def aligned(lines: list, w: int = 0) -> list:
         lab, val = text[1:].split(ROW_SEP, 1)
         lab = lab[:1].upper() + lab[1:]                     # labels start with a capital (user, 2026-10-08)
         if isinstance(ln, Ln) or not w or vlen(val) <= w - lw:
-            out.append(Ln(lv(lab, val, lw), ln.act, ln.spans) if isinstance(ln, Ln) else lv(lab, val, lw))
+            out.append(Ln(lv(lab, val, lw), ln.act, [(a + lw, b + lw, x) for a, b, x in ln.spans] if ln.rel else
+                          ln.spans) if isinstance(ln, Ln) else lv(lab, val, lw))
             continue
         parts = cwrap(val, w - lw)
         out.append(lv(lab, parts[0], lw))

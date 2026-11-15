@@ -78,13 +78,20 @@ class RevealFailed:
 
 
 @dataclass(frozen=True)
+class Handoff:
+    """The slot handoff after the last start (C-138): what went back, or why nothing did (the Caching panel's line
+    under Keep slots)."""
+    text: str
+
+
+@dataclass(frozen=True)
 class PackageDone:
     """The client package of run is made (or not: its outcome's error)."""
     run: PackageRun
     outcome: Outcome
 
 
-JobEvent = Union[Toast, Status, StartFailed, Settled, Job, Found, AskTuneStop, PackageDone, RevealFailed]
+JobEvent = Union[Toast, Status, StartFailed, Settled, Job, Found, AskTuneStop, PackageDone, RevealFailed, Handoff]
 
 
 class JobNotifier(Protocol):

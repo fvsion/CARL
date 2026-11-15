@@ -28,7 +28,7 @@ LEVEL_NAMES: List[str] = [
 THREE_LEVELS: FrozenSet[str] = frozenset((
     "slots", "speed", "memory", "thismac", "connect", "health", "model", "modelinfo", "srv", "srvmem", "mlist", "msel",
     "requests", "log", "reqtab", "logtab",
-    "agents", "fit", "fitrank", "cachedisk", "router", "rtsettings", "tune", "tunesteps",
+    "agents", "fit", "fitrank", "caching", "cachedisk", "router", "rtsettings", "tune", "tunesteps",
     "csetup", "clients",
 ))
 

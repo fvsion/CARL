@@ -10,8 +10,9 @@
   windows       the start (no command, `start` or a leading flag) runs in this process too (W6.4: the Windows
                 adapters, composition/start.py; it offers to install llama.cpp when none is found), the dashboard
                 (`dashboard`, `monitor`, `--no-start`, and no command while a llama-server runs on the port: W6.8, in
-                this process, as Windows has no exec) and a plugin's hidden command; the client setup does not run
-                there yet and gets an error that says so (W4.2: the preview launcher is gone)
+                this process, as Windows has no exec) and a plugin's hidden command; `install` runs the client setup
+                (client/carl_setup.py) with this Python as a child, in this console, and gives its exit code (W1.6:
+                the Connect tab's i and u, the Router panel's u and the install after an Apply run it)
 
 Nothing is built here until build() is called (rule R6); llama-server's own help is found by the locator
 (CARL_LLAMA_DIR, else llama.path off the Mac, else PATH).
@@ -24,7 +25,7 @@ from typing import Callable, MutableMapping, Optional, Sequence
 from ..application.first_run import FirstRun, FirstRunTools
 from ..application.start_server import LLAMA_SERVER
 from ..cli import commands
-from ..cli.main import DASHBOARD_WORDS, MONITOR, NO_START, Dispatch, DispatchTools
+from ..cli.main import DASHBOARD_WORDS, INSTALL, MONITOR, NO_START, SETUP, Dispatch, DispatchTools
 from ..domain.server import dispatch_text as dt
 from ..domain.server.launch_plan import is_port
 from ..domain.shared.constants import DEFAULT_PORT
@@ -68,9 +69,10 @@ def build(env: MutableMapping[str, str], profile: Profile, machine: Machine, hom
         windows_host.vt_output()                    # the texts' colours in a console (the bootstrap leaves it here)
 
         def preview_run(argv: Sequence[str]) -> int:
-            """The start in this process (its own llama.cpp offer first), the dashboard in this process, a plugin's
-            hidden command, else the error: what does not run on Windows yet, or an unknown command. A start or the
-            dashboard with a help flag shows its help, as the dispatch does elsewhere (cli/main.py)."""
+            """The start in this process (its own llama.cpp offer first), the dashboard in this process, the client
+            setup as a child (`install`), a plugin's hidden command, else the error: what does not run on Windows yet,
+            or an unknown command. A start, the dashboard or install with a help flag shows its help, as the dispatch
+            does elsewhere (cli/main.py)."""
             word = argv[0] if argv else ""
             asks_help = any(a in ("-h", "--help") for a in argv[1:])
             if (word == "start" or (word.startswith("-") and word != NO_START)) and asks_help:
@@ -84,12 +86,21 @@ def build(env: MutableMapping[str, str], profile: Profile, machine: Machine, hom
                 if word == MONITOR:
                     return dashboard_here(list(argv[1:]))
                 return dashboard_here(["--port", port, *argv[1:]])
+            if word == INSTALL:
+                return help_topic(INSTALL) if asks_help else setup_here(list(argv[1:]))
             if llama_wiring.starts_server(tuple(argv)):
                 return run_start(list(argv[1:]) if argv[:1] == ["start"] else list(argv))
             if argv and not argv[0].startswith("-") and plugin_command(argv[0]):
                 return run_plugin_command(argv[0], argv[1:])
             _err(dt.not_on_windows(word, words) if word in dt.NOT_ON_WINDOWS else dt.unknown_command(word, words))
             return 2
+        def setup_here(args: Sequence[str]) -> int:
+            """The client setup with this Python, as a child that shares this console (Windows has no exec): its
+            questions work in a terminal, a child of the dashboard gets the defaults; its exit code (127: it cannot
+            run)."""
+            from ..adapters.posix.start_tools import CarlPrograms
+            return CarlPrograms(wiring.REPO, sys.executable).run(SETUP, args)
+
         def server_on(port: str) -> bool:
             """A llama-server listens on port (another program there is not one), as the first run asks (C-120)."""
             if not is_port(port):

@@ -4,7 +4,7 @@ words. The composition gives it (composition/dashboard.py JobsHostAdapter); the 
 it, so they run the same on every OS and in a test with fakes (rule R5)."""
 from __future__ import annotations
 
-from typing import Any, List, Mapping, Optional, Protocol, Sequence
+from typing import Any, List, Mapping, Optional, Protocol, Sequence, Tuple
 
 from ...domain.clients.package import Outcome
 from ...domain.server.snapshot import JSONDict
@@ -24,6 +24,7 @@ class CacheSettings(Protocol):
     share: bool
     move: str
     gate: int
+    keep_slots: bool
 
     @property
     def limit(self) -> int:
@@ -79,6 +80,10 @@ class JobsHost(Protocol):
         """0 when there is no such file."""
         ...
 
+    def file_stamp(self, path: str) -> Optional[Tuple[int, float]]:
+        """A file's (bytes, modification time); None when it cannot be read (the slot handoff's fingerprint)."""
+        ...
+
     def exists(self, path: str) -> bool: ...
 
     def write_private(self, path: str, text: str) -> None:
@@ -128,6 +133,14 @@ class JobsHost(Protocol):
 
     def saving(self, folder: str, within: float) -> bool:
         """A saved state was written in the last `within` seconds (a save may still be going on)."""
+        ...
+
+    def placed(self, conf_dir: str, model: str, since: float) -> List[int]:
+        """The slots of a model where a client with CARL's plugins put a session since `since` (its cache events)."""
+        ...
+
+    def cache_event(self, conf_dir: str, event: JSONDict) -> None:
+        """Add one event to what the cache did (the counters: cache-events/DAY.jsonl)."""
         ...
 
     # ------------------------------------------------------------ the clients

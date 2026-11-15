@@ -38,11 +38,12 @@ class Pickers:
         vis = max(height - 9, 3)
         top = min(max(pk.sel - vis // 2, 0), max(n - vis, 0))
         qc = has_quants([it[1] for it in pk.items if not isinstance(it[1], str)])
+        arrows = qc and pk.on_pick != "pickmodel"     # the Server panel's Quantization row chooses it there (W1.6 B1)
         L: List[CardLine] = [*(pk.header or model_header(full, w - 4, quant=qc)).split("\n")]
         for i in range(top, min(top + vis, n)):
             item = pk.items[i][1]
             L.append(selectable(item if isinstance(item, str) else
-                                self.lines.model_line(item, pk.mark, full, w - 4, quant=qc),
+                                self.lines.model_line(item, pk.mark, full, w - 4, quant=qc, arrows=arrows),
                                 i == pk.sel, w - 4, make(Verb.PICK, i)))
         if n > vis:
             L.append(f"{DIM}  {top + 1}-{min(top + vis, n)} of {n} (↑↓ PgUp PgDn){R}")
@@ -51,7 +52,7 @@ class Pickers:
             sel_rows = [row("why use it", str(sel_item.get("why_use") or sel_item.get("summary") or "–"))]
             if sel_item.get("trade_offs"):
                 sel_rows.append(row("trade-off", f"{YEL}{sel_item['trade_offs']}{R}"))
-            if sel_item.get("quants"):
+            if sel_item.get("quants") and arrows:
                 sel_rows.insert(0, row("quantization", quant_line(sel_item)))
             L += ["", *aligned(sel_rows, w - 4)]
         elif pk.sel == 0 and pk.note:
@@ -60,7 +61,7 @@ class Pickers:
         if pk.foot:
             L += ["", *[x for part in pk.foot.split("\n") for x in cwrap(part, w - 4)]]
         if out is not None:
-            out.keys = [("↑↓", "select"), *([("← →", "quantization")] if qc else []), ("Enter", "choose"),
+            out.keys = [("↑↓", "select"), *([("← →", "quantization")] if arrows else []), ("Enter", "choose"),
                         ("Esc", "cancel")] + ([("s f", "sort / show")] if pk.on_pick in ("pickmodel", "pickagents")
                                               else [])
         count = f"{n - 1} {pk.noun} + auto" if pk.on_pick == "pickmodel" else f"{n} {pk.noun}"
@@ -96,10 +97,12 @@ class Pickers:
             note += f" {pick} is not downloaded. Until then, auto starts {start}."
         items += [(m["name"], m) for m in ms]
         so, fi = arrange_label(sort, filt)
+        quant = (f"\n{DIM}Quant: the quantization a choice takes (the one chosen last, else the default). The "
+                 f"Quantization row changes it.{R}" if has_quants(ms) else "")
         return Picker(title="CHOOSE A MODEL", items=items, on_pick="pickmodel",
                       sel=next((i for i, it in enumerate(items) if it[0] == cur), 0),
                       noun="models", header=None, mark=pick, note=note,
-                      foot=f"Sort: {CYN}{so}{R} (s)   Show: {CYN}{fi}{R} (f)\n" + picker_foot())
+                      foot=f"Sort: {CYN}{so}{R} (s)   Show: {CYN}{fi}{R} (f)\n" + picker_foot() + quant)
 
     def pinned(self, quants: Optional[Mapping[str, str]], cur: str) -> Dict[str, str]:
         """quants, and the quantization cur names shown for its model."""

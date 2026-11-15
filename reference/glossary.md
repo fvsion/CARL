@@ -158,7 +158,7 @@ On a Windows or Linux PC the GPU has its own memory, and the words of a Mac chan
 | **VRAM** | The memory of a GPU on a PC, apart from the RAM. In GiB. | GPU RAM, video memory, GPU memory limit (that is a Mac's) | the free and the total VRAM of each GPU in `carl gpu` |
 | **VRAM kept free** | The part of each GPU's VRAM that CARL leaves free for the desktop and other programs (0.5 GiB). As a row label: **GPU memory kept**. | reserve, buffer | `gpu.vram_keep` (`CARL_VRAM_KEEP_GIB`) |
 | **split** | A model spread over several GPUs by layers, each GPU getting the layers it has room for. | tensor split, sharding | `-dev`, `-ts`, `--split-mode layer`, `gpu.devices` |
-| **experts in RAM** | A MoE model with the experts of its first N layers in the RAM, the rest on the GPUs. As a row label: **Experts in RAM**. | offload, CPU MoE, `--n-cpu-moe` (in the UI) | `llama.n_cpu_moe`, `--n-cpu-moe N` |
+| **experts in RAM** | A MoE model with the experts of its first N layers in the RAM, the rest on the GPUs. As a row label: **Experts in RAM** (it saves the model's own count). | offload, CPU MoE, `--n-cpu-moe` (in the UI) | `models.NAME.n_cpu_moe` (the model's own), else `llama.n_cpu_moe`; `--n-cpu-moe N` |
 | **hot experts** | The experts that a model uses most. The MoE plugin will keep them on the GPUs (next version). | popular experts, top experts | the profile of use |
 | **prefetch** | The copy of an expert to the GPU before the model asks for it, guessed from the next layer's router. A mode of the MoE plugin (next version). | preload, warm-up | |
 | **shared-memory PC** | A PC whose GPU shares the RAM with the CPU (an APU). | APU PC, unified (that is a Mac's) | `gpu.shared_limit_gib` |

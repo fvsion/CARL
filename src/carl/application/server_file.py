@@ -3,7 +3,7 @@ domain/server/runtime_doc.py; carl-cache reads it): written at each start, singl
 """
 from __future__ import annotations
 
-from typing import Callable
+from typing import Any, Callable, Mapping, Optional
 
 from ..domain.server import runtime_doc as rd
 from ..domain.server.router_presets import Preset
@@ -19,11 +19,12 @@ class ServerFileService:
         self.store = store
         self.now = now
 
-    def write_single(self, port: int, model: str, swa: str, kv: str = "", ctx: int = 0, slots: int = 0) -> str:
+    def write_single(self, port: int, model: str, swa: str, kv: str = "", ctx: int = 0, slots: int = 0,
+                     start: Optional[Mapping[str, Any]] = None) -> str:
         """The file of a single-model start (swa: full, window, or "-" for a model with no sliding window); its
-        path."""
+        path. start: the start's own record of what it resolved (runtime_doc.start_record; W1.6)."""
         return self._written(port, self.store.write(port, rd.document(
-            port, "single", {model: rd.model_entry(swa, kv, ctx, slots)}, self.now())))
+            port, "single", {model: rd.model_entry(swa, kv, ctx, slots, start)}, self.now())))
 
     def write_router(self, port: int, preset: Preset) -> str:
         """The file of a router start: every model of its presets; its path."""

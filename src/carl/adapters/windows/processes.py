@@ -86,6 +86,12 @@ class _Memory(ctypes.Structure):
 
 def snapshot() -> Optional[List[Tuple[str, int]]]:
     """[(program name, pid)] from a Toolhelp snapshot; None when it cannot be taken."""
+    tree = snapshot_tree()
+    return None if tree is None else [(name, pid) for name, pid, _ in tree]
+
+
+def snapshot_tree() -> Optional[List[Tuple[str, int, int]]]:
+    """[(program name, pid, parent pid)] from a Toolhelp snapshot; None when it cannot be taken."""
     try:
         k = ctypes.WinDLL("kernel32", use_last_error=True)          # type: ignore[attr-defined]
     except (AttributeError, OSError):
@@ -97,13 +103,13 @@ def snapshot() -> Optional[List[Tuple[str, int]]]:
     h = k.CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)
     if not h or h == INVALID_HANDLE:
         return None
-    out: List[Tuple[str, int]] = []
+    out: List[Tuple[str, int, int]] = []
     try:
         e = _Entry()
         e.size = ctypes.sizeof(_Entry)
         ok = k.Process32FirstW(h, ctypes.byref(e))
         while ok:
-            out.append((e.exe, int(e.pid)))
+            out.append((e.exe, int(e.pid), int(e.parent)))
             ok = k.Process32NextW(h, ctypes.byref(e))
     finally:
         k.CloseHandle(h)

@@ -5,6 +5,7 @@ and written by adapters/common/slot_folder.py. Pure.
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import List, Optional, Sequence, Tuple
 
@@ -15,7 +16,15 @@ SAVES = ("auto", "turn", "switch", "stop")
 SWAS = ("auto", "full", "window")
 MOVES = ("off", "auto")             # the project part for templates CARL does not know: off (in place) or auto (moved)
 AUTO_S = 120                    # save = auto: after this much unsaved reading (a crash costs at most that)
-PROMPT, CONVERSATION = "prompt", "conversation"
+PROMPT, CONVERSATION, SLOT = "prompt", "conversation", "slot"
+SLOT_PREFIX = "carl-slot+"      # a slot CARL saved before a restart for a client without its plugins (slot_handoff.py)
+STATE_PREFIXES = ("carl-prefix+", "carl-session+", SLOT_PREFIX)        # the saved states the folder lists
+SAFE = re.compile(r"[^A-Za-z0-9._-]")
+
+
+def safe_name(s: str, n: int) -> str:
+    """The client's safeName (carl-cache.js): the same file names on both sides."""
+    return SAFE.sub("_", s)[:n]
 
 
 @dataclass(frozen=True)
@@ -29,6 +38,7 @@ class CacheConfig:
     share: bool = True
     move: str = "off"               # the project part for templates CARL does not know: off (in place) or auto (moved)
     gate: int = 0                   # config.json delegation.gate: the new-file gate of carl-delegation (0 = off)
+    keep_slots: bool = True         # the slots are saved before a restart CARL makes and put back after it (W1.6)
 
     @property
     def limit(self) -> int:
@@ -45,7 +55,7 @@ def config_of(cfg: JSONDict) -> CacheConfig:
                        save if save in SAVES else "auto", swa if swa in SWAS else "auto",
                        auto_s if isinstance(auto_s, int) and not isinstance(auto_s, bool) and auto_s > 0 else AUTO_S,
                        sec.get("share") is not False, "auto" if sec.get("move") == "auto" else "off",
-                       gate_of(cfg))
+                       gate_of(cfg), sec.get("keep_slots") is not False)
 
 
 def gate_of(cfg: JSONDict) -> int:
@@ -65,12 +75,16 @@ class CacheFile:
 
     @property
     def kind(self) -> str:
-        return PROMPT if self.name.startswith("carl-prefix+") else CONVERSATION
+        return (PROMPT if self.name.startswith("carl-prefix+") else SLOT if self.name.startswith(SLOT_PREFIX)
+                else CONVERSATION)
 
 
 def describe(name: str) -> str:
-    """A saved state's file name as "model · agent" (a prompt) or "model · session" (a conversation)."""
+    """A saved state's file name as "model · agent" (a prompt), "model · session" (a conversation) or "model · slot N"
+    (a slot kept over a restart: carl-slot+MODEL+FP+N.bin)."""
     parts = name[:-len(".bin")].split("+") if name.endswith(".bin") else []
+    if len(parts) == 4 and parts[0] == "carl-slot":
+        return f"{parts[1]} · slot {parts[3]}"
     return f"{parts[1]} · {parts[2 if parts[0] == 'carl-prefix' else 3]}" if len(parts) == 4 else name
 
 
@@ -79,7 +93,7 @@ def used(files: Sequence[CacheFile]) -> int:
 
 
 def over_budget(files: Sequence[CacheFile], limit: int, keep: str = "") -> List[str]:
-    """The files to remove so the rest fit `limit` bytes: the oldest conversations first, then
+    """The files to remove so the rest fit `limit` bytes: the oldest conversations (and kept slots) first, then
     the oldest prompts; `keep` last (only when it alone is over the limit)."""
     total = used(files)
     out = []
@@ -101,7 +115,7 @@ def shared_saving(files: Sequence[CacheFile]) -> int:
 
 
 def _rank(f: CacheFile) -> Tuple[int, float]:
-    return (0 if f.kind == CONVERSATION else 1, f.mtime)
+    return (1 if f.kind == PROMPT else 0, f.mtime)
 
 
 def gb(n: int) -> str:

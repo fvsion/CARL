@@ -20,12 +20,20 @@
 //     test files, and never a known_file with file_action read. Any other file may be written: the known_file list
 //     is a start, not a limit (the user, 2026-10-09: a gate on the listed files would keep the coder from making a
 //     module file, against the ports and adapters directive).
+// W1.6 (the coder brief, measured on the A3B: most retries were mechanical; the user, 2026-11-13: "Yes"):
+//   - the lenient reader before the check (repairCall: carl-brief.js repairBrief on each coder task, the fixed text
+//     written back so the coder gets it): leaked tool-call markup cut, the mechanical slips fixed; the main agent gets
+//     the [CARL] note of what changed (fixedText) with the call's result;
+//   - a made-up task_id (OpenCode): one that is not a session's id (ses_...) is dropped before OpenCode reads it
+//     (dropTaskId), so the call is a new coder task and its brief is checked; the main agent gets a note. The rule
+//     (TASK_ID_RULE) and every refusal (NEW_TASK_LINE) say that a new coder task has no task_id.
 
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { isCarl } from "./carl-api.js";
-import { BRIEF_MARK, briefRefusal, filesByAction, isTestFile, missingLiterals, parseBrief, requestLiterals } from "./carl-brief.js";
+import { BRIEF_MARK, briefRefusal, filesByAction, isTestFile, missingLiterals, parseBrief, repairBrief, requestLiterals }
+  from "./carl-brief.js";
 
 export const RULE_BEGIN = "<!-- carl:main-agents-only begin -->";
 export const RULE_END = "<!-- carl:main-agents-only end -->";
@@ -254,6 +262,63 @@ export function coderTaskItems(tool, args) {
     }
   }
   return out;
+}
+
+/**
+ * The lenient reader on each coder task of a call (coderTaskItems' tasks: OpenCode's prompt, Pi's task of the call
+ * and of each coder item of tasks and chain): carl-brief.js repairBrief, the fixed text written back into args (the
+ * coder gets it). The notes of what changed (empty: nothing); with several coder tasks each note names its task.
+ * o.root: the project folder (a task's own cwd is taken in it).
+ * @param {string} tool @param {Record<string, unknown>} args
+ * @param {{ root?: string, exists?: (p: string) => boolean }} [o] @returns {string[]}
+ */
+export function repairCall(tool, args, o = {}) {
+  /** @type {{ holder: Record<string, unknown>, key: string, cwd: string }[]} */
+  const at = [];
+  if (tool === "task") {
+    if (CODERS.has(String(args.subagent_type ?? "")) && !args.task_id) at.push({ holder: args, key: "prompt", cwd: "" });
+  } else if (tool === "subagent") {
+    const top = typeof args.cwd === "string" ? args.cwd : "";
+    if (CODERS.has(String(args.agent ?? ""))) at.push({ holder: args, key: "task", cwd: top });
+    for (const t of [...(Array.isArray(args.tasks) ? args.tasks : []), ...(Array.isArray(args.chain) ? args.chain : [])]) {
+      const item = /** @type {Record<string, unknown>} */ (t ?? {});
+      if (CODERS.has(String(item.agent ?? ""))) at.push({ holder: item, key: "task", cwd: typeof item.cwd === "string" ? item.cwd : top });
+    }
+  }
+  /** @type {string[]} */
+  const notes = [];
+  at.forEach(({ holder, key, cwd }, n) => {
+    if (typeof holder[key] !== "string") return;
+    const root = o.root === undefined ? undefined : cwd ? resolve(o.root, cwd) : o.root;
+    const r = repairBrief(/** @type {string} */ (holder[key]), { root, exists: o.exists });
+    if (!r.notes.length) return;
+    holder[key] = r.text;
+    notes.push(...(at.length > 1 ? r.notes.map((x) => `Coder task ${n + 1}: ${x}`) : r.notes));
+  });
+  return notes;
+}
+
+/** The rule of the task_id (OpenCode; its system transform adds it to a main session's delegation rule). */
+export const TASK_ID_RULE = "**A coder task's task_id.** A new coder task has no task_id. Use task_id only to continue " +
+  "a coder session, with the ses_... id from that coder's result; never make one up. After `[CARL] Brief refused`, " +
+  "send the whole brief again as a new task, without task_id.";
+/** The last line of a refusal in OpenCode. */
+export const NEW_TASK_LINE = "Send it as a new coder task: the same task call, without task_id.";
+
+/**
+ * OpenCode's task call for the coder with a task_id that is no session's id (it does not start with ses_; OpenCode
+ * refuses it: "Expected a string starting with "ses""): the task_id is dropped, so the call is a new coder task. The
+ * note for the main agent ("" when the call has none or a session's id). An empty task_id is no task_id (OpenCode's
+ * reading) and stays.
+ * @param {Record<string, unknown>} args @returns {string}
+ */
+export function dropTaskId(args) {
+  const id = args.task_id;
+  if (id === undefined || id === null || id === "" || String(id).startsWith("ses_")) return "";
+  delete args.task_id;
+  const shown = JSON.stringify(String(id).slice(0, 80));
+  return `[CARL] The task_id ${shown} is not a coder session's id (those start with ses_ and come from a coder's ` +
+    `result), so CARL left it out: this is a new coder task. A new coder task has no task_id.`;
 }
 
 /** The coder tasks in a call (their texts): coderTaskItems' texts. @param {string} tool

@@ -28,7 +28,7 @@ class DialogActions:
         elif verb is Verb.C2NO:
             ui.confirm2 = None
         elif verb is Verb.SP:
-            ui.sp = int(a.arg)
+            ui.sp, ui.edit = int(a.arg), None       # a value typed on the panel left is dropped
         elif ui.card:
             self.c.card.button(a, ui.card)
 
@@ -81,7 +81,8 @@ class DialogActions:
             cur = str(pk.items[pk.sel][0])
             c.act(ARRANGE_KEYS[k])
             ui.picker = self.rebuilt(pk.on_pick, cur)
-        elif k in (RIGHT, LEFTKEY) and pk.on_pick in ("pickmodel", "pickagents"):     # another quantization (A68)
+        elif k in (RIGHT, LEFTKEY) and pk.on_pick == "pickagents":     # another quantization (A68; the Server panel's
+            # model drop-down has none: its Quantization row chooses it, W1.6 B1)
             item = pk.items[pk.sel][1]
             new = c.cycle_quant(item, -1 if k == LEFTKEY else 1) if isinstance(item, dict) else None
             if new:

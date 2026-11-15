@@ -30,6 +30,17 @@ class ProcessInfo:
     command: str
 
 
+def own_servers(listeners: Sequence[int], table: Sequence[Tuple[str, int, int]]) -> List[int]:
+    """CARL's own servers: the listeners on the ports of its server files, and the llama-server processes they started
+    (a router's model servers, which listen on ports of their own and hold the model's VRAM: W1.6, the room fell by the
+    loaded model on a PC in router mode). table: every process as (program name, pid, parent pid)."""
+    out = [p for p in listeners if p]
+    for name, pid, parent in table:
+        if parent in listeners and pid not in out and re.fullmatch(r"llama-server(\.exe)?", basename_any(name), re.I):
+            out.append(pid)
+    return out
+
+
 def is_model_server(command: str) -> bool:
     """A known model server's command (a path with / or \\, or a bare name)."""
     return bool(_MODEL_SERVER.search(command))

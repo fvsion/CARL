@@ -56,9 +56,17 @@ def run(app: App) -> None:
                 next_fetch = time.time() + (0.5 if ui.stopping else app.opts.interval)
             app.jobs.poll()
             app.jobs.drain_tick(app.ctl.data)
+            app.jobs.after_start(app.ctl.data)          # the kept slots go back once into a new server (C-138)
             app.drain_events()
             app._status = {**c.tail.book.status(), "up": app.ctl.data.up}   # a new dict: the API reads it whole
             app.cache_api()
+            if ui.unloading:                     # Unload (W1.6): the server ends, the dashboard stays
+                pid, deadline = ui.unloading
+                if not app.watch.alive(pid):
+                    ui.unloading = None
+                    ui.toast("The model is unloaded. a starts the server again.", 10)
+                elif time.time() > deadline:
+                    app.watch.kill(pid)
             if ui.stopping:
                 pid, deadline = ui.stopping
                 if not app.watch.alive(pid):

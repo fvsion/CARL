@@ -76,16 +76,22 @@
 // the project folder's identity (folderId: its device and inode, so a folder made again at the same path is another
 // one) and OpenCode's project id. At the next start, a record is delivered only when both still match (when the record
 // has them) and its main session is still there in this folder; else the record is dropped, not delivered.
+// W1.6 (the coder brief; carl-delegation.js repairCall, dropTaskId): in tool.execute.before, a coder task's task_id
+// that is no session's id (not ses_...) is dropped before OpenCode reads it (OpenCode runs this hook before the task
+// tool checks the id), so the call is a new task and its brief is checked; the lenient reader then fixes the brief's
+// mechanical slips (and cuts leaked tool-call markup) and writes the fixed brief back into the prompt. What CARL
+// changed goes after the call's output in tool.execute.after (a [CARL] note); a refusal says so too and ends with
+// NEW_TASK_LINE. The system transform adds TASK_ID_RULE to a main session's delegation rule.
 
 import { execFile } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
-import { changedFiles, checkBrief, parseBrief, writeBrief, writeBriefJson } from "./carl-brief.js";
+import { changedFiles, checkBrief, fixedText, parseBrief, writeBrief, writeBriefJson } from "./carl-brief.js";
 import { Chain, TESTS_OFF, Watch, coderPlan, fixBrief, gateText, loopFrom, runGate, runSuites, sourceHashes, testsFrom }
   from "./carl-chain.js";
-import { CoderGate, FREE_FORM_TEXT, GateSetting, RULE_BEGIN, RULE_END, RequestCheck, Turn, briefCheck, freeFormFor, isCoderName,
-  requestFrom, withReminder, withoutRule }
+import { CoderGate, FREE_FORM_TEXT, GateSetting, NEW_TASK_LINE, RULE_BEGIN, RULE_END, RequestCheck, TASK_ID_RULE, Turn, briefCheck,
+  dropTaskId, freeFormFor, isCoderName, repairCall, requestFrom, withReminder, withoutRule }
   from "./carl-delegation.js";
 
 export { RULE_BEGIN, RULE_END, withoutRule };
@@ -430,6 +436,8 @@ export default {
     const client = /** @type {any} */ (ctx)?.client;
     /** @type {Map<string, Pending>} a coder task call (its callID) with a chain or a watch */
     const calls = new Map();
+    /** @type {Map<string, string>} a coder task call (its callID) -> CARL's note of what it changed (W1.6) */
+    const fixedNotes = new Map();
     /** @type {Map<string, Pending>} a background test session (its id) whose completion message is due */
     const waiting = new Map();
     /** @type {Map<string, Array<() => void>>} session id -> what waits for its session.idle */
@@ -764,7 +772,7 @@ export default {
       /** @type {any} */ (t).unref?.();
     }
 
-    return {
+    const hooks = {
       // the coder's thinking for the model it runs on (Phase 23.4.4): only for the coder, only with an entry
       "chat.params": async (input, output) => {
         if (!output || typeof output.options !== "object" || output.options === null) return;
@@ -801,7 +809,9 @@ export default {
           const model = /** @type {any} */ (input)?.model;
           const ok = stateFile !== "" && freeFormFor(stateFile, `${String(model?.providerID ?? "")}/${String(model?.id ?? "")}`);
           freeForm.set(input.sessionID, ok);
-          if (ok && output.system.some((s) => typeof s === "string" && s.includes(RULE_BEGIN))) output.system.push(FREE_FORM_TEXT);
+          const rule = output.system.some((s) => typeof s === "string" && s.includes(RULE_BEGIN));
+          if (rule && briefs) output.system.push(TASK_ID_RULE);
+          if (ok && rule) output.system.push(FREE_FORM_TEXT);
           return;
         }
         output.system.forEach((s, i) => {
@@ -864,6 +874,8 @@ export default {
         const tool = String(input?.tool ?? "");
         const args = /** @type {Record<string, unknown>} */ (output?.args ?? {});
         const kind = String(args.subagent_type ?? "");
+        // a made-up task_id (W1.6): dropped before the task tool reads it; the call is a new coder task
+        const dropped = tool === "task" && (kind === coder || isCoderName(kind)) ? dropTaskId(args) : "";
         if (tool === "task" && args.task_id && input?.sessionID && (kind === coder || isCoderName(kind))) {
           const note = await resumeNote(String(args.task_id), input.sessionID);      // too large to resume: anew
           if (note) {
@@ -872,16 +884,21 @@ export default {
             notice2(note.split("\n")[0].replace(/^# CARL: /, ""));
           }
         }
+        /** A refusal as the main agent gets it: the dropped task_id's note, and the way to send it again. @param {string} why */
+        const refused = (why) => [why, dropped, NEW_TASK_LINE].filter(Boolean).join("\n\n");
         if (briefs) {                                            // a coder task with an incomplete brief (and the turn's
-          const o = { format: briefFormat, root: cwd,            // memory: no switch to tests-only after a refusal)
+          const fixed = repairCall(tool, args, { root: cwd });   // memory: no switch to tests-only after a refusal); the
+          const o = { format: briefFormat, root: cwd,            // lenient reader first (W1.6)
                       freeForm: input?.sessionID ? freeForm.get(input.sessionID) === true : false };
           const why = input?.sessionID ? turn(input.sessionID).brief(tool, args, o) : briefCheck(tool, args, o);
-          if (why) throw new Error(why);
+          if (why) throw new Error(refused(why));
           if (input?.sessionID && !(await isSub(input.sessionID))) {   // the request's literals in the brief
             const missing = request(input.sessionID).check(tool, args, requestSetting());
-            if (missing) throw new Error(missing);
+            if (missing) throw new Error(refused(missing));
           }
-        }
+          const note = [dropped, fixedText(fixed)].filter(Boolean).join("\n\n");
+          if (note && input?.callID) fixedNotes.set(input.callID, note);
+        } else if (dropped && input?.callID) fixedNotes.set(input.callID, dropped);
         const mine = input?.sessionID ? gates.get(input.sessionID) : undefined;
         if (mine) {                                                // the coder's own session: its brief's gates
           const why = mine.before(tool, args);
@@ -923,25 +940,35 @@ export default {
       // a coder task with a chain or a watch: foreground, its output becomes the one result; background, its
       // completion message is due in chat.message
       "tool.execute.after": async (input, output) => {
-        const p = input?.callID ? calls.get(input.callID) : undefined;
-        if (!p) return;
-        calls.delete(input.callID);
-        const meta = /** @type {any} */ (output?.metadata ?? {});
-        p.model = meta.model;
-        const res = parseTaskXml(String(output?.output ?? ""));
-        const id = String(meta.sessionId ?? res?.id ?? "");
-        if (meta.background === true || res?.state === "running") {
-          if (!id) return;
-          waiting.set(id, p);
-          if ((p.chain || p.gate) && p.hold) {                     // the held chain's record (the state file)
-            p.first = id;
-            record(p, "first");
-          }
-          return;
-        }
-        if (!res) return;
-        output.output = taskXml(await finish(p, res));
+        const note = input?.callID ? fixedNotes.get(input.callID) : undefined;   // W1.6: what CARL changed in the call
+        if (note === undefined) return afterTask(input, output);
+        fixedNotes.delete(input.callID);
+        await afterTask(input, output);
+        if (output) output.output = `${String(output.output ?? "")}\n\n${note}`;
       },
     };
+    return hooks;
+
+    /** After a coder task with a chain or a watch (tool.execute.after). @param {any} input @param {any} output */
+    async function afterTask(input, output) {
+      const p = input?.callID ? calls.get(input.callID) : undefined;
+      if (!p) return;
+      calls.delete(input.callID);
+      const meta = /** @type {any} */ (output?.metadata ?? {});
+      p.model = meta.model;
+      const res = parseTaskXml(String(output?.output ?? ""));
+      const id = String(meta.sessionId ?? res?.id ?? "");
+      if (meta.background === true || res?.state === "running") {
+        if (!id) return;
+        waiting.set(id, p);
+        if ((p.chain || p.gate) && p.hold) {                       // the held chain's record (the state file)
+          p.first = id;
+          record(p, "first");
+        }
+        return;
+      }
+      if (!res) return;
+      output.output = taskXml(await finish(p, res));
+    }
   },
 };

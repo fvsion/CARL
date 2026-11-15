@@ -19,7 +19,7 @@ import re
 import time
 from typing import Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
-from ...domain.server.slot_files import short_id
+from ...domain.server.slot_files import SLOT_PREFIX, short_id
 from ...domain.shared.units import duration, file_size
 from ...ports.cache import StatRow  # noqa: F401  (the rows of table(); the dashboard draws them)
 from .private_dirs import make_dirs
@@ -225,6 +225,7 @@ FROM_TEXT = {"slot": "its slot", "ram": "the RAM cache", "window": "read (window
              "start": "a longer session's file", "read": "read in full"}
 
 
+KEPT_TEXT = "kept over a restart"   # the Saved text of a slot the slot handoff put back (C-138)
 SUB_SAVE_TOKENS = 32768        # carl-cache.js: a subagent's session is saved from this size (1.20.9)
 
 
@@ -264,6 +265,8 @@ def slot_column(events: Sequence[Event], slot: int, model: str, names: Mapping[s
                  and e.get("session") == session), None)
     if save:
         saved = f"{big(int(save.get('tokens', 0)))}, {duration(max(now - float(save['t']), 0))} ago"   # type: ignore[call-overload,arg-type]
+    elif str(place.get("file", "")).startswith(SLOT_PREFIX):
+        saved = KEPT_TEXT                   # a slot the dashboard put back (C-138): saved again at the next stop
     else:
         saved = ("no (a subagent)" if place.get("once") else "no (under 32K)"
                  if place.get("sub") and tokens < SUB_SAVE_TOKENS else "not yet")

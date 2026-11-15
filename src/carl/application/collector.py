@@ -129,17 +129,23 @@ class Collector:
         self.good_metrics: Tuple[float, JSONDict, Dict[int, float]] = (0.0, {}, {})   # the last /metrics
 
     def follow(self, port: int, pid: Optional[int], console: str) -> None:
-        """Watch the server on port (a start for another port moves the dashboard there)."""
+        """Watch the server on port (a start for another port moves the dashboard there). pid is the start's process:
+        kept for the stop and `exited`; the snapshot's pid is the listener's from the next refresh on (on Windows the
+        start, python.exe, stays the parent of llama-server, and its command line is not the server's)."""
         if port != self.endpoint.port:
             self.endpoint.port = port
-            self.pid, self.pid_t, self.props, self.props_t, self.last = pid, time.time(), {}, 0.0, None
-        self.server_pid, self.pid, self.console = pid, pid, console
+            self.props, self.props_t, self.last = {}, 0.0, None
+        self.server_pid, self.pid, self.pid_t, self.console = pid, pid, 0.0, console
 
     def find_pid(self, tcp: Callable[[], TcpTable]) -> Optional[int]:
-        """The pid listening on the port, looked up again when it dies or every 20 s."""
+        """The pid listening on the port, looked up again when it dies or every 20 s. After follow, at each refresh
+        until a process listens; until then the followed one stays (the server is loading, not stopped)."""
         now = time.time()
         if not self.watch.alive(self.pid) or now - self.pid_t > 20:
-            self.pid, self.pid_t = tcp().listen_pid(self.endpoint.port), now
+            found = tcp().listen_pid(self.endpoint.port)
+            if found is None and not self.pid_t and self.watch.alive(self.pid):
+                return self.pid
+            self.pid, self.pid_t = found, now
         return self.pid
 
     def slow_loop(self) -> None:
