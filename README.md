@@ -130,6 +130,8 @@ The live state of the server and the computer: what the server does now, the slo
 - **The coder:** large tasks go to a coder subagent in the background. Type `@coder TASK` in OpenCode to ask for it.
 - **Tools:** web search, LSP, a browser subagent, background subagents ([Tools](USERGUIDE.md#tools-in-opencode-and-pi)). Web search sends the queries to Exa: answer `off` in the setup (or `carl install --web-search off`) to turn it off.
 
+![Pi: the coder subagent wrote the code and the tests in the background](assets/pi-subagent.png)
+
 ## Plugins
 
 ![OpenCode with the CARL plugins](assets/opencode-plugins.png)
@@ -142,6 +144,10 @@ The setup (`carl install`, or `./setup` on another computer) adds CARL's plugins
 - **Model check:** a warning when the model that you select is not the one that the server runs (OpenCode, Pi).
 - **`/carl`:** a control panel: turn each CARL piece on or off; the config sync (OpenCode, Pi).
 - **Speeds:** the server's read and write speed in OpenCode's sidebar and Pi's status line, while the dashboard runs.
+
+The dashboard's Caching panel shows what the disk cache saved and put back. **Keep slots** keeps the server's slots over a restart for clients without the plugins.
+
+![The Caching panel](assets/caching.png)
 
 What each one does and how to turn it off: [USERGUIDE.md, "CARL's plugins and extensions"](USERGUIDE.md#carls-plugins-and-extensions). How they work: [reference/plugins.md](reference/plugins.md).
 
